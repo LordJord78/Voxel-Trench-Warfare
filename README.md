@@ -40,7 +40,9 @@ same command must print the same digest.
 
 ```bash
 .venv/bin/python -m trenchline --seed 7 --frames 240 --no-vsync  # windowed smoke test
-.venv/bin/python -m tools.bench --seed 7 --frames 900            # frame time
+.venv/bin/python -m tools.bench --seed 7 --frames 900            # frame time, static
+.venv/bin/python -m tools.stress --seed 7 --shells 6             # frame time, under shelling
+.venv/bin/python -m tools.stress --sweep                         # find the rebuild ceiling
 .venv/bin/python -m tools.sightlines --seeds 7 21 99             # parapet peek numbers
 .venv/bin/python -m tools.section --seed 7 --axis x --at 100     # ASCII cross-section
 .venv/bin/python -m tools.shot --seed 7 --bay 2 --out shot.png   # offscreen render
@@ -133,6 +135,24 @@ The trench section is the load-bearing one. Parapet crest height is not a
 constant there: each fire bay measures the ground it has to see over, raises its
 own firing step until a standing eye clears it, and builds its crest from that
 step. `tools/sightlines.py` prints what that produces.
+
+## Performance
+
+A mean frame time on a static scene says almost nothing about a voxel world;
+the whole cost is what happens when it stops being static. Both numbers, seed 7,
+offscreen at 1440x810:
+
+| | mean | p50 | p95 | p99 |
+| --- | --- | --- | --- | --- |
+| static, walking the line | 1.36 ms | 1.10 | 2.91 | 6.36 |
+| sustained shelling, 22+ dirty chunks/frame | 9.98 ms | 9.58 | 13.95 | 14.73 |
+
+Under artillery the limit is not frame time, it is the rebuild queue. At a
+budget of 8 chunks per frame the queue still grows; draining it needs 32, and
+32 puts *every* frame over the 60 Hz budget. `tools/stress.py --sweep` prints
+the whole curve, and the tunable carries it as a comment. Milestone 3 will have
+to spend that somewhere — a coarser mesh for distant chunks, or a rebuild that
+patches a chunk rather than remeshing it.
 
 ## Licence
 

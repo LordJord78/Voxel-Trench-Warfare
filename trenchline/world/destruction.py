@@ -247,42 +247,58 @@ def detonate(
     loosen = tun.f("destruction.loosen_radius_scale")
     core = tun.f("destruction.core_radius_scale")
 
-    before = world.v.copy() if radius < 24.0 else None
+    # Everything this shell can reach: the crater, the loosened rim, and enough
+    # room under both for the dirt to fall into. Copied once so the chunks that
+    # actually changed can be told apart from the chunks that were merely
+    # nearby — the difference is the whole cost of the rebuild queue.
+    reach = radius * max(loosen, 1.0) + 2.0
+    fall = radius * 2.0 + 4.0
+    lo = (
+        int(np.floor(voxel_centre[0] - reach)),
+        int(np.floor(voxel_centre[1] - fall)),
+        int(np.floor(voxel_centre[2] - reach)),
+    )
+    hi = (
+        int(np.ceil(voxel_centre[0] + reach)) + 1,
+        int(np.ceil(voxel_centre[1] + reach)) + 1,
+        int(np.ceil(voxel_centre[2] + reach)) + 1,
+    )
+    view, lo, hi = _region(world, lo, hi, pad=0)
+    if view is None:
+        return result
+    before = view.copy()
 
     # Soft ground goes out to the full radius; concrete and masonry only give
     # way near the centre, where the pressure is.
-    box = shapes.carve_sphere(
-        world.v, voxel_centre, radius, rng, protect=resists
-    )
-    inner = shapes.carve_sphere(world.v, voxel_centre, radius * core, rng)
-    if box is None:
+    if shapes.carve_sphere(world.v, voxel_centre, radius, rng, protect=resists) is None:
         return result
-    if inner is not None:
-        box = (
-            tuple(min(box[0][i], inner[0][i]) for i in range(3)),
-            tuple(max(box[1][i], inner[1][i]) for i in range(3)),
-        )
+    shapes.carve_sphere(world.v, voxel_centre, radius * core, rng)
 
     # A rind of ground around the hole is shaken loose rather than removed. It
     # is what actually falls in, and it is why a near miss on a parapet costs
     # you cover even where it did not break through.
     result.loosened = _loosen_rim(world.v, voxel_centre, radius * loosen, radius)
-
-    view, lo, hi = _region(world, box[0], box[1], pad=int(radius) + 3)
-    if view is None:
-        return result
     result.collapsed = collapse(view)
     water_sim.flood_region(world.v, world.water_table, lo, hi)
 
-    if before is not None:
-        changed = world.v != before
-        result.removed = int((changed & (world.v == voxel.AIR)).sum())
-        result.flooded = int((changed & (world.v == voxel.WATER)).sum())
-        materials, counts = np.unique(before[changed], return_counts=True)
-        result.materials = {int(m): int(c) for m, c in zip(materials, counts)}
+    changed = view != before
+    if not changed.any():
+        return result
+    result.removed = int((changed & (view == voxel.AIR)).sum())
+    result.flooded = int((changed & (view == voxel.WATER)).sum())
+    materials, counts = np.unique(before[changed], return_counts=True)
+    result.materials = {int(m): int(c) for m, c in zip(materials, counts)}
 
-    world.mark_region_dirty(lo, (hi[0] - 1, hi[1] - 1, hi[2] - 1))
-    result.box = (lo, hi)
+    # Dirty the chunks that changed, not the chunks that were in the
+    # neighbourhood. Padding this by the search radius queued around a hundred
+    # chunks per shell, most of them identical to what was already on the GPU,
+    # and no rebuild budget can outrun that.
+    axes = [np.nonzero(changed.any(axis=tuple(a for a in range(3) if a != i)))[0]
+            for i in range(3)]
+    tight_lo = tuple(lo[i] + int(axes[i][0]) for i in range(3))
+    tight_hi = tuple(lo[i] + int(axes[i][-1]) for i in range(3))
+    world.mark_region_dirty(tight_lo, tight_hi)
+    result.box = (tight_lo, tuple(v + 1 for v in tight_hi))
     return result
 
 

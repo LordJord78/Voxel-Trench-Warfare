@@ -63,6 +63,10 @@ class VoxelWorld:
 
         self._dirty: set[ChunkCoord] = set()
         self._queue: deque[ChunkCoord] = deque()
+        self.dirtied_total: int = 0
+        """Rebuilds the world has asked for. Against the number the renderer
+        managed, this is demand against supply, which is the only way to see a
+        rebuild queue losing before it has visibly fallen behind."""
         self.water_table: int = 0
         """Voxel y below which open cavities flood.  Set by generation."""
 
@@ -145,13 +149,21 @@ class VoxelWorld:
             return
         self._dirty.add(coord)
         self._queue.append(coord)
+        self.dirtied_total += 1
 
     def mark_region_dirty(self, lo: tuple[int, int, int], hi: tuple[int, int, int]) -> None:
-        """Dirty every chunk overlapping an inclusive voxel-space box."""
+        """Dirty every chunk overlapping an inclusive voxel-space box.
+
+        The box is grown by one *voxel*, which is what the mesher needs to cull
+        a seam correctly, and only then converted to chunks. Growing it by one
+        *chunk* on every side instead turned a change spanning two chunks into
+        a hundred rebuilds — most of them producing geometry identical to what
+        was already on the GPU, and no rebuild budget can outrun that.
+        """
         n = CHUNK_SIZE
-        for cx in range(lo[0] // n - 1, hi[0] // n + 2):
-            for cy in range(lo[1] // n - 1, hi[1] // n + 2):
-                for cz in range(lo[2] // n - 1, hi[2] // n + 2):
+        for cx in range((lo[0] - 1) // n, (hi[0] + 1) // n + 1):
+            for cy in range((lo[1] - 1) // n, (hi[1] + 1) // n + 1):
+                for cz in range((lo[2] - 1) // n, (hi[2] + 1) // n + 1):
                     self.mark_dirty((cx, cy, cz))
 
     def mark_all_dirty(self) -> None:
