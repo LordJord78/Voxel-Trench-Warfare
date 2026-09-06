@@ -97,12 +97,16 @@ def measure(seed: int, line: str = "front", reach: float = 120.0) -> dict[str, f
     session = Session(SessionConfig(seed=seed))
     stand = session.controller.stances[Stance.STANDING].eye_height
     crouch = session.controller.stances[Stance.CROUCHED].eye_height
+    periscope = session.controller.stances[Stance.PERISCOPE].eye_height
 
     floor_views: list[float] = []
     stand_views: list[float] = []
     crouch_views: list[float] = []
     crater_reach: list[float] = []
     crater_share: list[float] = []
+    periscope_reach: list[float] = []
+    periscope_share: list[float] = []
+    periscope_views: list[float] = []
     clearances: list[float] = []
     step_heights: list[float] = []
     bays = session.network.lines[line].bays
@@ -117,6 +121,14 @@ def measure(seed: int, line: str = "front", reach: float = 120.0) -> dict[str, f
         crest_rise = (bay.crest_y - bay.step_top_y) * voxel.VOXEL_SIZE if hasattr(
             bay, "crest_y") else float("nan")
         clearances.append(stand - crest_rise)
+        peri_far, peri_share = _craters_read(
+            session, Vec3(sx, sy + periscope, sz), sx, sz, facing
+        )
+        periscope_reach.append(peri_far)
+        periscope_share.append(peri_share)
+        periscope_views.append(
+            _horizontal(session, Vec3(sx, sy + periscope, sz), facing, reach)
+        )
         step_heights.append((bay.step_top_y - bay.floor_y - 1) * voxel.VOXEL_SIZE)
 
         far, share = _craters_read(session, Vec3(sx, sy + stand, sz), sx, sz, facing)
@@ -133,6 +145,10 @@ def measure(seed: int, line: str = "front", reach: float = 120.0) -> dict[str, f
         "crater_reach_median": statistics.median(crater_reach),
         "crater_reach_p10": float(np.percentile(crater_reach, 10)),
         "craters_read_pct": statistics.median(crater_share),
+        "periscope_median": statistics.median(periscope_views),
+        "periscope_reach_median": statistics.median(periscope_reach),
+        "periscope_reach_p10": float(np.percentile(periscope_reach, 10)),
+        "periscope_read_pct": statistics.median(periscope_share),
         "clearance_min_m": min(clearances),
         "clearance_max_m": max(clearances),
         "step_height_median_m": statistics.median(step_heights),
@@ -156,13 +172,22 @@ def main() -> None:
 
     print(f"\n--- parapet peek, {args.line} line ---")
     print(f"{'seed':>4} {'bays':>4} {'floor':>7} {'crouch':>7} {'stand':>7} "
-          f"{'craters':>8} {'p10':>6} {'read':>6} {'clear':>7} {'step':>6} {'relief':>7}")
+          f"{'craters':>8} {'p10':>6} {'read':>6} {'clear':>7} {'relief':>7}")
     for r in rows:
         print(f"{r['seed']:4.0f} {r['bays']:4.0f} {r['floor_median']:6.1f}m "
               f"{r['crouch_median']:6.1f}m {r['stand_median']:6.1f}m "
               f"{r['crater_reach_median']:7.0f}m {r['crater_reach_p10']:5.0f}m "
               f"{r['craters_read_pct']:5.0f}% {r['clearance_min_m']:+6.2f}m "
-              f"{r['step_height_median_m']:5.1f}m {r['relief_p2p_m']:6.2f}m")
+              f"{r['relief_p2p_m']:6.2f}m")
+
+    print(f"\n--- periscope (eye 2.20 m) against standing on the step (1.62 m) ---")
+    print(f"{'seed':>4} {'view':>16} {'crater reach':>16} {'p10':>14} {'craters read':>16}")
+    for r in rows:
+        print(f"{r['seed']:4.0f} "
+              f"{r['stand_median']:6.1f} ->{r['periscope_median']:6.1f}m "
+              f"{r['crater_reach_median']:6.0f} ->{r['periscope_reach_median']:6.0f}m "
+              f"{r['crater_reach_p10']:5.0f} ->{r['periscope_reach_p10']:5.0f}m "
+              f"{r['craters_read_pct']:6.0f} ->{r['periscope_read_pct']:6.0f}%")
 
 
 if __name__ == "__main__":

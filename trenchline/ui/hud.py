@@ -29,6 +29,7 @@ _STANCE_LABEL: dict[Stance, str] = {
     Stance.CROUCHED: "CROUCHED",
     Stance.PRONE: "PRONE",
     Stance.FIRING_STEP: "ON THE FIRING STEP",
+    Stance.PERISCOPE: "PERISCOPE UP",
 }
 
 _INK = (0.86, 0.85, 0.81, 1.0)
@@ -64,7 +65,7 @@ class Hud:
         self.hint = self._text("hint", left, -0.965, _DIM, 0.034)
         self.hint.node().set_text(
             "WASD move    SHIFT sprint    CTRL crouch    C prone    "
-            "SPACE jump    F1 stats    ESC free mouse"
+            "SPACE jump    V periscope    F1 stats    ESC free mouse"
         )
         self.perf = self._text(
             "perf", aspect - 0.05, 0.90, _DIM, 0.040, align=TextNode.A_right

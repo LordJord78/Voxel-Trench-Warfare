@@ -31,6 +31,7 @@ class Stance(IntEnum):
     CROUCHED = 1
     PRONE = 2
     FIRING_STEP = 3
+    PERISCOPE = 4
 
 
 _STANCE_KEY: dict[Stance, str] = {
@@ -38,6 +39,7 @@ _STANCE_KEY: dict[Stance, str] = {
     Stance.CROUCHED: "crouched",
     Stance.PRONE: "prone",
     Stance.FIRING_STEP: "firing_step",
+    Stance.PERISCOPE: "periscope",
 }
 
 
@@ -52,6 +54,9 @@ class StanceProfile:
     exposure: float
     """Multiplier on how much of you an enemy or drone can see and hit."""
     transition_time: float
+    fov_scale: float = 1.0
+    """Field of view multiplier. Only the periscope narrows it, and that
+    narrowing is the price of its elevation."""
 
 
 def load_stances(tun: Tunables) -> dict[Stance, StanceProfile]:
@@ -60,6 +65,7 @@ def load_stances(tun: Tunables) -> dict[Stance, StanceProfile]:
         Stance.CROUCHED: tun.f("player.eye_height_crouched"),
         Stance.PRONE: tun.f("player.eye_height_prone"),
         Stance.FIRING_STEP: tun.f("player.eye_height_standing"),
+        Stance.PERISCOPE: tun.f("player.eye_height_periscope"),
     }
     out: dict[Stance, StanceProfile] = {}
     for stance, key in _STANCE_KEY.items():
@@ -73,6 +79,7 @@ def load_stances(tun: Tunables) -> dict[Stance, StanceProfile]:
             sway_scale=float(section["sway_scale"]),
             exposure=float(section["exposure"]),
             transition_time=float(section["transition_time"]),
+            fov_scale=float(section.get("fov_scale", 1.0)),
         )
     return out
 
@@ -86,6 +93,8 @@ class MoveIntent:
     sprint: bool = False
     stance: Stance = Stance.STANDING
     """Requested posture; may be refused by a low ceiling."""
+    periscope: bool = False
+    """Raise the periscope.  Only means anything on a firing step."""
     fire: bool = False
     """Trigger held.  A semi-automatic weapon reads the edge, not the level."""
     reload: bool = False
@@ -143,6 +152,9 @@ class CharacterController:
         ratio = profile.eye_height / profile.height
         return state.height * ratio
 
+    def fov_scale(self, state: CharacterState) -> float:
+        return self.stances[state.stance].fov_scale
+
     def tick(self, state: CharacterState, intent: MoveIntent, dt: float) -> None:
         self._resolve_stance(state, intent, dt)
         profile = self.stances[state.stance]
@@ -165,6 +177,12 @@ class CharacterController:
             wanted = Stance.FIRING_STEP
         elif not state.on_firing_step and wanted == Stance.FIRING_STEP:
             wanted = Stance.STANDING
+        # The periscope needs the step under you as well: from the duckboards
+        # even 2.2 m of mirror is still under the crest.
+        if intent.periscope and state.on_firing_step and wanted == Stance.FIRING_STEP:
+            wanted = Stance.PERISCOPE
+        elif wanted == Stance.PERISCOPE and not (intent.periscope and state.on_firing_step):
+            wanted = Stance.FIRING_STEP if state.on_firing_step else Stance.STANDING
 
         target = self.stances[wanted]
         state.blocked_stance = False
@@ -232,7 +250,11 @@ class CharacterController:
         self, state: CharacterState, intent: MoveIntent, dt: float
     ) -> None:
         vy = state.velocity.y
-        if state.on_ground and intent.jump and state.stance == Stance.STANDING:
+        if (
+            state.on_ground
+            and intent.jump
+            and state.stance == Stance.STANDING
+        ):
             vy = self.jump_speed
             state.on_ground = False
         else:

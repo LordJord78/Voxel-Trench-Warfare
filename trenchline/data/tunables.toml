@@ -110,6 +110,13 @@ relief_persistence  = 0.34     # < 0.5: the fine octaves stay quiet
 swale_depth_m       = 1.50
 swale_margin_voxels = 10.0     # how far past each line the dip reaches
 
+# Vertical silhouette: the only thing that reads at 40 m from an eye 1.1 m over
+# a flat field, because it is seen against the sky rather than edge-on. Ground
+# relief cannot do this at any amplitude; that was measured, not assumed.
+[world.clutter]
+fence_lines         = 3
+poles               = 7
+
 # Battlefield layout, in voxels along z (0 = friendly rear, max = enemy rear).
 [world.layout]
 support_line_z      = 40
@@ -124,6 +131,9 @@ mass                = 82.0
 eye_height_standing = 1.62
 eye_height_crouched = 1.10
 eye_height_prone    = 0.34
+eye_height_periscope = 2.20    # the mirror head, not your eye. 0.58 m over a
+                               # standing eye, which is 0.70 m of clearance
+                               # over the crest against standing's 0.12 m
 radius              = 0.30
 step_up             = 0.55     # one voxel plus tolerance: climb the firing step
 gravity             = -19.6    # 2 g — arcade-leaning, keeps jumps snappy
@@ -351,10 +361,24 @@ rest_right_m        = 0.175    # where the rifle sits when nothing is happening
 rest_up_m           = -0.205
 rest_forward_m      = 0.440
 
+# The trench periscope. Elevation is the payoff — this is the only way to look
+# at no-man's-land from behind the parapet rather than over it — and the costs
+# are a narrow field of view, near-immobility, and no weapon. Exposure is very
+# low because what is above the crest is a mirror on a stick, not your head.
+[stance.periscope]
+height              = 1.80
+speed               = 0.35
+sprint_speed        = 0.35
+sway_scale          = 0.55
+exposure            = 0.22
+transition_time     = 0.45
+fov_scale           = 0.42     # the tunnel you are looking down
+
 [camera]
 fov                 = 90.0
 far_plane           = 320.0
 near_plane          = 0.08
+fov_lerp_per_s      = 7.0      # how fast the periscope's tunnel eases in
 head_bob_amplitude  = 0.035
 head_bob_hz         = 1.9
 landing_dip         = 0.11

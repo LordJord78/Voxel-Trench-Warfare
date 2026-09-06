@@ -80,6 +80,8 @@ class Frontend:
         self.particles = ParticleRenderer(session.particles, scene)
         self.viewmodel = ViewModel(camera, tun)
         self.base_fov = tun.f("camera.fov")
+        self.fov_scale = 1.0
+        self.fov_lerp = tun.f("camera.fov_lerp_per_s")
 
         from ..ui.hud import Hud
 
@@ -94,6 +96,7 @@ class Frontend:
         self._last_time = time.perf_counter()
         self._mouse_free = False
         self.frames = 0
+        self.frame_dt = 1.0 / 60.0
 
         self.app.taskMgr.add(self._frame, "trenchline-frame", sort=45)
 
@@ -114,6 +117,7 @@ class Frontend:
         intent.jump = bool(held_keys["space"])
         intent.fire = bool(held_keys["left mouse"])
         intent.reload = bool(held_keys["r"])
+        intent.periscope = bool(held_keys["v"])
 
         if self._edge("c", bool(held_keys["c"])):
             self._prone_latched = not self._prone_latched
@@ -149,6 +153,7 @@ class Frontend:
         real_dt = now - self._last_time
         self._last_time = now
         self.frame_stats.record(real_dt)
+        self.frame_dt = real_dt
         self.frames += 1
 
         if self._edge("escape", bool(held_keys["escape"])):
@@ -230,7 +235,12 @@ class Frontend:
 
         session = self.session
         kick = session.viewkick
-        camera.fov = self.base_fov + kick.fov_offset
+        # The periscope's narrow field of view is eased into rather than
+        # snapped, or raising it reads as a teleport.
+        target = session.controller.fov_scale(session.player)
+        blend = min(1.0, self.fov_lerp * max(1e-4, self.frame_dt))
+        self.fov_scale += (target - self.fov_scale) * blend
+        camera.fov = self.base_fov * self.fov_scale + kick.fov_offset
 
         player = session.player
         speed_ratio = min(1.0, player.horizontal_speed() / 5.0)

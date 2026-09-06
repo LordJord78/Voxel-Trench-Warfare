@@ -244,15 +244,33 @@ def test_dugouts_have_overhead_cover(game: Session) -> None:
     )
 
 
-def test_dugouts_are_dry(game: Session) -> None:
+def test_no_dugout_is_sited_below_the_water_table(game: Session) -> None:
+    """A dugout dug below the water table is a well.
+
+    This is the siting rule and it is absolute — it is decided at generation
+    time from the water table, before a single shell lands.
+    """
+    for dugout in game.network.dugouts:
+        floor = dugout.lo[1] - 1
+        assert floor > game.world.water_table, (
+            f"{dugout.line} dugout floor at y={floor} is under the water table "
+            f"at y={game.world.water_table}"
+        )
+
+
+def test_dugouts_that_still_have_a_roof_are_dry(game: Session) -> None:
+    """Once a shell has opened the roof it is a hole in the ground, and a hole
+    in the ground fills. Only the sound ones have to be dry."""
     v = game.world.v
     for dugout in game.network.dugouts:
-        block = v[
-            dugout.lo[0] : dugout.hi[0],
-            dugout.lo[1] : dugout.hi[1],
-            dugout.lo[2] : dugout.hi[2],
-        ]
-        assert not (block == voxel.WATER).any(), "a dugout below the water table is a well"
+        x0, _, z0 = dugout.lo
+        x1, y1, z1 = dugout.hi
+        if not voxel.SOLID[v[x0:x1, y1 : y1 + 1, z0:z1]].all():
+            continue
+        block = v[x0:x1, dugout.lo[1] : y1, z0:z1]
+        assert not (block == voxel.WATER).any(), (
+            f"{dugout.line} dugout is roofed and still wet"
+        )
 
 
 def test_dugout_roofs_are_intact_unless_shelled(game: Session) -> None:

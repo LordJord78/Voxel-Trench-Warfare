@@ -28,13 +28,14 @@ BRANCH: Final[int] = 13
 WATER: Final[int] = 14
 RUBBLE: Final[int] = 15
 WIRE: Final[int] = 16
+HULL: Final[int] = 17
 
-MATERIAL_COUNT: Final[int] = 17
+MATERIAL_COUNT: Final[int] = 18
 
 NAMES: Final[tuple[str, ...]] = (
     "air", "sod", "mud", "clay", "subsoil", "spoil", "sandbag", "duckboard",
     "timber", "corrugate", "concrete", "brick", "trunk", "branch", "water",
-    "rubble", "wire",
+    "rubble", "wire", "hull",
 )
 
 # (r, g, b) 0-255.
@@ -56,6 +57,7 @@ _COLOURS: Final[tuple[tuple[int, int, int], ...]] = (
     (92, 106, 104),     # standing water, cold grey-green
     (118, 112, 98),     # rubble
     (100, 98, 90),      # wire pickets
+    (54, 50, 48),       # burnt-out armour, near black
 )
 
 # Renderable: produces geometry.
@@ -79,14 +81,14 @@ _BLOCKS_SIGHT = _SOLID.copy()
 # water because water is a fill result, not a structural material.
 _HARDNESS = np.array(
     [0.0, 1.0, 1.0, 1.1, 1.2, 0.8, 1.4, 0.9, 1.0, 1.3, 4.0, 2.6, 1.6, 0.7,
-     0.0, 1.2, 0.5],
+     0.0, 1.2, 0.5, 3.4],
     dtype=np.float32,
 )
 
 # What a voxel becomes when an explosion carves it but does not fully remove it.
 _SPOIL_OF = np.array(
     [AIR, SPOIL, SPOIL, SPOIL, SPOIL, SPOIL, SPOIL, RUBBLE, RUBBLE, RUBBLE,
-     RUBBLE, RUBBLE, BRANCH, AIR, WATER, RUBBLE, AIR],
+     RUBBLE, RUBBLE, BRANCH, AIR, WATER, RUBBLE, AIR, RUBBLE],
     dtype=np.uint8,
 )
 

@@ -788,6 +788,112 @@ def _shelterbelt(
                     shapes.fill_box(v, (fx, lay, fz), (fx + 1, lay + 1, fz + 1), voxel.TRUNK)
 
 
+def _silhouette_clutter(
+    v: np.ndarray, surface: np.ndarray, rng: GameRandom, tun: Tunables,
+    z_lo: int, z_hi: int,
+) -> None:
+    """Vertical things standing in no-man's-land.
+
+    Ground relief cannot help here and the sweep that proved it is in the
+    commit log: an eye 1.1 m over a flat field sees the ground past ~20 m
+    edge-on, so undulation of any amplitude reads as a plate. What DOES read at
+    40 m is anything that breaks the horizon — a post, a pole, a wrecked hull —
+    because a vertical silhouette is seen against the sky rather than at
+    grazing incidence.
+
+    So the answer to "no-man's-land looks flat" is not more terrain. It is
+    things standing on it. Purely cosmetic; nothing here is cover worth the
+    name, and the wire belts are placed elsewhere.
+    """
+    nx, ny, nz = v.shape
+
+    def plant(x: int, z: int, height: int, material: int, lean: int = 0) -> None:
+        if not (1 <= x < nx - 1 and 1 <= z < nz - 1):
+            return
+        base = int(surface[x, z])
+        while base > 1 and not voxel.SOLID[v[x, base - 1, z]]:
+            base -= 1
+        while base < ny - 2 and voxel.SOLID[v[x, base, z]]:
+            base += 1
+        for k in range(height):
+            xx = x + (k * lean) // max(1, height)
+            if 0 <= xx < nx and base + k < ny and v[xx, base + k, z] == voxel.AIR:
+                v[xx, base + k, z] = material
+
+    # Field boundaries: post-and-wire fence lines, mostly shot to pieces.
+    for _ in range(tun.i("world.clutter.fence_lines")):
+        z = rng.randint(z_lo + 4, max(z_lo + 5, z_hi - 4))
+        drift = rng.uniform(-0.05, 0.05)
+        spacing = rng.randint(4, 8)
+        x = rng.randint(2, 10)
+        while x < nx - 2:
+            zc = int(z + drift * (x - nx * 0.5))
+            if 2 <= zc < nz - 2 and rng.chance(0.72):
+                plant(x, zc, rng.randint(2, 5), voxel.TRUNK, lean=rng.randint(-1, 2))
+            x += spacing
+
+    # Telegraph poles: tall, sparse, and the only thing on the map that still
+    # stands above head height out in the open.
+    for _ in range(tun.i("world.clutter.poles")):
+        x = rng.randint(4, nx - 4)
+        z = rng.randint(z_lo + 2, max(z_lo + 3, z_hi - 2))
+        height = rng.randint(8, 15)
+        plant(x, z, height, voxel.TRUNK, lean=rng.randint(-1, 2))
+        if rng.chance(0.5):  # crossbar
+            base = int(surface[x, z]) + height - 2
+            shapes.fill_box(v, (x - 2, base, z), (x + 3, base + 1, z + 1), voxel.BRANCH)
+
+
+def _burnt_hull(
+    v: np.ndarray, surface: np.ndarray, rng: GameRandom, cx: int, cz: int
+) -> tuple[float, float, float]:
+    """A burnt-out armoured hull, sat where it stopped.
+
+    Reads at range for the same reason the poles do — it is 2.5 m of near-black
+    against an overcast sky — and unlike the poles it is real cover, which is
+    why there is exactly one of it and it sits out in the open where reaching
+    it costs you.
+    """
+    nx, ny, nz = v.shape
+    w, d, h = 14, 7, 5
+    x0, z0 = cx - w // 2, cz - d // 2
+    if x0 < 2 or x0 + w >= nx - 2 or z0 < 2 or z0 + d >= nz - 2:
+        return (0.0, 0.0, 0.0)
+    base = int(np.median(surface[x0 : x0 + w, z0 : z0 + d])) - 1
+
+    shapes.fill_box(v, (x0, base, z0), (x0 + w, base + h, z0 + d), voxel.HULL)
+    # Turret, shoved round the way they always end up.
+    tx = x0 + rng.randint(3, 7)
+    shapes.fill_box(
+        v, (tx, base + h, z0 + 1), (tx + 5, base + h + 3, z0 + d - 1), voxel.HULL
+    )
+    # Gun barrel, drooping.
+    for k in range(6):
+        bx = tx + 5 + k
+        if bx < nx - 1:
+            shapes.fill_box(
+                v, (bx, base + h + 1 - k // 4, z0 + d // 2),
+                (bx + 1, base + h + 2 - k // 4, z0 + d // 2 + 1), voxel.HULL,
+            )
+    # Whatever killed it, and whatever burned afterwards.
+    for _ in range(4):
+        shapes.carve_sphere(
+            v,
+            (
+                x0 + rng.uniform(1.0, w - 1.0),
+                base + rng.uniform(2.0, h + 2.0),
+                z0 + rng.uniform(1.0, d - 1.0),
+            ),
+            rng.uniform(1.2, 2.4),
+            rng,
+        )
+    debris = np.zeros((nx, nz), dtype=bool)
+    debris[max(0, x0 - 3) : x0 + w + 3, max(0, z0 - 2) : z0 + d + 2] = True
+    _pile(v, surface, debris, 1, voxel.RUBBLE)
+    s = voxel.VOXEL_SIZE
+    return ((cx + 0.5) * s, base * s, (cz + 0.5) * s)
+
+
 def _shell_craters(
     v: np.ndarray,
     surface: np.ndarray,
@@ -820,7 +926,9 @@ def _shell_craters(
         gz = np.arange(z0, z1)[None, :] - z
         d2 = gx**2 + gz**2
         ring[x0:x1, z0:z1] = (d2 >= r * r) & (d2 < (r + 1.6) ** 2)
-        _pile(v, surface, ring, 1, voxel.SPOIL)
+        # Bigger shells throw a rim you can see edge-on from the parapet, which
+        # is the only way crater shape reads at range from 1.1 m up.
+        _pile(v, surface, ring, 2 if radius > 4.0 else 1, voxel.SPOIL)
         craters.append((x, y, z, radius))
     return craters
 
@@ -1046,6 +1154,14 @@ def generate(rng: GameRandom, tun: Tunables) -> GeneratedWorld:
     wire_rng = rng.derive("wire")
     _wire_belt(v, surface, wire_rng, front_z + 17)
     _wire_belt(v, surface, wire_rng, enemy_front_z - 17)
+
+    landmarks["hull"] = _burnt_hull(
+        v, surface, rng.derive("hull"),
+        int(dims.x * 0.55), (front_z + enemy_front_z) // 2 + 9,
+    )
+    _silhouette_clutter(
+        v, surface, rng.derive("clutter"), tun, front_z + 3, enemy_front_z - 3
+    )
 
     craters = _shell_craters(
         v, surface, rng.derive("craters"), front_z + 4, enemy_front_z - 4, 140
