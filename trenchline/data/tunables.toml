@@ -260,6 +260,88 @@ chip_energy_j          = 260.0 # per unit hardness, for a single round to mark
                                # a magazine; it does not dig through it.
 collapse_max_passes    = 64
 
+# ---------------------------------------------------------------------------
+# VIEWKICK — cosmetic recoil
+#
+# Everything you FEEL when the gun goes off, and nothing that moves the bullet.
+# Rounds fly along the [recoil] aim and would land in the same voxels if this
+# whole section were zeroed. That is what lets it be tuned for weight while
+# [recoil] stays light enough not to be a fight: difficulty lives up there,
+# heft lives here, and the two never trade against each other.
+#
+# damping_ratio below 1 overshoots on the way back, which is what reads as mass.
+# It belongs here and nowhere near the aim axis.
+# ---------------------------------------------------------------------------
+
+[viewkick.defaults]
+punch_back_m        = 0.030    # shoved toward the eye; the biggest weight cue
+punch_up_m          = 0.008
+punch_side_m        = 0.002
+punch_pitch_deg     = 1.10     # viewmodel only — the sight picture moves 0.34
+punch_yaw_deg       = 0.15
+punch_roll_deg      = 0.45
+aim_pitch_follow    = 0.90     # viewmodel pitch per degree of aim kick, so the
+                               # two layers are visibly one event
+settle_time_s       = 0.22     # close to the aim layer's 0.20 so they finish
+                               # together; drift these apart and the gun reads
+                               # as two guns
+damping_ratio       = 0.85     # overshoot: the mass settling back
+fov_pulse_deg       = -0.55    # a snap in, not a zoom out
+fov_settle_s        = 0.16
+fov_damping_ratio   = 1.00     # no bounce on the lens; it reads as a wobble
+brass_count         = 1.0
+brass_speed         = 2.6      # to the right
+brass_up            = 1.5
+brass_spread        = 0.55
+muzzle_forward_m    = 0.55
+muzzle_side_m       = 0.08
+muzzle_down_m       = 0.10
+report_peak_db      = 158.0    # 5.45 at the shooter's ear
+report_low_hz       = 70.0     # where the body of the transient sits
+report_length_s     = 0.18
+jitter_scale        = 0.12     # per-shot variation, as a fraction of each value
+
+[viewkick.assault_rifle]
+punch_back_m        = 0.034
+punch_pitch_deg     = 1.25
+punch_roll_deg      = 0.55
+damping_ratio       = 0.82
+fov_pulse_deg       = -0.60
+
+# ---------------------------------------------------------------------------
+# PARTICLES
+#
+# Cosmetic, deterministic, and simulated on the sim side so a headless run makes
+# the same brass as a windowed one. Nothing here is read by collision,
+# ballistics or AI.
+# ---------------------------------------------------------------------------
+
+[particles]
+pool_capacity       = 1024
+
+[particles.muzzle_flash]
+life_s              = 0.045    # two or three frames: a stab, not a flare
+gravity             = 0.0
+drag                = 12.0
+size_start_m        = 0.34
+size_end_m          = 0.08
+colour_start        = [1.0, 0.90, 0.55, 0.95]
+colour_end          = [1.0, 0.45, 0.12, 0.0]
+
+[particles.brass]
+life_s              = 1.30
+gravity             = -9.81
+drag                = 0.35
+size_start_m        = 0.028
+size_end_m          = 0.028
+colour_start        = [0.86, 0.68, 0.30, 1.0]
+colour_end          = [0.70, 0.55, 0.24, 0.0]
+
+[viewmodel]
+rest_right_m        = 0.175    # where the rifle sits when nothing is happening
+rest_up_m           = -0.205
+rest_forward_m      = 0.440
+
 [camera]
 fov                 = 90.0
 far_plane           = 320.0

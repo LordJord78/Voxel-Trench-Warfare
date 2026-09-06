@@ -14,18 +14,31 @@ from pathlib import Path
 import numpy as np
 
 from .combat.ballistics import Impact, ProjectilePool
+from .combat.particles import ParticlePool
 from .combat.recoil import Recoil, load_recoil
+from .combat.viewkick import ViewKick, WeaponReport, load_viewkick
 from .combat.weapons import Weapon, load_weapon
 from .core.events import Event, EventBus
 from .core.loop import TICK_DT, FixedClock
 from .core.rng import GameRandom
 from .data import Tunables, load_tunables
 from .physics.character import CharacterController, CharacterState, MoveIntent, Stance
-from .physics.vec import Vec3
+from .physics.vec import Vec3, from_yaw_pitch
 from .world import destruction, voxel
 from .world.chunks import VoxelWorld
 from .world.generation import GeneratedWorld, generate
 from .world.trenchmap import TrenchNetwork
+
+
+def _view_basis(
+    yaw: float, pitch: float
+) -> tuple[tuple[float, float, float], ...]:
+    """(forward, right, up) for an aim direction, as plain tuples."""
+    forward = from_yaw_pitch(yaw, pitch)
+    flat = from_yaw_pitch(yaw, 0.0)
+    right = Vec3(flat.z, 0.0, -flat.x)
+    up = right.cross(forward).normalised()
+    return (forward.as_tuple(), right.as_tuple(), up.as_tuple())
 
 
 @dataclass(slots=True)
@@ -41,6 +54,15 @@ class SessionConfig:
 class WeaponFired(Event):
     tick: int
     weapon: str
+
+
+@dataclass(frozen=True, slots=True)
+class WeaponHeard(Event):
+    """The transient one shot makes.  No audio backend is wired yet; from
+    milestone 3 the observation layer reads this to know a shot was audible."""
+
+    tick: int
+    report: WeaponReport
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +119,13 @@ class Session:
         self.recoil: Recoil = load_recoil(
             self.tun, self.config.weapon, self.stream("combat.recoil")
         )
+        # Cosmetic layer. Deliberately downstream of everything: it reads the
+        # aim kick, and nothing reads it back.
+        self.particles = ParticlePool(self.tun)
+        self.viewkick: ViewKick = load_viewkick(
+            self.tun, self.config.weapon, self.stream("combat.viewkick"),
+            self.particles,
+        )
         self.impacts: list[Impact] = []
         """Last tick's impacts, for the renderer to read and for destruction."""
 
@@ -130,13 +159,26 @@ class Session:
 
         self.weapon.tick(dt)
         self.recoil.tick(dt)
+        self.viewkick.tick(dt)
+        self.particles.step(dt)
         if self.intent.reload:
             self.weapon.begin_reload()
         if self.intent.fire and self.weapon.ready:
             yaw, pitch = self.recoil.aim(self.player.yaw, self.player.pitch)
-            if self.weapon.fire(self.eye_position, yaw, pitch) >= 0:
+            eye = self.eye_position
+            if self.weapon.fire(eye, yaw, pitch) >= 0:
+                before = self.recoil.state.kick_pitch
                 self.recoil.shot()
+                # The cosmetic layer is fired from the same event on the same
+                # frame, and takes the aim kick as an input, so the two cannot
+                # drift into looking like two separate guns.
+                forward, right, up = _view_basis(yaw, pitch)
+                report = self.viewkick.shot(
+                    eye.as_tuple(), forward, right, up,
+                    aim_kick_deg=self.recoil.state.kick_pitch - before,
+                )
                 self.bus.post(WeaponFired(tick=self.stats.ticks, weapon=self.weapon.spec.key))
+                self.bus.post(WeaponHeard(tick=self.stats.ticks, report=report))
 
         self.impacts = self.projectiles.step(dt)
         for impact in self.impacts:
@@ -286,6 +328,11 @@ class Session:
                 ),
             ),
         ]
+        # ViewKick and the particle pool are deliberately absent. They are
+        # cosmetic by contract — nothing in the simulation reads them — so
+        # folding them in would mean every tweak to how the rifle *looks*
+        # invalidated the determinism goldens, which is exactly the friction
+        # the split was supposed to remove. test_viewkick asserts the contract.
         pool = self.projectiles
         for slot in range(pool.count):
             rows.append(

@@ -8,10 +8,16 @@ weapon classes. Adding the seventh weapon is a new `[recoil.<key>]` table.
 Two terms, because two different things happen when you pull the trigger and
 they recover on different timescales:
 
-**Kick** is the snap. Each round adds an impulse to a damped spring anchored at
-zero, so it rises and falls back within a settling time you set directly in
-seconds. This is what makes the gun feel like it went off. It is deliberately
-small and deliberately fast: you should never be fighting it.
+**Kick** is the snap. Each round *displaces* a damped spring anchored at zero
+and the spring pulls it straight back, so the muzzle is already at its peak on
+the frame the round leaves and every frame after that is recovery. It is
+deliberately small and deliberately fast: you should never be fighting it.
+
+The attack has to be instantaneous, and this is the whole reason the kick is a
+displacement rather than an impulse. Feeding the spring velocity instead means
+the muzzle takes about 1/w seconds to reach its peak — two frames at 60 Hz —
+and a rise you can watch reads as weightless no matter how large it is. Firing
+a gun is not a ramp.
 
 **Climb** is the pattern. Each round adds to an offset that decays only slowly,
 so a burst walks the muzzle up and — after enough rounds — sideways. It
@@ -71,8 +77,16 @@ def advance_spring(
     return (x + b * dt) * decay, (b - omega * (x + b * dt)) * decay
 
 
-_SETTLE_CONSTANT = 6.83
-"""w * settle_time for an impulse response to fall to 2% of its peak."""
+_SETTLE_CONSTANT = 5.83
+"""w * settle_time for a *displacement* response to fall to 2% of its peak.
+
+Released from x0 with no velocity, a critically damped spring gives
+x(t) = x0 (1 + wt) e^-wt, whose derivative is -x0 w^2 t e^-wt: never positive,
+so the peak is at t = 0 and the whole response is decay. Solving
+(1 + u) e^-u = 0.02 gives u = 5.83. The impulse form of the same question
+answers 6.83, so swapping the attack without swapping this would have
+stretched every settling time in the tuning file by about 17%.
+"""
 
 _KEYS = (
     "kick_pitch_deg",
@@ -199,22 +213,20 @@ class Recoil:
         state.since_shot = 0.0
         state.shots += 1
 
-        # Kick: an impulse into the spring's velocity, not a jump in position,
-        # so the muzzle rises over a few milliseconds instead of teleporting.
+        # Kick: the muzzle is displaced NOW, on this frame, and the spring
+        # spends the next fraction of a second pulling it back. Adding to the
+        # spring's velocity instead would make it climb to its peak over a
+        # couple of frames, which is what made a perfectly reasonable 0.34 deg
+        # read as weightless — an attack you can watch is not an attack.
         #
-        # The impulse is scaled so kick_pitch_deg is the peak angle the muzzle
-        # actually reaches. A critically damped spring given velocity v0 peaks
-        # at v0 / (w e), so going the other way costs one multiply and means
-        # the tuning file says degrees rather than "spring units". Without it,
-        # stiffening the spring quietly shrinks the kick as well as speeding it
-        # up, and the two are supposed to be independent knobs.
-        gain = math.sqrt(p.stiffness) * math.e
-        state.kick_pitch_vel += (
+        # kick_pitch_deg is therefore exactly the angle the muzzle jumps, with
+        # no gain term between the tuning file and the result.
+        state.kick_pitch += (
             p.kick_pitch_deg + self._jitter(p.jitter_pitch_deg)
-        ) * gain * self.scale
-        state.kick_yaw_vel += (
+        ) * self.scale
+        state.kick_yaw += (
             p.kick_yaw_deg + self._jitter(p.jitter_yaw_deg)
-        ) * gain * self.scale
+        ) * self.scale
 
         # Climb: approaches its ceiling rather than accumulating without limit.
         headroom = 1.0 - (abs(state.climb_pitch) / max(1e-6, p.climb_ceiling_deg))

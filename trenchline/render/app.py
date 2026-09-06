@@ -71,9 +71,13 @@ class Frontend:
         camera.clip_plane_near = tun.f("camera.near_plane")
         camera.clip_plane_far = tun.f("camera.far_plane")
 
-        from .effects import TracerRenderer
+        from .effects import ParticleRenderer, TracerRenderer
+        from .viewmodel import ViewModel
 
         self.tracers = TracerRenderer(session.projectiles, scene, tun)
+        self.particles = ParticleRenderer(session.particles, scene)
+        self.viewmodel = ViewModel(camera, tun)
+        self.base_fov = tun.f("camera.fov")
 
         from ..ui.hud import Hud
 
@@ -159,6 +163,7 @@ class Frontend:
         self.chunks.build_pending()
         self.tracers.update()
         self._place_camera(camera, UVec3)
+        self._place_viewmodel(camera)
 
         stats = self.chunks.stats
         self.hud.update(
@@ -191,6 +196,40 @@ class Frontend:
         camera.rotation = UVec3(
             -(player.pitch + recoil.pitch), player.yaw + recoil.yaw, sway * 12.0
         )
+
+    def _place_viewmodel(self, camera: Any) -> None:
+        """Cosmetic recoil, applied to the things it is allowed to touch.
+
+        The FOV pulse and the viewmodel punch both come from `session.viewkick`
+        and neither is read back by anything: the round has already left along
+        `session.recoil.aim()`.
+        """
+        import math
+
+        import numpy as np
+
+        session = self.session
+        kick = session.viewkick
+        camera.fov = self.base_fov + kick.fov_offset
+
+        player = session.player
+        speed_ratio = min(1.0, player.horizontal_speed() / 5.0)
+        sway = math.sin(player.bob_phase * 0.5) * self.bob_amp * 0.6 * speed_ratio
+        self.viewmodel.update(kick, sway=sway, speed_ratio=speed_ratio)
+
+        # Particle quads face the camera, so they need its basis in world space.
+        yaw = math.radians(player.yaw + session.recoil.yaw)
+        pitch = math.radians(player.pitch + session.recoil.pitch)
+        right = np.array([math.cos(yaw), 0.0, -math.sin(yaw)], dtype=np.float32)
+        up = np.array(
+            [
+                -math.sin(yaw) * math.sin(pitch),
+                math.cos(pitch),
+                -math.cos(yaw) * math.sin(pitch),
+            ],
+            dtype=np.float32,
+        )
+        self.particles.update(right, up)
 
     def run(self, frames: int = 0) -> int:
         if frames > 0:

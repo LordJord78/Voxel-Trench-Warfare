@@ -98,14 +98,34 @@ def test_the_weapon_defines_itself_only_where_it_differs(tun) -> None:
 
 
 def test_the_kick_peaks_at_the_angle_it_was_tuned_to(recoil) -> None:
-    """kick_pitch_deg is degrees of muzzle rise, not an opaque spring unit.
+    """kick_pitch_deg is degrees of muzzle rise, not an opaque spring unit."""
+    recoil.shot()
+    assert recoil.state.kick_pitch == pytest.approx(
+        recoil.profile.kick_pitch_deg, rel=0.25
+    )
 
-    Regression: the impulse was fed in unscaled, so stiffening the spring
-    quietly shrank the kick and a 0.34 deg setting peaked at 0.04.
+
+def test_the_kick_is_at_its_peak_on_the_frame_the_round_leaves(recoil) -> None:
+    """An attack you can watch reads as weightless whatever its size.
+
+    Regression: the kick was an impulse into the spring's velocity, so the
+    muzzle climbed to its peak over 1/w seconds — two frames at 60 Hz. Firing
+    a gun is not a ramp. It is now a displacement, so the peak is frame zero
+    and everything after it is recovery.
     """
     recoil.shot()
-    peak = max(_peak_kick(recoil))
-    assert peak == pytest.approx(recoil.profile.kick_pitch_deg, rel=0.25)
+    at_shot = recoil.state.kick_pitch
+    after = _peak_kick(recoil)
+    assert at_shot >= max(after), (
+        f"kick reached {max(after):.3f} deg after the shot frame, having been "
+        f"{at_shot:.3f} deg on it"
+    )
+
+
+def test_the_kick_only_ever_decays(recoil) -> None:
+    recoil.shot()
+    trace = _peak_kick(recoil)
+    assert trace == sorted(trace, reverse=True), "the muzzle rose again mid-recovery"
 
 
 def _peak_kick(recoil: Recoil, ticks: int = 120) -> list[float]:

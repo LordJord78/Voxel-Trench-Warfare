@@ -12,8 +12,9 @@ import numpy as np
 from panda3d.core import ColorAttrib, NodePath
 
 from ..combat.ballistics import ProjectilePool
+from ..combat.particles import ParticlePool
 from ..data import Tunables
-from .buffers import TRACER_FORMAT, DynamicGeometry, GeomLines
+from .buffers import TRACER_FORMAT, DynamicGeometry, GeomLines, quad_indices
 
 
 class TracerRenderer:
@@ -64,4 +65,55 @@ class TracerRenderer:
         )
 
 
-__all__ = ["TracerRenderer"]
+class ParticleRenderer:
+    """Camera-facing quads for muzzle flash, brass and debris.
+
+    Four vertices per particle, rewritten every frame into a buffer allocated
+    once for the pool's worst case. The quads are built against the camera's
+    own right and up vectors rather than with a billboard effect, because the
+    whole point of `DynamicGeometry` is that this costs one memcpy — pushing
+    the same work into per-particle scene-graph nodes is what the mesh class
+    would have done.
+    """
+
+    __slots__ = ("pool", "buffer", "path", "_colours")
+
+    def __init__(self, pool: ParticlePool, parent: NodePath) -> None:
+        self.pool = pool
+        self.buffer = DynamicGeometry(
+            TRACER_FORMAT,
+            "particles",
+            capacity=pool.capacity * 4,
+            index_capacity=pool.capacity * 6,
+        )
+        self.path = parent.attach_new_node(self.buffer.node)
+        self.path.set_attrib(ColorAttrib.make_vertex())
+        self.path.set_light_off(1)
+        self.path.set_shader_off(1)
+        self.path.set_depth_write(False)
+        self.path.set_bin("fixed", 35)
+        self._colours = np.zeros((0, 4), dtype=np.uint8)
+
+    def update(self, right: np.ndarray, up: np.ndarray) -> None:
+        centres, half, rgba = self.pool.billboards()
+        n = centres.shape[0]
+        if n == 0:
+            self.buffer.clear()
+            return
+        r = right[None, :] * half[:, None]
+        u = up[None, :] * half[:, None]
+        corners = np.empty((n, 4, 3), dtype=np.float32)
+        corners[:, 0] = centres - r - u
+        corners[:, 1] = centres + r - u
+        corners[:, 2] = centres + r + u
+        corners[:, 3] = centres - r + u
+        self.buffer.write(
+            {
+                "vertex": corners.reshape(-1, 3),
+                "color": np.repeat(rgba, 4, axis=0),
+            },
+            quad_indices(n),
+        )
+
+
+__all__ = ["TracerRenderer", "ParticleRenderer"]
