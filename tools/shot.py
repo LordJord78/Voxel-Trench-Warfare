@@ -22,6 +22,7 @@ def main() -> None:
     ap.add_argument("--tunables", type=Path, default=None)
     ap.add_argument("--bay", type=int, default=None,
                     help="stand on this front-line bay's firing step")
+    ap.add_argument("--fire", type=int, default=0, help="hold the trigger")
     ap.add_argument("--offscreen", action="store_true", default=True)
     args = ap.parse_args()
 
@@ -48,7 +49,13 @@ def main() -> None:
     if args.pitch is not None:
         session.player.pitch = args.pitch
 
+    ap_fire = getattr(args, "fire", 0)
     frontend = Frontend(session)
+    if ap_fire:
+        from trenchline.physics.character import MoveIntent
+
+        frontend._read_intent = lambda: MoveIntent(fire=True)  # type: ignore[method-assign]
+        frontend._apply_mouse = lambda: None  # type: ignore[method-assign]
     for _ in range(args.frames):
         frontend.app.taskMgr.step()
 

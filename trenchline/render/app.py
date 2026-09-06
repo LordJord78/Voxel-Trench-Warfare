@@ -71,6 +71,10 @@ class Frontend:
         camera.clip_plane_near = tun.f("camera.near_plane")
         camera.clip_plane_far = tun.f("camera.far_plane")
 
+        from .effects import TracerRenderer
+
+        self.tracers = TracerRenderer(session.projectiles, scene, tun)
+
         from ..ui.hud import Hud
 
         self.hud = Hud(session, self.app)
@@ -102,6 +106,8 @@ class Frontend:
         intent.strafe = float(held_keys["d"]) - float(held_keys["a"])
         intent.sprint = bool(held_keys["shift"])
         intent.jump = bool(held_keys["space"])
+        intent.fire = bool(held_keys["left mouse"])
+        intent.reload = bool(held_keys["r"])
 
         if self._edge("c", bool(held_keys["c"])):
             self._prone_latched = not self._prone_latched
@@ -151,6 +157,7 @@ class Frontend:
             session.tick()
 
         self.chunks.build_pending()
+        self.tracers.update()
         self._place_camera(camera, UVec3)
 
         stats = self.chunks.stats
@@ -158,7 +165,8 @@ class Frontend:
             real_dt,
             self.frame_stats.summary(),
             f"chunks {stats.nodes}  tris {stats.triangles // 1000}k  "
-            f"queue {session.world.dirty_count}  rebuild {stats.last_frame_ms:.2f} ms",
+            f"queue {session.world.dirty_count}  rebuild {stats.last_frame_ms:.2f} ms  "
+            f"rounds {session.projectiles.count}",
         )
         return task.cont
 
@@ -174,9 +182,15 @@ class Frontend:
         sway = math.sin(player.bob_phase * 0.5) * self.bob_amp * 0.6 * speed_ratio
         dip = -min(player.landing_impact, 8.0) / 8.0 * self.landing_dip
 
+        # Recoil moves the camera because it moves the aim: the round already
+        # left along session.recoil.aim(), so a camera that ignored it would be
+        # pointing somewhere the rifle is not.
+        recoil = session.recoil
         p = player.position
         camera.position = UVec3(p.x + sway * 0.4, p.y + eye + bob + dip, p.z)
-        camera.rotation = UVec3(-player.pitch, player.yaw, sway * 12.0)
+        camera.rotation = UVec3(
+            -(player.pitch + recoil.pitch), player.yaw + recoil.yaw, sway * 12.0
+        )
 
     def run(self, frames: int = 0) -> int:
         if frames > 0:

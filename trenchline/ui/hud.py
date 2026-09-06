@@ -58,7 +58,8 @@ class Hud:
         self.title.node().set_text(
             f"{session.generated.name}    {session.config.callsign}"
         )
-        self.stance = self._text("stance", left, -0.78, _INK, 0.048)
+        # Three lines now that the weapon is on it, so it starts higher.
+        self.stance = self._text("stance", left, -0.72, _INK, 0.048)
         self.status = self._text("status", left, -0.905, _DIM, 0.040)
         self.hint = self._text("hint", left, -0.965, _DIM, 0.034)
         self.hint.node().set_text(
@@ -152,7 +153,16 @@ class Hud:
             label += "  (no headroom)"
         filled = max(0, min(14, int(round(exposure * 10))))
         bar = "#" * filled + "." * (14 - filled)
-        self.stance.node().set_text(f"{label}\nEXPOSURE [{bar}] {exposure:.2f}")
+        weapon = session.weapon
+        ammo = (
+            "RELOADING"
+            if weapon.state.reloading
+            else f"{weapon.state.rounds:2d}/{weapon.spec.magazine}"
+        )
+        self.stance.node().set_text(
+            f"{label}\nEXPOSURE [{bar}] {exposure:.2f}\n"
+            f"{weapon.spec.name.upper()}   {ammo}"
+        )
 
         p = player.position
         bay = session.network.nearest_bay(p.x, p.z)
