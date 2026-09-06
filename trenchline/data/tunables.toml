@@ -182,6 +182,52 @@ reload_time_s       = 2.4
 automatic           = true
 tracer              = true
 
+# ---------------------------------------------------------------------------
+# RECOIL
+#
+# Every recoil number is here. Nothing is hard-coded in a weapon class; adding
+# a weapon means adding a [recoil.<key>] table, not editing logic.
+#
+# Two terms with different timescales:
+#   kick   an impulse into a damped spring anchored at zero. The snap. Set by
+#          settle_time_s directly, so "never fighting the gun for more than a
+#          fraction of a second" is a number you type, not one you infer.
+#   climb  an offset that accumulates over a burst, approaches a ceiling and
+#          bleeds off when you stop. The pattern you have to correct.
+#
+# Feel first: the whole thing is LIGHT. If it reads as weightless rather than
+# snappy, raise kick_pitch_deg before touching anything else.
+# ---------------------------------------------------------------------------
+
+[recoil.defaults]
+kick_pitch_deg      = 0.30
+kick_yaw_deg        = 0.00
+settle_time_s       = 0.20     # kick back to 2% of its peak in this long
+damping_ratio       = 1.00     # critically damped: fastest return, no bounce
+climb_ceiling_deg   = 2.00
+climb_per_shot_deg  = 0.30
+climb_recovery_s    = 0.30
+drift_yaw_deg       = 0.00
+drift_onset_shots   = 6.0
+drift_ramp_shots    = 4.0
+jitter_pitch_deg    = 0.03
+jitter_yaw_deg      = 0.05
+burst_reset_s       = 0.28     # off the trigger this long and the pattern resets
+
+# Tiny kick, a quick vertical climb that plateaus, and a mild rightward drift
+# that only shows up once you are past about six rounds.
+[recoil.assault_rifle]
+kick_pitch_deg      = 0.34
+settle_time_s       = 0.20     # peak lands 2 frames after the shot, gone in 0.22 s
+climb_ceiling_deg   = 1.65     # ~2.4 m of rise at 100 m, held on the trigger
+climb_per_shot_deg  = 0.27     # so the plateau arrives in about 8 rounds
+climb_recovery_s    = 0.26
+drift_yaw_deg       = 0.075    # rightward; positive yaw is right
+drift_onset_shots   = 6.0
+drift_ramp_shots    = 5.0
+jitter_pitch_deg    = 0.035
+jitter_yaw_deg      = 0.055
+
 [camera]
 fov                 = 90.0
 far_plane           = 320.0

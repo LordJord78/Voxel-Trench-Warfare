@@ -86,6 +86,9 @@ class MoveIntent:
     sprint: bool = False
     stance: Stance = Stance.STANDING
     """Requested posture; may be refused by a low ceiling."""
+    fire: bool = False
+    """Trigger held.  A semi-automatic weapon reads the edge, not the level."""
+    reload: bool = False
 
 
 @dataclass(slots=True)

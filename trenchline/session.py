@@ -13,7 +13,10 @@ from pathlib import Path
 
 import numpy as np
 
-from .core.events import EventBus
+from .combat.ballistics import Impact, ProjectilePool
+from .combat.recoil import Recoil, load_recoil
+from .combat.weapons import Weapon, load_weapon
+from .core.events import Event, EventBus
 from .core.loop import TICK_DT, FixedClock
 from .core.rng import GameRandom
 from .data import Tunables, load_tunables
@@ -31,6 +34,21 @@ class SessionConfig:
     tunables_path: Path | None = None
     callsign: str = "BADGER-2"
     """Fictional callsign for the player's element."""
+    weapon: str = "assault_rifle"
+
+
+@dataclass(frozen=True, slots=True)
+class WeaponFired(Event):
+    tick: int
+    weapon: str
+
+
+@dataclass(frozen=True, slots=True)
+class RoundImpact(Event):
+    """A round stopped somewhere.  Destruction and audio both listen for this."""
+
+    tick: int
+    impact: Impact
 
 
 @dataclass(slots=True)
@@ -71,6 +89,17 @@ class Session:
         )
         self.intent = MoveIntent()
 
+        self.projectiles = ProjectilePool(self.world, self.tun)
+        self.weapon: Weapon = load_weapon(
+            self.tun, self.config.weapon, self.projectiles,
+            self.stream("combat.dispersion"),
+        )
+        self.recoil: Recoil = load_recoil(
+            self.tun, self.config.weapon, self.stream("combat.recoil")
+        )
+        self.impacts: list[Impact] = []
+        """Last tick's impacts, for the renderer to read and for destruction."""
+
     def stream(self, label: str) -> GameRandom:
         """A named simulation RNG stream, created once and remembered.
 
@@ -88,8 +117,30 @@ class Session:
 
     def tick(self, dt: float = TICK_DT) -> None:
         self.controller.tick(self.player, self.intent, dt)
+        self._tick_combat(dt)
         self.bus.drain()
         self.stats.ticks += 1
+
+    def _tick_combat(self, dt: float) -> None:
+        # Stance is the same tradeoff here as everywhere else: prone shoulders
+        # more of the impulse and holds a tighter cone than standing does.
+        sway = self.controller.profile(self.player).sway_scale
+        self.weapon.sway_scale = sway
+        self.recoil.scale = sway
+
+        self.weapon.tick(dt)
+        self.recoil.tick(dt)
+        if self.intent.reload:
+            self.weapon.begin_reload()
+        if self.intent.fire and self.weapon.ready:
+            yaw, pitch = self.recoil.aim(self.player.yaw, self.player.pitch)
+            if self.weapon.fire(self.eye_position, yaw, pitch) >= 0:
+                self.recoil.shot()
+                self.bus.post(WeaponFired(tick=self.stats.ticks, weapon=self.weapon.spec.key))
+
+        self.impacts = self.projectiles.step(dt)
+        for impact in self.impacts:
+            self.bus.post(RoundImpact(tick=self.stats.ticks, impact=impact))
 
     def run_ticks(self, count: int, dt: float = TICK_DT) -> None:
         for _ in range(count):
@@ -200,7 +251,8 @@ class Session:
         vehicles join the digest by appearing here and nowhere else.
         """
         p, v = self.player.position, self.player.velocity
-        return [
+        recoil = self.recoil.state
+        rows: list[tuple[str, tuple[float, ...]]] = [
             (
                 "player",
                 (
@@ -213,8 +265,38 @@ class Session:
                     self.player.bob_phase,
                     self.player.landing_impact,
                 ),
-            )
+            ),
+            (
+                "recoil",
+                (
+                    recoil.kick_pitch, recoil.kick_yaw,
+                    recoil.kick_pitch_vel, recoil.kick_yaw_vel,
+                    recoil.climb_pitch, recoil.climb_yaw,
+                    float(recoil.shots), recoil.since_shot,
+                ),
+            ),
+            (
+                "weapon",
+                (
+                    float(self.weapon.state.rounds),
+                    self.weapon.state.since_shot,
+                    self.weapon.state.reload_left,
+                    float(self.weapon.state.shots_fired),
+                ),
+            ),
         ]
+        pool = self.projectiles
+        for slot in range(pool.count):
+            rows.append(
+                (
+                    f"round{slot}",
+                    (
+                        *pool.position[slot], *pool.velocity[slot],
+                        float(pool.distance[slot]), float(pool.age[slot]),
+                    ),
+                )
+            )
+        return rows
 
     def rng_digest(self) -> str:
         """Hash of how far every live RNG stream has advanced."""
