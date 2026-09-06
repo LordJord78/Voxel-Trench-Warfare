@@ -134,6 +134,42 @@ def test_crouching_on_the_firing_step_keeps_you_behind_the_parapet(game: Session
     )
 
 
+def test_the_fire_bay_is_a_fire_bay_and_not_a_corridor(game: Session) -> None:
+    """Width is walkway plus firing step, and both have to be usable.
+
+    3.0 m read as a communication trench.  The bay is 2.5 m: a 1.0 m walkway
+    and a 1.5 m step.  A body is 0.60 m across, so the walkway has room to pass
+    and the step has room to stand on, and the arithmetic is asserted rather
+    than left in a comment.
+    """
+    tun = game.tun
+    vs = tun.f("world.voxel_size")
+    body = tun.f("player.radius") * 2.0
+    width = tun.i("world.trench.width_voxels") * vs
+    structure = (
+        tun.i("world.trench.step_bench_voxels") + tun.i("world.trench.step_tread_voxels")
+    ) * vs
+    walkway = width - structure
+
+    assert 2.0 <= width <= 2.5, f"fire bay is {width:.1f} m wide"
+    assert walkway >= body, f"{walkway:.1f} m walkway will not pass a {body:.1f} m body"
+    assert walkway <= 1.2, f"{walkway:.1f} m walkway is a communication trench"
+    # Each tread column is worth one voxel of rise, and the step-up has to cover
+    # it, or the step is only mountable from the flight at the end of the bay.
+    assert vs <= tun.f("player.step_up")
+    across = (tun.i("world.trench.step_tread_voxels") + 1) * vs
+    assert across >= tun.i("world.trench.firing_step_min") * vs, (
+        "the shortest step is already too tall to mount by walking at it"
+    )
+
+    for line in ("front", "enemy_front"):
+        for bay in game.network.lines[line].bays:
+            span = (bay.x1 - bay.x0) if bay.long_axis == 2 else (bay.z1 - bay.z0)
+            assert span * vs == pytest.approx(width), (
+                f"{line} bay {bay.index} is {span * vs:.1f} m wide"
+            )
+
+
 def test_crest_clearance_is_guaranteed_per_bay(game: Session) -> None:
     """The peek is arithmetic, not luck.
 

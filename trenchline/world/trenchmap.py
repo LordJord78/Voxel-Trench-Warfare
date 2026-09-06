@@ -46,17 +46,16 @@ class Bay:
     walk_z: float
     """Voxel-space centre of the *clear* walkway: the firing step is standing
     in part of the bay, and spawning on top of it means spawning inside it."""
+    long_axis: int = 0
+    """0 if the trench runs along x, 2 if along z.  Stored rather than inferred
+    from the extents: the last bay on a line is often a stub shorter than the
+    trench is wide, and guessing from which side is longer gets it backwards."""
     ground_y: int = 0
     """Local field surface, for reporting how far the parapet stands proud."""
 
     @property
     def has_firing_step(self) -> bool:
         return self.step_top_y > self.floor_y + 1
-
-    @property
-    def long_axis(self) -> int:
-        """0 if the trench runs along x, 2 if along z."""
-        return 0 if (self.x1 - self.x0) >= (self.z1 - self.z0) else 2
 
     @property
     def centre_voxel(self) -> tuple[int, int, int]:

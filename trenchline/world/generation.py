@@ -505,6 +505,7 @@ def _carve_trench_line(
                 crest_y=plan.crest_y,
                 walk_x=walk_x,
                 walk_z=walk_z,
+                long_axis=long_axis,
                 ground_y=plan.ground_y,
             )
         )
@@ -859,6 +860,39 @@ def _collapsed_culvert(
     return ((cx + 0.5) * s, base * s, (cz + 0.5) * s)
 
 
+def _pick_spawn(v: np.ndarray, line: TrenchLine) -> tuple[float, float, float]:
+    """Stand the player on duckboards that a shell has not already taken.
+
+    Craters are cut after the trench is dug, and four of them per line are
+    aimed at it deliberately.  Spawning on the geometric middle bay therefore
+    sometimes meant spawning in a hole in the walkway, one voxel below the
+    duckboards it was supposed to be standing on and too low to climb back onto
+    the firing step.  Search outward from the middle for a bay whose walkway is
+    still there, and fall back to the middle if the whole line has been ploughed.
+    """
+    bays = line.bays
+    if not bays:
+        return (0.0, 0.0, 0.0)
+    nx, ny, nz = v.shape
+    middle = len(bays) // 2
+    order = sorted(range(len(bays)), key=lambda i: (abs(i - middle), i))
+    for index in order:
+        bay = bays[index]
+        x, z = int(bay.walk_x), int(bay.walk_z)
+        if not (0 <= x < nx and 0 <= z < nz):
+            continue
+        floor = bay.floor_y
+        if v[x, floor, z] != voxel.DUCKBOARD:
+            continue
+        headroom = v[x, floor + 1 : min(ny, floor + 5), z]
+        if (headroom != voxel.AIR).any():
+            continue
+        s = voxel.VOXEL_SIZE
+        return (bay.walk_x * s, (floor + 1) * s + 0.05, bay.walk_z * s)
+    sx, sy, sz = bays[middle].centre_metres
+    return (sx, sy + 0.05, sz)
+
+
 # ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
@@ -964,9 +998,7 @@ def generate(rng: GameRandom, tun: Tunables) -> GeneratedWorld:
     water_sim.settle(v)
     world.mark_all_dirty()
 
-    spawn_bay = network.lines["front"].bays[len(network.lines["front"].bays) // 2]
-    sx, sy, sz = spawn_bay.centre_metres
-    spawn = (sx, sy + 0.05, sz)
+    spawn = _pick_spawn(v, network.lines["front"])
 
     return GeneratedWorld(
         world=world,

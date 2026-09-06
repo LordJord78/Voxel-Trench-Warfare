@@ -66,6 +66,28 @@ def ground_height_under(
     return None
 
 
+def support_is(
+    world: VoxelWorld, centre: Vec3, half_x: float, material: int
+) -> bool:
+    """Is any of what the body is standing on made of `material`?
+
+    Sampling the single voxel under the body's centre is not the same question:
+    a man with one boot on a firing-step tread and one over the walkway is
+    standing on the step, but the voxel under his centre is air.
+    """
+    s = voxel.VOXEL_SIZE
+    x0 = math.floor((centre.x - half_x + _EPS) / s)
+    x1 = math.floor((centre.x + half_x - _EPS) / s) + 1
+    z0 = math.floor((centre.z - half_x + _EPS) / s)
+    z1 = math.floor((centre.z + half_x - _EPS) / s) + 1
+    y = math.floor((centre.y - s * 0.5) / s)
+    for x in range(x0, x1):
+        for z in range(z0, z1):
+            if world.get(x, y, z) == material:
+                return True
+    return False
+
+
 def submerged_depth(world: VoxelWorld, centre: Vec3, height: float) -> float:
     """How much of an upright body is in water, in metres."""
     s = voxel.VOXEL_SIZE

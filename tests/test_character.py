@@ -49,15 +49,37 @@ def test_player_cannot_walk_through_the_trench_wall() -> None:
 
 
 def test_walking_down_the_bay_is_stopped_by_the_traverse() -> None:
+    """A traverse is a dead end, except where the shelling has opened one.
+
+    Walked from one bay this passed or failed on whether that particular
+    traverse had taken a direct hit, which is luck rather than a property.  It
+    now walks out of every bay on the line and requires the traverse to hold in
+    the large majority of them, matching how the sightline tests treat breaches.
+    """
     game = _fresh()
-    game.run_ticks(30)
-    game.player.yaw = 90.0
-    game.intent = MoveIntent(forward=1.0)
-    game.run_ticks(300)
-    travelled = abs(game.player.position.x - game.generated.spawn[0])
     bay_length = game.tun.f("world.trench.bay_length_m")
-    assert travelled < bay_length + 4.0, (
-        f"travelled {travelled:.1f} m down the line; the traverse should stop you"
+    limit = bay_length + 4.0
+    stopped = 0
+    walked: list[float] = []
+
+    for bay in game.network.lines["front"].bays:
+        cx, cy, cz = bay.centre_metres
+        game.player.position = Vec3(cx, cy + 0.05, cz)
+        game.player.velocity = Vec3(0.0, 0.0, 0.0)
+        game.intent = MoveIntent()
+        game.run_ticks(20)
+        start = game.player.position.x
+        game.player.yaw = 90.0
+        game.intent = MoveIntent(forward=1.0)
+        game.run_ticks(300)
+        travelled = abs(game.player.position.x - start)
+        walked.append(travelled)
+        if travelled < limit:
+            stopped += 1
+
+    assert stopped >= len(walked) * 0.75, (
+        f"only {stopped}/{len(walked)} bays stopped a man walking down the line "
+        f"within {limit:.0f} m: {[round(d, 1) for d in walked]}"
     )
 
 

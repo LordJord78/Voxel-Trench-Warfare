@@ -17,7 +17,12 @@ from enum import IntEnum
 from ..data import Tunables
 from ..world import voxel
 from ..world.chunks import VoxelWorld
-from .collision import box_hits_solid, ground_height_under, submerged_depth
+from .collision import (
+    box_hits_solid,
+    ground_height_under,
+    submerged_depth,
+    support_is,
+)
 from .vec import Vec3, ZERO, yaw_basis
 
 
@@ -310,8 +315,9 @@ class CharacterController:
         pos = state.position
         state.wade_depth = submerged_depth(self.world, pos, state.height)
 
-        below = self.world.material_at(pos.x, pos.y - voxel.VOXEL_SIZE * 0.5, pos.z)
-        state.on_firing_step = state.on_ground and below == voxel.TIMBER
+        state.on_firing_step = state.on_ground and support_is(
+            self.world, pos, self.radius, voxel.TIMBER
+        )
 
         speed = state.horizontal_speed()
         if state.on_ground and speed > 0.2:
