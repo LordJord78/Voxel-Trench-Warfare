@@ -150,6 +150,38 @@ sway_scale          = 0.85
 exposure            = 1.35
 transition_time     = 0.30
 
+# ---------------------------------------------------------------------------
+# BALLISTICS
+#
+# Real physics, arcade nothing. Rounds are integrated with quadratic drag and
+# real gravity — not the player's 2 g, which is a movement-feel number and has
+# no business deciding where a bullet lands 300 m away.
+# ---------------------------------------------------------------------------
+
+[ballistics]
+gravity             = -9.81    # m/s^2, actual
+air_density         = 1.225    # kg/m^3 at sea level, 15 C
+substeps_per_tick   = 4        # 240 Hz integration under a 60 Hz tick: a rifle
+                               # round covers 3.7 m per tick and 0.9 m per
+                               # substep, which is under two voxels
+pool_capacity       = 256      # rounds in the air at once; full is full
+max_range_m         = 400.0    # wider than the 128 m map, so nothing vanishes
+                               # mid-flight over open ground
+max_flight_time_s   = 4.0
+
+[weapon.assault_rifle]
+name                = "5.45 assault rifle"
+muzzle_velocity     = 880.0    # m/s
+projectile_mass_kg  = 0.00343  # 3.43 g
+drag_coefficient    = 0.295    # G7-ish for a boat-tailed spitzer
+cross_section_m2    = 0.0000238   # 5.45 mm bore
+rounds_per_minute   = 650.0
+magazine            = 30
+dispersion_moa      = 3.2      # cone half-angle, scaled by stance sway
+reload_time_s       = 2.4
+automatic           = true
+tracer              = true
+
 [camera]
 fov                 = 90.0
 far_plane           = 320.0
