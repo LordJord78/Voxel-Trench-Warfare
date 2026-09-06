@@ -49,6 +49,13 @@ class Session:
         self.clock = FixedClock()
         self.stats = SessionStats()
 
+        self.streams: dict[str, GameRandom] = {"root": self.rng}
+        """Every sub-stream that outlives generation, by label.
+
+        Registered rather than derived ad hoc so the determinism digest can hash
+        where each one has got to.  `worldgen` is deliberately absent: it is
+        consumed before the first tick and its result is in the voxels."""
+
         self.generated: GeneratedWorld = generate(self.rng.derive("worldgen"), self.tun)
         self.world: VoxelWorld = self.generated.world
         self.network: TrenchNetwork = self.generated.network
@@ -64,6 +71,19 @@ class Session:
         )
         self.intent = MoveIntent()
 
+    def stream(self, label: str) -> GameRandom:
+        """A named simulation RNG stream, created once and remembered.
+
+        Systems ask for their own stream by name instead of sharing one, so the
+        order in which they draw cannot couple them, and so the determinism
+        digest can see every one of them.
+        """
+        existing = self.streams.get(label)
+        if existing is None:
+            existing = self.rng.derive(label)
+            self.streams[label] = existing
+        return existing
+
     # -- simulation ------------------------------------------------------
 
     def tick(self, dt: float = TICK_DT) -> None:
@@ -73,6 +93,42 @@ class Session:
 
     def run_ticks(self, count: int, dt: float = TICK_DT) -> None:
         for _ in range(count):
+            self.tick(dt)
+
+    def scripted_intent(self, script: str, tick: int) -> MoveIntent:
+        """Deterministic synthetic input, so a headless run exercises things.
+
+        Lives here rather than in the CLI because the determinism test has to
+        drive the simulation exactly the way `--headless` drives it; two copies
+        of this would mean the golden digests measured something the game never
+        actually runs.
+        """
+        intent = MoveIntent()
+        if script == "idle":
+            return intent
+        if script == "walk":
+            intent.forward = 1.0
+            return intent
+        if script == "patrol":
+            # Walk the bay, turn about, sprint back, drop prone for a spell.
+            phase = (tick // 90) % 4
+            intent.forward = 1.0 if phase in (0, 2) else -0.6
+            intent.sprint = phase == 2
+            intent.stance = Stance.PRONE if phase == 3 else Stance.STANDING
+            self.player.yaw = 90.0 if phase < 2 else 270.0
+            return intent
+        rng = self.stream("input.script")
+        intent.forward = rng.uniform(-1.0, 1.0)
+        intent.strafe = rng.uniform(-1.0, 1.0)
+        intent.jump = rng.chance(0.02)
+        intent.sprint = rng.chance(0.2)
+        intent.stance = rng.choice((Stance.STANDING, Stance.CROUCHED, Stance.PRONE))
+        self.player.yaw = (self.player.yaw + rng.jitter(6.0)) % 360.0
+        return intent
+
+    def run_scripted(self, script: str, ticks: int, dt: float = TICK_DT) -> None:
+        for tick in range(ticks):
+            self.intent = self.scripted_intent(script, tick)
             self.tick(dt)
 
     # -- introspection ---------------------------------------------------
@@ -103,16 +159,93 @@ class Session:
         out.sort(key=lambda c: abs((c[2] + 0.5) * s - z))
         return out
 
-    def state_digest(self) -> str:
-        """Short hash of everything a replay must reproduce."""
-        h = hashlib.blake2b(digest_size=12)
-        p, v = self.player.position, self.player.velocity
-        for value in (p.x, p.y, p.z, v.x, v.y, v.z, self.player.yaw,
-                      self.player.pitch, self.player.height):
-            h.update(f"{value:.6f}".encode())
-        h.update(bytes([int(self.player.stance), int(self.player.on_ground)]))
-        h.update(np.ascontiguousarray(self.world.v[::7, ::5, ::7]).tobytes())
+    # -- determinism -----------------------------------------------------
+
+    def world_digest(self) -> str:
+        """Hash of the generated world: every voxel, plus what was placed where.
+
+        Whole array, not a stride sample.  A stride of 7 misses six voxels out of
+        seven, which is exactly where a one-voxel generation drift would hide.
+        """
+        h = hashlib.blake2b(digest_size=16)
+        h.update(np.ascontiguousarray(self.world.v).tobytes())
+        h.update(f"{self.generated.spawn}".encode())
+        h.update(repr(self.generated.craters).encode())
+        h.update(repr(sorted(self.generated.landmarks.items())).encode())
+        for name in sorted(self.network.lines):
+            line = self.network.lines[name]
+            for bay in line.bays:
+                h.update(
+                    f"{bay.index},{bay.floor_y},{bay.step_top_y},{bay.crest_y},"
+                    f"{bay.step_lo},{bay.step_span},{bay.ground_y}".encode()
+                )
+        for dugout in self.network.dugouts:
+            h.update(f"{dugout.lo}{dugout.hi}{dugout.entrance}".encode())
+        h.update(repr(self.network.graph.nodes).encode())
         return h.hexdigest()
+
+    def entity_digest(self) -> str:
+        """Hash of every transform the simulation is carrying."""
+        h = hashlib.blake2b(digest_size=16)
+        for name, values in self._entity_rows():
+            h.update(name.encode())
+            for value in values:
+                h.update(f"{value:.9f}".encode())
+        return h.hexdigest()
+
+    def _entity_rows(self) -> list[tuple[str, tuple[float, ...]]]:
+        """(name, numbers) for everything with a transform.
+
+        A list rather than the player's fields inline, so projectiles and
+        vehicles join the digest by appearing here and nowhere else.
+        """
+        p, v = self.player.position, self.player.velocity
+        return [
+            (
+                "player",
+                (
+                    p.x, p.y, p.z, v.x, v.y, v.z,
+                    self.player.yaw, self.player.pitch, self.player.height,
+                    float(self.player.stance),
+                    float(self.player.on_ground),
+                    float(self.player.on_firing_step),
+                    self.player.wade_depth,
+                    self.player.bob_phase,
+                    self.player.landing_impact,
+                ),
+            )
+        ]
+
+    def rng_digest(self) -> str:
+        """Hash of how far every live RNG stream has advanced."""
+        h = hashlib.blake2b(digest_size=16)
+        for label in sorted(self.streams):
+            h.update(label.encode())
+            h.update(self.streams[label].state_json().encode())
+        return h.hexdigest()
+
+    def state_digest(self) -> str:
+        """One digest over the whole simulation state.
+
+        Voxels, transforms and RNG position, so a replay that reproduces this
+        reproduces the run.  The three parts are also available separately,
+        because "the world changed" and "the physics changed" want different
+        answers when this starts failing.
+        """
+        h = hashlib.blake2b(digest_size=16)
+        h.update(self.world_digest().encode())
+        h.update(self.entity_digest().encode())
+        h.update(self.rng_digest().encode())
+        h.update(f"{self.stats.ticks}".encode())
+        return h.hexdigest()
+
+    def digests(self) -> dict[str, str]:
+        return {
+            "world": self.world_digest(),
+            "entities": self.entity_digest(),
+            "rng": self.rng_digest(),
+            "state": self.state_digest(),
+        }
 
     def describe(self) -> str:
         p = self.player.position

@@ -13,8 +13,6 @@ import time
 from pathlib import Path
 
 from .core.loop import TICK_DT, TICK_HZ
-from .core.rng import GameRandom
-from .physics.character import MoveIntent, Stance
 from .session import Session, SessionConfig
 
 
@@ -42,39 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def _scripted_intent(script: str, tick: int, rng: GameRandom, session: Session) -> MoveIntent:
-    """Deterministic synthetic input, so headless runs actually exercise things."""
-    intent = MoveIntent()
-    if script == "idle":
-        return intent
-    if script == "walk":
-        intent.forward = 1.0
-        return intent
-    if script == "patrol":
-        # Walk the bay, turn about, sprint back, drop prone for a spell.
-        phase = (tick // 90) % 4
-        intent.forward = 1.0 if phase in (0, 2) else -0.6
-        intent.sprint = phase == 2
-        intent.stance = Stance.PRONE if phase == 3 else Stance.STANDING
-        session.player.yaw = 90.0 if phase < 2 else 270.0
-        return intent
-    intent.forward = rng.uniform(-1.0, 1.0)
-    intent.strafe = rng.uniform(-1.0, 1.0)
-    intent.jump = rng.chance(0.02)
-    intent.sprint = rng.chance(0.2)
-    intent.stance = rng.choice((Stance.STANDING, Stance.CROUCHED, Stance.PRONE))
-    session.player.yaw = (session.player.yaw + rng.jitter(6.0)) % 360.0
-    return intent
-
-
 def run_headless(args: argparse.Namespace) -> int:
     session = Session(SessionConfig(seed=args.seed, tunables_path=args.tunables))
-    rng = session.rng.derive("headless.input")
     print(session.describe())
 
     start = time.perf_counter()
     for tick in range(args.ticks):
-        session.intent = _scripted_intent(args.script, tick, rng, session)
+        session.intent = session.scripted_intent(args.script, tick)
         session.tick()
         if args.report_every and (tick + 1) % args.report_every == 0:
             print(f"t={tick + 1:5d}  {session.describe()}")

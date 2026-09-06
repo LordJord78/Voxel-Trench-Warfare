@@ -7,17 +7,82 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+from tools import golden
 from trenchline.core.rng import GameRandom
 from trenchline.session import Session, SessionConfig
+from trenchline.world import voxel
 
 ROOT = Path(__file__).resolve().parent.parent
+GOLDEN = golden.load()
+GOLDEN_CASES = list(golden.CASES)
 
 
 def _run(seed: int, ticks: int) -> str:
     session = Session(SessionConfig(seed=seed))
     session.run_ticks(ticks)
     return session.state_digest()
+
+
+# -- golden digests ----------------------------------------------------------
+
+
+@pytest.mark.parametrize("case", GOLDEN_CASES, ids=golden.case_key)
+def test_state_matches_the_committed_golden(case: dict) -> None:
+    """The same seed still produces the same run, byte for byte.
+
+    98 passing tests do not prove determinism; they prove the things they
+    assert.  This hashes the whole simulation state — every voxel, every
+    transform, and how far every RNG stream has advanced — and compares it to a
+    value committed to the repository.
+
+    If this fails, something changed the run. That is often legitimate: new
+    physics, a new RNG stream, a change to generation. The point is that it is
+    never *silent*. Look at which part moved (the three sub-digests below say
+    which), satisfy yourself the change was intended, then regenerate with
+    `python -m tools.golden --update` and commit the diff.
+    """
+    committed = GOLDEN.get(golden.case_key(case))
+    assert committed, (
+        f"no golden digest for {golden.case_key(case)}; "
+        "run `python -m tools.golden --update`"
+    )
+    assert golden.run_case(case)["state"] == committed["state"], (
+        "simulation state has drifted from the committed golden"
+    )
+
+
+@pytest.mark.parametrize("case", GOLDEN_CASES, ids=golden.case_key)
+@pytest.mark.parametrize("part", ["world", "entities", "rng"])
+def test_each_part_of_the_state_matches_the_golden(case: dict, part: str) -> None:
+    """Which half of the state moved: the world, the bodies, or the dice."""
+    committed = GOLDEN.get(golden.case_key(case), {})
+    assert golden.run_case(case)[part] == committed.get(part), (
+        f"{part} digest has drifted from the committed golden"
+    )
+
+
+def test_the_digest_notices_a_single_changed_voxel() -> None:
+    """A golden test is only worth having if it can actually fail."""
+    session = Session(SessionConfig(seed=5))
+    before = session.state_digest()
+    x, y, z = session.generated.spawn
+    session.world.set(int(x / 0.5), int(y / 0.5) + 6, int(z / 0.5), voxel.SANDBAG)
+    assert session.state_digest() != before
+
+
+def test_the_digest_notices_an_extra_rng_draw() -> None:
+    """The stream position is part of the state, not an implementation detail.
+
+    A system that quietly draws one extra number produces an identical world
+    today and a divergent one the moment anything downstream of it draws again.
+    """
+    session = Session(SessionConfig(seed=5))
+    session.stream("ballistics")
+    before = session.state_digest()
+    session.stream("ballistics").uniform()
+    assert session.state_digest() != before
 
 
 def test_same_seed_same_world() -> None:

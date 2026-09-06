@@ -88,6 +88,22 @@ step does not shift the numbers every other system receives. The simulation
 advances only in whole 1/60 s ticks; rendering is decoupled and interpolates.
 Same seed produces the same map and the same simulation, headless or windowed.
 
+That claim is held up by a golden test rather than by inference. `Session`
+hashes its whole state — every voxel, every transform, and how far every named
+RNG stream has advanced — and `tests/golden_digests.json` records what three
+fixed seed/script/tick-count cases are supposed to produce. A 0.02% change to
+one movement tunable moves the digest.
+
+When it fails, look at which of the three sub-digests moved (`world`,
+`entities`, `rng`), satisfy yourself the change was intended, then:
+
+```bash
+.venv/bin/python -m tools.golden            # show current vs committed
+.venv/bin/python -m tools.golden --update   # rewrite, then commit the diff
+```
+
+Regenerating is deliberate and reviewable. The test never does it for itself.
+
 ## Engine note
 
 Ursina holds 60 FPS comfortably, but only if its convenience wrappers are

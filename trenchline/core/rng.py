@@ -12,6 +12,7 @@ Two runs with the same seed produce the same map and the same ballistics.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Sequence, TypeVar
 
 import numpy as np
@@ -77,6 +78,19 @@ class GameRandom:
     def jitter(self, magnitude: float) -> float:
         """Symmetric noise in [-magnitude, +magnitude]."""
         return float(self._gen.uniform(-magnitude, magnitude))
+
+    # -- introspection ---------------------------------------------------
+
+    def state_json(self) -> str:
+        """Exact position in the stream, as a stable string.
+
+        This is what makes "did the RNG drift?" a testable question rather than
+        an inference from downstream numbers.  A system that draws one extra
+        value moves this even when the world it produced happens to look the
+        same, which is the failure that is otherwise invisible until a replay
+        diverges hours later.
+        """
+        return json.dumps(self._gen.bit_generator.state, sort_keys=True, default=str)
 
     def __repr__(self) -> str:
         return f"GameRandom({self.label!r}, entropy={self._seq.entropy})"

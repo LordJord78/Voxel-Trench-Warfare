@@ -1,0 +1,40 @@
+{
+  "_comment": "Committed determinism digests. Regenerate deliberately with `python -m tools.golden --update` and review the diff: a change here means the same seed no longer produces the same run.",
+  "cases": [
+    {
+      "seed": 7,
+      "ticks": 600,
+      "script": "patrol"
+    },
+    {
+      "seed": 21,
+      "ticks": 600,
+      "script": "random"
+    },
+    {
+      "seed": 99,
+      "ticks": 240,
+      "script": "walk"
+    }
+  ],
+  "digests": {
+    "seed7-patrol-600": {
+      "world": "4508abfe4b05a5502249e48b280aecea",
+      "entities": "63026f669b41ffb440a8b6c4fe7e57e1",
+      "rng": "26a9f528c9f54bbf07ffd4dbd1ae36bc",
+      "state": "977e85b7dec545391c60a1a85097bb30"
+    },
+    "seed21-random-600": {
+      "world": "a1c8ca127ab2e66b7b77cea28dfc10a1",
+      "entities": "7dc38dea99b6e493c1e2440348dd0e96",
+      "rng": "564609c11678cc6f6cc30332e4dc2834",
+      "state": "db20cef5fc9c966e2aa621e151eb83f9"
+    },
+    "seed99-walk-240": {
+      "world": "e57e7bf60cf69f94310fb9f540319ae8",
+      "entities": "8e55f40d59887f580541d712c206fc3f",
+      "rng": "3e163aca3e23556dbf7a659369b5cff8",
+      "state": "f6ee06bc7515bdac8a038554cfeeb7e0"
+    }
+  }
+}
