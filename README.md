@@ -113,6 +113,15 @@ geometry is written straight into a Panda3D `GeomVertexData` via numpy memcpy
 (~0.14 ms/chunk) and the HUD is built on `TextNode`. Ursina supplies the window,
 input, camera and scene graph.
 
+That memcpy path is `render/buffers.py`, and it is shared. Terrain, tracers,
+muzzle dust, impact debris and the drone overlay all need it, in two lifetimes:
+
+- `build_static` — sized exactly, uploaded once, discarded on rebuild. Terrain.
+- `DynamicGeometry` — allocates its worst case once, then only memcpies a
+  prefix and moves the draw count. A frame with nine tracers costs nine
+  tracers' worth of copy and no allocation, because reallocating a vertex
+  buffer every frame is what makes particle systems stutter.
+
 ## Tuning
 
 Every number that decides how the game *feels* is in

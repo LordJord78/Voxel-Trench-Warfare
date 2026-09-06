@@ -36,6 +36,18 @@ _FACE_SHADE: tuple[float, ...] = (0.79, 0.73, 1.00, 0.50, 0.87, 0.65)
 
 _QUAD_INDICES = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
 
+
+def quad_indices(quads: int) -> np.ndarray:
+    """Two triangles per quad, for `quads` consecutive groups of four.
+
+    Kept here rather than in `render/`: the mesher is engine-agnostic and tests
+    index its output without an engine present.  `render.buffers` has the same
+    helper for geometry it builds itself.
+    """
+    base = (np.arange(quads, dtype=np.uint32) * 4)[:, None]
+    return (_QUAD_INDICES[None, :] + base).reshape(-1)
+
+
 _EMPTY_F32 = np.zeros((0, 3), dtype=np.float32)
 _EMPTY_U8 = np.zeros((0, 4), dtype=np.uint8)
 _EMPTY_U32 = np.zeros((0,), dtype=np.uint32)
@@ -205,8 +217,6 @@ def greedy_mesh(padded: np.ndarray, voxel_size: float = voxel.VOXEL_SIZE) -> Chu
     positions = np.concatenate(pos_chunks) * np.float32(voxel_size)
     normals = np.ascontiguousarray(np.concatenate(nrm_chunks), dtype=np.float32)
     colours = np.concatenate(col_chunks)
-    indices = (
-        _QUAD_INDICES[None, :] + (np.arange(total_quads, dtype=np.uint32) * 4)[:, None]
-    ).reshape(-1)
+    indices = quad_indices(total_quads)
 
     return ChunkMesh(positions, normals, colours, indices, total_quads)
