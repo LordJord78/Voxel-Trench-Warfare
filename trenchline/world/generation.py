@@ -17,6 +17,7 @@ Layout, looking from the friendly rear (-z) toward the enemy (+z):
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -107,6 +108,34 @@ def _lay_strata(v: np.ndarray, surface: np.ndarray) -> None:
     ).astype(np.uint8)
 
 
+def _swale(nz: int, front_z: int, enemy_front_z: int, tun: Tunables) -> np.ndarray:
+    """The ground between the lines, sagging into a shallow dry watercourse.
+
+    Amplitude alone does not make no-man's-land read.  A man on a firing step
+    has his eye 1.1 m over the field, so ground past about 20 m is edge-on to
+    him and a flat plate is exactly what he sees, whatever the relief is doing
+    vertically — raise the same view 3 m and the craters are obvious.  What
+    makes ground read is ground that *faces* you, and the cheapest honest way
+    to get that across 100 m of open field is to put both trench lines on the
+    shoulders of a shallow depression, which is what the map is named for.
+
+    A concave surface is fully visible from its own rim, so this costs no
+    fairness: each side overlooks the same dip, and the far shoulder rising
+    toward the enemy line is what the 60 m mark lands on.
+
+    Returns a per-z offset in voxels, zero outside the depression.
+    """
+    dip = tun.f("world.field.swale_depth_m") / tun.f("world.voxel_size")
+    if dip <= 0.0:
+        return np.zeros(nz, dtype=np.int32)
+    margin = tun.f("world.field.swale_margin_voxels")
+    centre = 0.5 * (front_z + enemy_front_z)
+    half = max(1.0, 0.5 * (enemy_front_z - front_z) + margin)
+    t = np.clip(np.abs(np.arange(nz, dtype=np.float32) - centre) / half, 0.0, 1.0)
+    hump = 0.5 * (1.0 + np.cos(np.pi * t))
+    return -np.round(dip * hump).astype(np.int32)
+
+
 def _plough_stripes(v: np.ndarray, surface: np.ndarray, rng: GameRandom) -> None:
     """Alternate the top voxel between sod and turned mud: ploughed fields."""
     nx, _, nz = v.shape
@@ -137,6 +166,29 @@ class _LineSpec:
     facing: int
     firing_steps: bool
     dugout_every: int
+
+
+@dataclass(slots=True)
+class _BayPlan:
+    """Every height for one bay, settled before a single voxel is written.
+
+    Planning the whole line first is what lets the crest be a *guarantee*:
+    each bay works out how high it has to stand to see its own ground, the
+    line is then smoothed so the crest does not saw up and down between
+    neighbours, and only then is anything carved.
+    """
+
+    a0: int
+    a1: int
+    b0: int
+    b1: int
+    ground_y: int
+    floor_y: int
+    step_top_y: int
+    crest_y: int
+    step_lo: int
+    step_span: int
+    walk_b: float
 
 
 def _pile_to(
@@ -173,6 +225,50 @@ def _pile_to(
         v[x2[air], y2[air], z2[air]] = material
 
 
+def _corridor_height(
+    surface: np.ndarray,
+    long_axis: int,
+    facing: int,
+    a0: int,
+    a1: int,
+    front_edge: int,
+    reach: int,
+    near: int,
+    percentile: float,
+) -> int:
+    """How high the ground gets in the strip this bay has to see over.
+
+    Two numbers, because they fail differently.  A rise anywhere in the corridor
+    costs you distance; a rise in the first few metres walls you in completely.
+    We take a high percentile of the whole strip and the maximum of the near
+    band, and answer with whichever is worse.
+
+    This reads the *field* heightmap, which is the terrain the parapet has to
+    beat.  Craters come later and mostly dig down; their ejecta is one voxel,
+    which the sight margin covers.
+    """
+    if facing > 0:
+        wide = (front_edge, front_edge + reach)
+        close = (front_edge, front_edge + near)
+    else:
+        wide = (front_edge - reach, front_edge)
+        close = (front_edge - near, front_edge)
+
+    def patch(span: tuple[int, int]) -> np.ndarray:
+        lo, hi = max(0, span[0]), max(0, span[1])
+        if long_axis == 0:
+            return surface[max(0, a0) : a1, lo:hi]
+        return surface[lo:hi, max(0, a0) : a1]
+
+    far_patch = patch(wide)
+    if far_patch.size == 0:
+        return int(np.median(surface))
+    near_patch = patch(close)
+    far_h = float(np.percentile(far_patch, percentile))
+    near_h = float(near_patch.max()) if near_patch.size else far_h
+    return int(math.ceil(max(far_h, near_h)))
+
+
 def _carve_trench_line(
     v: np.ndarray,
     surface: np.ndarray,
@@ -187,16 +283,78 @@ def _carve_trench_line(
     a constant depth rather than a level cut through rolling ground.  Adjacent
     bays are clamped to within one voxel of each other so the duckboards step
     rather than drop.
+
+    The parapet crest is *not* a constant the terrain has to stay under.  Each
+    fire bay measures the ground it is supposed to see over, raises its firing
+    step until a standing eye clears that ground, and then builds its crest at
+    `step_top + floor(standing eye)` — high enough that a crouched man on the
+    same step is behind it.  Clearance is therefore guaranteed locally, and the
+    field is free to have as much relief as it likes.
     """
     vs = tun.f("world.voxel_size")
     width = tun.i("world.trench.width_voxels")
     depth = tun.i("world.trench.depth_voxels")
-    step_h = tun.i("world.trench.firing_step_height")
-    parapet_h = tun.i("world.trench.parapet_height")
+    bench = tun.i("world.trench.step_bench_voxels")
+    treads = tun.i("world.trench.step_tread_voxels")
+    parapet_min = tun.i("world.trench.parapet_min_height")
     parados_h = tun.i("world.trench.parados_height")
+    thickness = tun.i("world.trench.parapet_thickness")
+    step_min = tun.i("world.trench.firing_step_min")
+    step_max = tun.i("world.trench.firing_step_max")
+    smooth = tun.i("world.trench.crest_smoothing_voxels")
+    reach = max(1, int(round(tun.f("world.trench.sight_range_m") / vs)))
+    near = max(1, int(round(tun.f("world.trench.sight_near_m") / vs)))
+    percentile = tun.f("world.trench.sight_percentile")
+    margin = tun.f("world.trench.sight_margin_m") / vs
     bay_len = max(4, int(round(tun.f("world.trench.bay_length_m") / vs)))
     offset = width + max(2, int(round(tun.f("world.trench.traverse_offset_m") / vs)) - 2)
     leg = 3
+
+    # The peek mechanic, stated as arithmetic rather than as a comment.  The
+    # crest sits `crest_rise` voxels over the bench; a standing eye is above it
+    # and a crouched eye is below it, and both halves are checked here so a
+    # careless edit to an eye height fails loudly at generation instead of
+    # quietly turning the parapet into a wall.
+    eye_stand = tun.f("player.eye_height_standing") / vs
+    eye_crouch = tun.f("player.eye_height_crouched") / vs
+    crest_rise = int(math.floor(eye_stand))
+    if not eye_crouch < crest_rise < eye_stand:
+        raise ValueError(
+            f"no whole-voxel crest gives a peek: standing eye {eye_stand:.2f} vx, "
+            f"crouched {eye_crouch:.2f} vx. The crest must land strictly between "
+            "them, so the two eye heights have to straddle an integer."
+        )
+    # How much rise the across-bay treads can carry on their own.  Each column
+    # buys one voxel, and the player's step-up has to cover it; past that the
+    # flight turns and runs along the bay instead, which costs bay length
+    # rather than walkway width.
+    if vs > tun.f("player.step_up") + 1e-9:
+        raise ValueError(
+            f"a {vs:.2f} m tread needs a step-up of at least that; "
+            f"player.step_up is {tun.f('player.step_up'):.2f} m"
+        )
+    across_rise = treads + 1
+    step_max = max(step_min, min(step_max, bay_len - 4))
+    structure = (bench + treads) if spec.firing_steps else 0
+    walk_width = width - structure
+    if walk_width * vs < tun.f("player.radius") * 2.0:
+        raise ValueError(
+            f"{spec.name}: {width * vs:.1f} m of trench less a "
+            f"{structure * vs:.1f} m firing step leaves a "
+            f"{walk_width * vs:.1f} m walkway; a body is "
+            f"{tun.f('player.radius') * 2:.1f} m across"
+        )
+    # A man on the bench may overhang the tread below it — that column is air at
+    # his feet — but not the parapet, which is solid to the crest.  So the
+    # standable surface is the bench plus one tread, and that is what has to
+    # hold a body.
+    standable = (bench + min(1, treads)) * vs
+    if spec.firing_steps and standable < tun.f("player.radius") * 2.0:
+        raise ValueError(
+            f"{spec.name}: a {bench * vs:.1f} m bench over a {treads} tread step "
+            f"gives {standable:.1f} m to stand on; a body is "
+            f"{tun.f('player.radius') * 2:.1f} m across"
+        )
 
     nx, ny, nz = v.shape
     long_axis = spec.long_axis
@@ -222,11 +380,10 @@ def _carve_trench_line(
         patch = surface[max(0, x0) : x1, max(0, z0) : z1]
         return int(np.median(patch)) if patch.size else int(np.median(surface))
 
-    bays: list[Bay] = []
-    dugouts: list[Dugout] = []
-    prev_node: int | None = None
-    prev_floor: int | None = None
+    # -- plan ------------------------------------------------------------
 
+    plans: list[_BayPlan] = []
+    prev_floor: int | None = None
     index = 0
     a = spec.a_start
     while a < spec.a_end:
@@ -234,39 +391,104 @@ def _carve_trench_line(
         b0 = spec.cross_base + (offset if index % 2 else 0)
         b1 = b0 + width
 
-        ground_here = local_surface(a, a1, b0, b1)
-        floor_y = ground_here - depth
+        ground_y = local_surface(a, a1, b0, b1)
+        floor_y = ground_y - depth
         if prev_floor is not None:
             floor_y = max(prev_floor - 1, min(prev_floor + 1, floor_y))
-        floor_y = max(3, min(floor_y, ny - depth - 4))
-        top = ground_here + parapet_h + 2
+        floor_y = max(3, min(floor_y, ny - depth - 6))
+        duck_y = floor_y + 1
 
-        clear(a, a1, b0, b1, floor_y + 1, top)
-        slab(a, a1, b0, b1, floor_y, floor_y + 1, voxel.DUCKBOARD)
+        if spec.facing > 0:
+            step_lo, front_edge = b1 - bench, b1
+        else:
+            step_lo, front_edge = b0, b0
+        walk_b = (
+            (b0 + b1 - structure) * 0.5
+            if spec.facing > 0
+            else (b0 + structure + b1) * 0.5
+        )
 
-        step_b = b1 - 1 if spec.facing > 0 else b0
-        step_top = floor_y + 1 + step_h
         if spec.firing_steps:
-            # A staircase, not a wall: one half-metre tread per voxel of rise,
-            # descending away from the parapet. Player step-up is 0.55 m, so a
-            # solid block of this height would simply be unclimbable.
-            inward = -1 if spec.facing > 0 else 1
-            for tread in range(step_h):
-                b = step_b + inward * tread
-                slab(a, a1, b, b + 1, floor_y + 1, step_top - tread, voxel.TIMBER)
+            ahead = _corridor_height(
+                surface, long_axis, spec.facing, a, a1, front_edge,
+                reach, near, percentile,
+            )
+            needed = int(math.ceil(ahead + margin - eye_stand))
+            step_top = max(duck_y + step_min, ground_y + parapet_min - crest_rise, needed)
+            step_top = min(step_top, duck_y + step_max)
+            crest_y = step_top + crest_rise
+        else:
+            step_top = duck_y
+            crest_y = ground_y + parapet_min
+            walk_b = (b0 + b1) * 0.5
+
+        plans.append(
+            _BayPlan(
+                a0=a, a1=a1, b0=b0, b1=b1,
+                ground_y=ground_y, floor_y=floor_y,
+                step_top_y=step_top, crest_y=crest_y,
+                step_lo=step_lo, step_span=bench if spec.firing_steps else 0,
+                walk_b=walk_b,
+            )
+        )
+        a = a1 + leg
+        prev_floor = floor_y
+        index += 1
+
+    # Smooth the crest line.  Raising a bay is free — it only buys a taller
+    # parapet — so smoothing only ever lifts, and no bay loses the clearance it
+    # asked for.
+    if spec.firing_steps and smooth > 0:
+        for i in range(1, len(plans)):
+            plans[i].step_top_y = max(plans[i].step_top_y, plans[i - 1].step_top_y - smooth)
+        for i in range(len(plans) - 2, -1, -1):
+            plans[i].step_top_y = max(plans[i].step_top_y, plans[i + 1].step_top_y - smooth)
+        for plan in plans:
+            plan.step_top_y = min(plan.step_top_y, plan.floor_y + 1 + step_max)
+            plan.crest_y = plan.step_top_y + crest_rise
+
+    # -- carve -----------------------------------------------------------
+
+    bays: list[Bay] = []
+    dugouts: list[Dugout] = []
+    prev_node: int | None = None
+
+    for index, plan in enumerate(plans):
+        a, a1, b0, b1 = plan.a0, plan.a1, plan.b0, plan.b1
+        floor_y, duck_y = plan.floor_y, plan.floor_y + 1
+        top = plan.crest_y + 3
+
+        clear(a, a1, b0, b1, duck_y, top)
+        slab(a, a1, b0, b1, floor_y, duck_y, voxel.DUCKBOARD)
+
+        step_h = plan.step_top_y - duck_y
+        if spec.firing_steps and step_h > 0:
+            lo, hi = plan.step_lo, plan.step_lo + plan.step_span
+            # Across the bay: the bench, and below it a short flight of treads
+            # falling away from the parapet.  This is what makes the step
+            # mountable from anywhere along the walkway, so it is built first
+            # and its width is fixed.
+            slab(a, a1, lo, hi, duck_y, plan.step_top_y, voxel.TIMBER)
+            for tread in range(treads):
+                col = lo - 1 - tread if spec.facing > 0 else hi + tread
+                rise = min(treads - tread, step_h)
+                slab(a, a1, col, col + 1, duck_y, duck_y + rise, voxel.TIMBER)
+            # Along the bay: whatever rise the across-bay treads could not
+            # carry.  Putting the extra height here is what lets the step vary
+            # per bay without the bay having to get wider to hold it.
+            climb = step_h - across_rise
+            if climb > 0:
+                for tread in range(climb):
+                    slab(
+                        a + tread, a + tread + 1, lo, hi,
+                        duck_y, plan.step_top_y - (climb - tread) + 1, voxel.TIMBER,
+                    )
 
         bx0, bx1, bz0, bz1 = to_box(a, a1, b0, b1)
-        step_x0, step_x1, step_z0, step_z1 = to_box(a, a1, step_b, step_b + 1)
-        # Centre of the clear walkway, with the firing step's column removed.
-        if spec.firing_steps:
-            # Exclude every tread column from the walkway centre.
-            walk_b = (
-                (b0 + b1 - step_h) * 0.5 if spec.facing > 0 else (b0 + step_h + b1) * 0.5
-            )
-        else:
-            walk_b = (b0 + b1) * 0.5
         walk_a = (a + a1) * 0.5
-        walk_x, walk_z = (walk_a, walk_b) if long_axis == 0 else (walk_b, walk_a)
+        walk_x, walk_z = (
+            (walk_a, plan.walk_b) if long_axis == 0 else (plan.walk_b, walk_a)
+        )
         bays.append(
             Bay(
                 line=spec.name,
@@ -277,48 +499,49 @@ def _carve_trench_line(
                 z1=bz1,
                 floor_y=floor_y,
                 facing=spec.facing,
-                step_z=step_z0 if long_axis == 0 else step_x0,
-                step_top_y=step_top if spec.firing_steps else floor_y + 1,
+                step_lo=plan.step_lo,
+                step_span=plan.step_span,
+                step_top_y=plan.step_top_y,
+                crest_y=plan.crest_y,
                 walk_x=walk_x,
                 walk_z=walk_z,
+                ground_y=plan.ground_y,
             )
         )
 
-        node = graph.add_node((int(walk_x), floor_y + 1, int(walk_z)))
+        node = graph.add_node((int(walk_x), duck_y, int(walk_z)))
         if prev_node is not None:
             graph.link(prev_node, node)
         prev_node = node
 
-        # Parapet on the exposed side, parados behind, both levelled to this
-        # bay's floor so the firing step keeps its exact relationship to the
-        # crest regardless of what the ground is doing.
-        crest = floor_y + depth + parapet_h
-        back_crest = floor_y + depth + parados_h
-        if spec.facing > 0:
-            front_lo, front_hi = b1, b1 + 3
-            back_lo, back_hi = b0 - 2, b0
-        else:
-            front_lo, front_hi = b0 - 3, b0
-            back_lo, back_hi = b1, b1 + 2
-        fx0, fx1, fz0, fz1 = to_box(a, a1 + leg, front_lo, front_hi)
-        parapet_target[max(0, fx0) : fx1, max(0, fz0) : fz1] = crest
-        kx0, kx1, kz0, kz1 = to_box(a, a1 + leg, back_lo, back_hi)
-        parados_target[max(0, kx0) : kx1, max(0, kz0) : kz1] = back_crest
+        # Parapet on the exposed side, parados behind.  The parapet's inner
+        # courses carry the crest; the outer ones fall away one voxel per
+        # course, so a tall bay reads as a bank of spoil rather than a wall and
+        # its own back slope never blocks the view it was raised to give.
+        for course in range(thickness):
+            col = b1 + course if spec.facing > 0 else b0 - 1 - course
+            target = plan.crest_y - max(0, course - 1)
+            if target <= plan.ground_y:
+                continue
+            px0, px1, pz0, pz1 = to_box(a, a1 + leg, col, col + 1)
+            parapet_target[max(0, px0) : px1, max(0, pz0) : pz1] = target
+        for course in range(2):
+            col = b0 - 1 - course if spec.facing > 0 else b1 + course
+            kx0, kx1, kz0, kz1 = to_box(a, a1 + leg, col, col + 1)
+            parados_target[max(0, kx0) : kx1, max(0, kz0) : kz1] = (
+                plan.ground_y + parados_h
+            )
 
-        if a1 < spec.a_end:
-            nb0 = spec.cross_base + (0 if index % 2 else offset)
+        if a1 < spec.a_end and index + 1 < len(plans):
+            nb0 = plans[index + 1].b0
             lo_b, hi_b = min(b0, nb0), max(b1, nb0 + width)
-            clear(a1, a1 + leg, lo_b, hi_b, floor_y + 1, top)
-            slab(a1, a1 + leg, lo_b, hi_b, floor_y, floor_y + 1, voxel.DUCKBOARD)
+            clear(a1, a1 + leg, lo_b, hi_b, duck_y, top)
+            slab(a1, a1 + leg, lo_b, hi_b, floor_y, duck_y, voxel.DUCKBOARD)
 
         if spec.dugout_every and index % spec.dugout_every == 1:
             dug = _carve_dugout(v, surface, spec, floor_y, bx0, bx1, bz0, bz1, tun)
             if dug is not None:
                 dugouts.append(dug)
-
-        a = a1 + leg
-        prev_floor = floor_y
-        index += 1
 
     parapet_target[footprint] = 0
     parados_target[footprint] = 0
@@ -343,6 +566,8 @@ def _carve_trench_line(
         bays=tuple(bays),
     )
     return line, dugouts
+
+
 
 
 def _carve_dugout(
@@ -649,22 +874,29 @@ def generate(rng: GameRandom, tun: Tunables) -> GeneratedWorld:
     water = tun.i("world.water_table")
     world.water_table = water
 
-    relief = shapes.fbm_2d(
-        rng.derive("field.relief"), (dims.x, dims.z), octaves=4, base_cells=3
-    )
-    # Flat farmland: ~1.75 m of relief across the whole map. Anything
-    # rougher and the ground beyond the parapet blocks the peek.
-    surface = (ground + np.round((relief - 0.5) * 3.5)).astype(np.int32)
-    surface = np.clip(surface, 8, dims.y - 8)
-    _lay_strata(v, surface)
-    _plough_stripes(v, surface, rng.derive("field.plough"))
-    _drainage_ditches(v, surface, rng.derive("field.ditches"), tun)
-
+    vs = tun.f("world.voxel_size")
     layout = tun.section("world.layout")
     front_z = int(layout["front_line_z"])
     support_z = int(layout["support_line_z"])
     enemy_front_z = int(layout["enemy_front_z"])
     enemy_support_z = int(layout["enemy_support_z"])
+
+    relief = shapes.fbm_2d(
+        rng.derive("field.relief"),
+        (dims.x, dims.z),
+        octaves=tun.i("world.field.relief_octaves"),
+        base_cells=tun.i("world.field.relief_base_cells"),
+        persistence=tun.f("world.field.relief_persistence"),
+    )
+    # Amplitude no longer has to stay under a global parapet crest: each fire
+    # bay guarantees its own clearance, so the field is free to have shape.
+    amplitude = tun.f("world.field.relief_amplitude_m") / vs
+    surface = (ground + np.round((relief - 0.5) * 2.0 * amplitude)).astype(np.int32)
+    surface += _swale(dims.z, front_z, enemy_front_z, tun)[None, :]
+    surface = np.clip(surface, water + 2, dims.y - 8)
+    _lay_strata(v, surface)
+    _plough_stripes(v, surface, rng.derive("field.plough"))
+    _drainage_ditches(v, surface, rng.derive("field.ditches"), tun)
 
     network = TrenchNetwork()
     dugouts: list[Dugout] = []

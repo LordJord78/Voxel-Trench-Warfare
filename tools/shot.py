@@ -19,6 +19,9 @@ def main() -> None:
     ap.add_argument("--pos", type=float, nargs=3, default=None)
     ap.add_argument("--yaw", type=float, default=None)
     ap.add_argument("--pitch", type=float, default=None)
+    ap.add_argument("--tunables", type=Path, default=None)
+    ap.add_argument("--bay", type=int, default=None,
+                    help="stand on this front-line bay's firing step")
     ap.add_argument("--offscreen", action="store_true", default=True)
     args = ap.parse_args()
 
@@ -33,7 +36,11 @@ def main() -> None:
     from trenchline.physics.vec import Vec3
 
     _configure_panda(vsync=False)
-    session = Session(SessionConfig(seed=args.seed))
+    session = Session(SessionConfig(seed=args.seed, tunables_path=args.tunables))
+    if args.bay is not None:
+        bay = session.network.lines["front"].bays[args.bay]
+        session.player.position = Vec3(*bay.step_metres)
+        session.player.yaw = 0.0 if bay.facing > 0 else 180.0
     if args.pos:
         session.player.position = Vec3(*args.pos)
     if args.yaw is not None:

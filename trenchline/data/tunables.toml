@@ -22,20 +22,69 @@ chunk_rebuilds_per_frame = 4   # destruction budget; ~1-3 ms at this value
 
 [world.trench]
 depth_voxels        = 5        # 2.5 m from field surface to duckboards
-width_voxels        = 6        # 3.0 m: a 1.5 m walkway plus the step's treads
-parapet_height      = 2        # spoil piled 1.0 m on the enemy side
+width_voxels        = 6        # 3.0 m of trench, wall to wall
+step_bench_voxels   = 1        # columns of bench, at full step height
+step_tread_voxels   = 2        # columns of stair below it, one voxel apart, so
+                               # the step can be mounted from anywhere along the
+                               # walkway. Together these eat width_voxels - 3 of
+                               # walkway; a body is 0.60 m across, so what is
+                               # left may not go below 2 columns.
 parados_height      = 1        # 0.5 m on the friendly side; lower than
                                # the parapet so you are not silhouetted
+parapet_min_height  = 2        # floor under the crest: 1.0 m of spoil above the
+                               # local field even where the view needs nothing
+parapet_thickness   = 4        # courses of spoil; the outer ones fall away one
+                               # voxel each, so a tall parapet is a bank not a wall
 bay_length_m        = 8.0      # traverse spacing
 traverse_offset_m   = 2.0      # lateral jog; equals the width, so a straight
                                # shot down the trench always meets an end wall
-firing_step_height  = 3        # 1.5 m, built as a staircase of half-metre
-                               # treads so it can actually be climbed. Standing
-                               # on it puts your eyes 0.12 m over the crest;
-                               # crouching on it puts them 0.40 m under. That
-                               # 0.52 m gap between standing and crouched eye
-                               # height is the whole parapet-peek mechanic, so
-                               # keep firing_step_height == parapet_height + 1.
+
+# The firing step is climbed by a flight running ALONG the bay, not across it,
+# so its height costs bay length (of which there is 8 m) instead of walkway
+# width (of which there is barely 1 m). That is what lets it vary per bay.
+# The across-bay treads carry (step_tread_voxels + 1) voxels of rise, because
+# each column is worth one voxel of step-up. Any bay that needs more than that
+# takes the remainder on a flight running ALONG the bay, which costs bay length
+# (8 m of it) instead of walkway width (1.5 m of it). That is what decouples
+# step height from trench width and lets the step vary per bay.
+firing_step_min     = 3        # 1.5 m: the shallowest step that still works
+firing_step_max     = 7        # 3.5 m: past this the parapet is a redoubt
+
+# Crest clearance is NOT a global constant. Each fire bay measures the ground it
+# has to see over, raises its step until a standing eye clears it, and builds
+# its crest at step_top + floor(standing_eye / voxel_size) = step_top + 3. That
+# puts a standing eye 0.12 m over its own crest and a crouched eye 0.40 m under
+# it, in every bay, whatever the terrain is doing. Generation asserts it.
+sight_range_m       = 60.0     # how far out the ground has to read
+sight_near_m        = 14.0     # near band, where a rise walls you in outright
+sight_percentile    = 88.0     # of corridor ground the standing eye must clear
+sight_margin_m      = 0.40     # over that ground: covers one voxel of ejecta
+crest_smoothing_voxels = 2     # max crest drop between neighbouring bays
+
+# Ploughed farmland: broad swells, not chop. Amplitude is what gives no-man's-
+# land shape; wavelength is what decides whether that shape blocks the peek.
+# High-frequency octaves are the expensive kind — a 1 m bump 20 m out costs more
+# view than a 1 m swell 60 m out — so amplitude buys relief and persistence
+# spends it. Raised from 0.875 m once crest clearance stopped being global.
+# Measured: amplitude does NOT change how far shell holes read (42-44 m across
+# 1.0-3.0 m); an eye 1.1 m over the field is the binding constraint, not the
+# terrain. What amplitude and the swale buy is the WORST bay: p10 crater reach
+# 30 m -> 37 m. See tools/sightlines.py.
+[world.field]
+relief_amplitude_m  = 2.00     # +/- about the nominal ground level
+relief_octaves      = 4
+relief_base_cells   = 3        # ~42 m at the base octave
+relief_persistence  = 0.34     # < 0.5: the fine octaves stay quiet
+
+# Both lines sit on the shoulders of a shallow dry watercourse, which is what
+# SUKHYI YAR is named for. This is the half of "relief" that actually makes
+# no-man's-land read: an eye 1.1 m over a flat field sees ground past ~20 m
+# edge-on however much vertical relief it has, and a concave dip is the one
+# shape fully visible from its own rim. Kept shallow enough that the trough
+# floor stays above the water table, so the middle holds shell holes and not a
+# lake. Set to 0.0 for a flat field.
+swale_depth_m       = 1.50
+swale_margin_voxels = 10.0     # how far past each line the dip reaches
 
 # Battlefield layout, in voxels along z (0 = friendly rear, max = enemy rear).
 [world.layout]

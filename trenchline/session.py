@@ -19,6 +19,7 @@ from .core.rng import GameRandom
 from .data import Tunables, load_tunables
 from .physics.character import CharacterController, CharacterState, MoveIntent, Stance
 from .physics.vec import Vec3
+from .world import voxel
 from .world.chunks import VoxelWorld
 from .world.generation import GeneratedWorld, generate
 from .world.trenchmap import TrenchNetwork
@@ -87,6 +88,20 @@ class Session:
 
     def exposure(self) -> float:
         return self.controller.profile(self.player).exposure
+
+    def craters_ahead(
+        self, x: float, z: float, facing: int, lateral_m: float
+    ) -> list[tuple[int, int, int, float]]:
+        """Shell holes in the corridor a bay looks down, nearest first."""
+        s = voxel.VOXEL_SIZE
+        out = []
+        for crater in self.generated.craters:
+            cx, cz = (crater[0] + 0.5) * s, (crater[2] + 0.5) * s
+            if (cz - z) * facing <= 0.0 or abs(cx - x) > lateral_m:
+                continue
+            out.append(crater)
+        out.sort(key=lambda c: abs((c[2] + 0.5) * s - z))
+        return out
 
     def state_digest(self) -> str:
         """Short hash of everything a replay must reproduce."""

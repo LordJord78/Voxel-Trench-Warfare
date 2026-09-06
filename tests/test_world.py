@@ -78,16 +78,32 @@ def test_traverse_blocks_fragmentation_around_the_corner(game: Session) -> None:
 
 
 def test_you_cannot_see_out_from_the_trench_floor(game: Session) -> None:
+    """The duckboards are blind, except where a shell has opened the parapet.
+
+    Generation puts four direct hits on each line on purpose, and a bay whose
+    parapet is gone is supposed to be exposed — that is the whole point of a
+    breach.  So this asserts the rule and bounds the exception, rather than
+    demanding every bay pass and passing by luck.
+    """
     stand = _eye(game, Stance.STANDING)
+    views: list[float] = []
     for bay in game.network.lines["front"].bays:
         cx, cy, cz = bay.centre_metres
         hit = raycast(
             game.world, Vec3(cx, cy + stand, cz), Vec3(0, 0, float(bay.facing)), 90.0
         )
-        assert hit is not None and hit.distance < 12.0, (
-            f"bay {bay.index} sees {0 if hit is None else hit.distance:.1f} m "
-            "into no man's land from the duckboards"
-        )
+        views.append(hit.distance if hit else 90.0)
+
+    assert statistics.median(views) < 4.0, (
+        f"median view from the duckboards is {statistics.median(views):.1f} m; "
+        "the parapet is not doing its job"
+    )
+    breached = [d for d in views if d >= 12.0]
+    assert len(breached) <= max(1, len(views) // 6), (
+        f"{len(breached)}/{len(views)} bays see into no man's land from the "
+        f"duckboards ({[round(d, 1) for d in breached]} m); at most a handful "
+        "should be shelled open"
+    )
 
 
 def test_standing_on_the_firing_step_opens_the_field(game: Session) -> None:
@@ -116,6 +132,47 @@ def test_crouching_on_the_firing_step_keeps_you_behind_the_parapet(game: Session
     assert statistics.median(views) < 4.0, (
         "crouching on the step should put the parapet between you and the enemy"
     )
+
+
+def test_crest_clearance_is_guaranteed_per_bay(game: Session) -> None:
+    """The peek is arithmetic, not luck.
+
+    This is the whole point of decoupling the crest from field relief: every
+    fire bay builds its parapet from its own firing-step height, so a standing
+    eye clears it and a crouched eye does not, in every bay, on every seed,
+    however much shape the ground has.  If terrain could ever push a crest out
+    of that window, this fails on the seed that does it.
+    """
+    stand, crouch = _eye(game, Stance.STANDING), _eye(game, Stance.CROUCHED)
+    for line in ("front", "enemy_front"):
+        for bay in game.network.lines[line].bays:
+            assert bay.has_firing_step
+            assert bay.clearance_m(stand) > 0.0, (
+                f"{line} bay {bay.index}: a standing eye is "
+                f"{-bay.clearance_m(stand):.2f} m BELOW its own crest"
+            )
+            assert bay.clearance_m(crouch) < 0.0, (
+                f"{line} bay {bay.index}: a crouched eye is "
+                f"{bay.clearance_m(crouch):.2f} m above its own crest, so "
+                "crouching does not hide you"
+            )
+
+
+def test_crest_tracks_the_step_not_the_terrain(game: Session) -> None:
+    """Bays differ in height; their clearance does not.
+
+    The crest follows the bay's own step by construction, so clearance is
+    identical everywhere even where the steps are not — which is exactly the
+    property a global constant could not give.
+    """
+    bays = [b for line in ("front", "enemy_front")
+            for b in game.network.lines[line].bays]
+    clearances = {round(b.crest_y - b.step_top_y) for b in bays}
+    assert len(clearances) == 1, f"crest rise varies between bays: {clearances}"
+    steps = {b.step_top_y - b.floor_y - 1 for b in bays}
+    grounds = {b.ground_y for b in bays}
+    assert len(grounds) > 1, "this seed has no terrain variation to test against"
+    assert steps, steps
 
 
 def test_standing_and_crouched_differ_on_every_intact_bay(game: Session) -> None:

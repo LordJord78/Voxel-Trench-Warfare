@@ -17,7 +17,13 @@ from . import voxel
 
 @dataclass(frozen=True, slots=True)
 class Bay:
-    """One fire bay, bounded at both ends by a traverse jog."""
+    """One fire bay, bounded at both ends by a traverse jog.
+
+    Every height in here is absolute voxel y, and every one of them is decided
+    per bay at generation time.  `crest_y` is not a global constant the terrain
+    has to stay under: it is derived from this bay's own `step_top_y`, so the
+    peek works the same in a hollow as it does on a rise.
+    """
 
     line: str
     index: int
@@ -28,17 +34,29 @@ class Bay:
     floor_y: int
     facing: int
     """+1 if the enemy lies toward +z, -1 toward -z."""
-    step_z: int
-    """Voxel z of the firing-step column (voxel x for a trench running in z)."""
+    step_lo: int
+    """Low edge of the firing-step bench, on the trench's cross axis."""
+    step_span: int
+    """Bench depth in voxels.  Has to be wide enough to actually stand on."""
     step_top_y: int
+    crest_y: int
+    """Parapet crest.  `step_top_y + floor(standing eye / voxel)` by construction
+    on a fire bay, which is what guarantees the standing/crouched split."""
     walk_x: float
     walk_z: float
     """Voxel-space centre of the *clear* walkway: the firing step is standing
     in part of the bay, and spawning on top of it means spawning inside it."""
+    ground_y: int = 0
+    """Local field surface, for reporting how far the parapet stands proud."""
 
     @property
     def has_firing_step(self) -> bool:
         return self.step_top_y > self.floor_y + 1
+
+    @property
+    def long_axis(self) -> int:
+        """0 if the trench runs along x, 2 if along z."""
+        return 0 if (self.x1 - self.x0) >= (self.z1 - self.z0) else 2
 
     @property
     def centre_voxel(self) -> tuple[int, int, int]:
@@ -50,10 +68,33 @@ class Bay:
         return (self.walk_x * s, (self.floor_y + 1) * s, self.walk_z * s)
 
     @property
+    def step_centre(self) -> tuple[float, float]:
+        """Voxel-space (x, z) of the middle of the bench."""
+        mid = self.step_lo + self.step_span * 0.5
+        if self.long_axis == 0:
+            return ((self.x0 + self.x1) * 0.5, mid)
+        return (mid, (self.z0 + self.z1) * 0.5)
+
+    @property
     def step_metres(self) -> tuple[float, float, float]:
         """Where you stand to look over the parapet."""
         s = voxel.VOXEL_SIZE
-        return (self.walk_x * s, self.step_top_y * s, (self.step_z + 0.5) * s)
+        cx, cz = self.step_centre
+        return (cx * s, self.step_top_y * s, cz * s)
+
+    @property
+    def crest_rise_m(self) -> float:
+        """How far this bay's crest stands above its own firing-step bench."""
+        return (self.crest_y - self.step_top_y) * voxel.VOXEL_SIZE
+
+    def clearance_m(self, eye_height: float) -> float:
+        """How far an eye at `eye_height` on the bench clears this bay's crest.
+
+        Positive for a standing man, negative for a crouched one.  That sign
+        flip is the peek, and because both terms come from this bay, it holds
+        whatever the ground is doing around it.
+        """
+        return eye_height - self.crest_rise_m
 
 
 @dataclass(frozen=True, slots=True)
