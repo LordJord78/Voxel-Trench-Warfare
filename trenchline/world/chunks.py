@@ -8,7 +8,6 @@ gives out-of-bounds queries a sane "you cannot walk off the map" answer.
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -61,12 +60,22 @@ class VoxelWorld:
         self.v: np.ndarray = self._store[1:-1, 1:-1, 1:-1]
         """Interior voxels, shape (x, y, z).  Writes go straight through."""
 
-        self._dirty: set[ChunkCoord] = set()
-        self._queue: deque[ChunkCoord] = deque()
+        # coord -> frame it FIRST went stale. A dict rather than a queue
+        # because the order chunks are rebuilt in is a policy decision the
+        # renderer makes from where the player is looking, and FIFO is the one
+        # ordering that is guaranteed to be wrong: it rebuilds the far side of
+        # the map before the wall the player is standing behind.
+        self._dirty: dict[ChunkCoord, int] = {}
+        self.frame: int = 0
+        """Advanced by whoever is drawing. Staleness is measured against it."""
         self.dirtied_total: int = 0
         """Rebuilds the world has asked for. Against the number the renderer
         managed, this is demand against supply, which is the only way to see a
         rebuild queue losing before it has visibly fallen behind."""
+        self.coalesced_total: int = 0
+        """Dirty marks absorbed by a chunk that was already waiting. A chunk
+        shelled three times before it is rebuilt is rebuilt once, at its final
+        state, and this counts the two rebuilds that never had to happen."""
         self.water_table: int = 0
         """Voxel y below which open cavities flood.  Set by generation."""
 
@@ -107,6 +116,10 @@ class VoxelWorld:
         s = voxel.VOXEL_SIZE * CHUNK_SIZE
         return (coord[0] * s, coord[1] * s, coord[2] * s)
 
+    def chunk_centre(self, coord: ChunkCoord) -> tuple[float, float, float]:
+        s = voxel.VOXEL_SIZE * CHUNK_SIZE
+        return ((coord[0] + 0.5) * s, (coord[1] + 0.5) * s, (coord[2] + 0.5) * s)
+
     def all_chunks(self) -> Iterator[ChunkCoord]:
         nx, ny, nz = self.dims.chunks
         for cx in range(nx):
@@ -146,9 +159,12 @@ class VoxelWorld:
         if not (0 <= cx < nx and 0 <= cy < ny and 0 <= cz < nz):
             return
         if coord in self._dirty:
+            # Already waiting. Keep the ORIGINAL timestamp: staleness is how
+            # long the player has been looking at wrong geometry, which starts
+            # at the first change, not the most recent one.
+            self.coalesced_total += 1
             return
-        self._dirty.add(coord)
-        self._queue.append(coord)
+        self._dirty[coord] = self.frame
         self.dirtied_total += 1
 
     def mark_region_dirty(self, lo: tuple[int, int, int], hi: tuple[int, int, int]) -> None:
@@ -172,13 +188,27 @@ class VoxelWorld:
 
     @property
     def dirty_count(self) -> int:
-        return len(self._queue)
+        return len(self._dirty)
+
+    def dirty_items(self) -> list[tuple[ChunkCoord, int]]:
+        """Every waiting chunk with the frame it first went stale."""
+        return list(self._dirty.items())
+
+    def dirty_since(self, coord: ChunkCoord) -> int | None:
+        return self._dirty.get(coord)
+
+    def clear_dirty(self, coord: ChunkCoord) -> None:
+        self._dirty.pop(coord, None)
 
     def take_dirty(self, limit: int) -> list[ChunkCoord]:
-        """Pop up to `limit` chunks off the rebuild queue."""
+        """Pop up to `limit` chunks in insertion order.
+
+        Kept for the load-time drain and for tests, where every chunk is
+        rebuilt anyway and order cannot matter. Anything drawing a frame should
+        be choosing by priority instead.
+        """
         out: list[ChunkCoord] = []
-        while self._queue and len(out) < limit:
-            coord = self._queue.popleft()
-            self._dirty.discard(coord)
+        for coord in list(self._dirty)[:limit]:
+            del self._dirty[coord]
             out.append(coord)
         return out

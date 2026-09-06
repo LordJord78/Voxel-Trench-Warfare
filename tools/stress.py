@@ -24,6 +24,28 @@ import time
 import numpy as np
 
 
+def _stale(frontend) -> dict[str, float]:
+    """Near-field staleness: the number that actually matters.
+
+    Queue depth counts chunks nobody is looking at. This counts frames during
+    which the player was standing next to, and looking at, geometry the
+    simulation had already changed.
+    """
+    s = frontend.chunks.staleness.summary()
+    return {
+        "worst_frames": s["worst_frames"],
+        "worst_ms": s["worst_ms"],
+        "p99_frames": s["p99_frames"],
+        "mean_frames": s["mean_frames"],
+        "worst_m": s["worst_distance_m"],
+        "vis_worst_frames": s["worst_visible_frames"],
+        "vis_worst_ms": s["worst_visible_ms"],
+        "vis_p99_frames": s["p99_visible_frames"],
+        "vis_mean_frames": s["mean_visible_frames"],
+        "vis_worst_m": s["worst_visible_distance_m"],
+    }
+
+
 def _percentiles(samples: np.ndarray) -> dict[str, float]:
     return {
         "mean": float(samples.mean()),
@@ -87,9 +109,9 @@ def run(args) -> dict:
     _configure_panda(vsync=False)
     session = Session(SessionConfig(seed=args.seed))
     if args.budget is not None:
-        session.tun._raw["world"]["chunk_rebuilds_per_frame"] = args.budget
+        session.tun._raw["world"]["rebuild_budget_ms"] = float(args.budget)
     frontend = Frontend(session)
-    budget = frontend.chunks.budget
+    budget = frontend.chunks.policy.budget_ms
 
     frontend._read_intent = lambda: MoveIntent(  # type: ignore[method-assign]
         forward=1.0, strafe=0.2, stance=Stance.STANDING
@@ -151,11 +173,18 @@ def run(args) -> dict:
         queue_end=float(dirty[-1]),
         queue_max=float(max(dirty)),
         over_budget=float((a > 16.67).mean() * 100.0),
+        near_m=frontend.chunks.policy.near_m,
         rebuilds=rebuilt[-1] - rebuilt[0],
         demanded=float(np.sum(dirtied)),
+        coalesced=float(session.world.coalesced_total),
+        **{f"stale_{k}": v for k, v in _stale(frontend).items()},
         frames=len(a),
     )
     return stats
+
+
+def frontend_near(stats: dict) -> float:
+    return stats.get("near_m", 32.0)
 
 
 def _report(stats: dict, seed: int) -> None:
@@ -166,7 +195,7 @@ def _report(stats: dict, seed: int) -> None:
     print(f"{stats['shells']:.0f} shells/frame at {stats['radius']:.1f} m, "
           f"dirtying {stats['dirtied_per_frame']:.0f} chunks per frame "
           f"(peak {stats['dirtied_peak']:.0f}), "
-          f"rebuild budget {stats['budget']:.0f}/frame")
+          f"rebuild budget {stats['budget']:.1f} ms/frame")
     print(f"frames {stats['frames']:.0f}: {stats['demanded']:.0f} chunk rebuilds "
           f"asked for, {stats['rebuilds']:.0f} delivered "
           f"({100 * stats['rebuilds'] / max(1.0, stats['demanded']):.0f}%)")
@@ -181,9 +210,23 @@ def _report(stats: dict, seed: int) -> None:
         print(f"    mean {stats['loaded_mean']:6.2f} ms   p50 {stats['loaded_p50']:6.2f}   "
               f"p95 {stats['loaded_p95']:6.2f}   p99 {stats['loaded_p99']:6.2f}   "
               f"max {stats['loaded_max']:6.2f}")
+    print(f"  near-field staleness (in frustum, within {frontend_near(stats):.0f} m)")
+    print(f"    frames the player was SHOWN wrong geometry, consecutively:")
+    print(f"      worst {stats['stale_vis_worst_frames']:.0f} frames "
+          f"({stats['stale_vis_worst_ms']:.0f} ms) at "
+          f"{stats['stale_vis_worst_m']:.1f} m,   "
+          f"p99 {stats['stale_vis_p99_frames']:.0f},   "
+          f"mean {stats['stale_vis_mean_frames']:.2f}")
+    print(f"    frames since the change, incl. time hidden or far:")
+    print(f"      worst {stats['stale_worst_frames']:.0f} frames "
+          f"({stats['stale_worst_ms']:.0f} ms) at {stats['stale_worst_m']:.1f} m,   "
+          f"p99 {stats['stale_p99_frames']:.0f},   "
+          f"mean {stats['stale_mean_frames']:.1f}")
+    print(f"  coalesced {stats['coalesced']:.0f} redundant dirty marks")
     print(f"  dirty queue: start {stats['queue_start']:.0f}, "
           f"peak {stats['queue_max']:.0f}, end {stats['queue_end']:.0f}"
-          + ("   <- QUEUE IS GROWING, the renderer is losing"
+          + ("   (growing — fine if it is all distant and unviewed; judge on "
+             "the staleness above)"
              if stats["queue_end"] > stats["queue_start"] + 32 else "   (stable)"))
 
 
@@ -196,8 +239,8 @@ def main() -> None:
     ap.add_argument("--radius", type=float, default=3.0)
     ap.add_argument("--spacing", type=float, default=7.0,
                     help="metres between aiming points; keeps fire on fresh ground")
-    ap.add_argument("--budget", type=int, default=None,
-                    help="chunk rebuilds per frame; default reads tunables.toml")
+    ap.add_argument("--budget", type=float, default=None,
+                    help="rebuild budget in ms/frame; default reads tunables.toml")
     ap.add_argument("--windowed", action="store_true")
     ap.add_argument("--loaded-at", type=int, default=10, dest="loaded_at",
                     help="chunks/frame above which a frame counts as loaded")
@@ -211,18 +254,21 @@ def main() -> None:
 
     print(f"\n--- rebuild budget sweep (seed {args.seed}, {args.shells} shells/frame) ---")
     print("frame times below are for LOADED frames only\n")
-    print(f"{'budget':>7} {'chunks/f':>8} {'mean':>8} {'p50':>8} {'p95':>8} "
-          f"{'p99':>8} {'max':>8} {'>16.7ms':>8} {'queue end':>10}")
-    for budget in (1, 2, 4, 8, 16, 32, 64):
+    print(f"{'ms/f':>7} {'chunks/f':>8} {'mean':>8} {'p50':>8} {'p95':>8} "
+          f"{'p99':>8} {'max':>8} {'>16.7ms':>8} {'queue end':>10} "
+          f"{'shown f':>8} {'shown m':>8}")
+    for budget in (0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0):
         args.budget = budget
         stats = run(args)
-        print(f"{budget:7d} {stats['loaded_rate']:8.0f} "
+        print(f"{budget:7.1f} {stats['loaded_rate']:8.0f} "
               f"{stats.get('loaded_mean', stats['mean']):6.2f}ms "
               f"{stats.get('loaded_p50', stats['p50']):6.2f}ms "
               f"{stats.get('loaded_p95', stats['p95']):6.2f}ms "
               f"{stats.get('loaded_p99', stats['p99']):6.2f}ms "
               f"{stats.get('loaded_max', stats['max']):6.2f}ms "
-              f"{stats['over_budget']:7.1f}% {stats['queue_end']:10.0f}")
+              f"{stats['over_budget']:7.1f}% {stats['queue_end']:10.0f} "
+              f"{stats['stale_vis_worst_frames']:8.0f} "
+              f"{stats['stale_vis_worst_m']:8.1f}")
 
 
 if __name__ == "__main__":

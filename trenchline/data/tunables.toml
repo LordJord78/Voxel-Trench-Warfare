@@ -18,20 +18,29 @@ water_table         = 25       # voxel y below which open cavities flood.
                                # Sits just under the trench floor: the line
                                # stays dry, but a crater deeper than ~2 m
                                # fills, and a shell in the trench floods it.
-chunk_rebuilds_per_frame = 8   # Destruction budget. Measured under sustained
-                               # shelling at 22+ dirty chunks/frame
-                               # (tools/stress.py --sweep, seed 7):
-                               #   budget  loaded p99   queue after 200 frames
-                               #        1      4.9 ms   413 and climbing
-                               #        4     11.4 ms   289 and climbing
-                               #        8     14.7 ms   194 and climbing
-                               #       16     19.6 ms   119, 7% of frames late
-                               #       32     27.8 ms   5, every frame late
-                               # Nothing drains the queue under that load
-                               # without blowing the 60 Hz budget outright, so
-                               # 8 is the most catch-up that still fits inside
-                               # a frame. It costs nothing when nothing is
-                               # being destroyed.
+# Destruction rebuild scheduling. The budget is TIME, not a chunk count:
+# chunks differ by an order of magnitude in cost, so a count is a time budget
+# with the units filed off. Ordering matters more than size — stale near-field
+# geometry is a correctness bug (collision reads the voxels, so the player
+# takes cover behind a wall the simulation already deleted), and no budget
+# fixes a queue that is rebuilding the far side of the map first.
+# Measured under sustained shelling at 18+ dirty chunks/frame, seed 7
+# (tools/stress.py --sweep). "shown" is the worst run of consecutive frames
+# during which the player was looking at, and standing within 32 m of,
+# geometry the simulation had already changed:
+#     ms/frame   loaded p99   shown stale   frames over 16.7 ms
+#          0.5       4.6 ms    191 frames                  0%
+#          1.0       9.7 ms    161 frames                0.5%
+#          3.0      15.3 ms     33 frames                1.0%
+#          5.0      15.7 ms     13 frames                  0%
+#          8.0      19.3 ms      3 frames                 38%
+#         12.0      24.7 ms      1 frame                 100%
+# 5 ms is the knee: 8 buys ten more frames of freshness and blows the frame
+# budget more than a third of the time to do it.
+rebuild_budget_ms   = 5.0      # of a 16.7 ms frame
+rebuild_min_per_frame = 1      # always make progress, however expensive
+rebuild_near_m      = 32.0     # inside this a wrong chunk can be walked into
+                               # as well as looked at
 
 [world.trench]
 depth_voxels        = 5        # 2.5 m from field surface to duckboards

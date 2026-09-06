@@ -51,8 +51,10 @@ class Frontend:
 
         print(f"meshing {session.world.dirty_count} chunks ...")
         t0 = time.perf_counter()
+        from .schedule import SchedulePolicy
+
         self.chunks = ChunkRenderer(
-            session.world, scene, budget=tun.i("world.chunk_rebuilds_per_frame")
+            session.world, scene, SchedulePolicy.from_tunables(tun, 1440.0 / 810.0)
         )
         self.chunks.build_all(progress=True)
         build_ms = (time.perf_counter() - t0) * 1000.0
@@ -139,6 +141,8 @@ class Frontend:
     # -- frame -----------------------------------------------------------
 
     def _frame(self, task: Any) -> Any:
+        import math
+
         from ursina import camera, held_keys, mouse, Vec3 as UVec3
 
         now = time.perf_counter()
@@ -156,10 +160,25 @@ class Frontend:
         self._apply_mouse()
         intent = self._read_intent()
         session = self.session
+        player = session.player
         for _ in range(session.clock.advance(real_dt)):
             session.intent = intent
             session.tick()
 
+        # The scheduler needs to know where the player is and what they are
+        # looking at BEFORE it picks, or it is back to guessing.
+        session.world.frame = self.frames
+        eye = session.eye_position
+        aim = math.radians(player_yaw := player.yaw + session.recoil.yaw)
+        pitch = math.radians(player.pitch + session.recoil.pitch)
+        self.chunks.look_from(
+            (eye.x, eye.y, eye.z),
+            (
+                math.sin(aim) * math.cos(pitch),
+                math.sin(pitch),
+                math.cos(aim) * math.cos(pitch),
+            ),
+        )
         self.chunks.build_pending()
         self.tracers.update()
         self._place_camera(camera, UVec3)
@@ -170,7 +189,8 @@ class Frontend:
             real_dt,
             self.frame_stats.summary(),
             f"chunks {stats.nodes}  tris {stats.triangles // 1000}k  "
-            f"queue {session.world.dirty_count}  rebuild {stats.last_frame_ms:.2f} ms  "
+            f"queue {session.world.dirty_count}  rebuild {stats.last_frame_ms:.2f} ms "
+            f"x{stats.last_frame_rebuilds}  near-stale {stats.near_stale}  "
             f"rounds {session.projectiles.count}",
         )
         return task.cont

@@ -145,14 +145,22 @@ offscreen at 1440x810:
 | | mean | p50 | p95 | p99 |
 | --- | --- | --- | --- | --- |
 | static, walking the line | 1.36 ms | 1.10 | 2.91 | 6.36 |
-| sustained shelling, 22+ dirty chunks/frame | 9.98 ms | 9.58 | 13.95 | 14.73 |
+| sustained shelling, 19+ dirty chunks/frame | 7.99 ms | 7.95 | 8.63 | 8.72 |
 
-Under artillery the limit is not frame time, it is the rebuild queue. At a
-budget of 8 chunks per frame the queue still grows; draining it needs 32, and
-32 puts *every* frame over the 60 Hz budget. `tools/stress.py --sweep` prints
-the whole curve, and the tunable carries it as a comment. Milestone 3 will have
-to spend that somewhere — a coarser mesh for distant chunks, or a rebuild that
-patches a chunk rather than remeshing it.
+Under artillery the limit is the rebuild queue, and the number that matters is
+not its depth. A thousand stale chunks behind the player cost nothing; one
+stale chunk in the trench they are standing in is a correctness bug, because
+collision and raycasts read the voxel array rather than the mesh — the player
+takes cover behind a wall the simulation has already deleted, and cannot see
+the breach they just made.
+
+So chunks are rebuilt nearest-and-visible first rather than in the order they
+were shelled, repeat dirties on a waiting chunk coalesce into one rebuild at
+its final state, the budget is milliseconds rather than a chunk count, and
+distant unviewed chunks are allowed to stay stale indefinitely — invisible and
+free. Under the load above, the worst run of consecutive frames during which
+the player was *shown* wrong geometry within 32 m is **12 frames (200 ms)**,
+p99 10, mean 0.92. `tools/stress.py --sweep` prints the whole curve.
 
 ## Licence
 
