@@ -20,21 +20,21 @@
   "digests": {
     "seed7-patrol-600": {
       "world": "26d00bdf79d5e80c706733b2775f9e95",
-      "entities": "5298d2e06edc295538af4ebd7a05e2e1",
-      "rng": "2f1f22d71e65185ac6e881b884e152ff",
-      "state": "2977f437a676c932a5df570149f55ed4"
+      "entities": "bdc4afdc0a64e85b76446d0edaa43bc4",
+      "rng": "19408b9e5bed407f66761ce32ad05538",
+      "state": "3aa0455acf2465714addff8d9f57628a"
     },
     "seed21-random-600": {
       "world": "af43a87df630573b4872763af9c93445",
-      "entities": "8972e349c579dced0e04544f500413a8",
-      "rng": "642f67ee2f1b2dd4f4c98c983cf12771",
-      "state": "ca696ed15e90d2b668ec83fe085ba5c6"
+      "entities": "068eaf6a4fe87b0576723abcbf7bffc5",
+      "rng": "e9d0bd95898aa5e6a6ffa0c77b0244d4",
+      "state": "58d01ccded72af7da6feec2b42d7f6ee"
     },
     "seed99-walk-240": {
       "world": "36bcab5162951df1a332304102f90804",
-      "entities": "78d3918014e94e689d9d2f6ece6e7c56",
-      "rng": "2574c0e84caabf05bd1b10fb70c91edc",
-      "state": "a15e28037f1c803dbc01e3a8bad95ace"
+      "entities": "fd23b777131d19d86c74f2de7290a7be",
+      "rng": "fa250f623f81fe2013081efb5ab2ee54",
+      "state": "1c20694da9d7b263e959e859f9f041f4"
     }
   }
 }

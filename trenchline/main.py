@@ -37,11 +37,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="windowed: run this many frames then exit (smoke test)",
     )
     ap.add_argument("--no-vsync", action="store_true", help="uncap the frame rate")
+    ap.add_argument(
+        "--incoming",
+        type=float,
+        default=0.0,
+        metavar="RPM",
+        help="harassing fire at this rate, for feeling suppression. A tuning "
+             "rig with no shooter behind it, not an enemy.",
+    )
+    ap.add_argument("--incoming-range", type=float, default=38.0, metavar="M")
     return ap
 
 
 def run_headless(args: argparse.Namespace) -> int:
-    session = Session(SessionConfig(seed=args.seed, tunables_path=args.tunables))
+    session = Session(
+        SessionConfig(
+            seed=args.seed,
+            tunables_path=args.tunables,
+            incoming_rpm=args.incoming,
+            incoming_range_m=args.incoming_range,
+        )
+    )
     print(session.describe())
 
     start = time.perf_counter()
@@ -69,7 +85,12 @@ def run_windowed(args: argparse.Namespace) -> int:
         print(f"render layer unavailable ({exc}); try --headless", file=sys.stderr)
         return 2
     return run(
-        SessionConfig(seed=args.seed, tunables_path=args.tunables),
+        SessionConfig(
+            seed=args.seed,
+            tunables_path=args.tunables,
+            incoming_rpm=args.incoming,
+            incoming_range_m=args.incoming_range,
+        ),
         fullscreen=args.fullscreen,
         vsync=not args.no_vsync,
         frames=args.frames,

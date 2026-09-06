@@ -73,12 +73,13 @@ class Frontend:
         camera.clip_plane_near = tun.f("camera.near_plane")
         camera.clip_plane_far = tun.f("camera.far_plane")
 
-        from .effects import ParticleRenderer, TracerRenderer
+        from .effects import ParticleRenderer, SuppressionOverlay, TracerRenderer
         from .viewmodel import ViewModel
 
         self.tracers = TracerRenderer(session.projectiles, scene, tun)
         self.particles = ParticleRenderer(session.particles, scene)
         self.viewmodel = ViewModel(camera, tun)
+        self.suppression_overlay = SuppressionOverlay(self.app.aspect2d, 1440.0 / 810.0)
         self.base_fov = tun.f("camera.fov")
         self.fov_scale = 1.0
         self.fov_lerp = tun.f("camera.fov_lerp_per_s")
@@ -217,10 +218,16 @@ class Frontend:
         # left along session.recoil.aim(), so a camera that ignored it would be
         # pointing somewhere the rifle is not.
         recoil = session.recoil
+        # Suppression shakes the camera and drags the muzzle; both are on the
+        # view because both are on the aim.
+        shake_pitch, shake_roll = session.suppression.shake()
+        flinch_yaw, flinch_pitch = session.suppression.aim_offset
         p = player.position
         camera.position = UVec3(p.x + sway * 0.4, p.y + eye + bob + dip, p.z)
         camera.rotation = UVec3(
-            -(player.pitch + recoil.pitch), player.yaw + recoil.yaw, sway * 12.0
+            -(player.pitch + recoil.pitch + flinch_pitch + shake_pitch),
+            player.yaw + recoil.yaw + flinch_yaw,
+            sway * 12.0 + shake_roll,
         )
 
     def _place_viewmodel(self, camera: Any) -> None:
@@ -261,6 +268,11 @@ class Frontend:
             dtype=np.float32,
         )
         self.particles.update(right, up)
+
+        suppression = session.suppression
+        self.suppression_overlay.update(
+            suppression.level, suppression.vignette, suppression.desaturation * 0.16
+        )
 
     def run(self, frames: int = 0) -> int:
         if frames > 0:

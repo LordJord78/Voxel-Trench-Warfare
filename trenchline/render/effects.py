@@ -116,4 +116,74 @@ class ParticleRenderer:
         )
 
 
-__all__ = ["TracerRenderer", "ParticleRenderer"]
+class SuppressionOverlay:
+    """What being shot at looks like from the inside.
+
+    A screen-space grid whose per-vertex colour is rewritten every frame: the
+    edges darken and close in, and a grey wash pulls the saturation out of the
+    middle. Both intensities come straight off the suppression level.
+
+    This is a wash and a vignette, not a true desaturate-and-blur. Those want a
+    post-process shader, and the GL profile Panda selects on this machine
+    rejects the GLSL it generates (`version '130' is not supported`), so the
+    honest version is the one that renders. It is written through the dynamic
+    buffer writer for the same reason the tracers are: one memcpy a frame.
+    """
+
+    __slots__ = ("buffer", "path", "_cells", "_positions", "_radius", "_indices")
+
+    def __init__(self, parent: NodePath, aspect: float = 16.0 / 9.0, cells: int = 14) -> None:
+        self._cells = cells
+        n = cells + 1
+        xs = np.linspace(-aspect, aspect, n, dtype=np.float32)
+        ys = np.linspace(-1.0, 1.0, n, dtype=np.float32)
+        grid_x, grid_y = np.meshgrid(xs, ys, indexing="xy")
+        self._positions = np.stack(
+            [grid_x.ravel(), grid_y.ravel(), np.zeros(n * n, np.float32)], axis=1
+        )
+        # Distance from the centre, normalised, for the vignette falloff.
+        r = np.sqrt((grid_x / aspect) ** 2 + grid_y**2).ravel()
+        self._radius = np.clip(r / np.sqrt(2.0), 0.0, 1.0).astype(np.float32)
+
+        quads = []
+        for row in range(cells):
+            for col in range(cells):
+                a = row * n + col
+                quads.extend([a, a + 1, a + n + 1, a + n])
+        self._indices = quad_indices(cells * cells)
+        self._positions = self._positions[np.array(quads, dtype=np.int64)]
+        self._radius = self._radius[np.array(quads, dtype=np.int64)]
+
+        self.buffer = DynamicGeometry(
+            TRACER_FORMAT,
+            "suppression",
+            capacity=self._positions.shape[0],
+            index_capacity=self._indices.shape[0],
+        )
+        self.path = parent.attach_new_node(self.buffer.node)
+        self.path.set_attrib(ColorAttrib.make_vertex())
+        self.path.set_light_off(1)
+        self.path.set_shader_off(1)
+        self.path.set_depth_test(False)
+        self.path.set_depth_write(False)
+        self.path.set_transparency(True)
+        self.path.set_bin("fixed", 20)
+
+    def update(self, level: float, vignette: float, wash: float) -> None:
+        if level <= 0.001:
+            self.buffer.clear()
+            return
+        # Wash across the whole screen, vignette rising toward the edges.
+        alpha = wash + vignette * (self._radius**2.2)
+        rgba = np.empty((self._positions.shape[0], 4), dtype=np.uint8)
+        rgba[:, 0] = 78
+        rgba[:, 1] = 76
+        rgba[:, 2] = 72
+        # Capped well short of opaque: being pinned should be unpleasant to
+        # look at, not a blackout. You still have to be able to see the
+        # trench you are being told to get down into.
+        rgba[:, 3] = np.clip(alpha * 255.0, 0.0, 170.0).astype(np.uint8)
+        self.buffer.write({"vertex": self._positions, "color": rgba}, self._indices)
+
+
+__all__ = ["TracerRenderer", "ParticleRenderer", "SuppressionOverlay"]

@@ -118,6 +118,12 @@ class CharacterState:
     wade_depth: float = 0.0
     blocked_stance: bool = False
     """True when a low ceiling refused a stand-up request."""
+    speed_scale: float = 1.0
+    """Outside multiplier on movement. Suppression sets this."""
+    pinned: bool = False
+    """Too much incoming to keep your head over the parapet. Refuses the
+    firing-step and periscope stances outright: taking the parapet away from
+    someone without hitting them is the whole mechanic."""
 
     @property
     def eye_position(self) -> Vec3:
@@ -181,7 +187,9 @@ class CharacterController:
             wanted = Stance.STANDING
         # The periscope needs the step under you as well: from the duckboards
         # even 2.2 m of mirror is still under the crest.
-        if intent.periscope and state.on_firing_step and wanted == Stance.FIRING_STEP:
+        if state.pinned and wanted in (Stance.FIRING_STEP, Stance.PERISCOPE):
+            wanted = Stance.CROUCHED
+        elif intent.periscope and state.on_firing_step and wanted == Stance.FIRING_STEP:
             wanted = Stance.PERISCOPE
         elif wanted == Stance.PERISCOPE and not (intent.periscope and state.on_firing_step):
             wanted = Stance.FIRING_STEP if state.on_firing_step else Stance.STANDING
@@ -220,7 +228,8 @@ class CharacterController:
             and intent.forward > 0.3
             and state.stance in (Stance.STANDING,)
         )
-        speed = profile.sprint_speed if sprinting else profile.speed
+        speed = (profile.sprint_speed if sprinting else profile.speed)
+        speed *= max(0.0, state.speed_scale)
         # Wading costs you: knee-deep water in a crater is not a shortcut.
         if state.wade_depth > 0.15:
             speed *= max(0.35, 1.0 - state.wade_depth * 0.9)

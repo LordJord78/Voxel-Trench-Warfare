@@ -387,6 +387,43 @@ seconds_per_voxel   = 1.35
 exposure_scale      = 1.25     # you are up, and side-on, and not watching
 sway_scale          = 1.60     # a shovel in your hands is not a rifle
 
+# ---------------------------------------------------------------------------
+# SUPPRESSION
+#
+# The whole reason small-arms fire matters at trench ranges: most rounds miss,
+# and the ones that miss are still doing the work. Tuned so that being shot at
+# with nothing hitting you is genuinely unpleasant.
+#
+# Levels are 0-1. A single close crack is worth about a fifth of the bar and a
+# sustained burst pins you; the bar holds for hold_s after the last round so a
+# burst does not bleed off between its own shots, then recovers over roughly
+# three seconds of not being shot at.
+# ---------------------------------------------------------------------------
+
+[suppression]
+crack_radius_m      = 3.20     # a supersonic round passing inside this
+crack_amount        = 0.34     # at nil miss distance; falls off as the square
+impact_radius_m     = 4.50     # dirt kicking up beside you
+impact_amount       = 0.16     # frightening, but it does not mean they have
+                               # your range the way a crack does
+decay_per_s         = 0.42
+hold_s              = 0.55
+max_level           = 1.00
+
+sway_at_full        = 4.20     # the dispersion cone at full suppression
+speed_at_full       = 0.40     # pinned should mean pinned
+flinch_deg          = 1.35     # muzzle dragged off by a near miss
+flinch_recovery_s   = 0.45
+eject_from_step_at  = 0.55     # above this you cannot stay head-up. Not a
+                               # suggestion — the mechanic is that fire takes
+                               # the parapet away from you without hitting you
+
+shake_deg_at_full   = 0.85
+shake_hz            = 7.5
+desaturate_at_full  = 0.55
+vignette_at_full    = 0.50
+blur_at_full        = 0.55
+
 [camera]
 fov                 = 90.0
 far_plane           = 320.0

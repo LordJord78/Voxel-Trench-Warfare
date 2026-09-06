@@ -16,6 +16,7 @@ import numpy as np
 from .combat.ballistics import Impact, ProjectilePool
 from .combat.particles import ParticlePool
 from .combat.recoil import Recoil, load_recoil
+from .combat.suppression import Suppression, load_suppression
 from .combat.viewkick import ViewKick, WeaponReport, load_viewkick
 from .combat.weapons import Weapon, load_weapon
 from .core.events import Event, EventBus
@@ -49,6 +50,10 @@ class SessionConfig:
     callsign: str = "BADGER-2"
     """Fictional callsign for the player's element."""
     weapon: str = "assault_rifle"
+    incoming_rpm: float = 0.0
+    """Harassing fire, for tuning suppression. A rig, not an enemy."""
+    incoming_spread_m: float = 1.6
+    incoming_range_m: float = 38.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,9 +132,13 @@ class Session:
             self.tun, self.config.weapon, self.stream("combat.viewkick"),
             self.particles,
         )
+        self.suppression: Suppression = load_suppression(
+            self.tun, self.stream("combat.suppression")
+        )
         self.entrenching = EntrenchingTool(self.world, DigPolicy.from_tunables(self.tun))
         self.digging = False
         """True on the ticks the player is actually shifting dirt."""
+        self._incoming_timer = 0.0
         self.impacts: list[Impact] = []
         """Last tick's impacts, for the renderer to read and for destruction."""
 
@@ -149,7 +158,15 @@ class Session:
     # -- simulation ------------------------------------------------------
 
     def tick(self, dt: float = TICK_DT) -> None:
+        # Suppression is applied BEFORE the controller moves anyone: being
+        # pinned has to take the step away on the same tick the rounds went
+        # past, not the one after.
+        self.player.speed_scale = self.suppression.speed_scale
+        self.player.pinned = self.suppression.forced_off_the_step
+        was_on_step = self.player.stance in (Stance.FIRING_STEP, Stance.PERISCOPE)
         self.controller.tick(self.player, self.intent, dt)
+        if was_on_step and self.player.pinned:
+            self.suppression.state.ejected += 1
         self._tick_dig(dt)
         self._tick_combat(dt)
         self.bus.drain()
@@ -176,14 +193,18 @@ class Session:
         self.weapon.sway_scale = sway
         self.recoil.scale = sway
 
+        sway *= self.suppression.sway_scale
         self.weapon.tick(dt)
         self.recoil.tick(dt)
+        self.suppression.tick(dt)
         self.viewkick.tick(dt)
         self.particles.step(dt)
         if self.intent.reload:
             self.weapon.begin_reload()
         if self.intent.fire and self.weapon.ready:
             yaw, pitch = self.recoil.aim(self.player.yaw, self.player.pitch)
+            flinch_yaw, flinch_pitch = self.suppression.aim_offset
+            yaw, pitch = yaw + flinch_yaw, pitch + flinch_pitch
             eye = self.eye_position
             if self.weapon.fire(eye, yaw, pitch) >= 0:
                 before = self.recoil.state.kick_pitch
@@ -199,10 +220,75 @@ class Session:
                 self.bus.post(WeaponFired(tick=self.stats.ticks, weapon=self.weapon.spec.key))
                 self.bus.post(WeaponHeard(tick=self.stats.ticks, report=report))
 
+        # The pool needs to know whose head to measure near misses against
+        # before it steps, not after.
+        eye_now = self.eye_position
+        self.projectiles.listener = (eye_now.x, eye_now.y, eye_now.z)
+        self.projectiles.listener_radius = self.suppression.profile.crack_radius_m
+
         self.impacts = self.projectiles.step(dt)
+        for miss in self.projectiles.cracks:
+            self.suppression.crack(miss)
         for impact in self.impacts:
             destruction.chip(self.world, impact, self.tun)
+            self.suppression.impact(
+                (impact.position - eye_now).length
+            )
             self.bus.post(RoundImpact(tick=self.stats.ticks, impact=impact))
+        self._tick_harassment(dt)
+
+    def _harassment_origin(self, target: Vec3, rng: GameRandom) -> Vec3 | None:
+        """A firing point out in no-man's-land with sight of the player.
+
+        Placed in the open at rifle height rather than in the enemy trench:
+        starting a round inside their own parapet means it strikes the inside
+        of it on the first substep, which is a very quiet way to discover that
+        the rig is not working.
+        """
+        s = voxel.VOXEL_SIZE
+        distance = rng.uniform(
+            self.config.incoming_range_m * 0.7, self.config.incoming_range_m
+        )
+        x = target.x + rng.jitter(20.0)
+        z = target.z + distance
+        vx, vz = int(x / s), int(z / s)
+        if not (0 <= vx < self.world.dims.x and 0 <= vz < self.world.dims.z):
+            return None
+        column = self.world.v[vx, :, vz]
+        solid = np.nonzero(voxel.SOLID[column])[0]
+        if not solid.size:
+            return None
+        ground = float(solid[-1] + 1) * s
+        return Vec3(x, ground + rng.uniform(0.4, 1.2), z)
+
+    def _tick_harassment(self, dt: float) -> None:
+        """Incoming fire from nobody in particular.
+
+        A tuning rig, not AI: there is no shooter, no decision and no target
+        selection, just rounds arriving from the enemy line at a set rate so
+        suppression can be felt and tuned before anything is built on top of
+        it. Off unless asked for. It goes away the day a squad exists.
+        """
+        rate = self.config.incoming_rpm
+        if rate <= 0.0:
+            return
+        self._incoming_timer += dt
+        interval = 60.0 / rate
+        rng = self.stream("harassment")
+        while self._incoming_timer >= interval:
+            self._incoming_timer -= interval
+            target = self.eye_position
+            origin = self._harassment_origin(target, rng)
+            if origin is None:
+                continue
+            aim = Vec3(
+                target.x + rng.jitter(self.config.incoming_spread_m),
+                target.y + rng.jitter(self.config.incoming_spread_m * 0.6),
+                target.z,
+            )
+            self.projectiles.fire(
+                origin, aim - origin, self.weapon.spec.projectile, owner=1
+            )
 
     def run_ticks(self, count: int, dt: float = TICK_DT) -> None:
         for _ in range(count):
@@ -315,6 +401,7 @@ class Session:
         """
         p, v = self.player.position, self.player.velocity
         recoil = self.recoil.state
+        sup = self.suppression.state
         rows: list[tuple[str, tuple[float, ...]]] = [
             (
                 "player",
@@ -324,6 +411,8 @@ class Session:
                     float(self.player.stance),
                     float(self.player.on_ground),
                     float(self.player.on_firing_step),
+                    float(self.player.pinned),
+                    self.player.speed_scale,
                     self.player.wade_depth,
                     self.player.bob_phase,
                     self.player.landing_impact,
@@ -336,6 +425,16 @@ class Session:
                     recoil.kick_pitch_vel, recoil.kick_yaw_vel,
                     recoil.climb_pitch, recoil.climb_yaw,
                     float(recoil.shots), recoil.since_shot,
+                ),
+            ),
+            (
+                # Suppression changes movement and refuses stances, so unlike
+                # the viewkick it is simulation state and belongs in the digest.
+                "suppression",
+                (
+                    sup.level, sup.since_event,
+                    sup.flinch_pitch, sup.flinch_yaw, sup.shake_phase,
+                    float(sup.cracks), float(sup.impacts), float(sup.ejected),
                 ),
             ),
             (

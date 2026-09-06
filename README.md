@@ -14,7 +14,16 @@ python3 -m venv .venv && .venv/bin/pip install numpy ursina pytest
 ```
 
 `WASD` move · `SHIFT` sprint · `CTRL` crouch · `C` prone · `SPACE` jump ·
+`LMB` fire · `R` reload · `V` periscope · `F` dig ·
 `F1` toggle stats · `ESC` release the mouse.
+
+To feel suppression, ask for incoming fire. It is a tuning rig with no shooter
+behind it — no AI, no decisions, no target selection — and it goes away the day
+a squad exists:
+
+```bash
+.venv/bin/python -m trenchline --seed 7 --incoming 400 --incoming-range 30
+```
 
 ### Headless
 
@@ -135,6 +144,33 @@ The trench section is the load-bearing one. Parapet crest height is not a
 constant there: each fire bay measures the ground it has to see over, raises its
 own firing step until a standing eye clears it, and builds its crest from that
 step. `tools/sightlines.py` prints what that produces.
+
+## Suppression
+
+Most rounds miss, and the ones that miss are doing the work. A round passing
+within 3.2 m of your head raises suppression, sharply non-linearly with how
+close it came; dirt kicking up nearby raises it less, because a crack past your
+ear also means they have your range. It holds for half a second so a burst does
+not bleed off between its own rounds, then recovers over about three seconds.
+
+What it costs, in order of how much it is felt: movement down to 0.4x, the
+dispersion cone out to 4.2x, a flinch that drags the muzzle off, and above 0.55
+you cannot stay on the firing step or keep the periscope up at all. The grey
+wash and vignette are how that is communicated, not what it is.
+
+Whether fire can actually reach you is terrain, not a number, which is the part
+worth playing with. From a firing step behind an intact parapet, measured on
+seed 7:
+
+| range of incoming fire | peak suppression | pushed off the step |
+| --- | --- | --- |
+| 55 m | 0.49 | no |
+| 40 m | 0.73 | yes |
+| 28 m | 1.00 | yes |
+| 18 m | 1.00 | yes |
+
+At 55 m the parapet and the ground clutter eat nearly every round; caught in
+the open at the same range you are pinned solid in seconds.
 
 ## Performance
 

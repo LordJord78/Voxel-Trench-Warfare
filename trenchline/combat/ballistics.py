@@ -31,6 +31,7 @@ from ..physics.vec import Vec3
 from ..world import voxel
 from ..world.chunks import VoxelWorld
 from ..world.raycast import raycast
+from .suppression import segment_distance
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +88,8 @@ class ProjectilePool:
         "world", "capacity", "gravity", "air_density", "substeps",
         "max_range", "max_flight_time", "count", "dropped",
         "position", "velocity", "origin", "drag_factor", "mass",
-        "distance", "age", "spec_index", "_specs",
+        "distance", "age", "spec_index", "owner", "_specs",
+        "listener", "listener_radius", "cracks",
     )
 
     def __init__(self, world: VoxelWorld, tun: Tunables, capacity: int | None = None) -> None:
@@ -108,6 +110,13 @@ class ProjectilePool:
         self.distance = np.zeros(n, dtype=np.float64)
         self.age = np.zeros(n, dtype=np.float64)
         self.spec_index = np.zeros(n, dtype=np.int32)
+        self.owner = np.zeros(n, dtype=np.int8)
+        """Who fired it. 0 is the player, and the player is not suppressed by
+        their own rifle."""
+        self.listener: tuple[float, float, float] | None = None
+        self.listener_radius = 0.0
+        self.cracks: list[float] = []
+        """Miss distances of rounds that went past the listener this step."""
         self.count = 0
         self.dropped = 0
         self._specs: list[ProjectileSpec] = []
@@ -120,6 +129,7 @@ class ProjectilePool:
         direction: Vec3,
         spec: ProjectileSpec,
         speed: float | None = None,
+        owner: int = 0,
     ) -> int:
         """Put one round in the air.  Returns its slot, or -1 if the pool is full."""
         if self.count >= self.capacity:
@@ -145,6 +155,7 @@ class ProjectilePool:
         self.distance[slot] = 0.0
         self.age[slot] = 0.0
         self.spec_index[slot] = index
+        self.owner[slot] = owner
         self.count += 1
         return slot
 
@@ -153,9 +164,11 @@ class ProjectilePool:
     def step(self, dt: float) -> list[Impact]:
         """Advance every live round one tick.  Returns what hit something."""
         if self.count == 0:
+            self.cracks.clear()
             return []
 
         impacts: list[Impact] = []
+        self.cracks.clear()
         sub_dt = dt / self.substeps
         for _ in range(self.substeps):
             if self.count == 0:
@@ -184,11 +197,22 @@ class ProjectilePool:
 
         impacts: list[Impact] = []
         dead: list[int] = []
+        listener = self.listener
         for i in range(n):
             length = float(step_length[i])
             if length > 1e-9:
                 start = Vec3(*position[i])
                 direction = Vec3(*(travel[i] / length))
+                # Did it go past someone's head? Asked about the whole segment,
+                # because a rifle round covers metres per tick and a test that
+                # only looked at where it ended would miss every round that
+                # missed — which is all of the interesting ones.
+                if listener is not None and self.owner[i] != 0:
+                    miss = segment_distance(
+                        start, Vec3(*candidate[i]), Vec3(*listener)
+                    )
+                    if miss <= self.listener_radius:
+                        self.cracks.append(miss)
                 hit = raycast(self.world, start, direction, length)
                 if hit is not None:
                     impacts.append(self._impact(i, hit, speed[i]))
@@ -234,7 +258,7 @@ class ProjectilePool:
             for array in (
                 self.position, self.velocity, self.origin,
                 self.drag_factor, self.mass, self.distance,
-                self.age, self.spec_index,
+                self.age, self.spec_index, self.owner,
             ):
                 array[slot] = array[last]
         self.count -= 1
