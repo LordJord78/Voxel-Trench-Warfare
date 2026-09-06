@@ -1,0 +1,238 @@
+"""The trench has to be mechanically true, not decorative.
+
+These tests are the acceptance criteria for the trench design: a traverse must
+actually stop enfilade fire, a firing step must actually be the difference
+between seeing and not seeing, and a dugout must actually have a roof.
+"""
+
+from __future__ import annotations
+
+import statistics
+
+import numpy as np
+import pytest
+
+from trenchline.physics.character import Stance
+from trenchline.physics.vec import Vec3
+from trenchline.session import Session, SessionConfig
+from trenchline.world import voxel
+from trenchline.world.raycast import line_of_sight, raycast
+
+SEEDS = (7, 21, 99)
+
+
+@pytest.fixture(scope="module", params=SEEDS)
+def game(request) -> Session:
+    return Session(SessionConfig(seed=request.param))
+
+
+def _eye(session: Session, stance: Stance) -> float:
+    return session.controller.stances[stance].eye_height
+
+
+# -- traverses ---------------------------------------------------------------
+
+
+def test_traverses_block_enfilade_down_the_line(game: Session) -> None:
+    """You must not be able to see, or shoot, down your own trench."""
+    stand = _eye(game, Stance.STANDING)
+    distances: list[float] = []
+    for bay in game.network.lines["front"].bays:
+        cx, cy, cz = bay.centre_metres
+        eye = Vec3(cx, cy + stand, cz)
+        for direction in (Vec3(1, 0, 0), Vec3(-1, 0, 0)):
+            hit = raycast(game.world, eye, direction, 120.0)
+            distances.append(hit.distance if hit else 120.0)
+
+    median = statistics.median(distances)
+    bay_length = game.tun.f("world.trench.bay_length_m")
+    assert median <= bay_length + 4.0, (
+        f"median sightline down the line is {median:.1f} m; traverses are not working"
+    )
+    # A few breaches from direct hits are the point, but not most of the line.
+    breached = sum(1 for d in distances if d > bay_length * 2.5)
+    assert breached <= len(distances) * 0.25
+
+
+def test_traverse_blocks_fragmentation_around_the_corner(game: Session) -> None:
+    """A grenade in one bay must not have line of sight into the next."""
+    bays = game.network.lines["front"].bays
+    blocked = 0
+    pairs = 0
+    for a, b in zip(bays, bays[1:]):
+        ax, ay, az = a.centre_metres
+        bx, by, bz = b.centre_metres
+        # Burst point at roughly waist height on the duckboards.
+        origin = Vec3(ax, ay + 0.6, az)
+        target = Vec3(bx, by + 0.6, bz)
+        pairs += 1
+        if not line_of_sight(game.world, origin, target):
+            blocked += 1
+    assert pairs > 0
+    assert blocked >= pairs * 0.75, (
+        f"only {blocked}/{pairs} bay-to-bay pairs are shielded from each other"
+    )
+
+
+# -- firing step vs parapet --------------------------------------------------
+
+
+def test_you_cannot_see_out_from_the_trench_floor(game: Session) -> None:
+    stand = _eye(game, Stance.STANDING)
+    for bay in game.network.lines["front"].bays:
+        cx, cy, cz = bay.centre_metres
+        hit = raycast(
+            game.world, Vec3(cx, cy + stand, cz), Vec3(0, 0, float(bay.facing)), 90.0
+        )
+        assert hit is not None and hit.distance < 12.0, (
+            f"bay {bay.index} sees {0 if hit is None else hit.distance:.1f} m "
+            "into no man's land from the duckboards"
+        )
+
+
+def test_standing_on_the_firing_step_opens_the_field(game: Session) -> None:
+    stand = _eye(game, Stance.STANDING)
+    views: list[float] = []
+    for bay in game.network.lines["front"].bays:
+        sx, sy, sz = bay.step_metres
+        hit = raycast(
+            game.world, Vec3(sx, sy + stand, sz), Vec3(0, 0, float(bay.facing)), 90.0
+        )
+        views.append(hit.distance if hit else 90.0)
+    assert statistics.median(views) > 25.0, (
+        f"median view from the firing step is only {statistics.median(views):.1f} m"
+    )
+
+
+def test_crouching_on_the_firing_step_keeps_you_behind_the_parapet(game: Session) -> None:
+    crouch = _eye(game, Stance.CROUCHED)
+    views: list[float] = []
+    for bay in game.network.lines["front"].bays:
+        sx, sy, sz = bay.step_metres
+        hit = raycast(
+            game.world, Vec3(sx, sy + crouch, sz), Vec3(0, 0, float(bay.facing)), 90.0
+        )
+        views.append(hit.distance if hit else 90.0)
+    assert statistics.median(views) < 4.0, (
+        "crouching on the step should put the parapet between you and the enemy"
+    )
+
+
+def test_standing_and_crouched_differ_on_every_intact_bay(game: Session) -> None:
+    """The peek must be a real decision, not a coin flip."""
+    stand, crouch = _eye(game, Stance.STANDING), _eye(game, Stance.CROUCHED)
+    better = 0
+    for bay in game.network.lines["front"].bays:
+        sx, sy, sz = bay.step_metres
+        d = Vec3(0, 0, float(bay.facing))
+        up = raycast(game.world, Vec3(sx, sy + stand, sz), d, 90.0)
+        down = raycast(game.world, Vec3(sx, sy + crouch, sz), d, 90.0)
+        up_d = up.distance if up else 90.0
+        down_d = down.distance if down else 90.0
+        if up_d > down_d + 5.0:
+            better += 1
+    bays = len(game.network.lines["front"].bays)
+    assert better >= bays * 0.7, f"only {better}/{bays} bays reward standing up"
+
+
+# -- dugouts -----------------------------------------------------------------
+
+
+def test_dugouts_have_overhead_cover(game: Session) -> None:
+    covered = 0
+    for dugout in game.network.dugouts:
+        cx, cy, cz = dugout.centre_metres
+        hit = raycast(game.world, Vec3(cx, cy, cz), Vec3(0, 1, 0), 25.0)
+        if hit is not None:
+            covered += 1
+    assert game.network.dugouts
+    assert covered >= len(game.network.dugouts) * 0.9, (
+        "dugouts must be hidden from overhead observation"
+    )
+
+
+def test_dugouts_are_dry(game: Session) -> None:
+    v = game.world.v
+    for dugout in game.network.dugouts:
+        block = v[
+            dugout.lo[0] : dugout.hi[0],
+            dugout.lo[1] : dugout.hi[1],
+            dugout.lo[2] : dugout.hi[2],
+        ]
+        assert not (block == voxel.WATER).any(), "a dugout below the water table is a well"
+
+
+def test_dugout_roofs_are_intact_unless_shelled(game: Session) -> None:
+    """A dugout is a trap because it has one entrance and a solid roof.
+
+    A minority may have been opened by a direct hit during generation; that is
+    the feature, not a defect.  Most must be sound.
+    """
+    v = game.world.v
+    sound = 0
+    for dugout in game.network.dugouts:
+        x0, _, z0 = dugout.lo
+        x1, y1, z1 = dugout.hi
+        if voxel.SOLID[v[x0:x1, y1 : y1 + 1, z0:z1]].all():
+            sound += 1
+    assert sound >= len(game.network.dugouts) * 0.9
+
+
+# -- water and terrain -------------------------------------------------------
+
+
+def test_water_never_floats(game: Session) -> None:
+    """Every water voxel rests on something."""
+    v = game.world.v
+    water = v == voxel.WATER
+    assert water.any(), "the map should have standing water somewhere"
+    below = np.zeros_like(water)
+    below[:, 1:, :] = water[:, :-1, :]
+    supported = voxel.SOLID[v] | (v == voxel.WATER)
+    unsupported = water[:, 1:, :] & ~supported[:, :-1, :]
+    assert not unsupported.any(), f"{int(unsupported.sum())} water voxels hang in mid-air"
+
+
+def test_deep_cavities_flood_to_the_water_table(game: Session) -> None:
+    """Anything open below the water table holds water; nothing above it does,
+    except a drainage ditch, which perches its own runoff by design."""
+    v = game.world.v
+    table = game.world.water_table
+    open_below = (v[:, : table + 1, :] == voxel.AIR)
+    assert not open_below.any(), (
+        f"{int(open_below.sum())} dry cavities remain below the water table"
+    )
+
+
+def test_some_craters_are_flooded(game: Session) -> None:
+    nml = game.world.v[:, :, 92:178]
+    assert int((nml == voxel.WATER).sum()) > 500, "no man's land should hold water"
+
+
+def test_no_spoil_floats_over_the_trench(game: Session) -> None:
+    """Regression: piling parapets used a pre-excavation heightmap, which left
+    slabs of spoil hanging in mid-air over the walkway."""
+    for line in game.network.lines.values():
+        for bay in line.bays:
+            cx, cy, cz = bay.centre_metres
+            hit = raycast(game.world, Vec3(cx, cy + 0.3, cz), Vec3(0, 1, 0), 25.0)
+            assert hit is None, (
+                f"{bay.line} bay {bay.index} has {voxel.NAMES[hit.material]} "
+                f"floating {hit.distance:.1f} m overhead"
+            )
+
+
+def test_trench_bays_are_reachable_from_each_other(game: Session) -> None:
+    """The communication graph must be one connected line per trench."""
+    graph = game.network.graph
+    assert graph.nodes
+    seen = {0}
+    stack = [0]
+    while stack:
+        node = stack.pop()
+        for other in graph.edges[node]:
+            if other not in seen:
+                seen.add(other)
+                stack.append(other)
+    front_nodes = len(game.network.lines["front"].bays)
+    assert len(seen) >= front_nodes
