@@ -118,6 +118,7 @@ class Frontend:
         intent.fire = bool(held_keys["left mouse"])
         intent.reload = bool(held_keys["r"])
         intent.periscope = bool(held_keys["v"])
+        intent.dig = bool(held_keys["f"])
 
         if self._edge("c", bool(held_keys["c"])):
             self._prone_latched = not self._prone_latched

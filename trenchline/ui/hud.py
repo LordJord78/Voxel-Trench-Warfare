@@ -65,7 +65,7 @@ class Hud:
         self.hint = self._text("hint", left, -0.965, _DIM, 0.034)
         self.hint.node().set_text(
             "WASD move    SHIFT sprint    CTRL crouch    C prone    "
-            "SPACE jump    V periscope    F1 stats    ESC free mouse"
+            "SPACE jump    V periscope    F dig    F1 stats    ESC free mouse"
         )
         self.perf = self._text(
             "perf", aspect - 0.05, 0.90, _DIM, 0.040, align=TextNode.A_right
@@ -169,6 +169,11 @@ class Hud:
         bay = session.network.nearest_bay(p.x, p.z)
         where = f"{bay.line.replace('_', ' ')} bay {bay.index}" if bay else "open ground"
         notes = []
+        if session.digging:
+            tool = session.entrenching
+            done = int(tool.target_fraction * 8)
+            notes.append(f"DIGGING [{'#' * done}{'.' * (8 - done)}]"
+                         if tool.target else "NOTHING TO CLEAR")
         if player.on_firing_step:
             notes.append("HEAD UP")
         if player.wade_depth > 0.15:

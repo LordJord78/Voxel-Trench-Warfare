@@ -95,6 +95,8 @@ class MoveIntent:
     """Requested posture; may be refused by a low ceiling."""
     periscope: bool = False
     """Raise the periscope.  Only means anything on a firing step."""
+    dig: bool = False
+    """Work the entrenching tool.  Refused while prone or airborne."""
     fire: bool = False
     """Trigger held.  A semi-automatic weapon reads the edge, not the level."""
     reload: bool = False

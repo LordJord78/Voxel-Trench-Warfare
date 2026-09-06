@@ -25,6 +25,7 @@ from .data import Tunables, load_tunables
 from .physics.character import CharacterController, CharacterState, MoveIntent, Stance
 from .physics.vec import Vec3, from_yaw_pitch
 from .world import destruction, voxel
+from .world.entrenching import DigPolicy, EntrenchingTool
 from .world.chunks import VoxelWorld
 from .world.generation import GeneratedWorld, generate
 from .world.trenchmap import TrenchNetwork
@@ -126,6 +127,9 @@ class Session:
             self.tun, self.config.weapon, self.stream("combat.viewkick"),
             self.particles,
         )
+        self.entrenching = EntrenchingTool(self.world, DigPolicy.from_tunables(self.tun))
+        self.digging = False
+        """True on the ticks the player is actually shifting dirt."""
         self.impacts: list[Impact] = []
         """Last tick's impacts, for the renderer to read and for destruction."""
 
@@ -146,14 +150,29 @@ class Session:
 
     def tick(self, dt: float = TICK_DT) -> None:
         self.controller.tick(self.player, self.intent, dt)
+        self._tick_dig(dt)
         self._tick_combat(dt)
         self.bus.drain()
         self.stats.ticks += 1
+
+    def _tick_dig(self, dt: float) -> None:
+        """Shovel work.  Cannot be done lying down, and cannot be rushed."""
+        player = self.player
+        if not (self.intent.dig and player.on_ground and player.stance != Stance.PRONE):
+            self.entrenching.idle()
+            self.digging = False
+            return
+        self.digging = True
+        self.entrenching.work(
+            player.position.x, player.position.y, player.position.z, player.yaw, dt
+        )
 
     def _tick_combat(self, dt: float) -> None:
         # Stance is the same tradeoff here as everywhere else: prone shoulders
         # more of the impulse and holds a tighter cone than standing does.
         sway = self.controller.profile(self.player).sway_scale
+        if self.digging:
+            sway *= self.tun.f("entrenching.sway_scale")
         self.weapon.sway_scale = sway
         self.recoil.scale = sway
 
@@ -237,7 +256,8 @@ class Session:
         return Vec3(p.x, p.y + self.eye_height, p.z)
 
     def exposure(self) -> float:
-        return self.controller.profile(self.player).exposure
+        base = self.controller.profile(self.player).exposure
+        return base * (self.tun.f("entrenching.exposure_scale") if self.digging else 1.0)
 
     def craters_ahead(
         self, x: float, z: float, facing: int, lateral_m: float
