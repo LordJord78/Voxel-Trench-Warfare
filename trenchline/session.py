@@ -22,7 +22,7 @@ from .core.rng import GameRandom
 from .data import Tunables, load_tunables
 from .physics.character import CharacterController, CharacterState, MoveIntent, Stance
 from .physics.vec import Vec3
-from .world import voxel
+from .world import destruction, voxel
 from .world.chunks import VoxelWorld
 from .world.generation import GeneratedWorld, generate
 from .world.trenchmap import TrenchNetwork
@@ -140,6 +140,7 @@ class Session:
 
         self.impacts = self.projectiles.step(dt)
         for impact in self.impacts:
+            destruction.chip(self.world, impact, self.tun)
             self.bus.post(RoundImpact(tick=self.stats.ticks, impact=impact))
 
     def run_ticks(self, count: int, dt: float = TICK_DT) -> None:

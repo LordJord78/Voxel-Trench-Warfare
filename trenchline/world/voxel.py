@@ -90,6 +90,23 @@ _SPOIL_OF = np.array(
     dtype=np.uint8,
 )
 
+# Granular: loose material with no tensile strength.  It falls when whatever
+# was underneath it is blown away, which is what turns an undercut crater wall
+# into dirt in the bottom of the trench.  Timber, corrugate, concrete and brick
+# are left out on purpose: revetment and masonry hold their own weight, and a
+# dugout roof that slumps the moment a shell lands nearby is not a dugout.
+_GRANULAR = np.zeros(MATERIAL_COUNT, dtype=bool)
+for _material in (SOD, MUD, CLAY, SUBSOIL, SPOIL, SANDBAG, RUBBLE):
+    _GRANULAR[_material] = True
+
+# Loose: granular AND already disturbed, so it also slumps sideways to find its
+# angle of repose. Undisturbed strata do not — a ploughed field is full of
+# one-voxel steps, and soil that slides off every one of them erodes the whole
+# map into a plain the first time anything settles.
+_LOOSE = np.zeros(MATERIAL_COUNT, dtype=bool)
+for _material in (SPOIL, RUBBLE, SANDBAG):
+    _LOOSE[_material] = True
+
 COLOURS: Final[np.ndarray] = np.array(_COLOURS, dtype=np.uint8)
 RENDERABLE: Final[np.ndarray] = _RENDERABLE
 OPAQUE: Final[np.ndarray] = _OPAQUE
@@ -97,6 +114,8 @@ SOLID: Final[np.ndarray] = _SOLID
 BLOCKS_SIGHT: Final[np.ndarray] = _BLOCKS_SIGHT
 HARDNESS: Final[np.ndarray] = _HARDNESS
 SPOIL_OF: Final[np.ndarray] = _SPOIL_OF
+GRANULAR: Final[np.ndarray] = _GRANULAR
+LOOSE: Final[np.ndarray] = _LOOSE
 
 VOXEL_SIZE: Final[float] = 0.5
 """Edge length of one voxel in metres."""

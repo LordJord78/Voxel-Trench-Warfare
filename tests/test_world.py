@@ -304,14 +304,23 @@ def test_some_craters_are_flooded(game: Session) -> None:
 
 def test_no_spoil_floats_over_the_trench(game: Session) -> None:
     """Regression: piling parapets used a pre-excavation heightmap, which left
-    slabs of spoil hanging in mid-air over the walkway."""
+    slabs of spoil hanging in mid-air over the walkway.
+
+    The question is whether anything is *unsupported*, not whether anything is
+    there at all: a shell that opens the revetment is supposed to put dirt in
+    the trench, and that dirt is resting on the duckboards, not floating.
+    """
     for line in game.network.lines.values():
         for bay in line.bays:
             cx, cy, cz = bay.centre_metres
             hit = raycast(game.world, Vec3(cx, cy + 0.3, cz), Vec3(0, 1, 0), 25.0)
-            assert hit is None, (
+            if hit is None:
+                continue
+            x, y, z = hit.voxel
+            below = game.world.get(x, y - 1, z)
+            assert voxel.SOLID[below] or hit.distance < 0.5, (
                 f"{bay.line} bay {bay.index} has {voxel.NAMES[hit.material]} "
-                f"floating {hit.distance:.1f} m overhead"
+                f"floating {hit.distance:.1f} m overhead on {voxel.NAMES[below]}"
             )
 
 

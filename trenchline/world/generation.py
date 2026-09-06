@@ -24,7 +24,7 @@ import numpy as np
 
 from ..core.rng import GameRandom
 from ..data import Tunables
-from . import shapes, voxel, water as water_sim
+from . import destruction, shapes, voxel, water as water_sim
 from .chunks import VoxelWorld, WorldDims
 from .trenchmap import Bay, Dugout, TrenchGraph, TrenchLine, TrenchNetwork
 
@@ -225,6 +225,40 @@ def _pile_to(
         v[x2[air], y2[air], z2[air]] = material
 
 
+def _revet(v: np.ndarray, surface: np.ndarray, target: np.ndarray) -> int:
+    """Face the trench's earth walls with timber, up to an absolute y.
+
+    Loose spoil piled at the lip of a two-and-a-half metre trench does not stay
+    there: it finds its angle of repose, and the angle of repose runs through
+    the walkway. Every army that ever dug one revetted the inner face for
+    exactly this reason, so the fix is the historical one rather than a
+    special case in the collapse code.
+
+    It also gives the breach its meaning. Where a shell takes the revetment
+    out, the parapet behind it *does* come down into the trench, because
+    nothing is holding it any more.
+    """
+    mask = target > 0
+    if not mask.any():
+        return 0
+    xs, zs = np.nonzero(mask)
+    tops = target[xs, zs]
+    base = surface[xs, zs]
+    ny = v.shape[1]
+    faced = 0
+    span = int((tops - base).max())
+    for layer in range(max(0, span)):
+        ys = base + layer
+        sel = (ys < tops) & (ys >= 0) & (ys < ny)
+        if not sel.any():
+            continue
+        x2, y2, z2 = xs[sel], ys[sel], zs[sel]
+        loose = voxel.LOOSE[v[x2, y2, z2]]
+        v[x2[loose], y2[loose], z2[loose]] = voxel.TIMBER
+        faced += int(loose.sum())
+    return faced
+
+
 def _corridor_height(
     surface: np.ndarray,
     long_axis: int,
@@ -361,6 +395,7 @@ def _carve_trench_line(
     footprint = np.zeros((nx, nz), dtype=bool)
     parapet_target = np.zeros((nx, nz), dtype=np.int32)
     parados_target = np.zeros((nx, nz), dtype=np.int32)
+    revet_target = np.zeros((nx, nz), dtype=np.int32)
 
     def to_box(a0: int, a1: int, b0: int, b1: int) -> tuple[int, int, int, int]:
         """(x0, x1, z0, z1) for an along/cross rectangle."""
@@ -526,6 +561,21 @@ def _carve_trench_line(
                 continue
             px0, px1, pz0, pz1 = to_box(a, a1 + leg, col, col + 1)
             parapet_target[max(0, px0) : px1, max(0, pz0) : pz1] = target
+        # Both earth faces of the trench get revetted, to their own heights:
+        # the parapet side to the crest, the parados side to its lower top.
+        # Leaving either one bare lets that bank find its angle of repose
+        # through the walkway — the parados is only a single course of spoil,
+        # but a single course sliding in runs the whole length of the bay and
+        # lands exactly where a man's feet go.
+        parapet_face = b1 if spec.facing > 0 else b0 - 1
+        parados_face = b0 - 1 if spec.facing > 0 else b1
+        for face, height in (
+            (parapet_face, plan.crest_y),
+            (parados_face, plan.ground_y + parados_h),
+        ):
+            fx0, fx1, fz0, fz1 = to_box(a, a1 + leg, face, face + 1)
+            revet_target[max(0, fx0) : fx1, max(0, fz0) : fz1] = height
+
         for course in range(2):
             col = b0 - 1 - course if spec.facing > 0 else b1 + course
             kx0, kx1, kz0, kz1 = to_box(a, a1 + leg, col, col + 1)
@@ -549,6 +599,8 @@ def _carve_trench_line(
     parados_target[parapet_target > 0] = 0
     _pile_to(v, surface, parapet_target, voxel.SPOIL)
     _pile_to(v, surface, parados_target, voxel.SPOIL)
+    revet_target[footprint] = 0
+    _revet(v, surface, revet_target)
 
     # Sandbag courses along the crest, in short runs rather than everywhere.
     xs, zs = np.nonzero(parapet_target > 0)
@@ -863,12 +915,13 @@ def _collapsed_culvert(
 def _pick_spawn(v: np.ndarray, line: TrenchLine) -> tuple[float, float, float]:
     """Stand the player on duckboards that a shell has not already taken.
 
-    Craters are cut after the trench is dug, and four of them per line are
-    aimed at it deliberately.  Spawning on the geometric middle bay therefore
-    sometimes meant spawning in a hole in the walkway, one voxel below the
-    duckboards it was supposed to be standing on and too low to climb back onto
-    the firing step.  Search outward from the middle for a bay whose walkway is
-    still there, and fall back to the middle if the whole line has been ploughed.
+    Craters are cut after the trench is dug, four of them per line are aimed at
+    it deliberately, and the collapse then drops whatever they undercut. The
+    geometric middle bay is therefore sometimes a hole in the walkway with its
+    firing step shot away — which is a fine bay to fight over and a poor one to
+    start in, since you can neither stand where you spawned nor climb up to see
+    out. Search outward from the middle for a bay that still works, and fall
+    back to the middle if the whole line has been ploughed.
     """
     bays = line.bays
     if not bays:
@@ -884,13 +937,26 @@ def _pick_spawn(v: np.ndarray, line: TrenchLine) -> tuple[float, float, float]:
         floor = bay.floor_y
         if v[x, floor, z] != voxel.DUCKBOARD:
             continue
-        headroom = v[x, floor + 1 : min(ny, floor + 5), z]
-        if (headroom != voxel.AIR).any():
+        if (v[x, floor + 1 : min(ny, floor + 5), z] != voxel.AIR).any():
+            continue
+        if bay.has_firing_step and _step_intact(v, bay) < 0.5:
             continue
         s = voxel.VOXEL_SIZE
         return (bay.walk_x * s, (floor + 1) * s + 0.05, bay.walk_z * s)
     sx, sy, sz = bays[middle].centre_metres
     return (sx, sy + 0.05, sz)
+
+
+def _step_intact(v: np.ndarray, bay: Bay) -> float:
+    """Fraction of this bay's firing-step bench still standing."""
+    lo, hi = bay.step_lo, bay.step_lo + max(1, bay.step_span)
+    if bay.long_axis == 0:
+        bench = v[bay.x0 : bay.x1, bay.floor_y + 1 : bay.step_top_y, lo:hi]
+    else:
+        bench = v[lo:hi, bay.floor_y + 1 : bay.step_top_y, bay.z0 : bay.z1]
+    if bench.size == 0:
+        return 0.0
+    return float((bench == voxel.TIMBER).mean())
 
 
 # ---------------------------------------------------------------------------
@@ -994,8 +1060,14 @@ def generate(rng: GameRandom, tun: Tunables) -> GeneratedWorld:
         enemy_front_z - 13, enemy_front_z + 2, 4, radius_cap=4.2,
     )
 
+    # Craters undercut trench walls and parapets, leaving spoil hanging over the
+    # walkway. Settle it before anyone sees it: the same collapse the runtime
+    # uses, so a crater cut at load behaves like one cut at tick 40 000, and
+    # the dirt ends up where it would have ended up — in the bottom of the
+    # trench underneath.
     water_sim.flood_below_table(v, water)
     water_sim.settle(v)
+    destruction.settle_world(world)
     world.mark_all_dirty()
 
     spawn = _pick_spawn(v, network.lines["front"])

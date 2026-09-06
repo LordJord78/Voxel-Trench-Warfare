@@ -228,6 +228,25 @@ drift_ramp_shots    = 5.0
 jitter_pitch_deg    = 0.035
 jitter_yaw_deg      = 0.055
 
+# ---------------------------------------------------------------------------
+# DESTRUCTION
+#
+# Every carve is followed by a collapse. A crater that leaves its spoil hanging
+# in mid-air is wrong to look at and wrong to shoot through, and one that does
+# not put its dirt anywhere has made cover out of nothing.
+# ---------------------------------------------------------------------------
+
+[destruction]
+resists_above_hardness = 2.0   # concrete (4.0) and brick (2.6) survive the
+                               # outer radius; soil and timber do not
+core_radius_scale      = 0.55  # inside this, nothing survives
+loosen_radius_scale    = 1.45  # rind of ground shaken into loose spoil, which
+                               # is what actually falls into the trench
+chip_energy_j          = 260.0 # per unit hardness, for a single round to mark
+                               # a surface. A rifle round scars a parapet over
+                               # a magazine; it does not dig through it.
+collapse_max_passes    = 64
+
 [camera]
 fov                 = 90.0
 far_plane           = 320.0
