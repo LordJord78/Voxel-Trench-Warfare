@@ -36,13 +36,14 @@ water_table_m       = 12.5     # below this, open cavities flood. Sits just
 # during which the player was looking at, and standing within near_m of,
 # geometry the simulation had already changed:
 #     ms/frame   loaded p99   shown stale   frames over 16.7 ms
-#          0.5       4.6 ms    191 frames                  0%
-#          3.0      15.3 ms     33 frames                1.0%
-#          5.0      15.7 ms     13 frames                  0%
-#          8.0      19.3 ms      3 frames                 38%
-# 5 ms is the knee: 8 buys ten more frames of freshness and blows the frame
-# budget more than a third of the time to do it.
-rebuild_budget_ms   = 5.0      # of a 16.7 ms frame
+#          5.0      13.5 ms     85 frames                  0%
+#          8.0      16.6 ms     25 frames                1.2%
+#         11.0      19.5 ms     18 frames               14.4%
+# 8 ms is the knee. It used to be 5 — baking ambient occlusion roughly tripled
+# the cost of a full-resolution rebuild, because occlusion splits greedy merges
+# wherever the shading changes. That is the price of the trench having visible
+# depth, and it is worth it, but it had to be paid for somewhere.
+rebuild_budget_ms   = 8.0      # of a 16.7 ms frame
 rebuild_min_per_frame = 1      # always make progress, however expensive
 rebuild_near_m      = 32.0     # inside this a wrong chunk can be walked into
                                # as well as looked at
@@ -437,7 +438,8 @@ blur_at_full        = 0.55
 
 [camera]
 fov                 = 90.0
-far_plane           = 320.0
+far_plane           = 400.0   # the map diagonal is 181 m; this is fog-limited,
+                               # not clip-limited, so nothing ever pops in
 near_plane          = 0.08
 fov_lerp_per_s      = 7.0      # how fast the periscope's tunnel eases in
 head_bob_amplitude  = 0.035
@@ -448,7 +450,38 @@ landing_dip         = 0.11
 tracer_length_m     = 7.0      # streak behind the round, not a dot
 tracer_colour       = [1.0, 0.83, 0.45]
 
+# ---------------------------------------------------------------------------
+# LIGHTING
+#
+# Baked into vertex colours at mesh time. Panda's shader generator emits GLSL
+# 120/130 and this machine's GL profile is 3.3/4.1 core, which rejects it, so
+# directional lights and shadow maps are not on the table — but a voxel world
+# does not need them. Ambient occlusion baked per vertex is what makes a trench
+# read as having depth, and it costs nothing per frame.
+#
+# Changing any of this means remeshing the world, not moving a slider.
+# ---------------------------------------------------------------------------
+
+[lighting]
+sun_azimuth_deg     = 141.0    # behind and right of a player facing the enemy,
+                               # so the parapet casts its shading toward them
+sun_elevation_deg   = 24.0     # low winter sun, well diffused by the overcast
+ambient             = 0.62     # high: an overcast sky is a dome of light
+diffuse             = 0.30     # low, for the same reason
+sky_bounce          = 0.10     # keeps downward faces off pure black
+ao_strength         = 0.55     # 0 flat, 1 pitch-black in a fully enclosed corner
+
 [weather]
-fog_near            = 14.0
-fog_far             = 135.0
-sky_colour          = [0.63, 0.64, 0.63]   # flat overcast
+# Overcast and heavy. The horizon colour is load-bearing: distance fog blends
+# to it, so the far treeline dissolves into the sky rather than into a grey
+# wall, and the LOD transition and the edge of the map go with it.
+horizon_colour      = [0.70, 0.70, 0.68]
+zenith_colour       = [0.46, 0.49, 0.53]
+sun_glow            = 0.34     # a broad brightening behind the cloud, not a disc
+sun_glow_power      = 6.0      # lower is wider
+
+# Exponential, so density is a single weather lever rather than two distances
+# that have to be kept consistent with the far plane. Transmittance is
+# exp(-density * metres): at 0.0060 the enemy parapet at 51 m is at 74% and the
+# far treeline at 120 m is at 49% — hazy, still readable.
+fog_density         = 0.0060

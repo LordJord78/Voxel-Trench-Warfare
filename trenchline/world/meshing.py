@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from . import voxel
+from . import lighting, voxel
 
 # (axis, sign, u_axis, v_axis).  The u/v choice is cyclic so that
 # cross(u_hat, v_hat) == +axis_hat and winding needs no special-casing.
@@ -30,9 +30,28 @@ _FACES: tuple[tuple[int, int, int, int], ...] = (
     (2, -1, 0, 1),
 )
 
-# Baked directional shading.  No dynamic lights: an overcast sky is a dome of
-# flat light, and cheap face shading reads better than a lambert term.
-_FACE_SHADE: tuple[float, ...] = (0.79, 0.73, 1.00, 0.50, 0.87, 0.65)
+# Baked directional shading, from the sun position in [lighting]. No dynamic
+# lights: Panda's shader generator does not run on this GL profile, and a voxel
+# world does not need it.
+_FACE_NORMALS: tuple[tuple[int, int, int], ...] = tuple(
+    tuple(1 if i == axis and sign > 0 else (-1 if i == axis and sign < 0 else 0)
+          for i in range(3))
+    for axis, sign, _, _ in _FACES
+)
+_FACE_SHADE: tuple[float, ...] = lighting.face_brightness(_FACE_NORMALS)
+
+_AO_LEVELS = lighting.ao_levels()
+"""Brightness for occlusion 0 (a fully enclosed corner) to 3 (open sky)."""
+
+# The four corners of a quad, as (du, dv) in the face's own u/v plane, in the
+# same order the quad's vertices are emitted.
+_AO_CORNERS: tuple[tuple[int, int], ...] = ((-1, -1), (1, -1), (1, 1), (-1, 1))
+
+_MATERIAL_BITS = 5
+_AO_SHIFT = 8
+"""Face keys pack the material in the low bits and the four corner occlusion
+values two bits each above it, so greedy merging cannot join two runs whose
+shading differs — which is what would smear a corner's AO along a whole wall."""
 
 _QUAD_INDICES = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
 
@@ -72,17 +91,56 @@ class ChunkMesh:
         return ChunkMesh(_EMPTY_F32, _EMPTY_F32, _EMPTY_U8, _EMPTY_U32, 0)
 
 
-def _tint(values: np.ndarray, seeds: np.ndarray, shade: float) -> np.ndarray:
-    """Per-quad colour with a deterministic dither so faces are not flat."""
+def _tint(
+    values: np.ndarray, seeds: np.ndarray, shade: float, ao: np.ndarray
+) -> np.ndarray:
+    """Per-VERTEX colour: material, face shading, dither and corner occlusion.
+
+    Four rows per quad, because the whole point of the occlusion term is that
+    it varies across a face.  `ao` is (n, 4) of 0-3.
+    """
     base = voxel.COLOURS[values].astype(np.float32)
     # Cheap integer hash of the quad's origin -> +/- 6% brightness.
     h = (seeds.astype(np.uint32) * np.uint32(2654435761)) >> np.uint32(16)
     jitter = 0.94 + (h & np.uint32(63)).astype(np.float32) * (0.12 / 63.0)
-    scale = (shade * jitter)[:, None]
-    rgb = np.clip(base * scale, 0.0, 255.0).astype(np.uint8)
-    out = np.empty((values.shape[0], 4), dtype=np.uint8)
-    out[:, :3] = rgb
-    out[:, 3] = 255
+    per_quad = (shade * jitter)[:, None]                      # (n, 1)
+    corner = _AO_LEVELS[ao]                                   # (n, 4)
+    scale = (per_quad * corner)[:, :, None]                   # (n, 4, 1)
+    rgb = np.clip(base[:, None, :] * scale, 0.0, 255.0).astype(np.uint8)
+    out = np.empty((values.shape[0], 4, 4), dtype=np.uint8)
+    out[:, :, :3] = rgb
+    out[:, :, 3] = 255
+    return out.reshape(-1, 4)
+
+
+def _corner_occlusion(
+    padded: np.ndarray, size: int, axis: int, sign: int, u_ax: int, v_ax: int
+) -> list[np.ndarray]:
+    """Classic voxel AO: how enclosed is each corner of each face?
+
+    For a corner, look at the three voxels touching it on the OUTSIDE of the
+    face — the two edge-adjacent ones and the diagonal. Two adjacent sides
+    meeting is the fully enclosed case and goes to zero regardless of the
+    diagonal, which is what puts a hard dark line in the inside corner of a
+    trench instead of a soft smudge.
+    """
+
+    def outer(du: int, dv: int) -> np.ndarray:
+        sl = [slice(1, 1 + size)] * 3
+        sl[axis] = slice(1 + sign, 1 + sign + size)
+        sl[u_ax] = slice(1 + du, 1 + du + size)
+        sl[v_ax] = slice(1 + dv, 1 + dv + size)
+        return voxel.OPAQUE[padded[tuple(sl)]]
+
+    out: list[np.ndarray] = []
+    for du, dv in _AO_CORNERS:
+        side_u = outer(du, 0)
+        side_v = outer(0, dv)
+        diagonal = outer(du, dv)
+        open_ness = 3 - (
+            side_u.astype(np.int8) + side_v.astype(np.int8) + diagonal.astype(np.int8)
+        )
+        out.append(np.where(side_u & side_v, np.int8(0), open_ness))
     return out
 
 
@@ -242,11 +300,19 @@ def greedy_mesh(padded: np.ndarray, voxel_size: float = voxel.VOXEL_SIZE) -> Chu
         if not visible.any():
             continue
 
-        mask = np.where(visible, core, np.uint8(0))
-        s, u0, u1, v0, v1, material = _face_quads(mask, size, axis, u_ax, v_ax)
+        ao = _corner_occlusion(padded, size, axis, sign, u_ax, v_ax)
+        key = core.astype(np.int32)
+        for corner in range(4):
+            key |= ao[corner].astype(np.int32) << (_AO_SHIFT + 2 * corner)
+        mask = np.where(visible, key, np.int32(0))
+        s, u0, u1, v0, v1, keys = _face_quads(mask, size, axis, u_ax, v_ax)
         n = s.shape[0]
         if n == 0:
             continue
+        material = (keys & ((1 << _MATERIAL_BITS) - 1)).astype(np.uint8)
+        quad_ao = np.stack(
+            [(keys >> (_AO_SHIFT + 2 * corner)) & 3 for corner in range(4)], axis=1
+        )
 
         plane = (s + 1 if sign > 0 else s).astype(np.float32)
         p = np.zeros((n, 4, 3), dtype=np.float32)
@@ -262,16 +328,16 @@ def greedy_mesh(padded: np.ndarray, voxel_size: float = voxel.VOXEL_SIZE) -> Chu
         # (Panda's `y-up-left`), so front faces are the reversed order.
         if sign > 0:
             p = p[:, ::-1, :]
+            quad_ao = quad_ao[:, ::-1]
 
         normal = np.zeros(3, dtype=np.float32)
         normal[axis] = float(sign)
 
         seeds = (s * 8191 + u0 * 131 + v0 * 17 + face).astype(np.uint32)
-        quad_colour = _tint(material, seeds, _FACE_SHADE[face])
 
         pos_chunks.append(p.reshape(-1, 3))
         nrm_chunks.append(np.broadcast_to(normal, (n * 4, 3)))
-        col_chunks.append(np.repeat(quad_colour, 4, axis=0))
+        col_chunks.append(_tint(material, seeds, _FACE_SHADE[face], quad_ao))
         total_quads += n
 
     if total_quads == 0:

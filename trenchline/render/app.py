@@ -42,7 +42,9 @@ class Frontend:
             development_mode=False,
             size=(1440, 810),
         )
-        window.color = color.rgb32(*[int(c * 255) for c in tun["weather.sky_colour"]])
+        window.color = color.rgb32(
+            *[int(c * 255) for c in tun["weather.horizon_colour"]]
+        )
         window.exit_button.visible = False
         window.fps_counter.enabled = False
         mouse.locked = True
@@ -56,6 +58,15 @@ class Frontend:
         self.chunks = ChunkRenderer(
             session.world, scene, SchedulePolicy.from_tunables(tun, 1440.0 / 810.0)
         )
+        # Tell the scheduler where the player will be BEFORE the first meshing
+        # pass, or every chunk is meshed as though viewed from the origin —
+        # which means the whole world loads at the coarsest LOD and only creeps
+        # back to full detail as the round-robin sweep happens to reach it.
+        spawn = session.eye_position
+        self.chunks.look_from(
+            (spawn.x, spawn.y, spawn.z),
+            (0.0, 0.0, 1.0 if session.player.yaw < 90.0 else -1.0),
+        )
         self.chunks.build_all(progress=True)
         build_ms = (time.perf_counter() - t0) * 1000.0
         print(
@@ -64,9 +75,18 @@ class Frontend:
             f"(mesh {self.chunks.stats.mesh_ms:.0f} / upload {self.chunks.stats.upload_ms:.0f})"
         )
 
+        from .sky import Sky
+
+        self.sky = Sky(scene, tun, radius=tun.f("camera.far_plane") * 0.80)
+
+        # Exponential rather than a near/far pair: density is one weather lever
+        # and it cannot fall out of step with the far plane. Blended to the
+        # horizon band of the sky, so distance dissolves into the sky instead
+        # of into a grey wall — which is also what hides the LOD transition and
+        # the edge of the map.
         fog = Fog("overcast")
-        fog.set_color(*tun["weather.sky_colour"])
-        fog.set_linear_range(tun.f("weather.fog_near"), tun.f("weather.fog_far"))
+        fog.set_color(*self.sky.fog_colour)
+        fog.set_exp_density(tun.f("weather.fog_density"))
         scene.set_fog(fog)
 
         camera.fov = tun.f("camera.fov")
@@ -186,6 +206,8 @@ class Frontend:
                 math.cos(aim) * math.cos(pitch),
             ),
         )
+        eye_now = session.eye_position
+        self.sky.follow(eye_now.x, eye_now.y, eye_now.z)
         self.chunks.restale_lod()
         self.chunks.build_pending()
         self.tracers.update()

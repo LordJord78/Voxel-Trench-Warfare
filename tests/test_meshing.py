@@ -81,12 +81,32 @@ def test_water_surface_is_drawn_but_water_to_water_is_not() -> None:
 
 
 def test_seams_are_culled_against_neighbours() -> None:
-    """A chunk whose neighbour is solid must not draw its shared face."""
+    """A chunk whose neighbour is solid must not draw its shared face.
+
+    Asserted as "no geometry in that plane" rather than "fewer quads": baked
+    occlusion splits merges wherever the shading changes, so a solid neighbour
+    can cull one big face and still raise the total quad count by breaking up
+    the four faces that meet it.
+    """
     lone = _padded()
     lone[1:-1, 1:-1, 1:-1] = voxel.MUD
     with_neighbour = lone.copy()
     with_neighbour[0, :, :] = voxel.MUD
-    assert greedy_mesh(with_neighbour).quads < greedy_mesh(lone).quads
+
+    def seam_faces(mesh) -> int:
+        """Quads lying IN the shared plane and facing out of it.
+
+        Position alone is not enough: the four side faces legitimately have
+        vertices at x = 0 because they span the chunk.
+        """
+        outward = mesh.normals[:, 0] < -0.5
+        in_plane = mesh.positions[:, 0] <= 1e-6
+        return int((outward & in_plane).sum())
+
+    assert seam_faces(greedy_mesh(with_neighbour)) == 0, "the shared face was drawn"
+    assert seam_faces(greedy_mesh(lone)) > 0, (
+        "the lone chunk should draw that face, or this proves nothing"
+    )
 
 
 def test_meshing_a_real_chunk_fits_the_frame_budget() -> None:
