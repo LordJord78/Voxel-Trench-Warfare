@@ -186,6 +186,7 @@ class Frontend:
                 math.cos(aim) * math.cos(pitch),
             ),
         )
+        self.chunks.restale_lod()
         self.chunks.build_pending()
         self.tracers.update()
         self._place_camera(camera, UVec3)

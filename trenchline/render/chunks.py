@@ -7,6 +7,7 @@ spread over a few frames instead of a visible hitch.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -16,7 +17,7 @@ import numpy as np
 
 from ..world import voxel
 from ..world.chunks import CHUNK_SIZE, ChunkCoord, VoxelWorld
-from ..world.meshing import greedy_mesh
+from ..world.meshing import mesh_at_lod
 from .geometry import build_geom_node
 from .schedule import SchedulePolicy, StalenessReport, rank
 
@@ -77,7 +78,44 @@ class ChunkRenderer:
         self.root.set_light_off(1)
         self.root.set_shader_off(1)
         self.nodes: dict[ChunkCoord, NodePath] = {}
+        self.lod: dict[ChunkCoord, int] = {}
+        """What level of detail each chunk is currently meshed at."""
+        self._sweep = 0
+        self._swept_from = np.zeros(3, dtype=np.float64)
+        """Round-robin cursor over existing chunks, looking for ones whose LOD
+        no longer matches where the player is standing."""
         self.stats = ChunkStats()
+
+    def _desired_lod(self, coord: ChunkCoord) -> int:
+        cx, cy, cz = self.world.chunk_centre(coord)
+        distance = float(
+            math.dist((cx, cy, cz), (self.eye[0], self.eye[1], self.eye[2]))
+        )
+        return self.policy.lod_for(distance, self.lod.get(coord, 1))
+
+    def restale_lod(self, budget: int = 48) -> int:
+        """Re-dirty chunks whose LOD no longer matches the view.
+
+        Swept round-robin rather than all at once: walking forward changes the
+        right answer for a band of chunks at a time, and re-queueing all of
+        them on one frame is a stall for no benefit — the far ones can wait.
+        """
+        coords = list(self.nodes)
+        if not coords:
+            return 0
+        # Nothing can have changed band if nobody has moved. Standing still is
+        # the common case and it should cost nothing.
+        if float(np.linalg.norm(self.eye - self._swept_from)) < 0.25:
+            return 0
+        self._swept_from[:] = self.eye
+        marked = 0
+        for _ in range(min(budget, len(coords))):
+            coord = coords[self._sweep % len(coords)]
+            self._sweep += 1
+            if self.lod.get(coord, 1) != self._desired_lod(coord):
+                self.world.mark_dirty(coord)
+                marked += 1
+        return marked
 
     def look_from(self, eye, forward) -> None:
         """Tell the scheduler where the player is and what they are looking at."""
@@ -162,7 +200,9 @@ class ChunkRenderer:
 
     def _rebuild(self, coord: ChunkCoord) -> None:
         t0 = time.perf_counter()
-        mesh = greedy_mesh(self.world.padded_chunk(coord))
+        step = self._desired_lod(coord)
+        self.lod[coord] = step
+        mesh = mesh_at_lod(self.world.padded_chunk(coord), step)
         t1 = time.perf_counter()
 
         existing = self.nodes.pop(coord, None)
@@ -181,6 +221,8 @@ class ChunkRenderer:
             self.nodes[coord] = path
             self.stats.nodes += 1
             self.stats.triangles += tris
+        else:
+            self.lod.pop(coord, None)
 
         t2 = time.perf_counter()
         self.stats.rebuilds += 1

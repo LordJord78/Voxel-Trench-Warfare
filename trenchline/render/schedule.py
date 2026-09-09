@@ -49,6 +49,34 @@ class SchedulePolicy:
     min_rebuilds: int
     """Always do at least this many, however slow, or a single expensive chunk
     can stall the queue forever."""
+    lod_full_m: float
+    """Inside this, chunks are meshed at full voxel resolution."""
+    lod_half_m: float
+    """Out to this, at half. Beyond it, at quarter."""
+    lod_hysteresis_m: float
+    """Slack on the band edges. Without it a player standing on a boundary
+    re-meshes the same chunks back and forth every time they breathe."""
+
+    def lod_for(self, distance: float, current: int = 1) -> int:
+        """LOD step for a chunk at `distance`, given what it is meshed at now.
+
+        Hysteresis is directional: coarsen only once clearly past the edge,
+        refine only once clearly inside it. Widening the band symmetrically
+        does not work — it moves the edge the chunk has just crossed to the
+        other side of the chunk, and it flip-flops on every sweep. That mistake
+        cost 7 ms a frame of pointless re-meshing.
+        """
+        slack = self.lod_hysteresis_m
+        ideal = 1 if distance <= self.lod_full_m else (
+            2 if distance <= self.lod_half_m else 4
+        )
+        if ideal == current:
+            return current
+        if ideal > current:                                   # coarsening
+            edge = self.lod_full_m if current == 1 else self.lod_half_m
+            return ideal if distance > edge + slack else current
+        edge = self.lod_full_m if ideal == 1 else self.lod_half_m
+        return ideal if distance < edge - slack else current
 
     @property
     def cos_half_fov(self) -> float:
@@ -65,6 +93,9 @@ class SchedulePolicy:
             aspect=aspect,
             budget_ms=tun.f("world.rebuild_budget_ms"),
             min_rebuilds=tun.i("world.rebuild_min_per_frame"),
+            lod_full_m=tun.f("world.lod_full_m"),
+            lod_half_m=tun.f("world.lod_half_m"),
+            lod_hysteresis_m=tun.f("world.lod_hysteresis_m"),
         )
 
 

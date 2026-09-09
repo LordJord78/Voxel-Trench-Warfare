@@ -151,6 +151,69 @@ def _face_quads(
     )
 
 
+def downsample(padded: np.ndarray, step: int) -> np.ndarray:
+    """Reduce a padded chunk by `step` for a coarser level of detail.
+
+    A cell becomes solid if any of the fine voxels inside it is, and takes the
+    material of the first solid one in a fixed order — deterministic, and it
+    keeps thin features like revetment and wire pickets from disappearing
+    entirely at range, which picking the centre sample would not.
+
+    Erring toward solid is the safe direction: it over-draws a little at
+    distance, where over-drawing is invisible, rather than opening holes in the
+    terrain, where it very much is not.
+    """
+    if step <= 1:
+        return padded
+    size = padded.shape[0] - 2
+    if size % step:
+        raise ValueError(f"chunk of {size} does not divide by an LOD step of {step}")
+    coarse_size = size // step
+    out = np.empty((coarse_size + 2,) * 3, dtype=padded.dtype)
+
+    core = padded[1:-1, 1:-1, 1:-1].reshape(
+        coarse_size, step, coarse_size, step, coarse_size, step
+    )
+    cells = core.transpose(0, 2, 4, 1, 3, 5).reshape(
+        coarse_size, coarse_size, coarse_size, step**3
+    )
+    solid = voxel.SOLID[cells]
+    first = np.argmax(solid, axis=-1)
+    picked = np.take_along_axis(cells, first[..., None], axis=-1)[..., 0]
+    out[1:-1, 1:-1, 1:-1] = np.where(solid.any(axis=-1), picked, np.uint8(voxel.AIR))
+
+    # The border only has to answer "is the neighbour solid here", and the
+    # padded input carries one fine voxel of it. Treat that voxel as the whole
+    # coarse cell: a wrong answer costs one culled or one extra face on a chunk
+    # seam that is, by construction, far enough away to be an LOD chunk.
+    out[0, 1:-1, 1:-1] = padded[0, 1:-1:step, 1:-1:step]
+    out[-1, 1:-1, 1:-1] = padded[-1, 1:-1:step, 1:-1:step]
+    out[1:-1, 0, 1:-1] = padded[1:-1:step, 0, 1:-1:step]
+    out[1:-1, -1, 1:-1] = padded[1:-1:step, -1, 1:-1:step]
+    out[1:-1, 1:-1, 0] = padded[1:-1:step, 1:-1:step, 0]
+    out[1:-1, 1:-1, -1] = padded[1:-1:step, 1:-1:step, -1]
+    # Corners and edges are never read by the face masks; fill them anyway so
+    # the array is never uninitialised.
+    out[0, 0, :] = out[0, -1, :] = out[-1, 0, :] = out[-1, -1, :] = voxel.AIR
+    out[:, 0, 0] = out[:, 0, -1] = out[:, -1, 0] = out[:, -1, -1] = voxel.AIR
+    out[0, :, 0] = out[0, :, -1] = out[-1, :, 0] = out[-1, :, -1] = voxel.AIR
+    return out
+
+
+def mesh_at_lod(
+    padded: np.ndarray, step: int, voxel_size: float = voxel.VOXEL_SIZE
+) -> ChunkMesh:
+    """Mesh a chunk at a level of detail.  `step` 1 is full resolution.
+
+    A crater at 150 m does not need quarter-metre fidelity, and meshing it as
+    though it did is what makes a fine grid unaffordable rather than just
+    expensive.
+    """
+    if step <= 1:
+        return greedy_mesh(padded, voxel_size)
+    return greedy_mesh(downsample(padded, step), voxel_size * step)
+
+
 def greedy_mesh(padded: np.ndarray, voxel_size: float = voxel.VOXEL_SIZE) -> ChunkMesh:
     """Mesh one chunk.
 
