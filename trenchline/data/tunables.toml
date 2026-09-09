@@ -9,32 +9,37 @@
 # ---------------------------------------------------------------------------
 
 [world]
-voxel_size          = 0.5
-size_x              = 256      # voxels -> 128 m
-size_y              = 64       # voxels ->  32 m
-size_z              = 256      # voxels -> 128 m
-ground_level        = 32       # voxel y of the undisturbed field surface
-water_table         = 25       # voxel y below which open cavities flood.
-                               # Sits just under the trench floor: the line
-                               # stays dry, but a crater deeper than ~2 m
-                               # fills, and a shell in the trench floods it.
-# Destruction rebuild scheduling. The budget is TIME, not a chunk count:
-# chunks differ by an order of magnitude in cost, so a count is a time budget
-# with the units filed off. Ordering matters more than size — stale near-field
-# geometry is a correctness bug (collision reads the voxels, so the player
-# takes cover behind a wall the simulation already deleted), and no budget
-# fixes a queue that is rebuilding the far side of the map first.
-# Measured under sustained shelling at 18+ dirty chunks/frame, seed 7
+# STRUCTURAL, not feel. Read once at import by world/grid.py; every other
+# distance in this file is in metres and is derived from it. Changing it
+# changes what the whole project means, so it is not a per-session override.
+voxel_size          = 0.50
+chunk_voxels        = 16       # voxels per chunk edge
+
+size_x_m            = 128.0
+size_y_m            = 32.0
+size_z_m            = 128.0
+ground_level_m      = 16.0     # height of the undisturbed field surface
+water_table_m       = 12.5     # below this, open cavities flood. Sits just
+                               # under the trench floor: the line stays dry, but
+                               # a crater deeper than ~2 m fills, and a shell in
+                               # the trench floods it.
+
+# Destruction rebuild scheduling. The budget is TIME, not a chunk count: chunks
+# differ by an order of magnitude in cost, so a count is a time budget with the
+# units filed off. Ordering matters more than size — stale near-field geometry
+# is a correctness bug (collision reads the voxels, so the player takes cover
+# behind a wall the simulation already deleted), and no budget fixes a queue
+# that is rebuilding the far side of the map first.
+#
+# Measured under sustained shelling at 19+ dirty chunks/frame, seed 7
 # (tools/stress.py --sweep). "shown" is the worst run of consecutive frames
-# during which the player was looking at, and standing within 32 m of,
+# during which the player was looking at, and standing within near_m of,
 # geometry the simulation had already changed:
 #     ms/frame   loaded p99   shown stale   frames over 16.7 ms
 #          0.5       4.6 ms    191 frames                  0%
-#          1.0       9.7 ms    161 frames                0.5%
 #          3.0      15.3 ms     33 frames                1.0%
 #          5.0      15.7 ms     13 frames                  0%
 #          8.0      19.3 ms      3 frames                 38%
-#         12.0      24.7 ms      1 frame                 100%
 # 5 ms is the knee: 8 buys ten more frames of freshness and blows the frame
 # budget more than a third of the time to do it.
 rebuild_budget_ms   = 5.0      # of a 16.7 ms frame
@@ -42,48 +47,54 @@ rebuild_min_per_frame = 1      # always make progress, however expensive
 rebuild_near_m      = 32.0     # inside this a wrong chunk can be walked into
                                # as well as looked at
 
-[world.trench]
-depth_voxels        = 5        # 2.5 m from field surface to duckboards
-width_voxels        = 5        # 2.5 m of trench, wall to wall: a 1.0 m
-                               # walkway plus a 1.5 m firing step. 3.0 m was a
-                               # communication trench, not a fire bay.
-step_bench_voxels   = 1        # columns of bench, at full step height
-step_tread_voxels   = 2        # columns of stair below it, one voxel apart, so
-                               # the step can be mounted from anywhere along the
-                               # walkway. Together these eat width_voxels - 3 of
-                               # walkway; a body is 0.60 m across, so what is
-                               # left may not go below 2 columns.
-parados_height      = 1        # 0.5 m on the friendly side; lower than
-                               # the parapet so you are not silhouetted
-parapet_min_height  = 2        # floor under the crest: 1.0 m of spoil above the
-                               # local field even where the view needs nothing
-parapet_thickness   = 4        # courses of spoil; the outer ones fall away one
-                               # voxel each, so a tall parapet is a bank not a wall
-bay_length_m        = 8.0      # traverse spacing
-traverse_offset_m   = 2.0      # lateral jog; equals the width, so a straight
-                               # shot down the trench always meets an end wall
+# Level of detail. A crater at 150 m does not need quarter-metre fidelity, and
+# meshing it as though it did is what makes a fine grid unaffordable rather
+# than merely expensive. Half resolution costs about half as much to mesh and
+# 40% of the triangles; quarter costs 29% and 14%.
+lod_full_m          = 40.0     # full voxel resolution inside this
+lod_half_m          = 90.0     # half out to here, quarter beyond
+lod_hysteresis_m    = 8.0      # slack, so standing on a band edge does not
+                               # re-mesh the same chunks back and forth
 
-# The firing step is climbed by a flight running ALONG the bay, not across it,
-# so its height costs bay length (of which there is 8 m) instead of walkway
-# width (of which there is barely 1 m). That is what lets it vary per bay.
-# The across-bay treads carry (step_tread_voxels + 1) voxels of rise, because
-# each column is worth one voxel of step-up. Any bay that needs more than that
-# takes the remainder on a flight running ALONG the bay, which costs bay length
-# (8 m of it) instead of walkway width (1.5 m of it). That is what decouples
-# step height from trench width and lets the step vary per bay.
-firing_step_min     = 3        # 1.5 m: the shallowest step that still works
-firing_step_max     = 7        # 3.5 m: past this the parapet is a redoubt
+[world.trench]
+# Every distance here is metres and every voxel count is derived, because the
+# same design is a different number of voxels on a different grid. The
+# derivation is in generation.py and is asserted by tests/test_world.py.
+depth_m             = 2.50     # field surface to duckboards
+width_m             = 2.50     # wall to wall: walkway plus firing step
+step_bench_m        = 0.50     # bench at full step height
+step_tread_m        = 1.00     # stair below it, so the step can be mounted from
+                               # anywhere along the walkway rather than only
+                               # from a flight at one end
+parados_m           = 0.50     # spoil on the friendly side; lower than the
+                               # parapet so you are not silhouetted
+parapet_min_m       = 1.00     # floor under the crest, above the local field
+parapet_thickness_m = 2.00     # courses of spoil; the outer ones fall away, so
+                               # a tall parapet is a bank and not a wall
+bay_length_m        = 8.0      # traverse spacing
+traverse_gap_m      = 1.00     # wall left between adjacent bay strips
+
+# The across-bay treads carry as much rise as the player's step-up allows per
+# column. Any bay needing more takes the remainder on a flight running ALONG the
+# bay, which costs bay length (8 m of it) rather than walkway width.
+firing_step_min_m   = 1.50     # the shallowest step that still works, and no
+                               # taller than the across-bay stair can carry:
+                               # (step_tread_m + step_bench_m) rounded to the
+                               # grid, times whatever rise the step-up reaches
+                               # per column. Exceed that and the step is only
+                               # mountable from the flight at the end of the bay.
+firing_step_max_m   = 3.50     # past this the parapet is a redoubt
 
 # Crest clearance is NOT a global constant. Each fire bay measures the ground it
 # has to see over, raises its step until a standing eye clears it, and builds
-# its crest at step_top + floor(standing_eye / voxel_size) = step_top + 3. That
-# puts a standing eye 0.12 m over its own crest and a crouched eye 0.40 m under
-# it, in every bay, whatever the terrain is doing. Generation asserts it.
+# its crest at step_top + floor(standing_eye / voxel_size). That puts a standing
+# eye 0.12 m over its own crest and a crouched eye 0.40 m under it, in every
+# bay, whatever the terrain is doing. Generation asserts it.
 sight_range_m       = 60.0     # how far out the ground has to read
 sight_near_m        = 14.0     # near band, where a rise walls you in outright
 sight_percentile    = 88.0     # of corridor ground the standing eye must clear
-sight_margin_m      = 0.40     # over that ground: covers one voxel of ejecta
-crest_smoothing_voxels = 2     # max crest drop between neighbouring bays
+sight_margin_m      = 0.40     # over that ground: covers ejecta
+crest_smoothing_m   = 1.00     # max crest drop between neighbouring bays
 
 # Ploughed farmland: broad swells, not chop. Amplitude is what gives no-man's-
 # land shape; wavelength is what decides whether that shape blocks the peek.
@@ -108,7 +119,7 @@ relief_persistence  = 0.34     # < 0.5: the fine octaves stay quiet
 # floor stays above the water table, so the middle holds shell holes and not a
 # lake. Set to 0.0 for a flat field.
 swale_depth_m       = 1.50
-swale_margin_voxels = 10.0     # how far past each line the dip reaches
+swale_margin_m      = 5.0      # how far past each line the dip reaches
 
 # Vertical silhouette: the only thing that reads at 40 m from an eye 1.1 m over
 # a flat field, because it is seen against the sky rather than edge-on. Ground
@@ -119,12 +130,12 @@ poles               = 7
 
 # Battlefield layout, in voxels along z (0 = friendly rear, max = enemy rear).
 [world.layout]
-support_line_z      = 40
-front_line_z        = 84
-enemy_front_z       = 186
-enemy_support_z     = 226
-comm_trench_x       = [56, 168]
-shelterbelt_z       = [24, 150, 244]
+support_line_m      = 20.0
+front_line_m        = 42.0
+enemy_front_m       = 93.0
+enemy_support_m     = 113.0
+comm_trench_x_m     = [28.0, 84.0]
+shelterbelt_z_m     = [12.0, 75.0, 122.0]
 
 [player]
 mass                = 82.0

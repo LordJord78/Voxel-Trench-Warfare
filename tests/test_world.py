@@ -15,7 +15,7 @@ import pytest
 from trenchline.physics.character import Stance
 from trenchline.physics.vec import Vec3
 from trenchline.session import Session, SessionConfig
-from trenchline.world import voxel
+from trenchline.world import grid, voxel
 from trenchline.world.raycast import line_of_sight, raycast
 
 SEEDS = (7, 21, 99)
@@ -137,36 +137,45 @@ def test_crouching_on_the_firing_step_keeps_you_behind_the_parapet(game: Session
 def test_the_fire_bay_is_a_fire_bay_and_not_a_corridor(game: Session) -> None:
     """Width is walkway plus firing step, and both have to be usable.
 
-    3.0 m read as a communication trench.  The bay is 2.5 m: a 1.0 m walkway
-    and a 1.5 m step.  A body is 0.60 m across, so the walkway has room to pass
-    and the step has room to stand on, and the arithmetic is asserted rather
-    than left in a comment.
+    All of it is derived from metres rather than voxel counts, because the same
+    design is a different number of voxels on a different grid: a fire step is
+    three voxels at 0.5 m and six at 0.25 m, and a codebase full of the literal
+    3 cannot say which it meant.
     """
     tun = game.tun
-    vs = tun.f("world.voxel_size")
+    vs = voxel.VOXEL_SIZE
     body = tun.f("player.radius") * 2.0
-    width = tun.i("world.trench.width_voxels") * vs
-    structure = (
-        tun.i("world.trench.step_bench_voxels") + tun.i("world.trench.step_tread_voxels")
-    ) * vs
-    walkway = width - structure
+    width = grid.vx(tun.f("world.trench.width_m")) * vs
+    bench = max(1, grid.vx(tun.f("world.trench.step_bench_m")))
+    treads = max(1, grid.vx(tun.f("world.trench.step_tread_m")))
+    walkway = width - (bench + treads) * vs
 
-    assert 2.0 <= width <= 2.5, f"fire bay is {width:.1f} m wide"
-    assert walkway >= body, f"{walkway:.1f} m walkway will not pass a {body:.1f} m body"
-    assert walkway <= 1.2, f"{walkway:.1f} m walkway is a communication trench"
-    # Each tread column is worth one voxel of rise, and the step-up has to cover
-    # it, or the step is only mountable from the flight at the end of the bay.
-    assert vs <= tun.f("player.step_up")
-    across = (tun.i("world.trench.step_tread_voxels") + 1) * vs
-    assert across >= tun.i("world.trench.firing_step_min") * vs, (
-        "the shortest step is already too tall to mount by walking at it"
+    # 2.0-2.25 m needs a finer grid than this one: at 0.5 m voxels a walkway
+    # is 2 columns and the stair is 3, and 5 columns is 2.5 m. Going narrower
+    # here costs half a metre of trench depth rather than nothing.
+    assert 2.0 <= width <= 2.5, f"fire bay is {width:.2f} m wide"
+    assert walkway >= body, f"{walkway:.2f} m walkway will not pass a {body:.2f} m body"
+    assert walkway <= 1.2, f"{walkway:.2f} m walkway is a communication trench"
+    # A man on the bench may overhang the tread below it, which is air at his
+    # feet, but not the parapet, which is solid to the crest.
+    assert (bench + 1) * vs >= body, "nothing wide enough to stand on"
+
+    # Each tread column is worth as much rise as the step-up reaches, which is
+    # one voxel at 0.5 m and two at 0.25 m.
+    rise_per_tread = max(1, int(tun.f("player.step_up") / vs + 1e-9))
+    assert rise_per_tread >= 1, "a tread is taller than the player can step"
+    across = (treads + 1) * rise_per_tread * vs
+    assert across >= tun.f("world.trench.firing_step_min_m") - 1e-6, (
+        f"the across-bay stair carries {across:.2f} m but the shortest step is "
+        f"{tun.f('world.trench.firing_step_min_m'):.2f} m, so it can only be "
+        "mounted from the flight at the end of the bay"
     )
 
     for line in ("front", "enemy_front"):
         for bay in game.network.lines[line].bays:
             span = (bay.x1 - bay.x0) if bay.long_axis == 2 else (bay.z1 - bay.z0)
             assert span * vs == pytest.approx(width), (
-                f"{line} bay {bay.index} is {span * vs:.1f} m wide"
+                f"{line} bay {bay.index} is {span * vs:.2f} m wide"
             )
 
 

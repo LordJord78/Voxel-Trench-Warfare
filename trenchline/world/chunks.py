@@ -14,8 +14,7 @@ from typing import Iterator
 import numpy as np
 
 from . import voxel
-
-CHUNK_SIZE: int = 16
+from .grid import CHUNK_SIZE
 
 ChunkCoord = tuple[int, int, int]
 

@@ -11,6 +11,8 @@ from typing import Final
 
 import numpy as np
 
+from .grid import VOXEL_SIZE as _VOXEL_SIZE
+
 AIR: Final[int] = 0
 SOD: Final[int] = 1
 MUD: Final[int] = 2
@@ -119,8 +121,9 @@ SPOIL_OF: Final[np.ndarray] = _SPOIL_OF
 GRANULAR: Final[np.ndarray] = _GRANULAR
 LOOSE: Final[np.ndarray] = _LOOSE
 
-VOXEL_SIZE: Final[float] = 0.5
-"""Edge length of one voxel in metres."""
+VOXEL_SIZE: Final[float] = _VOXEL_SIZE
+"""Edge length of one voxel in metres.  Defined in `grid`, re-exported here
+because half the project already asks `voxel.VOXEL_SIZE` for it."""
 
 
 def is_solid(material: int) -> bool:

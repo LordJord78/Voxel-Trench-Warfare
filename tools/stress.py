@@ -71,8 +71,8 @@ def _fire_plan(session, spacing_m: float, rng) -> list[tuple[float, float, float
 
     s = voxel.VOXEL_SIZE
     dims = session.world.dims
-    front = session.tun.i("world.layout.front_line_z") * s
-    enemy = session.tun.i("world.layout.enemy_front_z") * s
+    front = session.tun.f("world.layout.front_line_m")
+    enemy = session.tun.f("world.layout.enemy_front_m")
     points: list[tuple[float, float]] = []
     x = 6.0
     while x < dims.x * s - 6.0:

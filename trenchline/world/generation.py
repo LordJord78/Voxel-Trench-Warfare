@@ -24,8 +24,8 @@ import numpy as np
 
 from ..core.rng import GameRandom
 from ..data import Tunables
-from . import destruction, shapes, voxel, water as water_sim
-from .chunks import VoxelWorld, WorldDims
+from . import destruction, grid, shapes, voxel, water as water_sim
+from .chunks import CHUNK_SIZE, VoxelWorld, WorldDims
 from .trenchmap import Bay, Dugout, TrenchGraph, TrenchLine, TrenchNetwork
 
 MAP_NAME: str = "SUKHYI YAR"
@@ -125,10 +125,10 @@ def _swale(nz: int, front_z: int, enemy_front_z: int, tun: Tunables) -> np.ndarr
 
     Returns a per-z offset in voxels, zero outside the depression.
     """
-    dip = tun.f("world.field.swale_depth_m") / tun.f("world.voxel_size")
+    dip = grid.vx(tun.f("world.field.swale_depth_m"))
     if dip <= 0.0:
         return np.zeros(nz, dtype=np.int32)
-    margin = tun.f("world.field.swale_margin_voxels")
+    margin = float(grid.vx(tun.f("world.field.swale_margin_m")))
     centre = 0.5 * (front_z + enemy_front_z)
     half = max(1.0, 0.5 * (enemy_front_z - front_z) + margin)
     t = np.clip(np.abs(np.arange(nz, dtype=np.float32) - centre) / half, 0.0, 1.0)
@@ -325,24 +325,24 @@ def _carve_trench_line(
     same step is behind it.  Clearance is therefore guaranteed locally, and the
     field is free to have as much relief as it likes.
     """
-    vs = tun.f("world.voxel_size")
-    width = tun.i("world.trench.width_voxels")
-    depth = tun.i("world.trench.depth_voxels")
-    bench = tun.i("world.trench.step_bench_voxels")
-    treads = tun.i("world.trench.step_tread_voxels")
-    parapet_min = tun.i("world.trench.parapet_min_height")
-    parados_h = tun.i("world.trench.parados_height")
-    thickness = tun.i("world.trench.parapet_thickness")
-    step_min = tun.i("world.trench.firing_step_min")
-    step_max = tun.i("world.trench.firing_step_max")
-    smooth = tun.i("world.trench.crest_smoothing_voxels")
-    reach = max(1, int(round(tun.f("world.trench.sight_range_m") / vs)))
-    near = max(1, int(round(tun.f("world.trench.sight_near_m") / vs)))
+    vs = grid.VOXEL_SIZE
+    width = grid.vx(tun.f("world.trench.width_m"))
+    depth = grid.vx(tun.f("world.trench.depth_m"))
+    bench = max(1, grid.vx(tun.f("world.trench.step_bench_m")))
+    treads = max(1, grid.vx(tun.f("world.trench.step_tread_m")))
+    parapet_min = grid.vx(tun.f("world.trench.parapet_min_m"))
+    parados_h = max(1, grid.vx(tun.f("world.trench.parados_m")))
+    thickness = max(2, grid.vx(tun.f("world.trench.parapet_thickness_m")))
+    step_min = grid.vx(tun.f("world.trench.firing_step_min_m"))
+    step_max = grid.vx(tun.f("world.trench.firing_step_max_m"))
+    smooth = max(1, grid.vx(tun.f("world.trench.crest_smoothing_m")))
+    reach = max(1, grid.vx(tun.f("world.trench.sight_range_m")))
+    near = max(1, grid.vx(tun.f("world.trench.sight_near_m")))
     percentile = tun.f("world.trench.sight_percentile")
     margin = tun.f("world.trench.sight_margin_m") / vs
-    bay_len = max(4, int(round(tun.f("world.trench.bay_length_m") / vs)))
-    offset = width + max(2, int(round(tun.f("world.trench.traverse_offset_m") / vs)) - 2)
-    leg = 3
+    bay_len = max(4, grid.vx(tun.f("world.trench.bay_length_m")))
+    offset = width + max(1, grid.vx(tun.f("world.trench.traverse_gap_m")))
+    leg = max(2, grid.vx(1.5))
 
     # The peek mechanic, stated as arithmetic rather than as a comment.  The
     # crest sits `crest_rise` voxels over the bench; a standing eye is above it
@@ -367,7 +367,11 @@ def _carve_trench_line(
             f"a {vs:.2f} m tread needs a step-up of at least that; "
             f"player.step_up is {tun.f('player.step_up'):.2f} m"
         )
-    across_rise = treads + 1
+    # How much rise ONE tread column is worth. At 0.5 m voxels a 0.55 m step-up
+    # reaches exactly one; at 0.25 m it reaches two, and the stair should use
+    # that rather than pretending a tread is a voxel.
+    rise_per_tread = max(1, int(tun.f("player.step_up") / vs + 1e-9))
+    across_rise = (treads + 1) * rise_per_tread
     step_max = max(step_min, min(step_max, bay_len - 4))
     structure = (bench + treads) if spec.firing_steps else 0
     walk_width = width - structure
@@ -506,7 +510,7 @@ def _carve_trench_line(
             slab(a, a1, lo, hi, duck_y, plan.step_top_y, voxel.TIMBER)
             for tread in range(treads):
                 col = lo - 1 - tread if spec.facing > 0 else hi + tread
-                rise = min(treads - tread, step_h)
+                rise = min((treads - tread) * rise_per_tread, step_h)
                 slab(a, a1, col, col + 1, duck_y, duck_y + rise, voxel.TIMBER)
             # Along the bay: whatever rise the across-bay treads could not
             # carry.  Putting the extra height here is what lets the step vary
@@ -643,38 +647,42 @@ def _carve_dugout(
     out, which is what makes it a trap.
     """
     nx, ny, nz = v.shape
-    water = tun.i("world.water_table")
+    water = grid.vx(tun.f("world.water_table_m"))
 
+    # Chamber 3.0 x 3.0 m off the sheltered side, reached by a 1.0 m passage.
+    deep, near, half, ent_half = (
+        grid.vx(3.5), grid.vx(1.0), grid.vx(1.5), max(1, grid.vx(0.5))
+    )
     if spec.long_axis == 0:
         away = -spec.facing
         if away < 0:
-            c_z0, c_z1 = bz0 - 7, bz0 - 2
-            ent_z0, ent_z1 = bz0 - 2, bz0
+            c_z0, c_z1 = bz0 - deep, bz0 - near
+            ent_z0, ent_z1 = bz0 - near, bz0
             near_first = True
         else:
-            c_z0, c_z1 = bz1 + 2, bz1 + 7
-            ent_z0, ent_z1 = bz1, bz1 + 2
+            c_z0, c_z1 = bz1 + near, bz1 + deep
+            ent_z0, ent_z1 = bz1, bz1 + near
             near_first = False
         cx = (bx0 + bx1) // 2
-        c_x0, c_x1 = cx - 3, cx + 3
-        ent_x0, ent_x1 = cx - 1, cx + 1
+        c_x0, c_x1 = cx - half, cx + half
+        ent_x0, ent_x1 = cx - ent_half, cx + ent_half
     else:
-        c_x0, c_x1 = bx0 - 7, bx0 - 2
-        ent_x0, ent_x1 = bx0 - 2, bx0
+        c_x0, c_x1 = bx0 - deep, bx0 - near
+        ent_x0, ent_x1 = bx0 - near, bx0
         cz = (bz0 + bz1) // 2
-        c_z0, c_z1 = cz - 3, cz + 3
-        ent_z0, ent_z1 = cz - 1, cz + 1
+        c_z0, c_z1 = cz - half, cz + half
+        ent_z0, ent_z1 = cz - ent_half, cz + ent_half
         near_first = True
 
     if c_x0 < 1 or c_x1 >= nx - 1 or c_z0 < 1 or c_z1 >= nz - 1:
         return None
 
-    dug_floor = max(floor_y - 2, water + 1)
+    dug_floor = max(floor_y - grid.vx(1.0), water + 1)
     drop = floor_y - dug_floor
     if drop < 0 or dug_floor < 2:
         return None
     air_y0 = dug_floor + 1
-    air_y1 = air_y0 + 4  # 2.0 m of headroom
+    air_y1 = air_y0 + grid.vx(2.0)  # headroom
 
     # Chamber
     shapes.fill_box(v, (c_x0, air_y0, c_z0), (c_x1, air_y1, c_z1), voxel.AIR)
@@ -683,7 +691,10 @@ def _carve_dugout(
     shapes.fill_box(v, (c_x0, air_y1 + 1, c_z0), (c_x1, air_y1 + 2, c_z1), voxel.CORRUGATE)
 
     # Entrance passage: clear from the duckboards down to the chamber floor.
-    shapes.fill_box(v, (ent_x0, air_y0, ent_z0), (ent_x1, min(ny, floor_y + 4), ent_z1), voxel.AIR)
+    shapes.fill_box(
+        v, (ent_x0, air_y0, ent_z0),
+        (ent_x1, min(ny, floor_y + grid.vx(2.0)), ent_z1), voxel.AIR,
+    )
     shapes.fill_box(v, (ent_x0, dug_floor, ent_z0), (ent_x1, dug_floor + 1, ent_z1), voxel.DUCKBOARD)
     shapes.fill_box(v, (ent_x0, air_y1, ent_z0), (ent_x1, air_y1 + 1, ent_z1), voxel.TIMBER)
 
@@ -705,7 +716,7 @@ def _carve_dugout(
 
     # Burster course: spoil heaped until there is at least 1.0 m over the roof.
     target = np.zeros((nx, nz), dtype=np.int32)
-    target[c_x0:c_x1, c_z0:c_z1] = air_y1 + 4
+    target[c_x0:c_x1, c_z0:c_z1] = air_y1 + grid.vx(2.0)
     _pile_to(v, surface, target, voxel.SPOIL)
 
     return Dugout(
@@ -725,21 +736,25 @@ def _drainage_ditches(
     v: np.ndarray, surface: np.ndarray, rng: GameRandom, tun: Tunables
 ) -> None:
     nx, ny, nz = v.shape
-    water = tun.i("world.water_table")
+    water = grid.vx(tun.f("world.water_table_m"))
+    cut, half = grid.vx(1.5), max(1, grid.vx(0.5))
     for _ in range(3):
-        z = rng.randint(8, nz - 8)
+        z = rng.randint(grid.vx(4.0), nz - grid.vx(4.0))
         drift = rng.uniform(-0.03, 0.03)
         for x in range(2, nx - 2):
             zc = int(z + drift * (x - nx / 2))
             if not (2 <= zc < nz - 2):
                 continue
             top = int(surface[x, zc])
-            shapes.fill_box(v, (x, top - 3, zc - 1), (x + 1, top + 1, zc + 2), voxel.AIR)
+            shapes.fill_box(v, (x, top - cut, zc - half), (x + 1, top + 1, zc + half + 1), voxel.AIR)
             # Runoff in the bottom of the cut. Perched above the regional
             # water table, which is what a field drain is for; the settle pass
             # drains any of it left hanging over a lower neighbour.
-            shapes.fill_box(v, (x, top - 3, zc - 1), (x + 1, top - 2, zc + 2), voxel.WATER)
-            surface[x, max(0, zc - 1) : zc + 2] = top - 3
+            shapes.fill_box(
+                v, (x, top - cut, zc - half), (x + 1, top - cut + 1, zc + half + 1),
+                voxel.WATER,
+            )
+            surface[x, max(0, zc - half) : zc + half + 1] = top - cut
 
 
 def _shelterbelt(
@@ -1073,21 +1088,27 @@ def _step_intact(v: np.ndarray, bay: Bay) -> float:
 
 
 def generate(rng: GameRandom, tun: Tunables) -> GeneratedWorld:
+    def whole_chunks(metres: float) -> int:
+        n = grid.vx(metres)
+        return n + (-n) % CHUNK_SIZE
+
     dims = WorldDims(
-        tun.i("world.size_x"), tun.i("world.size_y"), tun.i("world.size_z")
+        whole_chunks(tun.f("world.size_x_m")),
+        whole_chunks(tun.f("world.size_y_m")),
+        whole_chunks(tun.f("world.size_z_m")),
     )
     world = VoxelWorld(dims)
     v = world.v
-    ground = tun.i("world.ground_level")
-    water = tun.i("world.water_table")
+    ground = grid.vx(tun.f("world.ground_level_m"))
+    water = grid.vx(tun.f("world.water_table_m"))
     world.water_table = water
 
-    vs = tun.f("world.voxel_size")
+    vs = grid.VOXEL_SIZE
     layout = tun.section("world.layout")
-    front_z = int(layout["front_line_z"])
-    support_z = int(layout["support_line_z"])
-    enemy_front_z = int(layout["enemy_front_z"])
-    enemy_support_z = int(layout["enemy_support_z"])
+    front_z = grid.vx(float(layout["front_line_m"]))
+    support_z = grid.vx(float(layout["support_line_m"]))
+    enemy_front_z = grid.vx(float(layout["enemy_front_m"]))
+    enemy_support_z = grid.vx(float(layout["enemy_support_m"]))
 
     relief = shapes.fbm_2d(
         rng.derive("field.relief"),
@@ -1106,24 +1127,26 @@ def generate(rng: GameRandom, tun: Tunables) -> GeneratedWorld:
     _plough_stripes(v, surface, rng.derive("field.plough"))
     _drainage_ditches(v, surface, rng.derive("field.ditches"), tun)
 
+    depth_v = grid.vx(tun.f("world.trench.depth_m"))
     network = TrenchNetwork()
     dugouts: list[Dugout] = []
     specs = [
-        _LineSpec("front", 0, 0, front_z, 4, dims.x - 4, ground - 5, +1, True, 3),
-        _LineSpec("support", 0, 0, support_z, 4, dims.x - 4, ground - 5, +1, False, 4),
-        _LineSpec("enemy_front", 1, 0, enemy_front_z, 4, dims.x - 4, ground - 5, -1, True, 3),
-        _LineSpec("enemy_support", 1, 0, enemy_support_z, 4, dims.x - 4, ground - 5, -1, False, 4),
+        _LineSpec("front", 0, 0, front_z, 4, dims.x - 4, ground - depth_v, +1, True, 3),
+        _LineSpec("support", 0, 0, support_z, 4, dims.x - 4, ground - depth_v, +1, False, 4),
+        _LineSpec("enemy_front", 1, 0, enemy_front_z, 4, dims.x - 4, ground - depth_v, -1, True, 3),
+        _LineSpec("enemy_support", 1, 0, enemy_support_z, 4, dims.x - 4, ground - depth_v, -1, False, 4),
     ]
-    for comm_index, comm_x in enumerate(layout["comm_trench_x"]):
+    for comm_index, comm_x_m in enumerate(layout["comm_trench_x_m"]):
+        comm_x = grid.vx(float(comm_x_m))
         specs.append(
             _LineSpec(
                 f"comm_{comm_index}",
                 0,
                 2,
-                int(comm_x),
+                comm_x,
                 support_z - 1,
-                front_z + 6,
-                ground - 5,
+                front_z + grid.vx(3.0),
+                ground - depth_v,
                 +1,
                 False,
                 0,
@@ -1140,40 +1163,40 @@ def generate(rng: GameRandom, tun: Tunables) -> GeneratedWorld:
     network.dugouts = tuple(dugouts)
 
     belt_rng = rng.derive("shelterbelts")
-    for z_centre in layout["shelterbelt_z"]:
-        _shelterbelt(v, surface, belt_rng, int(z_centre))
+    for z_centre_m in layout["shelterbelt_z_m"]:
+        _shelterbelt(v, surface, belt_rng, grid.vx(float(z_centre_m)))
 
     landmarks: dict[str, tuple[float, float, float]] = {}
     landmarks["farm"] = _wrecked_farm(
-        v, surface, rng.derive("farm"), int(dims.x * 0.26), (front_z + enemy_front_z) // 2 - 18
+        v, surface, rng.derive("farm"), int(dims.x * 0.26), (front_z + enemy_front_z) // 2 - grid.vx(9.0)
     )
     landmarks["culvert"] = _collapsed_culvert(
-        v, surface, rng.derive("culvert"), int(dims.x * 0.70), front_z - 22
+        v, surface, rng.derive("culvert"), int(dims.x * 0.70), front_z - grid.vx(11.0)
     )
 
     wire_rng = rng.derive("wire")
-    _wire_belt(v, surface, wire_rng, front_z + 17)
-    _wire_belt(v, surface, wire_rng, enemy_front_z - 17)
+    _wire_belt(v, surface, wire_rng, front_z + grid.vx(8.5))
+    _wire_belt(v, surface, wire_rng, enemy_front_z - grid.vx(8.5))
 
     landmarks["hull"] = _burnt_hull(
         v, surface, rng.derive("hull"),
-        int(dims.x * 0.55), (front_z + enemy_front_z) // 2 + 9,
+        int(dims.x * 0.55), (front_z + enemy_front_z) // 2 + grid.vx(4.5),
     )
     _silhouette_clutter(
-        v, surface, rng.derive("clutter"), tun, front_z + 3, enemy_front_z - 3
+        v, surface, rng.derive("clutter"), tun, front_z + grid.vx(1.5), enemy_front_z - grid.vx(1.5)
     )
 
     craters = _shell_craters(
-        v, surface, rng.derive("craters"), front_z + 4, enemy_front_z - 4, 140
+        v, surface, rng.derive("craters"), front_z + grid.vx(2.0), enemy_front_z - grid.vx(2.0), 140
     )
     # A handful of direct hits on the lines themselves: real breaches in the
     # parapet that leave a stretch of trench genuinely exposed.
     craters += _shell_craters(
-        v, surface, rng.derive("craters.direct"), front_z - 2, front_z + 13, 4, radius_cap=4.2
+        v, surface, rng.derive("craters.direct"), front_z - grid.vx(1.0), front_z + grid.vx(6.5), 4, radius_cap=4.2
     )
     craters += _shell_craters(
         v, surface, rng.derive("craters.direct.enemy"),
-        enemy_front_z - 13, enemy_front_z + 2, 4, radius_cap=4.2,
+        enemy_front_z - grid.vx(6.5), enemy_front_z + grid.vx(1.0), 4, radius_cap=4.2,
     )
 
     # Craters undercut trench walls and parapets, leaving spoil hanging over the
