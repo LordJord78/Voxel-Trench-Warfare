@@ -28,7 +28,13 @@ def _configure_panda(vsync: bool) -> None:
 
 
 class Frontend:
-    def __init__(self, session: Session, *, fullscreen: bool = False) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        fullscreen: bool = False,
+        size: tuple[int, int] = (1440, 810),
+    ) -> None:
         from ursina import Ursina, camera, color, mouse, scene, window
         from panda3d.core import Fog
 
@@ -40,7 +46,7 @@ class Frontend:
             borderless=False,
             fullscreen=fullscreen,
             development_mode=False,
-            size=(1440, 810),
+            size=size,
         )
         window.color = color.rgb32(
             *[int(c * 255) for c in tun["weather.horizon_colour"]]
@@ -56,7 +62,8 @@ class Frontend:
         from .schedule import SchedulePolicy
 
         self.chunks = ChunkRenderer(
-            session.world, scene, SchedulePolicy.from_tunables(tun, 1440.0 / 810.0)
+            session.world, scene,
+            SchedulePolicy.from_tunables(tun, size[0] / max(1, size[1])),
         )
         # Tell the scheduler where the player will be BEFORE the first meshing
         # pass, or every chunk is meshed as though viewed from the origin —
@@ -99,7 +106,9 @@ class Frontend:
         self.tracers = TracerRenderer(session.projectiles, scene, tun)
         self.particles = ParticleRenderer(session.particles, scene)
         self.viewmodel = ViewModel(camera, tun)
-        self.suppression_overlay = SuppressionOverlay(self.app.aspect2d, 1440.0 / 810.0)
+        self.suppression_overlay = SuppressionOverlay(
+            self.app.aspect2d, size[0] / max(1, size[1])
+        )
         self.base_fov = tun.f("camera.fov")
         self.fov_scale = 1.0
         self.fov_lerp = tun.f("camera.fov_lerp_per_s")

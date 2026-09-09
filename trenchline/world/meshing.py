@@ -47,6 +47,13 @@ _AO_LEVELS = lighting.ao_levels()
 # same order the quad's vertices are emitted.
 _AO_CORNERS: tuple[tuple[int, int], ...] = ((-1, -1), (1, -1), (1, 1), (-1, 1))
 
+_LOD_SOLID_FRACTION = 0.20
+"""How much of a coarse cell must be solid for it to survive downsampling.
+
+A one-voxel wall fills a quarter of a cell and stays; a pole fills a sixteenth
+and goes. Above about 0.3 distant walls start opening holes; at "any solid
+wins" a chunk of scattered clutter becomes a solid block in the sky."""
+
 _MATERIAL_BITS = 5
 _AO_SHIFT = 8
 """Face keys pack the material in the low bits and the four corner occlusion
@@ -212,14 +219,18 @@ def _face_quads(
 def downsample(padded: np.ndarray, step: int) -> np.ndarray:
     """Reduce a padded chunk by `step` for a coarser level of detail.
 
-    A cell becomes solid if any of the fine voxels inside it is, and takes the
-    material of the first solid one in a fixed order — deterministic, and it
-    keeps thin features like revetment and wire pickets from disappearing
-    entirely at range, which picking the centre sample would not.
+    A cell becomes solid when enough of the fine voxels inside it are, and takes
+    the material of the first solid one in a fixed order — deterministic, and
+    it keeps thin features like revetment from vanishing the way centre
+    sampling would.
 
-    Erring toward solid is the safe direction: it over-draws a little at
-    distance, where over-drawing is invisible, rather than opening holes in the
-    terrain, where it very much is not.
+    "Enough" is a fraction rather than "any", which is what this used to be and
+    which is wrong at quarter resolution. A 4x4x4 cell holds 64 voxels, so a
+    single telegraph pole passing through a chunk lights up every cell it
+    touches, and a chunk with scattered clutter in it inflates into a solid 8 m
+    block hanging in the sky. The threshold is low enough to keep a one-voxel
+    wall (which fills a quarter of a cell) and high enough to drop a pole
+    (which fills a sixteenth).
     """
     if step <= 1:
         return padded
@@ -238,7 +249,9 @@ def downsample(padded: np.ndarray, step: int) -> np.ndarray:
     solid = voxel.SOLID[cells]
     first = np.argmax(solid, axis=-1)
     picked = np.take_along_axis(cells, first[..., None], axis=-1)[..., 0]
-    out[1:-1, 1:-1, 1:-1] = np.where(solid.any(axis=-1), picked, np.uint8(voxel.AIR))
+    needed = max(1, int(round(_LOD_SOLID_FRACTION * step**3)))
+    keep = solid.sum(axis=-1) >= needed
+    out[1:-1, 1:-1, 1:-1] = np.where(keep, picked, np.uint8(voxel.AIR))
 
     # The border only has to answer "is the neighbour solid here", and the
     # padded input carries one fine voxel of it. Treat that voxel as the whole
