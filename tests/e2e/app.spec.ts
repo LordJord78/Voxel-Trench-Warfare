@@ -114,3 +114,18 @@ test('the page loads to a click-to-play prompt over the world, and a teleport st
   expect(reset).toBe(true);
   expect(errors).toEqual([]);
 });
+
+test('an exception in the frame loop stops the game and says so', async ({ page }) => {
+  await openGame(page);
+  await hooks(page, (h) => h.waitFrames(3));
+  await page.evaluate(() => {
+    const r = (window as unknown as { __trenchline: { renderer: { render: () => void } } }).__trenchline.renderer;
+    r.render = () => {
+      throw new Error('a test broke the renderer');
+    };
+  });
+  await expect(page.locator('#status')).toContainText('TRENCHLINE stopped: a test broke the renderer');
+  const frames = await hooks(page, (h) => h.frames());
+  await page.waitForTimeout(300);
+  expect(await hooks(page, (h) => h.frames())).toBe(frames);
+});

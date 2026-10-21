@@ -8,6 +8,8 @@
 export class LoadingScreen {
   /** Each phase named so far, once. */
   readonly phases: string[] = [];
+  /** Told each new phase as it starts. */
+  onPhase: ((phase: string) => void) | null = null;
   private readonly root: HTMLElement;
   private readonly status: HTMLElement;
   private readonly bar: SVGElement;
@@ -28,7 +30,10 @@ export class LoadingScreen {
   /** A phase, with a detail such as "strip 3 of 32", and the fraction of the whole load done. */
   progress(phase: string, detail: string | null, fraction: number): void {
     if (this.failed) return;
-    if (this.phases[this.phases.length - 1] !== phase) this.phases.push(phase);
+    if (this.phases[this.phases.length - 1] !== phase) {
+      this.phases.push(phase);
+      this.onPhase?.(phase);
+    }
     this.status.textContent = detail ? `${phase}, ${detail}` : phase;
     const f = Math.min(1, Math.max(0, fraction));
     this.dug.style.strokeDashoffset = String(1 - f);

@@ -10,7 +10,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "e2e": "playwright test",
-    "parity:export": "cd reference/python && ../../.venv/bin/python -m tools.export_parity ../../tests/fixtures/parity"
+    "parity:export": "cd reference/python && ../../.venv/bin/python -m tools.export_parity ../../tests/fixtures/parity",
+    "safari": "node tools/safari-report.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

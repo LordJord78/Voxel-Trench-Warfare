@@ -55,6 +55,8 @@ const checkRun = (() => {
   const run = new URLSearchParams(location.search).get('check');
   return run && /^[a-z0-9-]+$/.test(run) ? run : null;
 })();
+// A check reports how far loading got, so a run that stalls says where.
+if (checkRun) loading.onPhase = (stage) => void reporter(checkRun)('progress.json', JSON.stringify({ stage })).catch(() => {});
 
 function stop(message: string): void {
   if (stopped) return;
@@ -318,6 +320,18 @@ async function start(): Promise<void> {
 
   const frame = (time: number) => {
     if (stopped) return;
+    try {
+      step(time);
+    } catch (e) {
+      // A frame that throws would otherwise freeze the last image without a word.
+      console.error(e);
+      stop(`TRENCHLINE stopped: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    requestAnimationFrame(frame);
+  };
+
+  const step = (time: number) => {
     const now = time + skipped;
     const ms = now - last;
     if (ms > 0 && ms < 250) interval = interval === 0 ? ms : interval * 0.95 + ms * 0.05;
@@ -405,7 +419,6 @@ async function start(): Promise<void> {
         place: placeName(world.plan, pose.position[0], pose.position[2]),
       });
     }
-    requestAnimationFrame(frame);
   };
 
   /** An image shrunk to 160 × 100, as luminance statistics: a frame that is not blank has spread. */

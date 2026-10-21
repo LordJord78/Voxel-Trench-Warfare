@@ -76,10 +76,14 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
     views: [],
     errors: [],
   };
+  // Where the check has got to, so a run that stalls says where.
+  const progress = (stage: string) => post('progress.json', JSON.stringify({ stage }));
   try {
+    await progress('fingerprint');
     report.fingerprint = await game.fingerprint();
     game.setQuality({ preset: 'high', dynres: false });
     for (const name of VIEW_NAMES) {
+      await progress(`view ${name}`);
       game.view(name);
       await game.waitConverged();
       await game.waitFrames(30);
@@ -90,6 +94,7 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
       await post(shot, png);
       report.views.push({ name, time, gpuMs, res: game.stats().res, shot, spread });
     }
+    await progress('done');
   } catch (e) {
     report.errors.push(e instanceof Error ? e.message : String(e));
   }

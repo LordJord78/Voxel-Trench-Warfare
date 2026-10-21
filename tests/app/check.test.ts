@@ -22,9 +22,10 @@ function game(over: Partial<CheckGame> = {}): CheckGame {
   };
 }
 
+/** The run's report, and the files it posted besides its progress. */
 async function run(g: CheckGame): Promise<{ report: CheckReport; posted: string[] }> {
   const posted: string[] = [];
-  const report = await runCheck('t', g, async (file) => void posted.push(file));
+  const report = await runCheck('t', g, async (file) => void (file !== 'progress.json' && posted.push(file)));
   return { report, posted };
 }
 
@@ -47,5 +48,14 @@ describe('the check', () => {
     const { report, posted } = await run(game({ fingerprint: async () => Promise.reject(new Error('crypto.subtle is unavailable')) }));
     expect(report.errors).toEqual(['crypto.subtle is unavailable']);
     expect(posted).toEqual(['report.json']);
+  });
+});
+
+describe('the check, as it runs', () => {
+  it('reports its progress view by view, so a stalled run says where it stopped', async () => {
+    const posted: string[] = [];
+    await runCheck('t', game(), async (file, body) => void posted.push(file === 'progress.json' ? `progress:${JSON.parse(body as string).stage}` : file));
+    const progress = posted.filter((p) => p.startsWith('progress:'));
+    expect(progress).toEqual(['progress:fingerprint', ...VIEW_NAMES.map((n) => `progress:view ${n}`), 'progress:done']);
   });
 });
