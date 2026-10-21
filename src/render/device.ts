@@ -52,3 +52,31 @@ export async function createGpu(): Promise<Gpu> {
   });
   return { adapter, device, timestamps, errors };
 }
+
+/** The limits the renderer's passes need, by name. */
+export interface Limits {
+  maxStorageBufferBindingSize: number;
+  maxBufferSize: number;
+  maxStorageBuffersPerShaderStage: number;
+  maxStorageTexturesPerShaderStage: number;
+  maxSampledTexturesPerShaderStage: number;
+}
+
+/**
+ * What an adapter lacks for this renderer and a world whose largest buffer is
+ * `need.storageBinding` bytes: one line per shortfall, empty if none. A pass
+ * binds up to eight storage buffers, four storage textures and sixteen
+ * sampled textures.
+ */
+export function checkLimits(limits: Limits, need: { storageBinding: number }): string[] {
+  const short: string[] = [];
+  const want = (name: keyof Limits, value: number) => {
+    if (limits[name] < value) short.push(`${name} is ${limits[name]}; the renderer needs ${value}`);
+  };
+  want('maxStorageBufferBindingSize', need.storageBinding);
+  want('maxBufferSize', need.storageBinding);
+  want('maxStorageBuffersPerShaderStage', 8);
+  want('maxStorageTexturesPerShaderStage', 4);
+  want('maxSampledTexturesPerShaderStage', 16);
+  return short;
+}
