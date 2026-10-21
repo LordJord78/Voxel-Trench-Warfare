@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { loadTunables } from '../../../src/core/tunables';
+import { UNIFORM } from '../../../src/world/bricks';
+import { RECORD_UNITS, decodeBrick } from '../../../src/world/encode';
 import { fingerprint } from '../../../src/world/fingerprint';
 import { P } from '../../../src/world/materials';
 import { fillBand } from '../../../src/world/generation/fill';
@@ -34,6 +36,32 @@ describe('the generated world', () => {
     const reversed = await generateWorld(plan, async (bands) => [...bands].reverse().map((b) => fillBand(plan, b)).reverse());
     expect(await fingerprint(reversed.map)).toBe(await fingerprint(world.map));
   }, 120_000);
+  it('keeps a GPU mirror holding every brick of the world', () => {
+    const raw = new Uint8Array(512);
+    let dense = 0;
+    let wrong = 0;
+    for (let bi = 0; bi < world.map.table.length; bi++) {
+      const e = world.map.table[bi];
+      const g = world.mirror.gpuTable[bi];
+      if (e === 0 || e & UNIFORM) {
+        if (g !== e) wrong++;
+        continue;
+      }
+      dense++;
+      const unit = g & 0x0fffffff;
+      decodeBrick(world.mirror.heapView().subarray(unit * 4, (unit + RECORD_UNITS[g >>> 28]) * 4), raw);
+      const want = world.map.denseView(bi)!;
+      for (let i = 0; i < 512; i++) {
+        if (raw[i] !== want[i]) {
+          wrong++;
+          break;
+        }
+      }
+    }
+    expect(dense).toBe(world.map.denseCount);
+    expect(wrong).toBe(0);
+    expect(world.mirror.takeEdits()).toEqual([]);
+  });
   it('matches the golden fingerprint for seed 7', async () => {
     expect(await fingerprint(world.map)).toBe('dea2a4cd7809b3b83cecf714ba851600f20a91d85da08b1f17e9f4be8da4d67c');
   });

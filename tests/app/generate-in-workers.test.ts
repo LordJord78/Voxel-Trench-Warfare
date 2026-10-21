@@ -22,7 +22,9 @@ class StubWorker {
           table: new Uint32Array(4 * 40 * 320),
           dense: new Uint8Array(0),
           denseBricks: new Uint32Array(0),
-        } as BandResult;
+          records: new Uint32Array(0),
+          formats: new Uint8Array(0),
+        };
         this.onmessage?.({ data: { type: 'band', id: message.id, result } });
       } else {
         this.onerror?.({ message: 'far field failed' });

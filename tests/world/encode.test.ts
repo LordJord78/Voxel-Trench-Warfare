@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/core/rng';
 import { BrickMap, UNIFORM } from '../../src/world/bricks';
 import { HeapMirror, RECORD_UNITS, decodeBrick, encodeBrick, formatOfLength, tableEntry } from '../../src/world/encode';
+import { bandsOf, syntheticWorld } from '../support/synthetic';
 
 function brickWith(distinct: number, seed: number): Uint8Array {
   const r = Rng.root(seed);
@@ -44,7 +45,7 @@ describe('HeapMirror', () => {
     expect(() => h.update([w.table.length])).toThrow(RangeError);
     expect(() => h.update([-1])).toThrow(RangeError);
   });
-  it('packs the initial heap and re-encodes changed bricks, reusing freed records', () => {
+  it('packs the initial heap and re-encodes changed bricks, reusing released records', () => {
     const w = new BrickMap({ x: 32, y: 32, z: 32 });
     w.set(0, 0, 0, 3);
     w.set(8, 0, 0, 3);
@@ -60,8 +61,11 @@ describe('HeapMirror', () => {
     for (let i = 0; i < 20; i++) w.set(i % 8, 1 + (i >> 3), 1, 10 + i);
     h.update(w.takeDirty());
     expect(h.gpuTable[a] >>> 28).toBe(4);
-    expect(h.takeTableWrites()).toEqual([a]);
-    expect(h.takeWrites()).toHaveLength(1);
+    const edits = h.takeEdits();
+    expect(edits.map((e) => e.brick)).toEqual([a]);
+    expect(edits[0].words).not.toBeNull();
+    expect(edits[0].retire).toBe(tableEntry(0, 1));
+    h.release(edits[0].retire);
     w.set(16, 0, 0, 0);
     h.update(w.takeDirty());
     expect(h.gpuTable[c]).toBe(tableEntry(0, 1));
@@ -74,5 +78,68 @@ describe('HeapMirror', () => {
     const ua = ea & 0x0fffffff;
     decodeBrick(h.heapImage().subarray(ua * 4, (ua + RECORD_UNITS[ea >>> 28]) * 4), out);
     expect(out[1 + 8 + 64]).toBe(11);
+  });
+  it('does not reuse a retired record before it is released', () => {
+    const w = new BrickMap({ x: 32, y: 32, z: 32 });
+    w.set(0, 0, 0, 3);
+    w.set(8, 0, 0, 3);
+    w.takeDirty();
+    const h = HeapMirror.fromMap(w);
+    const a = w.brickIndex(0, 0, 0);
+    const oldA = h.gpuTable[a];
+    w.set(1, 0, 0, 3);
+    h.update(w.takeDirty());
+    const [ea] = h.takeEdits();
+    expect(ea.retire).toBe(oldA);
+    expect(ea.unit).not.toBe(oldA & 0x0fffffff);
+    w.set(9, 0, 0, 3);
+    h.update(w.takeDirty());
+    const [eb] = h.takeEdits();
+    expect(eb.unit).not.toBe(oldA & 0x0fffffff);
+    h.release(ea.retire);
+    h.release(eb.retire);
+    w.set(2, 0, 0, 3);
+    h.update(w.takeDirty());
+    const [e2] = h.takeEdits();
+    expect([oldA & 0x0fffffff, eb.retire & 0x0fffffff]).toContain(e2.unit);
+  });
+  it('makes no edit for a brick whose content came back unchanged', () => {
+    const w = new BrickMap({ x: 32, y: 32, z: 32 });
+    w.set(0, 0, 0, 3);
+    w.takeDirty();
+    const h = HeapMirror.fromMap(w);
+    w.set(1, 0, 0, 3);
+    w.set(1, 0, 0, 0);
+    h.update(w.takeDirty());
+    expect(h.takeEdits()).toEqual([]);
+  });
+  it('builds from encoded bands exactly as from the map', () => {
+    const map = syntheticWorld(1);
+    const fromBands = HeapMirror.fromBands(map, bandsOf(map));
+    const fromMap = HeapMirror.fromMap(map);
+    const a = new Uint8Array(512);
+    const b = new Uint8Array(512);
+    let dense = 0;
+    let wrong = 0;
+    for (let bi = 0; bi < map.table.length; bi++) {
+      const e = map.table[bi];
+      if (e === 0 || e & UNIFORM) {
+        if (fromBands.gpuTable[bi] !== fromMap.gpuTable[bi]) wrong++;
+        continue;
+      }
+      dense++;
+      const record = (h: HeapMirror) => {
+        const g = h.gpuTable[bi];
+        const unit = g & 0x0fffffff;
+        return h.heapView().subarray(unit * 4, (unit + RECORD_UNITS[g >>> 28]) * 4);
+      };
+      decodeBrick(record(fromBands), a);
+      decodeBrick(record(fromMap), b);
+      const raw = map.denseView(bi)!;
+      for (let i = 0; i < 512; i++) if (a[i] !== raw[i] || b[i] !== raw[i]) { wrong++; break; }
+    }
+    expect(dense).toBeGreaterThan(1000);
+    expect(wrong).toBe(0);
+    expect(fromBands.usedUnits).toBe(fromMap.usedUnits);
   });
 });

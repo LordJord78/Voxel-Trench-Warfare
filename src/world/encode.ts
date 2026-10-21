@@ -9,7 +9,8 @@
  * and shadow rays only ever read the mask.
  *
  * `HeapMirror` decides where every record lives and what the GPU's brick table
- * says, and queues the writes; the renderer copies them and knows nothing else.
+ * says, and hands each change over as an edit; the renderer uploads edits and
+ * knows nothing else.
  */
 
 import { BrickMap, UNIFORM } from './bricks';
@@ -83,10 +84,29 @@ export function tableEntry(format: number, unit: number): number {
   return ((format << 28) | unit) >>> 0;
 }
 
-export interface HeapWrite {
+/**
+ * One brick's change for the GPU: its new table entry and, for a dense brick,
+ * the record at `unit`. `retire` is the dense entry it replaces (0 if none):
+ * the GPU table may still point at that record until this edit is uploaded,
+ * so its units are only reused after `release(retire)`.
+ */
+export interface BrickEdit {
+  brick: number;
+  entry: number;
   unit: number;
-  words: Uint32Array;
+  words: Uint32Array | null;
+  retire: number;
 }
+
+/** A band's dense bricks as generation workers encode them (see `BandResult`). */
+export interface EncodedBand {
+  band: number;
+  denseBricks: Uint32Array;
+  records: Uint32Array;
+  formats: Uint8Array;
+}
+
+const isRecord = (e: number) => e !== 0 && !(e & UNIFORM);
 
 export class HeapMirror {
   readonly gpuTable: Uint32Array;
@@ -94,15 +114,12 @@ export class HeapMirror {
   private heap: Uint32Array;
   private used = 1;
   private readonly freeLists: number[][] = FORMAT_BITS.map(() => []);
-  private writes: HeapWrite[] = [];
-  private readonly tableFlag: Uint8Array;
-  private tableList: number[] = [];
+  private edits: BrickEdit[] = [];
 
-  private constructor(map: BrickMap) {
+  private constructor(map: BrickMap, capacityWords = 1024 * 4) {
     this.map = map;
     this.gpuTable = new Uint32Array(map.table.length);
-    this.tableFlag = new Uint8Array(map.table.length);
-    this.heap = new Uint32Array(1024 * 4);
+    this.heap = new Uint32Array(capacityWords);
   }
 
   /** Encode every dense brick into one contiguous image, in table order, from unit 1. */
@@ -110,7 +127,7 @@ export class HeapMirror {
     const mirror = new HeapMirror(map);
     for (let bi = 0; bi < map.table.length; bi++) {
       const e = map.table[bi];
-      if (e === 0 || e & UNIFORM) {
+      if (!isRecord(e)) {
         mirror.gpuTable[bi] = e;
         continue;
       }
@@ -123,6 +140,40 @@ export class HeapMirror {
     return mirror;
   }
 
+  /**
+   * The same mirror from records the bands already encoded, each band's copied
+   * whole, in band order. `map` must be exactly the assembly of `bands`.
+   */
+  static fromBands(map: BrickMap, bands: readonly EncodedBand[], bandBricks = 4): HeapMirror {
+    let words = 0;
+    for (const b of bands) words += b.records.length;
+    const mirror = new HeapMirror(map, Math.ceil((4 + words) * 1.25 / 4) * 4);
+    for (let bi = 0; bi < map.table.length; bi++) {
+      const e = map.table[bi];
+      if (!isRecord(e)) mirror.gpuTable[bi] = e;
+    }
+    const by = map.bricks.y;
+    for (const b of bands) {
+      let unit = mirror.used;
+      mirror.heap.set(b.records, unit * 4);
+      for (let k = 0; k < b.denseBricks.length; k++) {
+        const li = b.denseBricks[k];
+        const lx = li % bandBricks;
+        const rest = (li - lx) / bandBricks;
+        const ly = rest % by;
+        const lz = (rest - ly) / by;
+        const bi = map.brickIndex(b.band * bandBricks + lx, ly, lz);
+        if (!isRecord(map.table[bi])) throw new Error(`band ${b.band}: brick ${li} is not dense in the map`);
+        const format = b.formats[k];
+        mirror.gpuTable[bi] = tableEntry(format, unit);
+        unit += RECORD_UNITS[format];
+      }
+      if ((unit - mirror.used) * 4 !== b.records.length) throw new Error(`band ${b.band}: records do not match its formats`);
+      mirror.used = unit;
+    }
+    return mirror;
+  }
+
   get usedUnits(): number {
     return this.used;
   }
@@ -131,59 +182,68 @@ export class HeapMirror {
     return this.heap.length / 4;
   }
 
-  /** Everything allocated so far, from unit 0. */
+  /** Everything allocated so far, from unit 0, as a copy. */
   heapImage(): Uint32Array {
     return this.heap.slice(0, this.used * 4);
   }
 
-  /** Re-encode these bricks from the map, reusing freed records of the same size first. */
+  /** Everything allocated so far, from unit 0, without copying. Valid until the next update. */
+  heapView(): Uint32Array {
+    return this.heap.subarray(0, this.used * 4);
+  }
+
+  /**
+   * Re-encode these bricks from the map. A brick whose record comes out
+   * unchanged makes no edit; otherwise the new record takes a released unit of
+   * its size if there is one.
+   */
   update(bricks: readonly number[]): void {
     for (const bi of bricks) {
       if (!Number.isInteger(bi) || bi < 0 || bi >= this.gpuTable.length) {
         throw new RangeError(`brick index ${bi} is outside 0..${this.gpuTable.length - 1}`);
       }
       const old = this.gpuTable[bi];
-      if (old !== 0 && !(old & UNIFORM)) this.freeLists[old >>> 28].push(old & OFFSET_MASK);
       const e = this.map.table[bi];
-      let next = e;
-      if (e !== 0 && !(e & UNIFORM)) {
-        const rec = encodeBrick(this.map.denseView(bi)!);
-        const format = formatOfLength(rec.length);
-        const unit = this.freeLists[format].pop() ?? this.bump(RECORD_UNITS[format]);
-        this.heap.set(rec, unit * 4);
-        this.writes.push({ unit, words: rec });
-        next = tableEntry(format, unit);
+      if (!isRecord(e)) {
+        if (e === old) continue;
+        this.gpuTable[bi] = e;
+        this.edits.push({ brick: bi, entry: e, unit: 0, words: null, retire: isRecord(old) ? old : 0 });
+        continue;
       }
-      if (next !== old) {
-        this.gpuTable[bi] = next;
-        if (!this.tableFlag[bi]) {
-          this.tableFlag[bi] = 1;
-          this.tableList.push(bi);
-        }
-      }
+      const rec = encodeBrick(this.map.denseView(bi)!);
+      const format = formatOfLength(rec.length);
+      if (isRecord(old) && old >>> 28 === format && this.sameRecord(old, rec)) continue;
+      const unit = this.freeLists[format].pop() ?? this.bump(RECORD_UNITS[format]);
+      this.heap.set(rec, unit * 4);
+      const entry = tableEntry(format, unit);
+      this.gpuTable[bi] = entry;
+      this.edits.push({ brick: bi, entry, unit, words: rec, retire: isRecord(old) ? old : 0 });
     }
   }
 
-  takeWrites(): HeapWrite[] {
-    const out = this.writes;
-    this.writes = [];
+  takeEdits(): BrickEdit[] {
+    const out = this.edits;
+    this.edits = [];
     return out;
   }
 
-  /** Brick indices whose GPU table entry changed since the last call, ascending. */
-  takeTableWrites(): number[] {
-    const out = this.tableList;
-    this.tableList = [];
-    for (const bi of out) this.tableFlag[bi] = 0;
-    return out.sort((a, b) => a - b);
+  /** Make a retired record's units reusable: the GPU no longer points at it. */
+  release(entry: number): void {
+    if (isRecord(entry)) this.freeLists[entry >>> 28].push(entry & OFFSET_MASK);
+  }
+
+  private sameRecord(entry: number, rec: Uint32Array): boolean {
+    const at = (entry & OFFSET_MASK) * 4;
+    for (let i = 0; i < rec.length; i++) if (this.heap[at + i] !== rec[i]) return false;
+    return true;
   }
 
   private bump(units: number): number {
     const unit = this.used;
     this.used += units;
     if (this.used * 4 > this.heap.length) {
-      let words = this.heap.length * 2;
-      while (words < this.used * 4) words *= 2;
+      let words = Math.max(Math.ceil(this.heap.length * 0.375) * 4, 1024 * 4);
+      while (words < this.used * 4) words = Math.ceil(words * 0.375) * 4;
       const grown = new Uint32Array(words);
       grown.set(this.heap);
       this.heap = grown;

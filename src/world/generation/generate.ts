@@ -1,10 +1,12 @@
 /**
  * The whole pipeline: fill every band (in workers, or in-process for tests),
- * assemble, run the load-time events, settle, pick the spawn, build the far
- * field. Each phase is timed, because load time is a budget.
+ * assemble, mirror the bands' GPU records, run the load-time events and
+ * re-encode what they touched, pick the spawn, build the far field. Each phase
+ * is timed, because load time is a budget.
  */
 
 import type { BrickMap } from '../bricks';
+import { HeapMirror } from '../encode';
 import { assemble } from './assemble';
 import { applyEvents } from './events';
 import { buildFarField, type FarField } from './farfield';
@@ -15,6 +17,8 @@ import { pickSpawn, type Spawn } from './spawn';
 export interface GeneratedWorld {
   plan: WorldPlan;
   map: BrickMap;
+  /** The GPU's view of `map`, settled: no edits pending. */
+  mirror: HeapMirror;
   spawn: Spawn;
   farField: FarField;
   timings: Record<string, number>;
@@ -40,11 +44,13 @@ export async function generateWorld(
   const bands = await time('fill', () => runBands(all));
   bands.sort((a, b) => a.band - b.band);
   const map = await time('assemble', () => assemble(plan, bands));
+  const mirror = await time('encode', () => HeapMirror.fromBands(map, bands));
   await time('events', () => {
     applyEvents(map, plan);
-    map.takeDirty();
+    mirror.update(map.takeDirty());
+    for (const edit of mirror.takeEdits()) mirror.release(edit.retire);
   });
   const spawn = await time('spawn', () => pickSpawn(map, plan));
   const far = farPromise ? await farPromise : await time('farField', () => buildFarField(plan));
-  return { plan, map, spawn, farField: far, timings };
+  return { plan, map, mirror, spawn, farField: far, timings };
 }

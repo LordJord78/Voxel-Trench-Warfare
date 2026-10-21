@@ -13,6 +13,7 @@
 
 import { hash32x4 } from '../../core/hash';
 import { BrickMap, UNIFORM } from '../bricks';
+import { encodeBrick, formatOfLength } from '../encode';
 import { P, isLoose, isSolid, kindOf, K } from '../materials';
 import { bandSink } from '../sink';
 import { FLAG, columnModel, rememberColumns, type ColumnModel } from './columns';
@@ -32,6 +33,10 @@ export interface BandResult {
   dense: Uint8Array;
   /** Band-local brick indices of the dense bricks, ascending. */
   denseBricks: Uint32Array;
+  /** Each dense brick's GPU record, concatenated in `denseBricks` order. */
+  records: Uint32Array;
+  /** Each dense brick's record format. */
+  formats: Uint8Array;
 }
 
 const LOOSE = Uint8Array.from({ length: 256 }, (_, p) => (isLoose(p) ? 1 : 0));
@@ -229,17 +234,37 @@ function stampFurniture(plan: WorldPlan, map: BrickMap, x0: number): void {
   }
 }
 
-/** One band as transferable bricks: the table, and the dense bricks' bytes in table order. */
+/** One band as transferable bricks: the table, the dense bricks' bytes in table order, and their GPU records. */
 export function fillBand(plan: WorldPlan, band: number): BandResult {
-  const map = bandMap(plan, band);
+  return bandResult(bandMap(plan, band), band);
+}
+
+/** A 32-wide band map as the buffers a worker sends back. */
+export function bandResult(map: BrickMap, band: number): BandResult {
   const dense: number[] = [];
   for (let bi = 0; bi < map.table.length; bi++) {
     const e = map.table[bi];
     if (e !== 0 && !(e & UNIFORM)) dense.push(bi);
   }
   const bytes = new Uint8Array(dense.length * 512);
-  dense.forEach((bi, i) => bytes.set(map.denseView(bi)!, i * 512));
-  return { band, table: map.table.slice(), dense: bytes, denseBricks: Uint32Array.from(dense) };
+  const encoded: Uint32Array[] = [];
+  const formats = new Uint8Array(dense.length);
+  let words = 0;
+  dense.forEach((bi, i) => {
+    const raw = map.denseView(bi)!;
+    bytes.set(raw, i * 512);
+    const record = encodeBrick(raw);
+    formats[i] = formatOfLength(record.length);
+    encoded.push(record);
+    words += record.length;
+  });
+  const records = new Uint32Array(words);
+  let at = 0;
+  for (const r of encoded) {
+    records.set(r, at);
+    at += r.length;
+  }
+  return { band, table: map.table.slice(), dense: bytes, denseBricks: Uint32Array.from(dense), records, formats };
 }
 
 /** The voxel the fill lays at world (x, y, z): for tests and spot checks. */

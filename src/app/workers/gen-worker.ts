@@ -23,7 +23,7 @@ self.onmessage = (event: MessageEvent<Job | { type: 'plan'; plan: WorldPlan }>) 
   const p = job.plan ?? plan!;
   if (job.type === 'band') {
     const result = fillBand(p, job.band);
-    (self as unknown as Worker).postMessage({ type: 'band', id: job.id, result }, [result.table.buffer, result.dense.buffer, result.denseBricks.buffer]);
+    (self as unknown as Worker).postMessage({ type: 'band', id: job.id, result }, [result.table.buffer, result.dense.buffer, result.denseBricks.buffer, result.records.buffer, result.formats.buffer]);
     return;
   }
   const ff = emptyFarField(p);
