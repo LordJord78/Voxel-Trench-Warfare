@@ -1,5 +1,6 @@
 import { Rng } from '../../../src/core/rng';
 import { HeapMirror } from '../../../src/world/encode';
+import { FarFieldGpu } from '../../../src/render/farfield-gpu';
 import { FLAGS, FRAME, writeWorldInfo } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
 import { StructWriter } from '../../../src/render/layout';
@@ -81,6 +82,7 @@ export const cases = {
     const count = args?.count ?? 8192;
     const map = syntheticWorld(4);
     const world = GpuWorld.create(device, { map, mirror: HeapMirror.fromMap(map) });
+    const far = FarFieldGpu.empty(device);
     const rays = makeRays(count);
     const rayData = new ArrayBuffer(count * 32);
     const rf = new Float32Array(rayData);
@@ -116,7 +118,7 @@ export const cases = {
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
       pass.setPipeline(pipeline);
-      pass.setBindGroup(0, sceneGroup(device, scene, frameBuffer, world));
+      pass.setBindGroup(0, sceneGroup(device, scene, frameBuffer, world, far));
       pass.setBindGroup(1, device.createBindGroup({ layout: local, entries: [{ binding: 0, resource: { buffer: rayBuffer } }, { binding: 1, resource: { buffer: results } }] }));
       pass.dispatchWorkgroups(Math.ceil(count / 64));
       pass.end();

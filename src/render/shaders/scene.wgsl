@@ -8,3 +8,7 @@
 // Two vec4s per palette entry: albedo (linear) and roughness, then emission and kind.
 @group(0) @binding(4) var<storage, read> palette: array<vec4f>;
 @group(0) @binding(5) var<storage, read> pyramid: array<u32>;
+// The far field (see farfield-gpu.ts): prepared heights, their max mips, materials.
+@group(0) @binding(7) var farHeights: texture_2d<f32>;
+@group(0) @binding(8) var farMips: texture_2d<f32>;
+@group(0) @binding(9) var farMaterials: texture_2d<u32>;

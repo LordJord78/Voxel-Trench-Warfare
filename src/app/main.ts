@@ -5,8 +5,9 @@
  */
 
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
+import { FarFieldGpu } from '../render/farfield-gpu';
 import { GpuWorld } from '../render/gpu-world';
-import { Renderer } from '../render/renderer';
+import { compileFrame, Renderer } from '../render/renderer';
 import { fingerprint } from '../world/fingerprint';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
@@ -33,7 +34,10 @@ function fail(error: unknown): void {
 
 async function start(): Promise<void> {
   say('TRENCHLINE — generating the world…');
-  const gpuReady: Promise<Gpu | Error> = createGpu().catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))));
+  // The device comes up and the pipelines compile while the workers generate.
+  const asError = (e: unknown) => (e instanceof Error ? e : new Error(String(e)));
+  const gpuReady: Promise<Gpu | Error> = createGpu().catch(asError);
+  const compiling = gpuReady.then((g) => (g instanceof Error ? g : compileFrame(g.device).catch(asError)));
   const world = await generateInWorkers(7, (phase, done, total) => say(`TRENCHLINE — generating: ${phase} ${done}/${total}`));
   const gpu = await gpuReady;
   if (gpu instanceof Error) throw gpu;
@@ -42,11 +46,16 @@ async function start(): Promise<void> {
   const gpuWorld = GpuWorld.create(gpu.device, world);
   world.timings.upload = Math.round(performance.now() - t);
   t = performance.now();
+  const far = FarFieldGpu.create(gpu.device, world.farField);
+  world.timings.farUpload = Math.round(performance.now() - t);
+  t = performance.now();
+  const compiled = await compiling;
+  if (compiled instanceof Error) throw compiled;
+  world.timings.pipelinesWait = Math.round(performance.now() - t);
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.floor(canvas.clientWidth * dpr);
   canvas.height = Math.floor(canvas.clientHeight * dpr);
-  const renderer = await Renderer.create(gpu, canvas, gpuWorld, world.plan, { megapixels: 1.5 });
-  world.timings.pipelines = Math.round(performance.now() - t);
+  const renderer = await Renderer.create(gpu, canvas, gpuWorld, world.plan, { megapixels: 1.5, far, compiled });
 
   const views = standardViews(world.plan, world.spawn);
   const cam = new FlyCam(views.bay);

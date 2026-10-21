@@ -12,6 +12,7 @@
 import type { WorldPlan } from '../world/generation/plan';
 import { jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
+import { FarFieldGpu } from './farfield-gpu';
 import { FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
@@ -38,6 +39,10 @@ export interface RendererOptions {
   megapixels?: number;
   /** Bytes of world edits uploaded per frame. */
   uploadBudget?: number;
+  /** The ground past the map's edge; none if absent. */
+  far?: FarFieldGpu;
+  /** Pipelines compiled ahead of time (see compileFrame); compiled now if absent. */
+  compiled?: CompiledFrame;
 }
 
 /** The internal image for a canvas: the canvas itself, or `megapixels` at its aspect if that is smaller. */
@@ -70,6 +75,49 @@ function sampled(binding: number, sampleType: GPUTextureSampleType): GPUBindGrou
   return { binding, visibility: STAGE(), texture: { sampleType } };
 }
 
+/** Everything the GPU compiles for a frame: layouts and pipelines, independent of any world. */
+export interface CompiledFrame {
+  scene: GPUBindGroupLayout;
+  layouts: Record<'primary' | 'shade' | 'present', GPUBindGroupLayout>;
+  pipelines: { primary: GPUComputePipeline; shade: GPUComputePipeline; present: GPURenderPipeline };
+}
+
+/** Compile the frame's pipelines, in parallel. Needs only the device, so it can run while the world generates. */
+export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
+  const scene = sceneLayout(device);
+  const layouts = {
+    primary: device.createBindGroupLayout({
+      label: 'primary',
+      entries: [storageTexture(0, 'r32float'), storageTexture(1, 'rg32uint'), storageTexture(2, 'rgba16float')],
+    }),
+    shade: device.createBindGroupLayout({
+      label: 'shade',
+      entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float')],
+    }),
+    present: device.createBindGroupLayout({
+      label: 'present',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
+    }),
+  };
+  const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
+  const [primary, shade, present] = await Promise.all([
+    compute(device, 'primary', primarySrc, [scene, layouts.primary]),
+    compute(device, 'shade', debugSrc, [scene, layouts.shade]),
+    device.createRenderPipelineAsync({
+      label: 'present',
+      layout: device.createPipelineLayout({ bindGroupLayouts: [layouts.present] }),
+      vertex: { module: presentModule, entryPoint: 'vs' },
+      fragment: { module: presentModule, entryPoint: 'fs', targets: [{ format: navigator.gpu.getPreferredCanvasFormat() }] },
+      primitive: { topology: 'triangle-list' },
+    }),
+  ]);
+  return { scene, layouts, pipelines: { primary, shade, present } };
+}
+
 export class Renderer {
   readonly device: GPUDevice;
   readonly world: GpuWorld;
@@ -89,9 +137,10 @@ export class Renderer {
   private readonly frameBuffer: GPUBuffer;
   private readonly presentBuffer: GPUBuffer;
   private readonly scene: GPUBindGroupLayout;
-  private readonly layouts: Record<'primary' | 'shade' | 'present', GPUBindGroupLayout>;
+  private readonly layouts: CompiledFrame['layouts'];
   private readonly sampler: GPUSampler;
-  private pipelines!: { primary: GPUComputePipeline; shade: GPUComputePipeline; present: GPURenderPipeline };
+  private readonly far: FarFieldGpu;
+  private readonly pipelines: CompiledFrame['pipelines'];
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
   private groups: Partial<Record<'primary' | 'shade' | 'present', GPUBindGroup>> = {};
@@ -102,14 +151,14 @@ export class Renderer {
   private prevPose: CameraPose | null = null;
 
   static async create(gpu: Gpu, canvas: HTMLCanvasElement | null, world: GpuWorld, plan: WorldPlan | null, options: RendererOptions = {}): Promise<Renderer> {
-    const r = new Renderer(gpu, canvas, world, plan, options);
-    await r.compile();
+    const compiled = options.compiled ?? (await compileFrame(gpu.device));
+    const r = new Renderer(gpu, canvas, world, plan, options, compiled);
     if (canvas) r.resize(canvas.width, canvas.height);
     else r.resize(...(options.size ?? [320, 240]));
     return r;
   }
 
-  private constructor(gpu: Gpu, canvas: HTMLCanvasElement | null, world: GpuWorld, plan: WorldPlan | null, options: RendererOptions) {
+  private constructor(gpu: Gpu, canvas: HTMLCanvasElement | null, world: GpuWorld, plan: WorldPlan | null, options: RendererOptions, compiled: CompiledFrame) {
     const device = gpu.device;
     this.device = device;
     this.world = world;
@@ -121,43 +170,11 @@ export class Renderer {
     this.timer = new GpuTimer(device, gpu.timestamps, PASSES);
     this.frameBuffer = device.createBuffer({ label: 'frame', size: this.writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.presentBuffer = device.createBuffer({ label: 'present', size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.scene = sceneLayout(device);
-    this.layouts = {
-      primary: device.createBindGroupLayout({
-        label: 'primary',
-        entries: [storageTexture(0, 'r32float'), storageTexture(1, 'rg32uint'), storageTexture(2, 'rgba16float')],
-      }),
-      shade: device.createBindGroupLayout({
-        label: 'shade',
-        entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float')],
-      }),
-      present: device.createBindGroupLayout({
-        label: 'present',
-        entries: [
-          { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-          { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-          { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
-        ],
-      }),
-    };
+    this.scene = compiled.scene;
+    this.layouts = compiled.layouts;
+    this.pipelines = compiled.pipelines;
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-  }
-
-  private async compile(): Promise<void> {
-    const device = this.device;
-    const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-    const [primary, shade, present] = await Promise.all([
-      compute(device, 'primary', primarySrc, [this.scene, this.layouts.primary]),
-      compute(device, 'shade', debugSrc, [this.scene, this.layouts.shade]),
-      device.createRenderPipelineAsync({
-        label: 'present',
-        layout: device.createPipelineLayout({ bindGroupLayouts: [this.layouts.present] }),
-        vertex: { module: presentModule, entryPoint: 'vs' },
-        fragment: { module: presentModule, entryPoint: 'fs', targets: [{ format: this.format }] },
-        primitive: { topology: 'triangle-list' },
-      }),
-    ]);
-    this.pipelines = { primary, shade, present };
+    this.far = options.far ?? FarFieldGpu.empty(device);
   }
 
   /** Size the canvas (device pixels) and reallocate the internal image to match. */
@@ -218,7 +235,7 @@ export class Renderer {
     this.world.flush(this.options.uploadBudget ?? 1 << 20, eye);
     // A grown heap is a new buffer: the scene group follows it.
     if (this.world.generation !== this.sceneGeneration || !this.sceneGroup) {
-      this.sceneGroup = sceneGroup(device, this.scene, this.frameBuffer, this.world);
+      this.sceneGroup = sceneGroup(device, this.scene, this.frameBuffer, this.world, this.far);
       this.sceneGeneration = this.world.generation;
     }
 
@@ -236,6 +253,7 @@ export class Renderer {
     w.set('voxel', voxel);
     w.set('timeOfDay', timeOfDay);
     writeSky(w, this.sky);
+    w.set('far', this.far.info);
     device.queue.writeBuffer(this.frameBuffer, 0, w.buffer);
 
     const encoder = device.createCommandEncoder({ label: `frame ${this.frameIndex}` });

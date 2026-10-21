@@ -71,3 +71,66 @@ export function traceRef(map: BrickMap, ro: Vec3, rd: Vec3, tMax: number): RefHi
     face = axis * 2 + (rd[axis] > 0 ? 0 : 1);
   }
 }
+
+/** A far field as the reference marches it: prepared heights at cell centres (see farfield-mips.ts). */
+export interface FarRef {
+  size: number;
+  cell: number;
+  originX: number;
+  originZ: number;
+  heights: Float32Array;
+}
+
+export interface FarRefHit {
+  hit: boolean;
+  t: number;
+  n: [number, number, number];
+}
+
+/**
+ * The far field's ground, found by small steps (a twentieth of a cell) along
+ * the ray and refined by bisection. A patch exists where its four corner
+ * samples are all ground. Doubles throughout.
+ */
+export function marchRef(ff: FarRef, ro: Vec3, rd: Vec3, tMin: number, tMax: number): FarRefHit {
+  const sample = (i: number, j: number) => ff.heights[Math.min(ff.size - 1, j) * ff.size + Math.min(ff.size - 1, i)];
+  const ground = (t: number): { f: number; n: [number, number, number] } | null => {
+    const u = (ro[0] + rd[0] * t - ff.originX) / ff.cell - 0.5;
+    const v = (ro[2] + rd[2] * t - ff.originZ) / ff.cell - 0.5;
+    if (u < 0 || v < 0 || u >= ff.size - 1 || v >= ff.size - 1) return null;
+    const i = Math.floor(u);
+    const j = Math.floor(v);
+    const a = sample(i, j);
+    const b = sample(i + 1, j);
+    const c = sample(i, j + 1);
+    const d = sample(i + 1, j + 1);
+    if (Math.min(a, b, c, d) === -Infinity) return null;
+    const fu = u - i;
+    const fv = v - j;
+    const h = a + (b - a) * fu + (c - a) * fv + (a - b - c + d) * fu * fv;
+    const dx = ((b - a) + (a - b - c + d) * fv) / ff.cell;
+    const dz = ((c - a) + (a - b - c + d) * fu) / ff.cell;
+    const l = Math.hypot(dx, 1, dz);
+    return { f: ro[1] + rd[1] * t - h, n: [-dx / l, 1 / l, -dz / l] };
+  };
+  const step = ff.cell / 20;
+  let prev = ground(tMin);
+  if (prev && prev.f <= 0) return { hit: true, t: tMin, n: prev.n };
+  for (let t = tMin + step; t <= tMax; t += step) {
+    const here = ground(t);
+    // Under the ground here and not before: either the ray came down through it, or entered it from no ground at all.
+    if (here && here.f <= 0 && (!prev || prev.f > 0)) {
+      let lo = t - step;
+      let hi = t;
+      for (let k = 0; k < 40; k++) {
+        const mid = (lo + hi) / 2;
+        const g = ground(mid);
+        if (g && g.f <= 0) hi = mid;
+        else lo = mid;
+      }
+      return { hit: true, t: hi, n: ground(hi)!.n };
+    }
+    prev = here;
+  }
+  return { hit: false, t: 0, n: [0, 1, 0] };
+}
