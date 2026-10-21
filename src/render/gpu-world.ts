@@ -98,8 +98,11 @@ export class GpuWorld {
     this.queue.push(this.mirror.takeEdits());
   }
 
-  /** Upload up to `budgetBytes` of edits, nearest `eye` (voxels) first. */
+  /** Take the map's new edits, then upload up to `budgetBytes` of them, nearest `eye` (voxels) first. */
   flush(budgetBytes: number, eye: readonly [number, number, number]): number {
+    // The queue settles a column's pyramid from the map, so every edit the map holds must be queued
+    // first: an edit left untaken could be under a settled column while the table still shows it.
+    this.takeEdits();
     const sink: GpuSink = {
       table: (i, e) => this.tableWrites.set(i, e),
       heap: (unit, words) => this.heapWrites.push({ unit, words }),
