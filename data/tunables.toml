@@ -1,0 +1,459 @@
+# ---------------------------------------------------------------------------
+# TRENCHLINE — feel tuning
+#
+# Every number that decides how the game FEELS lives here. Logic modules read
+# values by dotted key and never hard-code a magnitude. Edit freely; nothing in
+# here changes behaviour structurally, only its shape and scale.
+#
+# Units: metres, seconds, degrees, kilograms.
+# ---------------------------------------------------------------------------
+
+[world]
+# STRUCTURAL, not feel. Every other distance in this file is in metres and is
+# converted with it. Changing it changes what the whole project means, so it is
+# not a per-session override. 10 cm is Teardown's scale, and the reason for the
+# web rebuild: at 0.5 m a sandbag was a cube.
+voxel_size          = 0.10
+
+size_x_m            = 256.0    # twice the Python map each way: room for reserve
+size_y_m            = 32.0     # lines, a hamlet behind ours and a wood behind theirs
+size_z_m            = 256.0
+ground_level_m      = 16.0     # height of the undisturbed field surface
+water_table_m       = 12.5     # below this, open cavities flood. Sits just
+                               # under the trench floor: the line stays dry, but
+                               # a crater deeper than ~2 m fills, and a shell in
+                               # the trench floods it.
+
+# The Python game meshed chunks, so it carried a rebuild budget and level-of-
+# detail bands here. The web renderer ray-traces a sparse brick map instead:
+# there is nothing to mesh and nothing to rebuild, only bricks to re-upload, so
+# those settings went with the meshes.
+
+[world.trench]
+# Every distance here is metres and every voxel count is derived, because the
+# same design is a different number of voxels on a different grid. The
+# derivation is in generation.py and is asserted by tests/test_world.py.
+depth_m             = 2.50     # field surface to duckboards
+width_m             = 2.50     # wall to wall: walkway plus firing step
+step_bench_m        = 0.50     # bench at full step height
+step_tread_m        = 1.00     # stair below it, so the step can be mounted from
+                               # anywhere along the walkway rather than only
+                               # from a flight at one end
+parados_m           = 0.50     # spoil on the friendly side; lower than the
+                               # parapet so you are not silhouetted
+parapet_min_m       = 1.00     # floor under the crest, above the local field
+parapet_thickness_m = 2.00     # courses of spoil; the outer ones fall away, so
+                               # a tall parapet is a bank and not a wall
+bay_length_m        = 8.0      # traverse spacing
+traverse_gap_m      = 1.00     # wall left between adjacent bay strips
+
+# The across-bay treads carry as much rise as the player's step-up allows per
+# column. Any bay needing more takes the remainder on a flight running ALONG the
+# bay, which costs bay length (8 m of it) rather than walkway width.
+firing_step_min_m   = 1.50     # the shallowest step that still works, and no
+                               # taller than the across-bay stair can carry:
+                               # (step_tread_m + step_bench_m) rounded to the
+                               # grid, times whatever rise the step-up reaches
+                               # per column. Exceed that and the step is only
+                               # mountable from the flight at the end of the bay.
+firing_step_max_m   = 3.50     # past this the parapet is a redoubt
+
+# Crest clearance is NOT a global constant. Each fire bay measures the ground it
+# has to see over, raises its step until a standing eye clears it, and builds
+# its crest at step_top + floor(standing_eye / voxel_size). That puts a standing
+# eye 0.12 m over its own crest and a crouched eye 0.40 m under it, in every
+# bay, whatever the terrain is doing. Generation asserts it.
+sight_range_m       = 60.0     # how far out the ground has to read
+sight_near_m        = 14.0     # near band, where a rise walls you in outright
+sight_percentile    = 88.0     # of corridor ground the standing eye must clear
+sight_margin_m      = 0.40     # over that ground: covers ejecta
+crest_smoothing_m   = 1.00     # max crest drop between neighbouring bays
+
+# Ploughed farmland: broad swells, not chop. Amplitude is what gives no-man's-
+# land shape; wavelength is what decides whether that shape blocks the peek.
+# High-frequency octaves are the expensive kind — a 1 m bump 20 m out costs more
+# view than a 1 m swell 60 m out — so amplitude buys relief and persistence
+# spends it. Raised from 0.875 m once crest clearance stopped being global.
+# Measured: amplitude does NOT change how far shell holes read (42-44 m across
+# 1.0-3.0 m); an eye 1.1 m over the field is the binding constraint, not the
+# terrain. What amplitude and the swale buy is the WORST bay: p10 crater reach
+# 30 m -> 37 m. See tools/sightlines.py.
+[world.field]
+relief_amplitude_m  = 2.00     # +/- about the nominal ground level
+relief_octaves      = 4
+relief_base_cells   = 3        # ~42 m at the base octave
+relief_persistence  = 0.34     # < 0.5: the fine octaves stay quiet
+
+# Both lines sit on the shoulders of a shallow dry watercourse, which is what
+# SUKHYI YAR is named for. This is the half of "relief" that actually makes
+# no-man's-land read: an eye 1.1 m over a flat field sees ground past ~20 m
+# edge-on however much vertical relief it has, and a concave dip is the one
+# shape fully visible from its own rim. Kept shallow enough that the trough
+# floor stays above the water table, so the middle holds shell holes and not a
+# lake. Set to 0.0 for a flat field.
+swale_depth_m       = 1.50
+swale_margin_m      = 5.0      # how far past each line the dip reaches
+
+# Vertical silhouette: the only thing that reads at 40 m from an eye 1.1 m over
+# a flat field, because it is seen against the sky rather than edge-on. Ground
+# relief cannot do this at any amplitude; that was measured, not assumed.
+[world.clutter]
+fence_lines         = 3
+poles               = 7
+
+# Battlefield layout, in voxels along z (0 = friendly rear, max = enemy rear).
+[world.layout]
+support_line_m      = 20.0
+front_line_m        = 42.0
+enemy_front_m       = 93.0
+enemy_support_m     = 113.0
+comm_trench_x_m     = [28.0, 84.0]
+shelterbelt_z_m     = [12.0, 75.0, 122.0]
+
+[player]
+mass                = 82.0
+eye_height_standing = 1.62
+eye_height_crouched = 1.10
+eye_height_prone    = 0.34
+eye_height_periscope = 2.20    # the mirror head, not your eye. 0.58 m over a
+                               # standing eye, which is 0.70 m of clearance
+                               # over the crest against standing's 0.12 m
+radius              = 0.30
+step_up             = 0.55     # one voxel plus tolerance: climb the firing step
+gravity             = -19.6    # 2 g — arcade-leaning, keeps jumps snappy
+jump_speed          = 5.0
+ground_accel        = 62.0
+air_accel           = 9.0
+ground_friction     = 11.0
+max_fall_speed      = 55.0
+mouse_sensitivity   = 0.14
+pitch_limit         = 88.0
+
+# Stance is a tradeoff: speed and vision against how much of you is showing.
+# `exposure` scales incoming hit probability; `sway_scale` multiplies weapon
+# sway and recoil recovery time.
+[stance.standing]
+height              = 1.80
+speed               = 4.1
+sprint_speed        = 6.4
+sway_scale          = 1.00
+exposure            = 1.00
+transition_time     = 0.00
+
+[stance.crouched]
+height              = 1.25
+speed               = 2.0
+sprint_speed        = 2.0
+sway_scale          = 0.72
+exposure            = 0.62
+transition_time     = 0.22
+
+[stance.prone]
+height              = 0.55
+speed               = 0.75
+sprint_speed        = 0.75
+sway_scale          = 0.38
+exposure            = 0.28
+transition_time     = 0.75
+
+# Standing on the firing step: full vision, full exposure, and the trench no
+# longer protects you. This is the fast/dangerous option against the periscope.
+[stance.firing_step]
+height              = 1.80
+speed               = 1.2
+sprint_speed        = 1.2
+sway_scale          = 0.85
+exposure            = 1.35
+transition_time     = 0.30
+
+# ---------------------------------------------------------------------------
+# BALLISTICS
+#
+# Real physics, arcade nothing. Rounds are integrated with quadratic drag and
+# real gravity — not the player's 2 g, which is a movement-feel number and has
+# no business deciding where a bullet lands 300 m away.
+# ---------------------------------------------------------------------------
+
+[ballistics]
+gravity             = -9.81    # m/s^2, actual
+air_density         = 1.225    # kg/m^3 at sea level, 15 C
+substeps_per_tick   = 4        # 240 Hz integration under a 60 Hz tick: a rifle
+                               # round covers 3.7 m per tick and 0.9 m per
+                               # substep, which is under two voxels
+pool_capacity       = 256      # rounds in the air at once; full is full
+max_range_m         = 400.0    # wider than the 128 m map, so nothing vanishes
+                               # mid-flight over open ground
+max_flight_time_s   = 4.0
+
+[weapon.assault_rifle]
+name                = "5.45 assault rifle"
+muzzle_velocity     = 880.0    # m/s
+projectile_mass_kg  = 0.00343  # 3.43 g
+drag_coefficient    = 0.295    # G7-ish for a boat-tailed spitzer
+cross_section_m2    = 0.0000238   # 5.45 mm bore
+rounds_per_minute   = 650.0
+magazine            = 30
+dispersion_moa      = 3.2      # cone half-angle, scaled by stance sway
+reload_time_s       = 2.4
+automatic           = true
+tracer              = true
+
+# ---------------------------------------------------------------------------
+# RECOIL
+#
+# Every recoil number is here. Nothing is hard-coded in a weapon class; adding
+# a weapon means adding a [recoil.<key>] table, not editing logic.
+#
+# Two terms with different timescales:
+#   kick   an impulse into a damped spring anchored at zero. The snap. Set by
+#          settle_time_s directly, so "never fighting the gun for more than a
+#          fraction of a second" is a number you type, not one you infer.
+#   climb  an offset that accumulates over a burst, approaches a ceiling and
+#          bleeds off when you stop. The pattern you have to correct.
+#
+# Feel first: the whole thing is LIGHT. If it reads as weightless rather than
+# snappy, raise kick_pitch_deg before touching anything else.
+# ---------------------------------------------------------------------------
+
+[recoil.defaults]
+kick_pitch_deg      = 0.30
+kick_yaw_deg        = 0.00
+settle_time_s       = 0.20     # kick back to 2% of its peak in this long
+damping_ratio       = 1.00     # critically damped: fastest return, no bounce
+climb_ceiling_deg   = 2.00
+climb_per_shot_deg  = 0.30
+climb_recovery_s    = 0.30
+drift_yaw_deg       = 0.00
+drift_onset_shots   = 6.0
+drift_ramp_shots    = 4.0
+jitter_pitch_deg    = 0.03
+jitter_yaw_deg      = 0.05
+burst_reset_s       = 0.28     # off the trigger this long and the pattern resets
+
+# Tiny kick, a quick vertical climb that plateaus, and a mild rightward drift
+# that only shows up once you are past about six rounds.
+[recoil.assault_rifle]
+kick_pitch_deg      = 0.34
+settle_time_s       = 0.20     # peak lands 2 frames after the shot, gone in 0.22 s
+climb_ceiling_deg   = 1.65     # ~2.4 m of rise at 100 m, held on the trigger
+climb_per_shot_deg  = 0.27     # so the plateau arrives in about 8 rounds
+climb_recovery_s    = 0.26
+drift_yaw_deg       = 0.075    # rightward; positive yaw is right
+drift_onset_shots   = 6.0
+drift_ramp_shots    = 5.0
+jitter_pitch_deg    = 0.035
+jitter_yaw_deg      = 0.055
+
+# ---------------------------------------------------------------------------
+# DESTRUCTION
+#
+# Every carve is followed by a collapse. A crater that leaves its spoil hanging
+# in mid-air is wrong to look at and wrong to shoot through, and one that does
+# not put its dirt anywhere has made cover out of nothing.
+# ---------------------------------------------------------------------------
+
+[destruction]
+resists_above_hardness = 2.0   # concrete (4.0) and brick (2.6) survive the
+                               # outer radius; soil and timber do not
+core_radius_scale      = 0.55  # inside this, nothing survives
+loosen_radius_scale    = 1.45  # rind of ground shaken into loose spoil, which
+                               # is what actually falls into the trench
+chip_energy_j          = 260.0 # per unit hardness, for a single round to mark
+                               # a surface. A rifle round scars a parapet over
+                               # a magazine; it does not dig through it.
+collapse_max_passes    = 64
+
+# ---------------------------------------------------------------------------
+# VIEWKICK — cosmetic recoil
+#
+# Everything you FEEL when the gun goes off, and nothing that moves the bullet.
+# Rounds fly along the [recoil] aim and would land in the same voxels if this
+# whole section were zeroed. That is what lets it be tuned for weight while
+# [recoil] stays light enough not to be a fight: difficulty lives up there,
+# heft lives here, and the two never trade against each other.
+#
+# damping_ratio below 1 overshoots on the way back, which is what reads as mass.
+# It belongs here and nowhere near the aim axis.
+# ---------------------------------------------------------------------------
+
+[viewkick.defaults]
+punch_back_m        = 0.030    # shoved toward the eye; the biggest weight cue
+punch_up_m          = 0.008
+punch_side_m        = 0.002
+punch_pitch_deg     = 1.10     # viewmodel only — the sight picture moves 0.34
+punch_yaw_deg       = 0.15
+punch_roll_deg      = 0.45
+aim_pitch_follow    = 0.90     # viewmodel pitch per degree of aim kick, so the
+                               # two layers are visibly one event
+settle_time_s       = 0.22     # close to the aim layer's 0.20 so they finish
+                               # together; drift these apart and the gun reads
+                               # as two guns
+damping_ratio       = 0.85     # overshoot: the mass settling back
+fov_pulse_deg       = -0.55    # a snap in, not a zoom out
+fov_settle_s        = 0.16
+fov_damping_ratio   = 1.00     # no bounce on the lens; it reads as a wobble
+brass_count         = 1.0
+brass_speed         = 2.6      # to the right
+brass_up            = 1.5
+brass_spread        = 0.55
+muzzle_forward_m    = 0.55
+muzzle_side_m       = 0.08
+muzzle_down_m       = 0.10
+report_peak_db      = 158.0    # 5.45 at the shooter's ear
+report_low_hz       = 70.0     # where the body of the transient sits
+report_length_s     = 0.18
+jitter_scale        = 0.12     # per-shot variation, as a fraction of each value
+
+[viewkick.assault_rifle]
+punch_back_m        = 0.034
+punch_pitch_deg     = 1.25
+punch_roll_deg      = 0.55
+damping_ratio       = 0.82
+fov_pulse_deg       = -0.60
+
+# ---------------------------------------------------------------------------
+# PARTICLES
+#
+# Cosmetic, deterministic, and simulated on the sim side so a headless run makes
+# the same brass as a windowed one. Nothing here is read by collision,
+# ballistics or AI.
+# ---------------------------------------------------------------------------
+
+[particles]
+pool_capacity       = 1024
+
+[particles.muzzle_flash]
+life_s              = 0.045    # two or three frames: a stab, not a flare
+gravity             = 0.0
+drag                = 12.0
+size_start_m        = 0.34
+size_end_m          = 0.08
+colour_start        = [1.0, 0.90, 0.55, 0.95]
+colour_end          = [1.0, 0.45, 0.12, 0.0]
+
+[particles.brass]
+life_s              = 1.30
+gravity             = -9.81
+drag                = 0.35
+size_start_m        = 0.028
+size_end_m          = 0.028
+colour_start        = [0.86, 0.68, 0.30, 1.0]
+colour_end          = [0.70, 0.55, 0.24, 0.0]
+
+[viewmodel]
+rest_right_m        = 0.175    # where the rifle sits when nothing is happening
+rest_up_m           = -0.205
+rest_forward_m      = 0.440
+
+# The trench periscope. Elevation is the payoff — this is the only way to look
+# at no-man's-land from behind the parapet rather than over it — and the costs
+# are a narrow field of view, near-immobility, and no weapon. Exposure is very
+# low because what is above the crest is a mirror on a stick, not your head.
+[stance.periscope]
+height              = 1.80
+speed               = 0.35
+sprint_speed        = 0.35
+sway_scale          = 0.55
+exposure            = 0.22
+transition_time     = 0.45
+fov_scale           = 0.42     # the tunnel you are looking down
+
+# The entrenching tool. Artillery degrades a position structurally — collapsed
+# spoil ramps over a shelled traverse — and this is the counter. Priced in time
+# spent standing up in a trench that no longer has a traverse.
+#
+# seconds_per_voxel is set from the measured fill: the worst blocked bay across
+# seeds 7/21/99 holds 13-16 loose voxels, so 1.35 s each puts clearing it at
+# about twenty seconds of continuous work.
+[entrenching]
+reach_m             = 1.60
+seconds_per_voxel   = 1.35
+exposure_scale      = 1.25     # you are up, and side-on, and not watching
+sway_scale          = 1.60     # a shovel in your hands is not a rifle
+
+# ---------------------------------------------------------------------------
+# SUPPRESSION
+#
+# The whole reason small-arms fire matters at trench ranges: most rounds miss,
+# and the ones that miss are still doing the work. Tuned so that being shot at
+# with nothing hitting you is genuinely unpleasant.
+#
+# Levels are 0-1. A single close crack is worth about a fifth of the bar and a
+# sustained burst pins you; the bar holds for hold_s after the last round so a
+# burst does not bleed off between its own shots, then recovers over roughly
+# three seconds of not being shot at.
+# ---------------------------------------------------------------------------
+
+[suppression]
+crack_radius_m      = 3.20     # a supersonic round passing inside this
+crack_amount        = 0.34     # at nil miss distance; falls off as the square
+impact_radius_m     = 4.50     # dirt kicking up beside you
+impact_amount       = 0.16     # frightening, but it does not mean they have
+                               # your range the way a crack does
+decay_per_s         = 0.42
+hold_s              = 0.55
+max_level           = 1.00
+
+sway_at_full        = 4.20     # the dispersion cone at full suppression
+speed_at_full       = 0.40     # pinned should mean pinned
+flinch_deg          = 1.35     # muzzle dragged off by a near miss
+flinch_recovery_s   = 0.45
+eject_from_step_at  = 0.55     # above this you cannot stay head-up. Not a
+                               # suggestion — the mechanic is that fire takes
+                               # the parapet away from you without hitting you
+
+shake_deg_at_full   = 0.85
+shake_hz            = 7.5
+desaturate_at_full  = 0.55
+vignette_at_full    = 0.50
+blur_at_full        = 0.55
+
+[camera]
+fov                 = 90.0
+far_plane           = 400.0   # the map diagonal is 181 m; this is fog-limited,
+                               # not clip-limited, so nothing ever pops in
+near_plane          = 0.08
+fov_lerp_per_s      = 7.0      # how fast the periscope's tunnel eases in
+head_bob_amplitude  = 0.035
+head_bob_hz         = 1.9
+landing_dip         = 0.11
+
+[render]
+tracer_length_m     = 7.0      # streak behind the round, not a dot
+tracer_colour       = [1.0, 0.83, 0.45]
+
+# ---------------------------------------------------------------------------
+# LIGHTING
+#
+# Baked into vertex colours at mesh time. Panda's shader generator emits GLSL
+# 120/130 and this machine's GL profile is 3.3/4.1 core, which rejects it, so
+# directional lights and shadow maps are not on the table — but a voxel world
+# does not need them. Ambient occlusion baked per vertex is what makes a trench
+# read as having depth, and it costs nothing per frame.
+#
+# Changing any of this means remeshing the world, not moving a slider.
+# ---------------------------------------------------------------------------
+
+[lighting]
+sun_azimuth_deg     = 141.0    # behind and right of a player facing the enemy,
+                               # so the parapet casts its shading toward them
+sun_elevation_deg   = 24.0     # low winter sun, well diffused by the overcast
+ambient             = 0.62     # high: an overcast sky is a dome of light
+diffuse             = 0.30     # low, for the same reason
+sky_bounce          = 0.10     # keeps downward faces off pure black
+ao_strength         = 0.55     # 0 flat, 1 pitch-black in a fully enclosed corner
+
+[weather]
+# Overcast and heavy. The horizon colour is load-bearing: distance fog blends
+# to it, so the far treeline dissolves into the sky rather than into a grey
+# wall, and the LOD transition and the edge of the map go with it.
+horizon_colour      = [0.70, 0.70, 0.68]
+zenith_colour       = [0.46, 0.49, 0.53]
+sun_glow            = 0.34     # a broad brightening behind the cloud, not a disc
+sun_glow_power      = 6.0      # lower is wider
+
+# Exponential, so density is a single weather lever rather than two distances
+# that have to be kept consistent with the far plane. Transmittance is
+# exp(-density * metres): at 0.0060 the enemy parapet at 51 m is at 74% and the
+# far treeline at 120 m is at 49% — hazy, still readable.
+fog_density         = 0.0060
