@@ -141,7 +141,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
       len = pick.len;
       want = pick.len > 0.0;
     }
-    if (want && !traceWorld(at, d, len, false).hit) {
+    if (want && !traceWorld(at, d, 0.0, len, false).hit) {
       open[k] = 1.0;
     }
   }

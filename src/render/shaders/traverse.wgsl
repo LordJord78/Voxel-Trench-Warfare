@@ -73,7 +73,8 @@ fn pyramidAt(k: u32, bx: i32, bz: i32) -> f32 {
   return f32(pyramid[l.z + (u32(bz) >> k) * l.x + (u32(bx) >> k)]);
 }
 
-fn traceWorld(ro: vec3f, rd: vec3f, tMax: f32, wantMaterial: bool) -> Hit {
+// From tMin (where the caller has proved the ray empty so far) to tMax.
+fn traceWorld(ro: vec3f, rd: vec3f, tMin: f32, tMax: f32, wantMaterial: bool) -> Hit {
   var h = Hit(false, 0.0, vec3i(0), 0u, 0u, 0u);
   let dims = worldDims();
   let dimsF = vec3f(dims);
@@ -88,14 +89,14 @@ fn traceWorld(ro: vec3f, rd: vec3f, tMax: f32, wantMaterial: bool) -> Hit {
   let thi = max(ta, tb);
   let tEntry = max(tlo.x, max(tlo.y, tlo.z));
   let tEnd = min(min(thi.x, min(thi.y, thi.z)), tMax);
-  var t = max(tEntry, 0.0);
+  var t = max(tEntry, max(tMin, 0.0));
   if (t >= tEnd) {
     return h;
   }
   let up = rd > vec3f(0.0);
   var cell = clamp(vec3i(floor(ro + rd * t)), vec3i(0), dims - 1);
   var face = 0u;
-  if (tEntry > 0.0) {
+  if (tEntry > 0.0 && tEntry >= tMin) {
     var ax = 2;
     if (tlo.x >= tlo.y && tlo.x >= tlo.z) {
       ax = 0;

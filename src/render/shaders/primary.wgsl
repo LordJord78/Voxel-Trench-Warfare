@@ -43,6 +43,8 @@ fn farPalette(m: u32) -> u32 {
 @group(1) @binding(0) var gDepth: texture_storage_2d<r32float, write>;
 @group(1) @binding(1) var gHit: texture_storage_2d<rg32uint, write>;
 @group(1) @binding(2) var gMotion: texture_storage_2d<rgba16float, write>;
+// Per 8 × 8 tile, the forward depth before which no ray in it can hit anything (beam.wgsl).
+@group(1) @binding(3) var beam: texture_2d<f32>;
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) g: vec3u) {
@@ -51,7 +53,8 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   }
   let res = vec2f(frame.res);
   let rd = cameraRay(frame.cam, vec2f(g.xy) + 0.5 + frameJitter(), res);
-  let h = traceWorld(frame.cam.origin, rd, 1e7, true);
+  let start = textureLoad(beam, vec2i(g.xy >> vec2u(3u)), 0).r / dot(rd, frame.cam.forward);
+  let h = traceWorld(frame.cam.origin, rd, start, 1e7, true);
   var depth = 1e9;
   var word0 = FACE_SKY << 24u;
   var word1 = 0u;

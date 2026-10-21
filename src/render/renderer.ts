@@ -2,7 +2,8 @@
  * The frame: every pass, its textures and bind groups, in order.
  *
  * Compute passes render the internal image:
- *   primary  — one jittered ray per pixel into the G-buffer;
+ *   beam     — per 8 × 8 tile, how far its rays can go before meeting anything;
+ *   primary  — one jittered ray per pixel into the G-buffer, from its tile's beam;
  *   lighting — the light reaching one pixel of each 2 × 2 block;
  *   temporal — that light blended into its reprojected history;
  *   atrous   — three edge-stopping filter passes over it, for display (the
@@ -39,6 +40,7 @@ import { LIGHT_SCALE, scaledSize, type Preset, type RenderSettings } from './qua
 import { sceneExtras, sceneGroup, sceneLayout } from './scene';
 import { moduleSource } from './shaders';
 import atrousSrc from './shaders/atrous.wgsl';
+import beamSrc from './shaders/beam.wgsl';
 import casSrc from './shaders/cas.wgsl';
 import lightingSrc from './shaders/lighting.wgsl';
 import presentSrc from './shaders/present.wgsl';
@@ -48,8 +50,8 @@ import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'present'] as const;
-type ComputePass = 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas';
+const PASSES = ['beam', 'primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'present'] as const;
+type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas';
 type Timed = (typeof PASSES)[number];
 
 /** A gap between frames longer than this (a hidden tab, a debugger) leaves histories too stale to blend. */
@@ -137,9 +139,10 @@ export interface CompiledFrame {
 export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
   const scene = sceneLayout(device);
   const layouts = {
+    beam: device.createBindGroupLayout({ label: 'beam', entries: [storageTexture(0, 'r32float')] }),
     primary: device.createBindGroupLayout({
       label: 'primary',
-      entries: [storageTexture(0, 'r32float'), storageTexture(1, 'rg32uint'), storageTexture(2, 'rgba16float')],
+      entries: [storageTexture(0, 'r32float'), storageTexture(1, 'rg32uint'), storageTexture(2, 'rgba16float'), sampled(3, 'unfilterable-float')],
     }),
     lighting: device.createBindGroupLayout({
       label: 'lighting',
@@ -182,7 +185,8 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [primary, lighting, temporal, atrous, shade, taa, cas, present] = await Promise.all([
+  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, present] = await Promise.all([
+    compute(device, 'beam', beamSrc, [scene, layouts.beam]),
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
     compute(device, 'temporal', temporalSrc, [scene, layouts.temporal]),
@@ -198,7 +202,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
       primitive: { topology: 'triangle-list' },
     }),
   ]);
-  return { scene, layouts, pipelines: { primary, lighting, temporal, atrous, shade, taa, cas, present }, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, present }, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -351,6 +355,7 @@ export class Renderer {
         usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
       });
     };
+    make('beam', 'r32float', [Math.ceil(this.alloc[0] / 8), Math.ceil(this.alloc[1] / 8)]);
     make('gDepth', 'r32float', this.alloc);
     make('gHit', 'rg32uint', this.alloc);
     make('gMotion', 'rgba16float', this.alloc);
@@ -378,7 +383,8 @@ export class Renderer {
     this.groups = [0, 1].map((cur) => {
       const prev = 1 - cur;
       return {
-        primary: group('primary', [view('gDepth'), view('gHit'), view('gMotion')]),
+        beam: group('beam', [view('beam')]),
+        primary: group('primary', [view('gDepth'), view('gHit'), view('gMotion'), view('beam')]),
         lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`)]),
         temporal: group('temporal', [
           view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view(`hHit${prev}`), view(`hColour${prev}`), view(`hMoments${prev}`),
@@ -497,6 +503,7 @@ export class Renderer {
       p.end();
     };
     const light = this.lightResolution;
+    pass('beam', 'beam', [Math.ceil(this.res[0] / 8), Math.ceil(this.res[1] / 8)]);
     pass('primary', 'primary', this.res);
     pass('lighting', 'lighting', light);
     pass('temporal', 'temporal', light);

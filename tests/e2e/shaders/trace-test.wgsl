@@ -24,6 +24,6 @@ struct Result {
 fn main(@builtin(global_invocation_id) g: vec3u) {
   if (g.x >= arrayLength(&rays)) { return; }
   let r = rays[g.x];
-  let h = traceWorld(r.o, r.d, r.tMax, r.wantMaterial != 0u);
+  let h = traceWorld(r.o, r.d, 0.0, r.tMax, r.wantMaterial != 0u);
   results[g.x] = Result(h.t, h.face, h.mat, h.steps, h.cell, select(0u, 1u, h.hit));
 }
