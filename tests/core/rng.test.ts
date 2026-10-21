@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fnv1a64 } from '../../src/core/hash';
+import { fnv1a64, hash32, hash32x4 } from '../../src/core/hash';
 import { Rng } from '../../src/core/rng';
 
 describe('hash', () => {
@@ -7,6 +7,13 @@ describe('hash', () => {
     expect(fnv1a64('')).toBe(0xcbf29ce484222325n);
     expect(fnv1a64('field.relief')).toBe(0x0793195090d9f6een);
     expect(fnv1a64('é')).toBe(0x0ac21707b7181e01n);
+  });
+  it('hash32x4 is hash32 with four arguments, unrolled', () => {
+    const r = Rng.root(3);
+    for (let i = 0; i < 1000; i++) {
+      const v = [r.randint(-1e6, 1e6), r.randint(-1e6, 1e6), r.randint(0, 8), r.nextU32()] as const;
+      expect(hash32x4(...v)).toBe(hash32(...v));
+    }
   });
 });
 

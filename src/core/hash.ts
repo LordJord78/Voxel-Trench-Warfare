@@ -36,3 +36,21 @@ export function hash32(...ints: number[]): number {
   h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
   return (h ^ (h >>> 16)) >>> 0;
 }
+
+/**
+ * `hash32(a, b, c, d)` without the rest-parameter array, for the noise lattice's
+ * inner loop. Identical output; tests/core/rng.test.ts holds them together.
+ */
+export function hash32x4(a: number, b: number, c: number, d: number): number {
+  let h = Math.imul(0x2545f491 ^ (a | 0), 0x45d9f3b);
+  h ^= h >>> 16;
+  h = Math.imul(h ^ (b | 0), 0x45d9f3b);
+  h ^= h >>> 16;
+  h = Math.imul(h ^ (c | 0), 0x45d9f3b);
+  h ^= h >>> 16;
+  h = Math.imul(h ^ (d | 0), 0x45d9f3b);
+  h ^= h >>> 16;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  return (h ^ (h >>> 16)) >>> 0;
+}
