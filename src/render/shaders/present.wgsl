@@ -1,6 +1,7 @@
-// To the canvas: the internal image stretched over it, exposure, the ACES fit
-// and a gamma-2.2 encode, as the probe did. Milestone 4's last task adds the
-// bicubic upscale, sharpening and dither.
+// To the canvas: the sharpened internal image upscaled bicubically, exposed,
+// through the ACES fit, gamma-2.2 encoded (the probe's look), and dithered
+// with blue noise below a single 8-bit step, so night skies do not band.
+#include "catmull.wgsl"
 
 struct Present {
   // Internal image size, and the size its texture was allocated at.
@@ -12,8 +13,9 @@ struct Present {
 }
 
 @group(0) @binding(0) var image: texture_2d<f32>;
-@group(0) @binding(1) var linearSampler: sampler;
+@group(0) @binding(1) var linear: sampler;
 @group(0) @binding(2) var<uniform> present: Present;
+@group(0) @binding(3) var dither: texture_2d<u32>;
 
 struct VOut {
   @builtin(position) pos: vec4f,
@@ -34,6 +36,9 @@ fn aces(x: vec3f) -> vec3f {
 @fragment
 fn fs(v: VOut) -> @location(0) vec4f {
   let uv = v.pos.xy / present.canvas * present.res / present.alloc;
-  let c = textureSampleLevel(image, linearSampler, uv, 0.0).rgb * present.exposure;
-  return vec4f(pow(aces(c), vec3f(1.0 / 2.2)), 1.0);
+  let c = catmullRom(image, linear, uv, present.alloc).rgb * present.exposure;
+  let encoded = pow(aces(c), vec3f(1.0 / 2.2));
+  let rank = textureLoad(dither, vec2i(v.pos.xy) & vec2i(63), 0).r;
+  let noise = (f32(rank) + 0.5) / 4096.0 - 0.5;
+  return vec4f(encoded + noise / 255.0, 1.0);
 }

@@ -8,8 +8,11 @@
  *   atrous   — three edge-stopping filter passes over it, for display (the
  *              history keeps the plain average, so converged edges stay put);
  *   shade    — the image: upsampled light, materials, water, far field,
- *              sky and height fog.
- * A render pass presents it to the canvas. Pipelines compile in parallel and
+ *              sky and height fog;
+ *   taa      — blended into its own reprojected history, which smooths the
+ *              jitter into anti-aliased edges;
+ *   cas      — sharpened back.
+ * A render pass presents it to the canvas: upscaled, tonemapped, dithered. Pipelines compile in parallel and
  * need only the device (see compileFrame), so they can compile while the
  * world generates.
  *
@@ -28,15 +31,17 @@ import { lightBuffer, MAX_LIGHTS, type SceneLight } from './lights';
 import { sceneExtras, sceneGroup, sceneLayout } from './scene';
 import { moduleSource } from './shaders';
 import atrousSrc from './shaders/atrous.wgsl';
+import casSrc from './shaders/cas.wgsl';
 import lightingSrc from './shaders/lighting.wgsl';
 import presentSrc from './shaders/present.wgsl';
 import primarySrc from './shaders/primary.wgsl';
 import shadeSrc from './shaders/shade.wgsl';
+import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { GpuTimer } from './timing';
 
-const PASSES = ['primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'present'] as const;
-type ComputePass = 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade';
+const PASSES = ['primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'present'] as const;
+type ComputePass = 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas';
 type Timed = (typeof PASSES)[number];
 
 export interface RenderStats {
@@ -59,6 +64,8 @@ export interface RendererOptions {
   compiled?: CompiledFrame;
   /** The denoiser: frames of history at most, and its filter's edge widths (render.history_max, atrous_sigma_*). */
   denoise?: { historyMax: number; sigmaLuma: number; sigmaPlane: number };
+  /** Sharpening after TAA, 0 to 1 (render.cas_sharpness). */
+  sharpness?: number;
 }
 
 /** The internal image for a canvas: the canvas itself, or `megapixels` at its aspect if that is smaller. */
@@ -131,22 +138,36 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
       label: 'shade',
       entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), sampled(3, 'float'), sampled(4, 'uint')],
     }),
+    taa: device.createBindGroupLayout({
+      label: 'taa',
+      entries: [
+        sampled(0, 'float'), sampled(1, 'float'), sampled(2, 'float'), storageTexture(3, 'rgba16float'),
+        { binding: 4, visibility: STAGE(), sampler: { type: 'filtering' } },
+      ],
+    }),
+    cas: device.createBindGroupLayout({
+      label: 'cas',
+      entries: [sampled(0, 'float'), storageTexture(1, 'rgba16float')],
+    }),
     present: device.createBindGroupLayout({
       label: 'present',
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } },
       ],
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [primary, lighting, temporal, atrous, shade, present] = await Promise.all([
+  const [primary, lighting, temporal, atrous, shade, taa, cas, present] = await Promise.all([
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
     compute(device, 'temporal', temporalSrc, [scene, layouts.temporal]),
     compute(device, 'atrous', atrousSrc, [scene, layouts.atrous]),
     compute(device, 'shade', shadeSrc, [scene, layouts.shade]),
+    compute(device, 'taa', taaSrc, [scene, layouts.taa]),
+    compute(device, 'cas', casSrc, [scene, layouts.cas]),
     device.createRenderPipelineAsync({
       label: 'present',
       layout: device.createPipelineLayout({ bindGroupLayouts: [layouts.present] }),
@@ -155,7 +176,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
       primitive: { topology: 'triangle-list' },
     }),
   ]);
-  return { scene, layouts, pipelines: { primary, lighting, temporal, atrous, shade, present }, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { primary, lighting, temporal, atrous, shade, taa, cas, present }, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -262,6 +283,9 @@ export class Renderer {
     make('gHit', 'rg32uint', this.res);
     make('gMotion', 'rgba16float', this.res);
     make('colour', 'rgba16float', this.res);
+    make('taa0', 'rgba16float', this.res);
+    make('taa1', 'rgba16float', this.res);
+    make('sharp', 'rgba16float', this.res);
     const light = this.lightResolution;
     make('lNoisy', 'rgba16float', light);
     for (const k of [0, 1]) {
@@ -292,14 +316,22 @@ export class Renderer {
         atrous2: group('atrous', [view('filteredA'), view('varianceA'), view(`hHit${cur}`), view('filteredB'), view('varianceB'), { buffer: this.steps[1] }]),
         atrous3: group('atrous', [view('filteredB'), view('varianceB'), view(`hHit${cur}`), view('denoised'), view('varianceA'), { buffer: this.steps[2] }]),
         shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('denoised'), view(`hHit${cur}`)]),
-        present: group('present', [view('colour'), this.sampler, { buffer: this.presentBuffer }]),
+        taa: group('taa', [view('colour'), view('gMotion'), view(`taa${prev}`), view(`taa${cur}`), this.sampler]),
+        cas: group('cas', [view(`taa${cur}`), view('sharp')]),
+        present: group('present', [view('sharp'), this.sampler, { buffer: this.presentBuffer }, this.compiled.noise.createView()]),
       };
     });
     this.resetNext = true;
     this.prevPose = null;
   }
 
-  /** A texture by name; a history (hDepth, hHit, hColour, hMoments) is the one the last frame wrote. */
+  /** The scene bind group the last frame used, for running a single pass in tests. */
+  sceneBindGroup(): GPUBindGroup {
+    if (!this.sceneGroup) throw new Error('no frame rendered yet');
+    return this.sceneGroup;
+  }
+
+  /** A texture by name; a history (hDepth, hHit, hColour, hMoments, taa) is the one the last frame wrote. */
   texture(name: string): GPUTexture {
     const last = (this.frameIndex + 1) & 1;
     const t = this.textures[name] ?? this.textures[`${name}${last}`];
@@ -346,6 +378,7 @@ export class Renderer {
     w.set('historyMax', denoise.historyMax);
     w.set('sigmaLuma', denoise.sigmaLuma);
     w.set('sigmaPlane', denoise.sigmaPlane);
+    w.set('casSharpness', this.options.sharpness ?? 0.4);
     writeSky(w, this.sky);
     w.set('far', this.far.info);
     device.queue.writeBuffer(this.frameBuffer, 0, w.buffer);
@@ -368,6 +401,8 @@ export class Renderer {
     pass('atrous2', 'atrous', light);
     pass('atrous3', 'atrous', light);
     pass('shade', 'shade', this.res);
+    pass('taa', 'taa', this.res);
+    pass('cas', 'cas', this.res);
     if (this.context) {
       const present = new Float32Array([this.res[0], this.res[1], this.res[0], this.res[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, 0]);
       device.queue.writeBuffer(this.presentBuffer, 0, present);

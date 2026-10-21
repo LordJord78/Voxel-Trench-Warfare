@@ -63,6 +63,8 @@ export const FRAME: StructDef = {
     ['historyMax', 'f32'],
     ['sigmaLuma', 'f32'],
     ['sigmaPlane', 'f32'],
+    // Contrast-adaptive sharpening after TAA, 0 to 1 (render.cas_sharpness).
+    ['casSharpness', 'f32'],
     // The key light (sun or moon) and the sky, in linear RGB with intensity.
     ['keyDir', 'vec3f'],
     ['keyCone', 'f32'],
