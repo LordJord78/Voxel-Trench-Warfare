@@ -21,6 +21,7 @@ try {
     status: document.getElementById('status').textContent,
     error: window.__trenchline.error,
     ms: window.__trenchline.ms,
+    promptMs: window.__trenchline.promptMs,
     timings: window.__trenchline.world?.timings,
   }));
   // The dev server serves sources, so the page can fingerprint its own world.
@@ -33,8 +34,9 @@ try {
   else {
     const t = report.timings;
     const core = t.fill + t.assemble + t.events;
-    console.log(`fill + assemble + events: ${Math.round(core)} ms (${core < 4000 ? 'under' : 'OVER'} 4 s); whole page: ${report.ms} ms`);
-    if (core >= 4000) process.exitCode = 1;
+    console.log(`fill + assemble + events: ${Math.round(core)} ms; click to play at ${report.promptMs} ms (${report.promptMs <= 4000 ? 'within' : 'OVER'} 4 s)`);
+    // The spec's measure: navigation to the click-to-play prompt.
+    if (!(report.promptMs <= 4000)) process.exitCode = 1;
     if (print) console.log(`fingerprint: ${print}`);
   }
 } finally {
