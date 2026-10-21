@@ -1,0 +1,53 @@
+import { describe, expect, it } from 'vitest';
+import { Rng } from '../../src/core/rng';
+import { cameraBasis, halton, jitter, projectToPixel, rayDir, type CameraPose } from '../../src/render/camera';
+
+const close = (a: readonly number[], b: readonly number[], eps = 1e-12) => a.every((v, i) => Math.abs(v - b[i]) <= eps);
+
+describe('the camera', () => {
+  it('looks down +z with +x to the right at yaw 0, as the Python game did', () => {
+    const b = cameraBasis(0, 0);
+    expect(close(b.forward, [0, 0, 1])).toBe(true);
+    expect(close(b.right, [1, 0, 0])).toBe(true);
+    expect(close(b.up, [0, 1, 0])).toBe(true);
+  });
+  it('turns toward +x at yaw 90', () => {
+    const b = cameraBasis(90, 0);
+    expect(close(b.forward, [1, 0, 0])).toBe(true);
+    expect(close(b.right, [0, 0, -1])).toBe(true);
+  });
+  it('jitters by the Halton (2, 3) sequence', () => {
+    expect([halton(1, 2), halton(2, 2), halton(3, 2)]).toEqual([0.5, 0.25, 0.75]);
+    expect(halton(1, 3)).toBeCloseTo(1 / 3, 15);
+    expect(halton(2, 3)).toBeCloseTo(2 / 3, 15);
+    const [jx, jy] = jitter(0);
+    expect(jx).toBe(0);
+    expect(jy).toBeCloseTo(-1 / 6, 15);
+    expect(jitter(16)).toEqual(jitter(0));
+  });
+  it('projects each pixel ray back onto its pixel', () => {
+    const pose: CameraPose = { position: [10, 2, 30], yaw: 37, pitch: -12 };
+    const res: [number, number] = [1600, 900];
+    const rng = Rng.root(1);
+    for (let i = 0; i < 100; i++) {
+      const px = rng.uniform(0, res[0]);
+      const py = rng.uniform(0, res[1]);
+      const d = rayDir(pose, res, px, py);
+      const point: [number, number, number] = [pose.position[0] + d[0] * 25, pose.position[1] + d[1] * 25, pose.position[2] + d[2] * 25];
+      const back = projectToPixel(pose, res, point)!;
+      expect(Math.abs(back[0] - px)).toBeLessThan(1e-9);
+      expect(Math.abs(back[1] - py)).toBeLessThan(1e-9);
+    }
+    expect(projectToPixel(pose, res, [pose.position[0] - 100 * Math.sin((37 * Math.PI) / 180), 2, pose.position[2] - 100 * Math.cos((37 * Math.PI) / 180)])).toBeNull();
+  });
+  it('spans 90 degrees across the screen', () => {
+    const pose: CameraPose = { position: [0, 0, 0], yaw: 20, pitch: 10 };
+    const res: [number, number] = [1500, 1000];
+    const { forward } = cameraBasis(pose.yaw, pose.pitch);
+    const centre = rayDir(pose, res, 750, 500);
+    expect(close(centre, forward, 1e-12)).toBe(true);
+    const edge = rayDir(pose, res, 0, 500);
+    const angle = Math.acos(edge[0] * forward[0] + edge[1] * forward[1] + edge[2] * forward[2]);
+    expect(Math.abs(angle - Math.PI / 4)).toBeLessThan(1e-9);
+  });
+});

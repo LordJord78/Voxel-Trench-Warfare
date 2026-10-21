@@ -108,17 +108,31 @@ fn traceWorld(ro: vec3f, rd: vec3f, tMax: f32, wantMaterial: bool) -> Hit {
   let pyramidOn = (frame.flags & FLAG_PYRAMID_OFF) == 0u && frame.world.levels > 0u;
   let topLevel = min(frame.world.levels, 7u) - 1u;
   var askedBrick = vec3i(-1);
+  // The sector and brick the last step was in: a ray walking voxels through a
+  // dense brick reads only the mask, not the sector and table again.
+  var sector = vec3i(-1);
+  var sectorFull = false;
+  var brick = vec3i(-1);
+  var e = 0u;
 
   for (var i = 0u; i < MAX_STEPS; i++) {
     h.steps = i + 1u;
     var size = 1;
     var ask = false;
-    let brick = cell >> vec3u(3u);
-    if (!sectorOccupied(cell >> vec3u(5u))) {
+    let s = cell >> vec3u(5u);
+    if (any(s != sector)) {
+      sector = s;
+      sectorFull = sectorOccupied(s);
+    }
+    if (!sectorFull) {
       size = 32;
       ask = true;
     } else {
-      let e = brickEntry(brick);
+      let b = cell >> vec3u(3u);
+      if (any(b != brick)) {
+        brick = b;
+        e = brickEntry(b);
+      }
       if (e == 0u) {
         size = 8;
         ask = true;

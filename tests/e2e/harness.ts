@@ -3,8 +3,9 @@
  * from Playwright as window.harness[name](args). A case returns plain data.
  */
 import { cases as device } from './cases/device';
+import { cases as primary } from './cases/primary';
 import { cases as traverse } from './cases/traverse';
 import { cases as world } from './cases/world';
 
-const registry: Record<string, (args?: never) => Promise<unknown>> = { ...device, ...world, ...traverse };
+const registry: Record<string, (args?: never) => Promise<unknown>> = { ...device, ...world, ...traverse, ...primary };
 (window as unknown as { harness: typeof registry }).harness = registry;
