@@ -32,6 +32,8 @@ export function standardViews(plan: WorldPlan, spawn: Pick<Spawn, 'position' | '
   const dugout = front.dugouts[0] ?? plan.lines.flatMap((l) => l.dugouts)[0];
   const dcx = ((dugout.lo[0] + dugout.hi[0]) / 2) * v;
   const dcz = ((dugout.lo[2] + dugout.hi[2]) / 2) * v;
+  const ex = dugout.entrance[0] * v;
+  const ez = dugout.entrance[2] * v;
   const nmlZ = ((p.layout.front + p.layout.enemyFront) / 2) * v;
   const mid = (p.dims.x / 2) * v;
   const hamletZ = ((p.layout.hamlet[0] + p.layout.hamlet[1]) / 2) * v;
@@ -42,10 +44,11 @@ export function standardViews(plan: WorldPlan, spawn: Pick<Spawn, 'position' | '
     step: { position: [sx * v, bay.stepTopY * v + eye, sz * v], yaw: bay.facing > 0 ? 0 : 180, pitch: 0, time: 0 },
     'nml-night': { position: [mid, ground(mid, nmlZ) + eye, nmlZ], yaw: 0, pitch: 0, time: 1 },
     overview: { position: [mid, 48, p.layout.reserve * v - 30], yaw: 0, pitch: -22, time: 0 },
+    // Just inside the curtain, looking across the chamber at the lantern on the back wall.
     dugout: {
-      position: [dcx, (dugout.dugFloor + 1) * v + eye, dcz],
-      yaw: facing(dcx, dcz, dugout.entrance[0] * v, dugout.entrance[2] * v),
-      pitch: 0,
+      position: [dcx + (ex - dcx) * 0.6, (dugout.dugFloor + 1) * v + eye, dcz + (ez - dcz) * 0.6],
+      yaw: facing(ex, ez, dcx, dcz),
+      pitch: -8,
       time: 0,
     },
     hamlet: {

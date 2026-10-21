@@ -7,7 +7,8 @@
  *   temporal — that light blended into its reprojected history;
  *   atrous   — three edge-stopping filter passes over it, for display (the
  *              history keeps the plain average, so converged edges stay put);
- *   shade    — the image, from the G-buffer and the denoised lighting.
+ *   shade    — the image: upsampled light, materials, water, far field,
+ *              sky and height fog.
  * A render pass presents it to the canvas. Pipelines compile in parallel and
  * need only the device (see compileFrame), so they can compile while the
  * world generates.
@@ -27,10 +28,10 @@ import { lightBuffer, MAX_LIGHTS, type SceneLight } from './lights';
 import { sceneExtras, sceneGroup, sceneLayout } from './scene';
 import { moduleSource } from './shaders';
 import atrousSrc from './shaders/atrous.wgsl';
-import debugSrc from './shaders/debug.wgsl';
 import lightingSrc from './shaders/lighting.wgsl';
 import presentSrc from './shaders/present.wgsl';
 import primarySrc from './shaders/primary.wgsl';
+import shadeSrc from './shaders/shade.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { GpuTimer } from './timing';
 
@@ -128,7 +129,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
     shade: device.createBindGroupLayout({
       label: 'shade',
-      entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), sampled(3, 'float')],
+      entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), sampled(3, 'float'), sampled(4, 'uint')],
     }),
     present: device.createBindGroupLayout({
       label: 'present',
@@ -145,7 +146,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
     compute(device, 'temporal', temporalSrc, [scene, layouts.temporal]),
     compute(device, 'atrous', atrousSrc, [scene, layouts.atrous]),
-    compute(device, 'shade', debugSrc, [scene, layouts.shade]),
+    compute(device, 'shade', shadeSrc, [scene, layouts.shade]),
     device.createRenderPipelineAsync({
       label: 'present',
       layout: device.createPipelineLayout({ bindGroupLayouts: [layouts.present] }),
@@ -290,7 +291,7 @@ export class Renderer {
         atrous1: group('atrous', [view(`hColour${cur}`), view('variance'), view(`hHit${cur}`), view('filteredA'), view('varianceA'), { buffer: this.steps[0] }]),
         atrous2: group('atrous', [view('filteredA'), view('varianceA'), view(`hHit${cur}`), view('filteredB'), view('varianceB'), { buffer: this.steps[1] }]),
         atrous3: group('atrous', [view('filteredB'), view('varianceB'), view(`hHit${cur}`), view('denoised'), view('varianceA'), { buffer: this.steps[2] }]),
-        shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('denoised')]),
+        shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('denoised'), view(`hHit${cur}`)]),
         present: group('present', [view('colour'), this.sampler, { buffer: this.presentBuffer }]),
       };
     });
