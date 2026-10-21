@@ -60,14 +60,27 @@ firing_step_max_m   = 3.50     # past this the parapet is a redoubt
 
 # Crest clearance is NOT a global constant. Each fire bay measures the ground it
 # has to see over, raises its step until a standing eye clears it, and builds
-# its crest at step_top + floor(standing_eye / voxel_size). That puts a standing
-# eye 0.12 m over its own crest and a crouched eye 0.40 m under it, in every
-# bay, whatever the terrain is doing. Generation asserts it.
+# its crest at step_top + (standing eye - crest_clearance_m). That puts a
+# standing eye 0.12 m over its own crest and a crouched eye 0.40 m under it, in
+# every bay, whatever the terrain is doing. Generation asserts it. (At 0.5 m
+# voxels the Python game got the same 0.12 m by rounding the eye down to the
+# grid; at 10 cm that rounding would leave 2 cm, so the clearance is stated.)
 sight_range_m       = 60.0     # how far out the ground has to read
 sight_near_m        = 14.0     # near band, where a rise walls you in outright
 sight_percentile    = 88.0     # of corridor ground the standing eye must clear
 sight_margin_m      = 0.40     # over that ground: covers ejecta
 crest_smoothing_m   = 1.00     # max crest drop between neighbouring bays
+crest_clearance_m   = 0.12     # standing eye over its own crest
+crest_flat_m        = 1.00     # flat top of a parapet before it falls away at 45°
+
+# Treads at 10 cm are real stairs, not one-voxel ledges: 0.30 m deep and 0.30 m
+# up, inside the 0.55 m the player can step. The across-bay flight carries what
+# it can in step_tread_m; the rest climbs along the bay, as in the Python game.
+tread_depth_m       = 0.30
+tread_rise_m        = 0.30
+line_margin_m       = 6.0      # lines end in closed walls this far inside the map
+floor_min_m         = 1.5      # no duckboard deeper than this above the map floor
+floor_below_top_m   = 3.0      # nor closer than this under the map ceiling
 
 # Ploughed farmland: broad swells, not chop. Amplitude is what gives no-man's-
 # land shape; wavelength is what decides whether that shape blocks the peek.
@@ -81,7 +94,8 @@ crest_smoothing_m   = 1.00     # max crest drop between neighbouring bays
 [world.field]
 relief_amplitude_m  = 2.00     # +/- about the nominal ground level
 relief_octaves      = 4
-relief_base_cells   = 3        # ~42 m at the base octave
+relief_cell_m       = 42.7     # base octave's cell, in metres so a bigger map
+                               # keeps the same ground rather than stretching it
 relief_persistence  = 0.34     # < 0.5: the fine octaves stay quiet
 
 # Both lines sit on the shoulders of a shallow dry watercourse, which is what
@@ -93,22 +107,46 @@ relief_persistence  = 0.34     # < 0.5: the fine octaves stay quiet
 # lake. Set to 0.0 for a flat field.
 swale_depth_m       = 1.50
 swale_margin_m      = 5.0      # how far past each line the dip reaches
+ditches             = 3        # field drains, cut across the map with a drift
 
 # Vertical silhouette: the only thing that reads at 40 m from an eye 1.1 m over
 # a flat field, because it is seen against the sky rather than edge-on. Ground
 # relief cannot do this at any amplitude; that was measured, not assumed.
 [world.clutter]
-fence_lines         = 3
-poles               = 7
+fence_lines         = 6        # doubled with the map's width
+poles               = 14
 
-# Battlefield layout, in voxels along z (0 = friendly rear, max = enemy rear).
+# Battlefield layout, in metres along z (0 = friendly rear, 256 = enemy rear)
+# and along x. The Python map was 128 m square with two lines a side; at 256 m
+# each side gets a reserve line, ours a hamlet behind it and theirs a wood.
 [world.layout]
-support_line_m      = 20.0
-front_line_m        = 42.0
-enemy_front_m       = 93.0
-enemy_support_m     = 113.0
-comm_trench_x_m     = [28.0, 84.0]
-shelterbelt_z_m     = [12.0, 75.0, 122.0]
+reserve_line_m        = 52.0
+support_line_m        = 84.0
+front_line_m          = 106.0
+enemy_front_m         = 158.0
+enemy_support_m       = 180.0
+enemy_reserve_m       = 206.0
+comm_trench_x_m       = [44.0, 128.0, 212.0]
+enemy_comm_trench_x_m = [70.0, 186.0]
+shelterbelt_z_m       = [44.0, 132.0, 214.0]
+hamlet_z_m            = [8.0, 40.0]
+wood_z_m              = [220.0, 252.0]
+farm_m                = [66.0, 123.0]    # [x, z]: in no man's land, friendly half
+culvert_m             = [180.0, 95.0]    # under the track behind our front line
+hull_m                = [141.0, 137.0]   # out in the open, where reaching it costs you
+
+# Shell holes. Radius is drawn from the Python game's distribution, in metres:
+# min + gamma(shape, scale), capped. Open-field craters are bowls and rims in
+# the terrain; direct hits on the lines are carved and collapsed at load.
+[world.craters]
+nml_count             = 300
+rear_count            = 120
+direct_hits_per_line  = 6
+radius_min_m          = 0.70
+gamma_shape           = 2.4
+gamma_scale_m         = 0.575
+radius_cap_m          = 3.25
+direct_cap_m          = 2.10
 
 [player]
 mass                = 82.0

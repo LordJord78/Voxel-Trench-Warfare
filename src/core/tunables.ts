@@ -8,14 +8,14 @@
 import raw from '../../data/tunables.toml';
 
 export class Tunables {
-  private readonly raw: Record<string, unknown>;
+  private readonly rawData: Record<string, unknown>;
 
   constructor(raw: Record<string, unknown>) {
-    this.raw = raw;
+    this.rawData = raw;
   }
 
   get(key: string): unknown {
-    let node: unknown = this.raw;
+    let node: unknown = this.rawData;
     for (const part of key.split('.')) {
       if (node === null || typeof node !== 'object' || Array.isArray(node) || !(part in node)) {
         throw new Error(`tunable '${key}' not found (missing '${part}')`);
@@ -46,6 +46,11 @@ export class Tunables {
     const value = this.f(key);
     if (!Number.isInteger(value)) throw new TypeError(`tunable '${key}' is not an integer: ${value}`);
     return value;
+  }
+
+  /** A deep copy of the whole file, for deriving a variant (tests shrink the world this way). */
+  raw(): Record<string, unknown> {
+    return JSON.parse(JSON.stringify(this.rawData)) as Record<string, unknown>;
   }
 
   section(key: string): Record<string, unknown> {
