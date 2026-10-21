@@ -129,3 +129,20 @@ test('an exception in the frame loop stops the game and says so', async ({ page 
   await page.waitForTimeout(300);
   expect(await hooks(page, (h) => h.frames())).toBe(frames);
 });
+
+for (const paused of [false, true]) {
+  test(`a failure while ${paused ? 'paused' : 'playing'} shows its message, not the pause menu`, async ({ page }) => {
+    await openGame(page);
+    await page.locator('#play').click();
+    await hooks(page, (h) => h.waitFrames(5));
+    if (paused) {
+      await page.keyboard.press('Escape');
+      await expect(page.locator('#pause')).toBeVisible();
+    }
+    await hooks(page, (h) => h.loseDevice());
+    await expect(page.locator('#status')).toContainText('The graphics device was lost');
+    await expect(page.locator('#status')).toBeVisible();
+    await expect(page.locator('#pause')).toBeHidden();
+    await expect(page.locator('#controls')).toBeHidden();
+  });
+}

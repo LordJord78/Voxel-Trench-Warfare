@@ -61,5 +61,6 @@ export class LoadingScreen {
     this.root.classList.add('failed');
     this.status.textContent = message;
     this.play.hidden = true;
+    this.controls.hidden = true;
   }
 }

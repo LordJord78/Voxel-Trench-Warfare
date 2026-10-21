@@ -51,6 +51,8 @@ const hooks: Record<string, unknown> = { ready: false, phases: loading.phases };
 /** Set once the game has stopped for good: its message stays, and no more frames are drawn. */
 let stopped = false;
 /** `?check=<run>`: measure and photograph the standard views and report them (check.ts). */
+/** `?dev`: the developer keys work without F3's overlay open. */
+const devMode = new URLSearchParams(location.search).has('dev');
 const checkRun = (() => {
   const run = new URLSearchParams(location.search).get('check');
   return run && /^[a-z0-9-]+$/.test(run) ? run : null;
@@ -61,6 +63,8 @@ if (checkRun) loading.onPhase = (stage) => void reporter(checkRun)('progress.jso
 function stop(message: string): void {
   if (stopped) return;
   stopped = true;
+  // The message goes over everything: a pause menu left open would hide it.
+  document.getElementById('pause')!.hidden = true;
   loading.fail(message);
   hooks.error = message;
   hooks.ready = true;
@@ -192,7 +196,7 @@ async function start(): Promise<void> {
     if (lock) lockPointer();
   };
   const pause = () => {
-    if (mode !== 'playing' && mode !== 'fly') return;
+    if (stopped || (mode !== 'playing' && mode !== 'fly')) return;
     resumeTo = mode;
     mode = 'paused';
     input.blur();
@@ -202,7 +206,7 @@ async function start(): Promise<void> {
     pauseMenu.open(settings, timeOfDay);
   };
   const resume = () => {
-    if (mode !== 'paused') return;
+    if (stopped || mode !== 'paused') return;
     pauseMenu.close();
     mode = resumeTo;
     lockPointer();
@@ -252,7 +256,10 @@ async function start(): Promise<void> {
       return;
     }
     if (mode === 'paused' || mode === 'loading') return;
+    // The developer keys (views, fly, time, quality) wait behind F3, so a visitor's 1 or T does nothing strange.
+    const developer = overlay.visible || devMode;
     if (e.code === 'Backquote' && !e.repeat) {
+      if (!developer) return;
       if (mode === 'fly') mode = 'playing';
       else enterFly(lastPose);
       return;
@@ -261,7 +268,7 @@ async function start(): Promise<void> {
     if (mode === 'playing') input.keyDown(e.code, e.repeat);
     const action = actionFor(e.code);
     // Held keys repeat only the time steps.
-    if (!action || (e.repeat && action.kind !== 'time-step')) return;
+    if (!action || (e.repeat && action.kind !== 'time-step') || (action.kind !== 'overlay' && !developer)) return;
     e.preventDefault();
     act(action);
   });
