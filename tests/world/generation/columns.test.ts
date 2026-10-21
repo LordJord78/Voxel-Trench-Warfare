@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadTunables } from '../../../src/core/tunables';
-import { columnModel } from '../../../src/world/generation/columns';
+import { columnModel, columnTopAt } from '../../../src/world/generation/columns';
 import { genParams } from '../../../src/world/generation/params';
 import { planWorld } from '../../../src/world/generation/plan';
 
@@ -48,5 +48,14 @@ describe('column model', () => {
     const c = (Math.floor(cross.walkX) - mm.x0) * mm.nz + Math.floor(cross.walkZ);
     expect(mm.spoilTop[c]).toBe(-1);
     expect(mm.floor[c]).toBeGreaterThan(0);
+  });
+  it('keeps the columns of a map deeper than 4096 voxels apart when it caches them', () => {
+    const deep = genParams(loadTunables(), (raw) => {
+      (raw.world as Record<string, unknown>).size_z_m = 512;
+    });
+    const a = planWorld(deep, 7);
+    const b = planWorld(deep, 7);
+    columnTopAt(a, 600, 4096);
+    expect(columnTopAt(a, 601, 0)).toBe(columnTopAt(b, 601, 0));
   });
 });

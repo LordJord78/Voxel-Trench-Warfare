@@ -35,6 +35,8 @@ export async function generateWorld(
   const bandCount = plan.params.dims.x / BAND;
   const all = Array.from({ length: bandCount }, (_, i) => i);
   const farPromise = farField ? time('farField', farField) : null;
+  // It is awaited last; a failure before then is reported there, not as unhandled.
+  farPromise?.catch(() => {});
   const bands = await time('fill', () => runBands(all));
   bands.sort((a, b) => a.band - b.band);
   const map = await time('assemble', () => assemble(plan, bands));

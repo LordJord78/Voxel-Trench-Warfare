@@ -26,8 +26,12 @@ export async function generateInWorkers(seed: number, onProgress?: Progress): Pr
 
   const far = emptyFarField(plan);
   const rowsPerJob = 128;
-  let farDone!: () => void;
-  const farReady = new Promise<FarField>((resolve) => (farDone = () => resolve(far)));
+  let farDone!: (ff: FarField) => void;
+  let farFail!: (error: Error) => void;
+  const farReady = new Promise<FarField>((resolve, reject) => {
+    farDone = resolve;
+    farFail = reject;
+  });
 
   const run = (jobs: Job[], onResult: (data: any) => void, phase: string): Promise<void> =>
     new Promise((resolve, reject) => {
@@ -48,6 +52,7 @@ export async function generateInWorkers(seed: number, onProgress?: Progress): Pr
           else feed(w);
         };
         w.onerror = (event) => reject(new Error(`generation worker failed: ${event.message}`));
+        w.onmessageerror = () => reject(new Error('a generation worker sent a message that could not be read'));
         feed(w);
       }
     });
@@ -63,7 +68,7 @@ export async function generateInWorkers(seed: number, onProgress?: Progress): Pr
         void run(rows, (data) => {
           far.height.set(data.height, data.row0 * far.size);
           far.material.set(data.material, data.row0 * far.size);
-        }, 'farfield').then(farDone);
+        }, 'farfield').then(() => farDone(far), farFail);
         return results;
       },
       () => farReady,

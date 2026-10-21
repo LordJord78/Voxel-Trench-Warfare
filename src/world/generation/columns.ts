@@ -304,7 +304,7 @@ export function columnTopAt(plan: WorldPlan, x: number, z: number): number {
     points = new Map();
     pointCache.set(plan, points);
   }
-  const key = xi * 4096 + zi;
+  const key = xi * plan.params.dims.z + zi;
   let top = points.get(key);
   if (top === undefined) {
     const m = columnModel(plan, xi, xi + 1, zi, zi + 1);
