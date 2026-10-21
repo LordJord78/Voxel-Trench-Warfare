@@ -57,6 +57,8 @@ export const FRAME: StructDef = {
     ['lightCount', 'u32'],
     ['voxel', 'f32'],
     ['timeOfDay', 'f32'],
+    // Rays each lighting pixel traces: always 3, read from here so shaders cannot unroll their loop over them.
+    ['lightRays', 'u32'],
     // The key light (sun or moon) and the sky, in linear RGB with intensity.
     ['keyDir', 'vec3f'],
     ['keyCone', 'f32'],

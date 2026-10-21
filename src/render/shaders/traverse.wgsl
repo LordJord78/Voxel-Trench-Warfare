@@ -117,7 +117,8 @@ fn traceWorld(ro: vec3f, rd: vec3f, tMax: f32, wantMaterial: bool) -> Hit {
 
   for (var i = 0u; i < MAX_STEPS; i++) {
     h.steps = i + 1u;
-    var size = 1;
+    // The empty cell to step out of: a voxel, a brick (8) or a sector (32), as a shift.
+    var shift = 0u;
     var ask = false;
     let s = cell >> vec3u(5u);
     if (any(s != sector)) {
@@ -125,7 +126,7 @@ fn traceWorld(ro: vec3f, rd: vec3f, tMax: f32, wantMaterial: bool) -> Hit {
       sectorFull = sectorOccupied(s);
     }
     if (!sectorFull) {
-      size = 32;
+      shift = 5u;
       ask = true;
     } else {
       let b = cell >> vec3u(3u);
@@ -134,7 +135,7 @@ fn traceWorld(ro: vec3f, rd: vec3f, tMax: f32, wantMaterial: bool) -> Hit {
         e = brickEntry(b);
       }
       if (e == 0u) {
-        size = 8;
+        shift = 3u;
         ask = true;
       } else if ((e & UNIFORM_BIT) != 0u) {
         h.hit = true;
@@ -173,8 +174,8 @@ fn traceWorld(ro: vec3f, rd: vec3f, tMax: f32, wantMaterial: bool) -> Hit {
       var span = 0;
       for (var k = 0u; k <= topLevel; k++) {
         let s = 8 << k;
-        let px = (cell.x / s) * s;
-        let pz = (cell.z / s) * s;
+        let px = (cell.x >> (k + 3u)) << (k + 3u);
+        let pz = (cell.z >> (k + 3u)) << (k + 3u);
         let top = pyramidAt(k, cell.x >> 3u, cell.z >> 3u);
         if (yNow < top) {
           break;
@@ -215,8 +216,9 @@ fn traceWorld(ro: vec3f, rd: vec3f, tMax: f32, wantMaterial: bool) -> Hit {
       }
     }
 
-    // Step out of the current empty cell of `size`.
-    let cmin = (cell / vec3i(size)) * size;
+    // Step out of the current empty cell.
+    let size = 1 << shift;
+    let cmin = (cell >> vec3u(shift)) << vec3u(shift);
     let bound = vec3f(select(cmin, cmin + size, up));
     let te = select(vec3f(1e30), (bound - ro) * inv, moving);
     var ax = 2;

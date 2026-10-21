@@ -106,13 +106,15 @@ export function stampDugout(sink: VoxelSink, clip: Clip, d: DugoutPlan, p: GenPa
   box(sink, clip, gx0, gx1, d.dugFloor + 1, Math.min(airY1, headroom), gz0, gz1, P.CLOTH);
 
   // A lantern on the back wall at 1.6 m, centred.
-  const lanternY = d.dugFloor + 1 + vx(1.6, p.voxel);
-  if (d.longAxis === 0) {
-    const x = (cx0 + cx1) >> 1;
-    const z = d.away < 0 ? cz0 : cz1 - 1;
-    if (x >= clip.x0 && x < clip.x1) sink.set(x, lanternY, z, P.LANTERN_GLOW);
-  } else {
-    const z = (cz0 + cz1) >> 1;
-    if (cx0 >= clip.x0 && cx0 < clip.x1) sink.set(cx0, lanternY, z, P.LANTERN_GLOW);
-  }
+  const [lx, ly, lz] = lanternVoxel(d, p);
+  if (lx >= clip.x0 && lx < clip.x1) sink.set(lx, ly, lz, P.LANTERN_GLOW);
+}
+
+/** The voxel of a dugout's lantern glass: on the back wall, centred, 1.6 m up. */
+export function lanternVoxel(d: DugoutPlan, p: GenParams): [number, number, number] {
+  const [cx0, , cz0] = d.lo;
+  const [cx1, , cz1] = d.hi;
+  const y = d.dugFloor + 1 + vx(1.6, p.voxel);
+  if (d.longAxis === 0) return [(cx0 + cx1) >> 1, y, d.away < 0 ? cz0 : cz1 - 1];
+  return [cx0, y, (cz0 + cz1) >> 1];
 }

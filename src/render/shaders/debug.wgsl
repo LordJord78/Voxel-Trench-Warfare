@@ -1,5 +1,6 @@
-// A plain shade from the G-buffer, until lighting exists: palette albedo with
-// the probe's per-voxel variation, lit by a fixed direction, and the sky.
+// A plain shade from the G-buffer and the raw lighting, until the denoiser and
+// the real shading pass arrive: palette albedo with the probe's per-voxel
+// variation, the key light times its visibility, sky and point light, the sky.
 #include "palette.wgsl"
 #include "common.wgsl"
 #include "camera.wgsl"
@@ -10,6 +11,7 @@
 @group(1) @binding(0) var gDepth: texture_2d<f32>;
 @group(1) @binding(1) var gHit: texture_2d<u32>;
 @group(1) @binding(2) var outColour: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(3) var lNoisy: texture_2d<f32>;
 
 fn variation(cell: vec3i) -> f32 {
   let v = hash3(cell);
@@ -27,17 +29,19 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let face = (hit.x >> 24u) & 7u;
   var colour: vec3f;
   let rd = cameraRay(frame.cam, vec2f(g.xy) + 0.5 + frameJitter(), vec2f(frame.res));
-  let light = normalize(vec3f(0.4, 0.8, 0.45));
   if (face == 7u) {
     colour = skyColour(rd);
   } else if (face == 6u) {
     let p = frame.cam.origin + rd * textureLoad(gDepth, vec2i(g.xy), 0).r;
-    colour = albedoOf(hit.y >> 16u) * (0.3 + 0.7 * max(dot(farNormalAt(p), light), 0.0));
+    let n = farNormalAt(p);
+    colour = albedoOf(hit.y >> 16u) * (frame.keyColour * max(dot(n, frame.keyDir), 0.0) + skyIrradiance(n));
   } else {
+    // The nearest lighting pixel's raw light, until the denoiser and upsampling arrive.
     let cell = vec3i(i32(hit.x & 0xfffu), i32(hit.y & 0xffffu), i32((hit.x >> 12u) & 0xfffu));
     let mat = hit.y >> 16u;
     let n = faceNormal(face);
-    colour = albedoOf(mat) * variation(cell) * (0.3 + 0.7 * max(dot(n, light), 0.0)) + emissionOf(mat);
+    let l = textureLoad(lNoisy, vec2i(g.xy / frame.lightScale), 0);
+    colour = albedoOf(mat) * variation(cell) * (frame.keyColour * l.a * max(dot(n, frame.keyDir), 0.0) + l.rgb) + emissionOf(mat);
   }
   textureStore(outColour, g.xy, vec4f(colour, 1.0));
 }

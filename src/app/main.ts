@@ -4,10 +4,13 @@
  * front-line bay at dusk. `window.__trenchline` exposes hooks the tests use.
  */
 
+import { loadTunables } from '../core/tunables';
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
 import { FarFieldGpu } from '../render/farfield-gpu';
 import { GpuWorld } from '../render/gpu-world';
+import { sceneLights } from '../render/lights';
 import { compileFrame, Renderer } from '../render/renderer';
+import { frameSky, skyState } from '../render/sky-state';
 import { fingerprint } from '../world/fingerprint';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
@@ -60,6 +63,17 @@ async function start(): Promise<void> {
   const views = standardViews(world.plan, world.spawn);
   const cam = new FlyCam(views.bay);
   let timeOfDay = views.bay.time;
+  // The light follows the time of day; the flares burn as it says.
+  const tun = loadTunables();
+  const lights = sceneLights(world.plan, tun);
+  let litFor = Number.NaN;
+  const light = () => {
+    if (timeOfDay === litFor) return;
+    litFor = timeOfDay;
+    const sky = skyState(tun, timeOfDay);
+    renderer.sky = frameSky(sky, tun);
+    renderer.setLights(lights, sky.flares);
+  };
   const keys = new Set<string>();
   const look: [number, number] = [0, 0];
   window.addEventListener('keydown', (e) => keys.add(e.code));
@@ -83,6 +97,7 @@ async function start(): Promise<void> {
     cam.update(dt, keys, look);
     look[0] = 0;
     look[1] = 0;
+    light();
     renderer.render(cam.pose, timeOfDay, now);
     frames++;
     if (snapshot) {

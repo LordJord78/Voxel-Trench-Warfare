@@ -4,7 +4,7 @@ import { FarFieldGpu } from '../../../src/render/farfield-gpu';
 import { FLAGS, FRAME, writeWorldInfo } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
 import { StructWriter } from '../../../src/render/layout';
-import { sceneGroup, sceneLayout } from '../../../src/render/scene';
+import { sceneExtras, sceneGroup, sceneLayout } from '../../../src/render/scene';
 import { moduleSource } from '../../../src/render/shaders';
 import traceTest from '../shaders/trace-test.wgsl';
 import { gpu, readBuffer } from '../support/gpu';
@@ -118,7 +118,7 @@ export const cases = {
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
       pass.setPipeline(pipeline);
-      pass.setBindGroup(0, sceneGroup(device, scene, frameBuffer, world, far));
+      pass.setBindGroup(0, sceneGroup(device, scene, { frame: frameBuffer, world, far, ...sceneExtras(device) }));
       pass.setBindGroup(1, device.createBindGroup({ layout: local, entries: [{ binding: 0, resource: { buffer: rayBuffer } }, { binding: 1, resource: { buffer: results } }] }));
       pass.dispatchWorkgroups(Math.ceil(count / 64));
       pass.end();
