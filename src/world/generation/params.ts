@@ -55,6 +55,8 @@ export interface GenParams {
     farm: [number, number]; culvert: [number, number]; hull: [number, number];
   };
   clutter: { fenceLines: number; poles: number };
+  /** From [destruction]: what a shell spares, its core, and the rind it shakes loose. */
+  destruction: { hardLimit: number; core: number; loosen: number };
   craters: {
     nml: number; rear: number; directPerLine: number; radiusMin: number;
     gammaShape: number; gammaScale: number; radiusCap: number; directCap: number;
@@ -203,6 +205,11 @@ export function genParams(tun: Tunables, override?: (raw: Record<string, unknown
     },
     layout,
     clutter: { fenceLines: tun.i('world.clutter.fence_lines'), poles: tun.i('world.clutter.poles') },
+    destruction: {
+      hardLimit: tun.f('destruction.resists_above_hardness'),
+      core: tun.f('destruction.core_radius_scale'),
+      loosen: tun.f('destruction.loosen_radius_scale'),
+    },
     craters: {
       nml: tun.i('world.craters.nml_count'),
       rear: tun.i('world.craters.rear_count'),

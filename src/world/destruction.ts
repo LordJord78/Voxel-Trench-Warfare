@@ -8,8 +8,9 @@
 
 import type { Rng } from '../core/rng';
 import type { BrickMap } from './bricks';
-import { K, P, isGranular, isLoose, isSolid, kindOf } from './materials';
+import { K, P, hardness, isGranular, isLoose, isSolid, kindOf, spoilOf } from './materials';
 import { Region, clampBox, type Box } from './region';
+import type { Clip, VoxelSink } from './sink';
 
 export interface CarveOptions {
   /** What the cut leaves; air unless stated. */
@@ -40,6 +41,54 @@ function lattice(size: number, extent: number, n: number): { i0: Int32Array; i1:
 }
 
 /**
+ * The irregular sphere itself: its unclamped box and an inside test. The wobble
+ * lattice spans the unclamped box, so a carve cut short by the world's edge, or
+ * drawn piecewise by several bands, cuts exactly the voxels the whole one does.
+ */
+function wobbleSphere(cx: number, cy: number, cz: number, radius: number, rng: Rng, roughness: number) {
+  const rOut = radius * (1 + roughness) + 1;
+  const box: Box = {
+    x0: Math.floor(cx - rOut),
+    y0: Math.floor(cy - rOut),
+    z0: Math.floor(cz - rOut),
+    x1: Math.ceil(cx + rOut) + 1,
+    y1: Math.ceil(cy + rOut) + 1,
+    z1: Math.ceil(cz + rOut) + 1,
+  };
+  const sx = box.x1 - box.x0;
+  const sy = box.y1 - box.y0;
+  const sz = box.z1 - box.z0;
+  const extent = Math.max(sx, sy, sz);
+  const n = Math.max(2, Math.floor(extent / 3));
+  const grid = new Float64Array(n * n * n);
+  for (let i = 0; i < grid.length; i++) grid[i] = rng.normal();
+  const lx = lattice(sx, extent, n);
+  const ly = lattice(sy, extent, n);
+  const lz = lattice(sz, extent, n);
+  const scale = roughness * radius;
+  const at = (x: number, y: number, z: number) => grid[(z * n + y) * n + x];
+  const inside = (x: number, y: number, z: number): boolean => {
+    const dx = x + 0.5 - cx;
+    const dy = y + 0.5 - cy;
+    const dz = z + 0.5 - cz;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const ix = x - box.x0;
+    const iy = y - box.y0;
+    const iz = z - box.z0;
+    const fx = lx.f[ix], fy = ly.f[iy], fz = lz.f[iz];
+    const x0 = lx.i0[ix], x1 = lx.i1[ix], y0 = ly.i0[iy], y1 = ly.i1[iy], z0 = lz.i0[iz], z1 = lz.i1[iz];
+    const c00 = at(x0, y0, z0) * (1 - fx) + at(x1, y0, z0) * fx;
+    const c10 = at(x0, y1, z0) * (1 - fx) + at(x1, y1, z0) * fx;
+    const c01 = at(x0, y0, z1) * (1 - fx) + at(x1, y0, z1) * fx;
+    const c11 = at(x0, y1, z1) * (1 - fx) + at(x1, y1, z1) * fx;
+    const c0 = c00 * (1 - fy) + c10 * fy;
+    const c1 = c01 * (1 - fy) + c11 * fy;
+    return dist < radius + (c0 * (1 - fz) + c1 * fz) * scale;
+  };
+  return { box, inside };
+}
+
+/**
  * Carve an irregular sphere centred on voxel-space (cx, cy, cz). Returns the
  * clamped box it touched, or null when it misses the world entirely.
  */
@@ -53,60 +102,110 @@ export function carveSphere(
   opts: CarveOptions = {},
 ): Box | null {
   const material = opts.material ?? 0;
-  const roughness = opts.roughness ?? 0.16;
   const protect = opts.protect;
-  const rOut = radius * (1 + roughness) + 1;
-  const box = clampBox(
-    {
-      x0: Math.floor(cx - rOut),
-      y0: Math.floor(cy - rOut),
-      z0: Math.floor(cz - rOut),
-      x1: Math.ceil(cx + rOut) + 1,
-      y1: Math.ceil(cy + rOut) + 1,
-      z1: Math.ceil(cz + rOut) + 1,
-    },
-    map.dims,
-  );
+  const sphere = wobbleSphere(cx, cy, cz, radius, rng, opts.roughness ?? 0.16);
+  const box = clampBox(sphere.box, map.dims);
   if (!box) return null;
-
   const region = Region.extract(map, box);
-  const { sx, sy, sz, data } = region;
-  const extent = Math.max(sx, sy, sz);
-  const n = Math.max(2, Math.floor(extent / 3));
-  const grid = new Float64Array(n * n * n);
-  for (let i = 0; i < grid.length; i++) grid[i] = rng.normal();
-  const lx = lattice(sx, extent, n);
-  const ly = lattice(sy, extent, n);
-  const lz = lattice(sz, extent, n);
-  const scale = roughness * radius;
-  const at = (x: number, y: number, z: number) => grid[(z * n + y) * n + x];
-
   let i = 0;
-  for (let z = 0; z < sz; z++) {
-    const dz = box.z0 + z + 0.5 - cz;
-    const z0 = lz.i0[z], z1 = lz.i1[z], fz = lz.f[z];
-    for (let y = 0; y < sy; y++) {
-      const dy = box.y0 + y + 0.5 - cy;
-      const y0 = ly.i0[y], y1 = ly.i1[y], fy = ly.f[y];
-      for (let x = 0; x < sx; x++, i++) {
-        const dx = box.x0 + x + 0.5 - cx;
-        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        const x0 = lx.i0[x], x1 = lx.i1[x], fx = lx.f[x];
-        const c00 = at(x0, y0, z0) * (1 - fx) + at(x1, y0, z0) * fx;
-        const c10 = at(x0, y1, z0) * (1 - fx) + at(x1, y1, z0) * fx;
-        const c01 = at(x0, y0, z1) * (1 - fx) + at(x1, y0, z1) * fx;
-        const c11 = at(x0, y1, z1) * (1 - fx) + at(x1, y1, z1) * fx;
-        const c0 = c00 * (1 - fy) + c10 * fy;
-        const c1 = c01 * (1 - fy) + c11 * fy;
-        const wobble = (c0 * (1 - fz) + c1 * fz) * scale;
-        if (dist >= radius + wobble) continue;
-        if (protect && protect[data[i]]) continue;
-        data[i] = material;
+  for (let z = box.z0; z < box.z1; z++) {
+    for (let y = box.y0; y < box.y1; y++) {
+      for (let x = box.x0; x < box.x1; x++, i++) {
+        if (!sphere.inside(x, y, z)) continue;
+        if (protect && protect[region.data[i]]) continue;
+        region.data[i] = material;
       }
     }
   }
   region.commit(map);
   return box;
+}
+
+/** The same cut through a sink in world coordinates, writing only inside `clip`. */
+export function carveWith(
+  sink: VoxelSink,
+  clip: Clip,
+  cx: number,
+  cy: number,
+  cz: number,
+  radius: number,
+  rng: Rng,
+  opts: CarveOptions = {},
+): void {
+  const material = opts.material ?? 0;
+  const protect = opts.protect;
+  const sphere = wobbleSphere(cx, cy, cz, radius, rng, opts.roughness ?? 0.16);
+  const b = sphere.box;
+  for (let z = b.z0; z < b.z1; z++) {
+    for (let y = Math.max(0, b.y0); y < b.y1; y++) {
+      for (let x = Math.max(b.x0, clip.x0); x < Math.min(b.x1, clip.x1); x++) {
+        if (!sphere.inside(x, y, z)) continue;
+        if (protect && protect[sink.get(x, y, z)]) continue;
+        sink.set(x, y, z, material);
+      }
+    }
+  }
+}
+
+/** Python's `_loosen_rim`: intact ground just outside the crater is shaken into whatever it spoils to. */
+export function loosenRim(map: BrickMap, cx: number, cy: number, cz: number, outer: number, inner: number): Box | null {
+  const box = clampBox(
+    {
+      x0: Math.floor(cx - outer), y0: Math.floor(cy - outer), z0: Math.floor(cz - outer),
+      x1: Math.ceil(cx + outer) + 1, y1: Math.ceil(cy + outer) + 1, z1: Math.ceil(cz + outer) + 1,
+    },
+    map.dims,
+  );
+  if (!box) return null;
+  const region = Region.extract(map, box);
+  let i = 0;
+  for (let z = box.z0; z < box.z1; z++) {
+    for (let y = box.y0; y < box.y1; y++) {
+      for (let x = box.x0; x < box.x1; x++, i++) {
+        const v = region.data[i];
+        if (v === 0) continue;
+        const dx = x + 0.5 - cx;
+        const dy = y + 0.5 - cy;
+        const dz = z + 0.5 - cz;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 >= inner * inner && d2 < outer * outer) region.data[i] = spoilOf(v);
+      }
+    }
+  }
+  region.commit(map);
+  return box;
+}
+
+export interface DetonateOptions {
+  /** Materials harder than this survive outside the core. */
+  hardLimit: number;
+  /** Core radius as a fraction of the crater's: inside it nothing survives. */
+  core: number;
+  /** Loosened rind's outer radius as a fraction of the crater's. */
+  loosen: number;
+  waterTable: number;
+}
+
+/**
+ * A shell landing, ported from Python's `detonate`: cut the crater (concrete
+ * and masonry give way only in the core), shake the rind around it loose,
+ * let everything settle, and let it flood. Returns the box it worked over.
+ */
+export function detonate(map: BrickMap, cx: number, cy: number, cz: number, radius: number, rng: Rng, o: DetonateOptions): Box | null {
+  if (!(radius > 0)) return null;
+  const protect = Uint8Array.from({ length: 256 }, (_, p) => (hardness(p) > o.hardLimit ? 1 : 0));
+  if (!carveSphere(map, cx, cy, cz, radius, rng, { protect })) return null;
+  carveSphere(map, cx, cy, cz, radius * o.core, rng);
+  loosenRim(map, cx, cy, cz, radius * o.loosen, radius);
+  const reach = radius * Math.max(o.loosen, 1) + 2;
+  const fall = radius * 2 + 4;
+  const box: Box = {
+    x0: Math.floor(cx - reach), y0: Math.floor(cy - fall), z0: Math.floor(cz - reach),
+    x1: Math.ceil(cx + reach) + 1, y1: Math.ceil(cy + reach) + 1, z1: Math.ceil(cz + reach) + 1,
+  };
+  collapseRegion(map, box);
+  floodRegion(map, box, o.waterTable);
+  return clampBox(box, map.dims);
 }
 
 export interface CollapseOptions {
