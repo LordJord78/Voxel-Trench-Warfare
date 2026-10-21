@@ -139,6 +139,9 @@ export class HeapMirror {
   /** Re-encode these bricks from the map, reusing freed records of the same size first. */
   update(bricks: readonly number[]): void {
     for (const bi of bricks) {
+      if (!Number.isInteger(bi) || bi < 0 || bi >= this.gpuTable.length) {
+        throw new RangeError(`brick index ${bi} is outside 0..${this.gpuTable.length - 1}`);
+      }
       const old = this.gpuTable[bi];
       if (old !== 0 && !(old & UNIFORM)) this.freeLists[old >>> 28].push(old & OFFSET_MASK);
       const e = this.map.table[bi];

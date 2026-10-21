@@ -66,9 +66,21 @@ export class BrickMap {
     return this.dense;
   }
 
-  /** Dense brick slots allocated so far, used or free. */
+  /** Pool capacity in slots: whole 8192-slot chunks allocated so far. */
   get poolCapacity(): number {
     return this.chunks.length * CHUNK_BRICKS;
+  }
+
+  /** Distinct dense slots ever handed out; stays flat while freed slots are being reused. */
+  get slotsIssued(): number {
+    return this.nextSlot;
+  }
+
+  /** Throw unless `bi` names a brick in this map: a bad index must fail where it was made. */
+  private checkBrick(bi: number): void {
+    if (!Number.isInteger(bi) || bi < 0 || bi >= this.table.length) {
+      throw new RangeError(`brick index ${bi} is outside 0..${this.table.length - 1}`);
+    }
   }
 
   inBounds(x: number, y: number, z: number): boolean {
@@ -147,6 +159,7 @@ export class BrickMap {
 
   /** The brick's 512 voxels into `out`, indexed `lx + ly*8 + lz*64`. */
   readBrick(bi: number, out: Uint8Array): void {
+    this.checkBrick(bi);
     const e = this.table[bi];
     if (e === 0) out.fill(0, 0, 512);
     else if (e & UNIFORM) out.fill(e & 0xff, 0, 512);
@@ -159,6 +172,8 @@ export class BrickMap {
 
   /** Replace a whole brick; stored compacted. */
   writeBrick(bi: number, raw: Uint8Array): void {
+    this.checkBrick(bi);
+    if (raw.length < 512) throw new RangeError(`a brick is 512 voxels; got ${raw.length}`);
     let e = this.table[bi];
     if (e === 0 || e & UNIFORM) {
       e = this.alloc() + 1;
@@ -172,6 +187,7 @@ export class BrickMap {
 
   /** Make a whole brick one palette id (0 empties it), releasing any dense slot. */
   setUniform(bi: number, p: number): void {
+    this.checkBrick(bi);
     checkId(p);
     const e = this.table[bi];
     const next = p === 0 ? 0 : (UNIFORM | p) >>> 0;
@@ -183,6 +199,7 @@ export class BrickMap {
 
   /** A live view of a dense brick's bytes, or null if the brick is empty or uniform. */
   denseView(bi: number): Uint8Array | null {
+    this.checkBrick(bi);
     const e = this.table[bi];
     if (e === 0 || e & UNIFORM) return null;
     const slot = e - 1;
@@ -192,6 +209,7 @@ export class BrickMap {
 
   /** Turn a dense brick whose voxels are all equal back into a uniform or empty one. */
   compact(bi: number): void {
+    this.checkBrick(bi);
     const e = this.table[bi];
     if (e === 0 || e & UNIFORM) return;
     const slot = e - 1;

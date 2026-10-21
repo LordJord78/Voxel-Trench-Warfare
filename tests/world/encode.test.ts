@@ -38,6 +38,12 @@ describe('encodeBrick', () => {
 });
 
 describe('HeapMirror', () => {
+  it('refuses brick indices outside the table', () => {
+    const w = new BrickMap({ x: 32, y: 32, z: 32 });
+    const h = HeapMirror.fromMap(w);
+    expect(() => h.update([w.table.length])).toThrow(RangeError);
+    expect(() => h.update([-1])).toThrow(RangeError);
+  });
   it('packs the initial heap and re-encodes changed bricks, reusing freed records', () => {
     const w = new BrickMap({ x: 32, y: 32, z: 32 });
     w.set(0, 0, 0, 3);

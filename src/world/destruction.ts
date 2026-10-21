@@ -110,7 +110,7 @@ export function carveSphere(
 }
 
 export interface CollapseOptions {
-  /** Ceiling on vertical-plus-repose passes. */
+  /** Safety cap on vertical-plus-repose passes; defaults to 64 or four per voxel of region height. */
   maxPasses?: number;
   /** Let loose material slump sideways to its angle of repose. */
   repose?: boolean;
@@ -121,41 +121,71 @@ const GRANULAR = Uint8Array.from({ length: 256 }, (_, p) => (isGranular(p) ? 1 :
 const LOOSE = Uint8Array.from({ length: 256 }, (_, p) => (isLoose(p) ? 1 : 0));
 const SOLID = Uint8Array.from({ length: 256 }, (_, p) => (isSolid(p) ? 1 : 0));
 const WATER = Uint8Array.from({ length: 256 }, (_, p) => (kindOf(p) === K.WATER ? 1 : 0));
+/** Solid and not granular: timber, brick, steel. They hold, and soil rests on them. */
+const FIXED = Uint8Array.from({ length: 256 }, (_, p) => (SOLID[p] && !GRANULAR[p] ? 1 : 0));
 
-/** One vertical pass: in every column, granular voxels sink to the nearest fixed support. */
-function fallVertical(r: Region): number {
-  const { sx, sy, sz, data } = r;
+/**
+ * Settle one column segment between fixed solids, as Python's repeated
+ * one-voxel falls would leave it: grains end stacked from the bottom in their
+ * original order, water they sank through sits on top of them, and anything
+ * non-solid a grain fell through — wire, a curtain — is crushed. Cells above
+ * the highest grain are untouched, so a picket nothing fell on keeps standing.
+ */
+function settleSegment(data: Uint8Array, base: number, step: number, start: number, end: number, grains: number[], waters: number[]): boolean {
+  let top = -1;
+  for (let y = end - 1; y >= start; y--) {
+    if (GRANULAR[data[base + y * step]]) {
+      top = y;
+      break;
+    }
+  }
+  if (top < 0) return false;
+  grains.length = 0;
+  waters.length = 0;
+  for (let y = start; y <= top; y++) {
+    const v = data[base + y * step];
+    if (GRANULAR[v]) grains.push(v);
+    else if (WATER[v]) waters.push(v);
+  }
+  let changed = false;
+  let k = start;
+  for (let n = 0; n < grains.length + waters.length; n++, k++) {
+    const v = n < grains.length ? grains[n] : waters[n - grains.length];
+    const i = base + k * step;
+    if (data[i] !== v) {
+      data[i] = v;
+      changed = true;
+    }
+  }
+  for (; k <= top; k++) {
+    const i = base + k * step;
+    if (data[i] !== 0) {
+      data[i] = 0;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** One vertical pass over the listed columns, marking the ones that changed. */
+function fallColumns(r: Region, columns: Iterable<number>, changed: Uint8Array): number {
+  const { sx, sy, data } = r;
   const grains: number[] = [];
   const waters: number[] = [];
   let moved = 0;
-  for (let z = 0; z < sz; z++) {
-    for (let x = 0; x < sx; x++) {
-      const column = z * sy * sx + x;
-      let start = 0;
-      for (let y = 0; y <= sy; y++) {
-        const p = y < sy ? data[column + y * sx] : -1;
-        const fixed = p >= 0 && SOLID[p] === 1 && GRANULAR[p] === 0;
-        if (y < sy && !fixed) {
-          if (GRANULAR[p]) grains.push(p);
-          else if (WATER[p]) waters.push(p);
-          continue;
-        }
-        // Segment [start, y): grains first, then water, then air.
-        let k = start;
-        for (const g of grains) {
-          const i = column + k * sx;
-          if (data[i] !== g) {
-            data[i] = g;
-            moved++;
-          }
-          k++;
-        }
-        for (const w of waters) data[column + k++ * sx] = w;
-        while (k < y) data[column + k++ * sx] = P.AIR;
-        grains.length = 0;
-        waters.length = 0;
-        start = y + 1;
+  for (const col of columns) {
+    const x = col % sx;
+    const z = (col - x) / sx;
+    const base = z * sy * sx + x;
+    let start = 0;
+    while (start < sy) {
+      let end = start;
+      while (end < sy && !FIXED[data[base + end * sx]]) end++;
+      if (settleSegment(data, base, sx, start, end, grains, waters)) {
+        changed[col] = 1;
+        moved++;
       }
+      start = end + 1;
     }
   }
   return moved;
@@ -163,79 +193,146 @@ function fallVertical(r: Region): number {
 
 const DIRECTIONS = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 
-/** One repose pass: a resting loose voxel steps down and sideways into open air. */
-function slump(r: Region): number {
+/**
+ * Per column: the lowest air cell (`floor`, or sy if none) and one past the
+ * highest non-air cell (`top`). A resting loose voxel can only slump into a
+ * neighbour's air with air beneath it, so it lies above some neighbour's
+ * lowest air and below its own top: the repose pass scans that band only.
+ */
+function columnBounds(r: Region, col: number, floor: Int16Array, top: Int16Array): void {
+  const { sx, sy, data } = r;
+  const x = col % sx;
+  const z = (col - x) / sx;
+  const base = z * sy * sx + x;
+  let lo = 0;
+  while (lo < sy && data[base + lo * sx] !== 0) lo++;
+  let hi = sy;
+  while (hi > 0 && data[base + (hi - 1) * sx] === 0) hi--;
+  floor[col] = lo;
+  top[col] = hi;
+}
+
+/**
+ * One repose pass over the candidate columns, column by column (z, then x) and
+ * bottom-up within each: a loose voxel resting on something solid steps down
+ * and sideways into a cell that is air with air beneath it. Bounds may go
+ * stale within a pass; a column that moved is revisited next pass with fresh
+ * ones, so a stale bound only ever delays a slump, never loses one.
+ */
+function slumpColumns(r: Region, candidates: number[], changed: Uint8Array, floor: Int16Array, top: Int16Array): number {
   const { sx, sy, sz, data } = r;
-  const layer = sx;
-  const plane = sy * sx;
   let moved = 0;
-  for (let y = 1; y < sy; y++) {
-    for (let z = 0; z < sz; z++) {
-      for (let x = 0; x < sx; x++) {
-        const i = z * plane + y * layer + x;
-        const p = data[i];
-        if (!LOOSE[p] || !SOLID[data[i - layer]]) continue;
-        for (const [dx, dz] of DIRECTIONS) {
-          const nx = x + dx;
-          const nz = z + dz;
-          if (nx < 0 || nz < 0 || nx >= sx || nz >= sz) continue;
-          const side = nz * plane + y * layer + nx;
-          if (data[side] !== P.AIR || data[side - layer] !== P.AIR) continue;
-          data[side - layer] = p;
-          data[i] = P.AIR;
-          moved++;
-          break;
-        }
+  for (const col of candidates) {
+    const x = col % sx;
+    const z = (col - x) / sx;
+    let lo = sy;
+    if (x > 0) lo = Math.min(lo, floor[col - 1] + 1);
+    if (x + 1 < sx) lo = Math.min(lo, floor[col + 1] + 1);
+    if (z > 0) lo = Math.min(lo, floor[col - sx] + 1);
+    if (z + 1 < sz) lo = Math.min(lo, floor[col + sx] + 1);
+    const hi = top[col];
+    for (let y = Math.max(1, lo); y < hi; y++) {
+      const i = (z * sy + y) * sx + x;
+      const p = data[i];
+      if (!LOOSE[p] || !SOLID[data[i - sx]]) continue;
+      for (const [dx, dz] of DIRECTIONS) {
+        const nx = x + dx;
+        const nz = z + dz;
+        if (nx < 0 || nz < 0 || nx >= sx || nz >= sz) continue;
+        const side = (nz * sy + y) * sx + nx;
+        if (data[side] !== 0 || data[side - sx] !== 0) continue;
+        data[side - sx] = p;
+        data[i] = 0;
+        changed[col] = 1;
+        changed[nz * sx + nx] = 1;
+        moved++;
+        break;
       }
     }
   }
   return moved;
 }
 
+/** The columns that changed plus their four neighbours: the only places the next pass can move anything. */
+function nextActive(r: Region, changed: Uint8Array): number[] {
+  const { sx, sz } = r;
+  const mark = new Uint8Array(changed.length);
+  for (let col = 0; col < changed.length; col++) {
+    if (!changed[col]) continue;
+    const x = col % sx;
+    const z = (col - x) / sx;
+    mark[col] = 1;
+    if (x > 0) mark[col - 1] = 1;
+    if (x + 1 < sx) mark[col + 1] = 1;
+    if (z > 0) mark[col - sx] = 1;
+    if (z + 1 < sz) mark[col + sx] = 1;
+  }
+  const out: number[] = [];
+  for (let col = 0; col < mark.length; col++) if (mark[col]) out.push(col);
+  return out;
+}
+
 /**
- * Settle granular material in and around `box`: soil with nothing under it
- * falls (displacing water upward), and loose spoil slumps to 45°. Works on the
- * columns of the box, extended down to whatever they rest on and up through
- * whatever rests on them, widened sideways so a slumping heap has room.
- * Returns how many voxel moves it took.
+ * Settle granular material in and around `box`: soil with nothing solid under
+ * it falls (sinking through water, crushing wire), and loose spoil slumps to
+ * 45°. The work region is the box widened sideways so a heap has room to
+ * spread, extended down through every non-solid gap under any of its columns
+ * and up through whatever rests on them. After the first pass only columns
+ * that moved, and their neighbours, are revisited, so the cost follows the
+ * material that moves rather than the volume. A last vertical pass means a run
+ * stopped by the cap can leave slopes steep but never leaves soil hanging.
+ * Returns how many column updates and slumps it took.
  */
 export function collapseRegion(map: BrickMap, box: Box, opts: CollapseOptions = {}): number {
-  const maxPasses = opts.maxPasses ?? 64;
   const repose = opts.repose ?? true;
   const b = clampBox(box, map.dims);
   if (!b) return 0;
+  const pad = repose ? Math.min(24, Math.max(4, b.y1 - b.y0)) : 0;
+  const foot = clampBox({ x0: b.x0 - pad, y0: b.y0, z0: b.z0 - pad, x1: b.x1 + pad, y1: b.y1, z1: b.z1 + pad }, map.dims);
+  if (!foot) return 0;
 
   let low = b.y0;
   let high = b.y1;
-  for (let z = b.z0; z < b.z1; z++) {
-    for (let x = b.x0; x < b.x1; x++) {
+  for (let z = foot.z0; z < foot.z1; z++) {
+    for (let x = foot.x0; x < foot.x1; x++) {
       let y = b.y0;
-      while (y > 0 && (map.get(x, y - 1, z) === P.AIR || WATER[map.get(x, y - 1, z)])) y--;
+      while (y > 0 && !isSolid(map.get(x, y - 1, z))) y--;
       if (y < low) low = y;
       let top = b.y1;
-      while (top < map.dims.y && map.get(x, top, z) !== P.AIR) top++;
+      while (top < map.dims.y && map.get(x, top, z) !== 0) top++;
       if (top > high) high = top;
     }
   }
-  const pad = repose ? Math.min(24, Math.max(4, b.y1 - b.y0)) : 0;
-  const work = clampBox({ x0: b.x0 - pad, y0: low, z0: b.z0 - pad, x1: b.x1 + pad, y1: high, z1: b.z1 + pad }, map.dims);
-  if (!work) return 0;
-
-  const region = Region.extract(map, work);
+  const region = Region.extract(map, { ...foot, y0: low, y1: high });
+  const columns = region.sx * region.sz;
+  const maxPasses = opts.maxPasses ?? Math.max(64, 4 * region.sy);
+  const changed = new Uint8Array(columns);
+  const floor = new Int16Array(columns);
+  const top = new Int16Array(columns);
+  let active: number[] = Array.from({ length: columns }, (_, i) => i);
   let total = 0;
-  for (let pass = 0; pass < maxPasses; pass++) {
-    const moved = fallVertical(region) + (repose ? slump(region) : 0);
+  for (let pass = 0; pass < maxPasses && active.length > 0; pass++) {
+    changed.fill(0);
+    let moved = fallColumns(region, active, changed);
+    if (repose) {
+      for (const col of active) columnBounds(region, col, floor, top);
+      moved += slumpColumns(region, active, changed, floor, top);
+    }
     total += moved;
     if (moved === 0) break;
+    active = nextActive(region, changed);
   }
+  total += fallColumns(region, Array.from({ length: columns }, (_, i) => i), changed);
   region.commit(map);
   return total;
 }
 
 /**
  * Standing water as a state the world settles into, not a fluid: every open
- * voxel in `box` at or below the water table fills, then water left hanging
- * over a gap drains. Same rule as the Python game's `water.flood_region`.
+ * voxel in `box` at or below the water table fills, water left hanging over a
+ * gap drains, and water pushed above the table (dirt sinking into a pool
+ * displaces it) runs off. The Python game kept displaced water; the spec's
+ * world has water only at or below the table.
  */
 export function floodRegion(map: BrickMap, box: Box, waterTable: number): void {
   const b = clampBox(box, map.dims);
@@ -256,7 +353,7 @@ export function floodRegion(map: BrickMap, box: Box, waterTable: number): void {
         const worldY: number = base + y;
         const below: number = worldY === 0 ? -1 : y > 0 ? data[i - sx] : map.get(region.box.x0 + x, worldY - 1, region.box.z0 + z);
         const held = below === -1 || SOLID[below] === 1 || WATER[below] === 1;
-        if (!held) data[i] = P.AIR;
+        if (!held || worldY > waterTable) data[i] = P.AIR;
       }
     }
   }

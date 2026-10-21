@@ -43,7 +43,21 @@ describe('BrickMap', () => {
       w.takeDirty();
     }
     expect(w.denseCount).toBe(0);
-    expect(w.poolCapacity).toBeLessThanOrEqual(8192);
+    expect(w.slotsIssued).toBe(8);
+  });
+  it('refuses brick indices outside the table and short bricks', () => {
+    const w = new BrickMap(D);
+    const raw = new Uint8Array(512);
+    for (const bad of [-1, w.table.length, w.table.length + 3, 1.5, NaN]) {
+      expect(() => w.writeBrick(bad, raw), `writeBrick ${bad}`).toThrow(RangeError);
+      expect(() => w.setUniform(bad, 3), `setUniform ${bad}`).toThrow(RangeError);
+      expect(() => w.readBrick(bad, raw), `readBrick ${bad}`).toThrow(RangeError);
+      expect(() => w.denseView(bad), `denseView ${bad}`).toThrow(RangeError);
+      expect(() => w.compact(bad), `compact ${bad}`).toThrow(RangeError);
+    }
+    expect(() => w.writeBrick(0, new Uint8Array(100))).toThrow(RangeError);
+    w.set(9, 9, 9, 4);
+    expect(w.get(9, 9, 9)).toBe(4);
   });
   it('counts non-empty bricks per sector', () => {
     const w = new BrickMap(D);
