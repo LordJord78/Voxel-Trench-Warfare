@@ -72,16 +72,16 @@ export interface FrameSummary {
 
 /** Rolling frame-time record, in milliseconds. */
 export class FrameStats {
-  readonly window: number;
+  readonly capacity: number;
   private samples: number[] = [];
 
-  constructor(window = 240) {
-    this.window = window;
+  constructor(capacity = 240) {
+    this.capacity = capacity;
   }
 
   record(seconds: number): void {
     this.samples.push(seconds * 1000);
-    if (this.samples.length > this.window) this.samples.splice(0, this.samples.length - this.window);
+    if (this.samples.length > this.capacity) this.samples.splice(0, this.samples.length - this.capacity);
   }
 
   summary(): FrameSummary {
