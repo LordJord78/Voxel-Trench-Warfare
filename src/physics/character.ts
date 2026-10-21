@@ -177,8 +177,17 @@ export class CharacterController {
     else if (intent.periscope && state.onFiringStep && wanted === Stance.FIRING_STEP) wanted = Stance.PERISCOPE;
     else if (wanted === Stance.PERISCOPE && !(intent.periscope && state.onFiringStep)) wanted = state.onFiringStep ? Stance.FIRING_STEP : Stance.STANDING;
 
-    const target = this.t.stances[wanted];
     state.blockedStance = false;
+    // The periscope rises above the body (its "eye" is the mirror, at 2.2 m) in a thin column over
+    // the head: refuse it where that column meets a roof, such as over a dugout's timber stairs, or
+    // the eye would be in it. Not the body's width: at a parapet the crest is beside the head, not
+    // over it. Python's periscopes only ever rose under open sky, so the parity fixtures never reach this.
+    const scope = this.t.stances[Stance.PERISCOPE];
+    if (wanted === Stance.PERISCOPE && boxHitsSolid(this.grid, state.position.withY(state.position.y + scope.height), 0.1, scope.eyeHeight - scope.height + 0.1)) {
+      state.blockedStance = true;
+      wanted = Stance.FIRING_STEP;
+    }
+    const target = this.t.stances[wanted];
     // Refuse to grow into a ceiling: dugouts and the culvert are low.
     if (target.height > state.height + 1e-4 && boxHitsSolid(this.grid, state.position, this.t.radius, target.height)) {
       state.blockedStance = true;

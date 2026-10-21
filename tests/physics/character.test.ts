@@ -41,3 +41,36 @@ describe('the controller at 10 cm', () => {
     expect(c.eyeHeight(s)).toBeCloseTo(1.1, 9);
   });
 });
+
+describe('the periscope at 10 cm', () => {
+  // A timber step under a roof: a dugout's stairs, where Python's rule (standing on timber) also applies.
+  function stepUnder(roofY: number | null) {
+    const map = new BrickMap({ x: 64, y: 64, z: 64 });
+    map.fillBox(0, 0, 0, 64, 20, 64, P.SOD);
+    map.fillBox(0, 20, 0, 64, 21, 64, P.TIMBER);
+    if (roofY !== null) map.fillBox(0, roofY, 0, 64, roofY + 1, 64, P.TIMBER);
+    const c = new CharacterController(brickGrid(map, 0.1), controllerTunables(loadTunables()));
+    const s = newCharacter(new Vec3(3.2, 2.1, 3.2));
+    s.onGround = true;
+    for (let t = 0; t < 5; t++) c.tick(s, intent(Stance.STANDING), DT);
+    return { c, s };
+  }
+  const raise = (): MoveIntent => ({ ...intent(Stance.STANDING), periscope: true });
+
+  it('rises under open sky', () => {
+    const { c, s } = stepUnder(null);
+    expect(s.stance).toBe(Stance.FIRING_STEP);
+    for (let t = 0; t < 30; t++) c.tick(s, raise(), DT);
+    expect(s.stance).toBe(Stance.PERISCOPE);
+  });
+
+  it('is refused where its head would be in the roof, and the eye stays a standing one', () => {
+    // A roof 2.0 m over the tread: room to stand (1.8 m), not for a mirror at 2.2 m.
+    const { c, s } = stepUnder(41);
+    expect(s.stance).toBe(Stance.FIRING_STEP);
+    for (let t = 0; t < 30; t++) c.tick(s, raise(), DT);
+    expect(s.stance).toBe(Stance.FIRING_STEP);
+    expect(s.blockedStance).toBe(true);
+    expect(c.eyeHeight(s)).toBeCloseTo(1.62, 9);
+  });
+});
