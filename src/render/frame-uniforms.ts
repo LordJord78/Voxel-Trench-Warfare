@@ -59,6 +59,10 @@ export const FRAME: StructDef = {
     ['timeOfDay', 'f32'],
     // Rays each lighting pixel traces: always 3, read from here so shaders cannot unroll their loop over them.
     ['lightRays', 'u32'],
+    // The denoiser: frames of history at most, and how sharply its filter stops at brightness and plane edges.
+    ['historyMax', 'f32'],
+    ['sigmaLuma', 'f32'],
+    ['sigmaPlane', 'f32'],
     // The key light (sun or moon) and the sky, in linear RGB with intensity.
     ['keyDir', 'vec3f'],
     ['keyCone', 'f32'],

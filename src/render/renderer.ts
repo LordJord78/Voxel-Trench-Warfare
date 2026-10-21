@@ -4,7 +4,10 @@
  * Compute passes render the internal image:
  *   primary  — one jittered ray per pixel into the G-buffer;
  *   lighting — the light reaching one pixel of each 2 × 2 block;
- *   shade    — the image, from the G-buffer and the lighting.
+ *   temporal — that light blended into its reprojected history;
+ *   atrous   — three edge-stopping filter passes over it, for display (the
+ *              history keeps the plain average, so converged edges stay put);
+ *   shade    — the image, from the G-buffer and the denoised lighting.
  * A render pass presents it to the canvas. Pipelines compile in parallel and
  * need only the device (see compileFrame), so they can compile while the
  * world generates.
@@ -17,20 +20,23 @@ import type { WorldPlan } from '../world/generation/plan';
 import { jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { FarFieldGpu } from './farfield-gpu';
-import { FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
+import { FLAGS, FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
 import { lightBuffer, MAX_LIGHTS, type SceneLight } from './lights';
 import { sceneExtras, sceneGroup, sceneLayout } from './scene';
 import { moduleSource } from './shaders';
+import atrousSrc from './shaders/atrous.wgsl';
 import debugSrc from './shaders/debug.wgsl';
 import lightingSrc from './shaders/lighting.wgsl';
 import presentSrc from './shaders/present.wgsl';
 import primarySrc from './shaders/primary.wgsl';
+import temporalSrc from './shaders/temporal.wgsl';
 import { GpuTimer } from './timing';
 
-const PASSES = ['primary', 'lighting', 'shade', 'present'] as const;
-type ComputePass = 'primary' | 'lighting' | 'shade';
+const PASSES = ['primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'present'] as const;
+type ComputePass = 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade';
+type Timed = (typeof PASSES)[number];
 
 export interface RenderStats {
   gpuMs: number | null;
@@ -50,6 +56,8 @@ export interface RendererOptions {
   far?: FarFieldGpu;
   /** Pipelines compiled ahead of time (see compileFrame); compiled now if absent. */
   compiled?: CompiledFrame;
+  /** The denoiser: frames of history at most, and its filter's edge widths (render.history_max, atrous_sigma_*). */
+  denoise?: { historyMax: number; sigmaLuma: number; sigmaPlane: number };
 }
 
 /** The internal image for a canvas: the canvas itself, or `megapixels` at its aspect if that is smaller. */
@@ -82,6 +90,10 @@ function sampled(binding: number, sampleType: GPUTextureSampleType): GPUBindGrou
   return { binding, visibility: STAGE(), texture: { sampleType } };
 }
 
+function uniform(binding: number): GPUBindGroupLayoutEntry {
+  return { binding, visibility: STAGE(), buffer: { type: 'uniform' } };
+}
+
 /** Everything the GPU compiles or builds once for a frame, independent of any world. */
 export interface CompiledFrame {
   scene: GPUBindGroupLayout;
@@ -103,6 +115,17 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
       label: 'lighting',
       entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), storageTexture(3, 'r32float'), storageTexture(4, 'rg32uint')],
     }),
+    temporal: device.createBindGroupLayout({
+      label: 'temporal',
+      entries: [
+        sampled(0, 'float'), sampled(1, 'unfilterable-float'), sampled(2, 'uint'), sampled(3, 'uint'), sampled(4, 'float'), sampled(5, 'float'),
+        storageTexture(6, 'rgba16float'), storageTexture(7, 'rgba16float'), storageTexture(8, 'rg32float'), sampled(9, 'unfilterable-float'),
+      ],
+    }),
+    atrous: device.createBindGroupLayout({
+      label: 'atrous',
+      entries: [sampled(0, 'float'), sampled(1, 'unfilterable-float'), sampled(2, 'uint'), storageTexture(3, 'rgba16float'), storageTexture(4, 'rg32float'), uniform(5)],
+    }),
     shade: device.createBindGroupLayout({
       label: 'shade',
       entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), sampled(3, 'float')],
@@ -117,9 +140,11 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [primary, lighting, shade, present] = await Promise.all([
+  const [primary, lighting, temporal, atrous, shade, present] = await Promise.all([
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
+    compute(device, 'temporal', temporalSrc, [scene, layouts.temporal]),
+    compute(device, 'atrous', atrousSrc, [scene, layouts.atrous]),
     compute(device, 'shade', debugSrc, [scene, layouts.shade]),
     device.createRenderPipelineAsync({
       label: 'present',
@@ -129,7 +154,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
       primitive: { topology: 'triangle-list' },
     }),
   ]);
-  return { scene, layouts, pipelines: { primary, lighting, shade, present }, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { primary, lighting, temporal, atrous, shade, present }, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -155,7 +180,10 @@ export class Renderer {
   private readonly far: FarFieldGpu;
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
-  private groups: Partial<Record<ComputePass | 'present', GPUBindGroup>> = {};
+  /** Bind groups by frame parity: histories ping-pong between two sets of textures. */
+  private groups: Partial<Record<ComputePass | 'present' | 'atrous1' | 'atrous2' | 'atrous3', GPUBindGroup>>[] = [{}, {}];
+  private readonly steps: GPUBuffer[];
+  private resetNext = true;
   private textures: Record<string, GPUTexture> = {};
   private res: [number, number] = [0, 0];
   private lightScale = 2;
@@ -187,6 +215,11 @@ export class Renderer {
     this.presentBuffer = device.createBuffer({ label: 'present', size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     this.far = options.far ?? FarFieldGpu.empty(device);
+    this.steps = [1, 2, 4].map((step) => {
+      const b = device.createBuffer({ label: `atrous step ${step}`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(b, 0, new Int32Array([step, 0, 0, 0]));
+      return b;
+    });
   }
 
   /** The lighting image's size: the internal image over the lighting scale, rounded up. */
@@ -230,22 +263,45 @@ export class Renderer {
     make('colour', 'rgba16float', this.res);
     const light = this.lightResolution;
     make('lNoisy', 'rgba16float', light);
-    make('hDepth', 'r32float', light);
-    make('hHit', 'rg32uint', light);
+    for (const k of [0, 1]) {
+      make(`hDepth${k}`, 'r32float', light);
+      make(`hHit${k}`, 'rg32uint', light);
+      make(`hColour${k}`, 'rgba16float', light);
+      make(`hMoments${k}`, 'rgba16float', light);
+    }
+    make('variance', 'rg32float', light);
+    make('varianceA', 'rg32float', light);
+    make('varianceB', 'rg32float', light);
+    make('filteredA', 'rgba16float', light);
+    make('filteredB', 'rgba16float', light);
+    make('denoised', 'rgba16float', light);
     const view = (name: string) => this.textures[name].createView();
     const group = (pass: ComputePass | 'present', resources: GPUBindingResource[]) =>
       this.device.createBindGroup({ label: pass, layout: this.compiled.layouts[pass], entries: resources.map((resource, binding) => ({ binding, resource })) });
-    this.groups = {
-      primary: group('primary', [view('gDepth'), view('gHit'), view('gMotion')]),
-      lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view('hDepth'), view('hHit')]),
-      shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('lNoisy')]),
-      present: group('present', [view('colour'), this.sampler, { buffer: this.presentBuffer }]),
-    };
+    this.groups = [0, 1].map((cur) => {
+      const prev = 1 - cur;
+      return {
+        primary: group('primary', [view('gDepth'), view('gHit'), view('gMotion')]),
+        lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`)]),
+        temporal: group('temporal', [
+          view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view(`hHit${prev}`), view(`hColour${prev}`), view(`hMoments${prev}`),
+          view(`hColour${cur}`), view(`hMoments${cur}`), view('variance'), view(`hDepth${prev}`),
+        ]),
+        atrous1: group('atrous', [view(`hColour${cur}`), view('variance'), view(`hHit${cur}`), view('filteredA'), view('varianceA'), { buffer: this.steps[0] }]),
+        atrous2: group('atrous', [view('filteredA'), view('varianceA'), view(`hHit${cur}`), view('filteredB'), view('varianceB'), { buffer: this.steps[1] }]),
+        atrous3: group('atrous', [view('filteredB'), view('varianceB'), view(`hHit${cur}`), view('denoised'), view('varianceA'), { buffer: this.steps[2] }]),
+        shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('denoised')]),
+        present: group('present', [view('colour'), this.sampler, { buffer: this.presentBuffer }]),
+      };
+    });
+    this.resetNext = true;
     this.prevPose = null;
   }
 
+  /** A texture by name; a history (hDepth, hHit, hColour, hMoments) is the one the last frame wrote. */
   texture(name: string): GPUTexture {
-    const t = this.textures[name];
+    const last = (this.frameIndex + 1) & 1;
+    const t = this.textures[name] ?? this.textures[`${name}${last}`];
     if (!t) throw new Error(`no texture '${name}'`);
     return t;
   }
@@ -278,27 +334,39 @@ export class Renderer {
     w.set('lightRes', this.lightResolution);
     w.set('lightScale', this.lightScale);
     w.set('frame', this.frameIndex);
-    w.set('flags', this.flags);
+    // A history from before a resize is in textures that no longer exist.
+    w.set('flags', this.flags | (this.resetNext ? FLAGS.HISTORY_RESET : 0));
+    this.resetNext = false;
     w.set('lightCount', this.lightCount);
     w.set('voxel', voxel);
     w.set('timeOfDay', timeOfDay);
     w.set('lightRays', 3);
+    const denoise = this.options.denoise ?? { historyMax: 32, sigmaLuma: 4, sigmaPlane: 1 };
+    w.set('historyMax', denoise.historyMax);
+    w.set('sigmaLuma', denoise.sigmaLuma);
+    w.set('sigmaPlane', denoise.sigmaPlane);
     writeSky(w, this.sky);
     w.set('far', this.far.info);
     device.queue.writeBuffer(this.frameBuffer, 0, w.buffer);
 
     const encoder = device.createCommandEncoder({ label: `frame ${this.frameIndex}` });
-    const pass = (name: ComputePass, size: readonly [number, number]) => {
+    const groups = this.groups[this.frameIndex & 1];
+    const pass = (name: Timed & keyof typeof groups, pipeline: ComputePass, size: readonly [number, number]) => {
       const p = encoder.beginComputePass({ label: name, timestampWrites: this.timer.writes(name) });
-      p.setPipeline(this.compiled.pipelines[name]);
+      p.setPipeline(this.compiled.pipelines[pipeline]);
       p.setBindGroup(0, this.sceneGroup!);
-      p.setBindGroup(1, this.groups[name]!);
+      p.setBindGroup(1, groups[name]!);
       p.dispatchWorkgroups(Math.ceil(size[0] / 8), Math.ceil(size[1] / 8));
       p.end();
     };
-    pass('primary', this.res);
-    pass('lighting', this.lightResolution);
-    pass('shade', this.res);
+    const light = this.lightResolution;
+    pass('primary', 'primary', this.res);
+    pass('lighting', 'lighting', light);
+    pass('temporal', 'temporal', light);
+    pass('atrous1', 'atrous', light);
+    pass('atrous2', 'atrous', light);
+    pass('atrous3', 'atrous', light);
+    pass('shade', 'shade', this.res);
     if (this.context) {
       const present = new Float32Array([this.res[0], this.res[1], this.res[0], this.res[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, 0]);
       device.queue.writeBuffer(this.presentBuffer, 0, present);
@@ -308,7 +376,7 @@ export class Renderer {
         timestampWrites: this.timer.writes('present'),
       });
       p.setPipeline(this.compiled.pipelines.present);
-      p.setBindGroup(0, this.groups.present!);
+      p.setBindGroup(0, groups.present!);
       p.draw(3);
       p.end();
     }

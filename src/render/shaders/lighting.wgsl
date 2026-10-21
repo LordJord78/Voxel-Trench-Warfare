@@ -12,6 +12,7 @@
 #include "traverse.wgsl"
 #include "camera.wgsl"
 #include "sky.wgsl"
+#include "lightgrid.wgsl"
 
 @group(1) @binding(0) var gDepth: texture_2d<f32>;
 @group(1) @binding(1) var gHit: texture_2d<u32>;
@@ -19,20 +20,7 @@
 @group(1) @binding(3) var hDepth: texture_storage_2d<r32float, write>;
 @group(1) @binding(4) var hHit: texture_storage_2d<rg32uint, write>;
 
-const BAYER2 = array(vec2u(0u, 0u), vec2u(1u, 1u), vec2u(1u, 0u), vec2u(0u, 1u));
-const BAYER4 = array(
-  vec2u(0u, 0u), vec2u(2u, 2u), vec2u(2u, 0u), vec2u(0u, 2u),
-  vec2u(1u, 1u), vec2u(3u, 3u), vec2u(3u, 1u), vec2u(1u, 3u),
-  vec2u(1u, 0u), vec2u(3u, 2u), vec2u(3u, 0u), vec2u(1u, 2u),
-  vec2u(0u, 1u), vec2u(2u, 3u), vec2u(2u, 1u), vec2u(0u, 3u),
-);
 const NOISE_OFFSETS = array(vec2u(0u, 0u), vec2u(17u, 39u), vec2u(41u, 7u), vec2u(29u, 53u), vec2u(5u, 23u));
-
-// Which pixel of lighting pixel q's block traces this frame.
-fn representative(q: vec2u) -> vec2u {
-  let o = select(BAYER4[frame.frame & 15u], BAYER2[frame.frame & 3u], frame.lightScale == 2u);
-  return min(q * frame.lightScale + o, frame.res - 1u);
-}
 
 // The k-th random number of lighting pixel q this frame: blue noise in space,
 // stepped through time by the golden ratio, in integers so it stays exact.
@@ -60,10 +48,6 @@ fn cosineDir(n: vec3f, u1: f32, u2: f32) -> vec3f {
   let r = sqrt(u1);
   let phi = 6.2831853 * u2;
   return normalize(basis(n) * vec3f(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1))));
-}
-
-fn luminance(c: vec3f) -> f32 {
-  return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
 // A light's contribution to a face, as if nothing were in the way (distances in metres).

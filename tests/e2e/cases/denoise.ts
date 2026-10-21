@@ -1,0 +1,236 @@
+import { BrickMap } from '../../../src/world/bricks';
+import { HeapMirror } from '../../../src/world/encode';
+import { P } from '../../../src/world/materials';
+import { jitter, projectToPixel, rayDir, type CameraPose } from '../../../src/render/camera';
+import { FLAGS, PROBE_DUSK } from '../../../src/render/frame-uniforms';
+import { GpuWorld } from '../../../src/render/gpu-world';
+import { Renderer } from '../../../src/render/renderer';
+import { Rng } from '../../../src/core/rng';
+import { gpu, readTexture } from '../support/gpu';
+import { halfToFloat } from '../support/half';
+import { traceRef } from '../../support/trace-ref';
+
+/**
+ * A floor with a wall standing on it, lit by a key light from 45° in -x: the
+ * wall's shadow lies across the floor beside it. The camera looks straight
+ * down at the shadow's edge.
+ */
+function world(): BrickMap {
+  const map = new BrickMap({ x: 128, y: 128, z: 128 });
+  map.fillBox(0, 0, 0, 128, 40, 128, P.SOD);
+  map.fillBox(60, 40, 0, 64, 70, 128, P.BRICK);
+  return map;
+}
+
+const DOWN: CameraPose = { position: [5.6, 9.0, 6.4], yaw: 0, pitch: -89.9 };
+
+async function setup(g: Awaited<ReturnType<typeof gpu>>) {
+  const map = world();
+  const w = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
+  const r = await Renderer.create(g, null, w, null, { size: [96, 96] });
+  const el = Math.PI / 4;
+  r.sky = { ...PROBE_DUSK, keyDir: [-Math.cos(el), Math.sin(el), 0], keyColour: [1, 1, 1], ambient: 1 };
+  r.setLights([], 0);
+  return { r, w };
+}
+
+/**
+ * Lighting pixels whose 2 × 2 block of the internal image lies on one face of
+ * one plane. A block straddling two surfaces represents one of them each
+ * frame, so its own value alternates; the upsampler sorts that out per pixel.
+ */
+async function wholeBlocks(r: Renderer): Promise<Uint8Array> {
+  const hit = new Uint32Array(await readTexture(r.texture('gHit')));
+  const [w, h] = [r.stats.res[0], r.stats.res[1]];
+  const [lw, lh] = r.lightResolution;
+  const key = (i: number) => {
+    const face = (hit[i * 2] >>> 24) & 7;
+    const cell = [hit[i * 2] & 0xfff, hit[i * 2 + 1] & 0xffff, (hit[i * 2] >>> 12) & 0xfff];
+    return face >= 6 ? -1 : face * 100000 + cell[face >> 1] + (face & 1);
+  };
+  const out = new Uint8Array(lw * lh);
+  for (let qy = 0; qy < lh; qy++) {
+    for (let qx = 0; qx < lw; qx++) {
+      const keys = [0, 1, 2, 3].map((k) => key(Math.min(qy * 2 + (k >> 1), h - 1) * w + Math.min(qx * 2 + (k & 1), w - 1)));
+      out[qy * lw + qx] = keys[0] >= 0 && keys.every((k) => k === keys[0]) ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+const rgba = async (r: Renderer, name: string) => {
+  const raw = new Uint16Array(await readTexture(r.texture(name)));
+  return Array.from(raw, halfToFloat);
+};
+
+export const cases = {
+  /** The denoised key visibility after `frames` still frames, against a long plain average of the raw lighting. */
+  async denoiseConverge(args: { frames: number; reference: number }) {
+    const g = await gpu();
+    const { r, w } = await setup(g);
+    const [lw, lh] = r.lightResolution;
+    const raw = new Float64Array(lw * lh);
+    for (let f = 0; f < args.reference; f++) {
+      r.render(DOWN, 0, f);
+      const noisy = await rgba(r, 'lNoisy');
+      for (let i = 0; i < lw * lh; i++) raw[i] += noisy[i * 4 + 3];
+    }
+    r.flags = FLAGS.HISTORY_RESET;
+    r.render(DOWN, 0, 0);
+    r.flags = 0;
+    let previous: number[] = [];
+    let change = 0;
+    for (let f = 0; f < args.frames; f++) {
+      r.render(DOWN, 0, f);
+      if (f >= args.frames - 2) {
+        const out = await rgba(r, 'denoised');
+        if (previous.length) {
+          let sum = 0;
+          for (let i = 0; i < lw * lh; i++) sum += Math.abs(out[i * 4 + 3] - previous[i * 4 + 3]);
+          change = sum / (lw * lh);
+        }
+        previous = out;
+      }
+    }
+    const whole = await wholeBlocks(r);
+    const rng = Rng.root(7);
+    let worst = 0;
+    let compared = 0;
+    const bad: string[] = [];
+    while (compared < 200) {
+      const i = rng.randint(0, lw * lh - 1);
+      if (!whole[i]) continue;
+      compared++;
+      const e = Math.abs(previous[i * 4 + 3] - raw[i] / args.reference);
+      worst = Math.max(worst, e);
+      if (e > 0.05 && bad.length < 6) bad.push(`q ${i % lw},${Math.floor(i / lw)} denoised ${previous[i * 4 + 3].toFixed(3)} raw ${(raw[i] / args.reference).toFixed(3)}`);
+    }
+    for (const b of [w.table, w.sectors, w.heap, w.palette, w.pyramid]) b.destroy();
+    return { worst, change, bad, errors: [...g.errors] };
+  },
+
+  /**
+   * History lengths after the camera slides past the wall's top. Whether each
+   * surface point was hidden last frame is decided on the CPU: a ray from the
+   * previous camera to the point either reaches it or hits something first.
+   */
+  async denoiseDisocclusion() {
+    const g = await gpu();
+    const { r, w } = await setup(g);
+    const map = world();
+    const side: CameraPose = { position: [7.5, 5.5, 6.4], yaw: -90, pitch: -30 };
+    for (let f = 0; f < 32; f++) r.render(side, 0, f);
+    const moved: CameraPose = { ...side, position: [7.5, 5.5, 5.9] };
+    r.render(moved, 0, 32);
+    const whole = await wholeBlocks(r);
+    const depth = new Float32Array(await readTexture(r.texture('hDepth')));
+    const hit = new Uint32Array(await readTexture(r.texture('hHit')));
+    const moments = await rgba(r, 'hMoments');
+    const [lw, lh] = r.lightResolution;
+    const res: [number, number] = [96, 96];
+    const [jx, jy] = jitter(32);
+    let hidden = 0;
+    let hiddenFresh = 0;
+    let seen = 0;
+    let seenOld = 0;
+    const lost: string[] = [];
+    for (let qy = 0; qy < lh; qy++) {
+      for (let qx = 0; qx < lw; qx++) {
+        const i = qy * lw + qx;
+        if (((hit[i * 2] >>> 24) & 7) >= 6 || !whole[i]) continue;
+        // Frame 32's representative is the block's top-left pixel.
+        const px = Math.min(qx * 2, res[0] - 1);
+        const py = Math.min(qy * 2, res[1] - 1);
+        const d = rayDir(moved, res, px + 0.5 + jx, py + 0.5 + jy);
+        const o = moved.position.map((m) => m / 0.1);
+        const at = [o[0] + d[0] * depth[i], o[1] + d[1] * depth[i], o[2] + d[2] * depth[i]];
+        const from = side.position.map((m) => m / 0.1);
+        // Seen from last frame's camera: the ray to the point reaches it.
+        const reaches = (pt: number[]) => {
+          const to = [pt[0] - from[0], pt[1] - from[1], pt[2] - from[2]];
+          const dist = Math.hypot(to[0], to[1], to[2]);
+          const back = traceRef(map, from as [number, number, number], [to[0] / dist, to[1] / dist, to[2] / dist], dist + 1);
+          const before = projectToPixel(side, res, pt.map((v) => v * 0.1) as [number, number, number]);
+          const inView = before !== null && before[0] >= 0 && before[1] >= 0 && before[0] < res[0] && before[1] < res[1];
+          return inView && back.hit && Math.abs(back.t - dist) <= 0.5;
+        };
+        // The shader treats last frame's samples within `reach` on the same plane as the same
+        // spot (see temporal.wgsl); a point is plainly uncovered when it and everything within
+        // that reach on its plane was out of sight.
+        const reach = Math.max(1.5, (2.5 * depth[i] * 2) / res[0] * 2);
+        const axis = ((hit[i * 2] >>> 24) & 7) >> 1;
+        const along = [0, 1, 2].filter((k) => k !== axis);
+        const around = [at, ...along.flatMap((k) => [-reach, reach].map((dk) => at.map((v, c) => (c === k ? v + dk : v))))];
+        const length = moments[i * 4 + 2];
+        if (!reaches(at)) {
+          if (around.every((pt) => !reaches(pt))) {
+            hidden++;
+            if (length <= 1.01) hiddenFresh++;
+          }
+          continue;
+        }
+        seen++;
+        if (length >= 2) seenOld++;
+        else if (lost.length < 10) lost.push(`q ${qx},${qy} face ${(hit[i * 2] >>> 24) & 7} length ${length}`);
+      }
+    }
+    for (const b of [w.table, w.sectors, w.heap, w.palette, w.pyramid]) b.destroy();
+    return { hidden, hiddenFresh, seen, seenOld, lost, errors: [...g.errors] };
+  },
+
+  /** After convergence, the key visibility on the shadowed wall face beside the lit floor. */
+  async denoiseEdges() {
+    const g = await gpu();
+    const { r, w } = await setup(g);
+    // Looking at the wall's shadowed +x face, with the lit floor below it.
+    const view: CameraPose = { position: [8.5, 4.6, 6.4], yaw: -90, pitch: -12 };
+    for (let f = 0; f < 96; f++) r.render(view, 0, f);
+    const out = await rgba(r, 'denoised');
+    const hit = new Uint32Array(await readTexture(r.texture('hHit')));
+    const [lw, lh] = r.lightResolution;
+    let worstWall = 0;
+    let wallNearFloor = 0;
+    for (let y = 0; y < lh; y++) {
+      for (let x = 0; x < lw; x++) {
+        const i = y * lw + x;
+        if (((hit[i * 2] >>> 24) & 7) !== 1) continue;
+        // Within two lighting pixels of a floor (+y) pixel.
+        let near = false;
+        for (let dy = -2; dy <= 2 && !near; dy++) {
+          for (let dx = -2; dx <= 2; dx++) {
+            const xx = x + dx;
+            const yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= lw || yy >= lh) continue;
+            if (((hit[(yy * lw + xx) * 2] >>> 24) & 7) === 3) near = true;
+          }
+        }
+        if (!near) continue;
+        wallNearFloor++;
+        worstWall = Math.max(worstWall, out[i * 4 + 3]);
+      }
+    }
+    for (const b of [w.table, w.sectors, w.heap, w.palette, w.pyramid]) b.destroy();
+    return { worstWall, wallNearFloor, errors: [...g.errors] };
+  },
+
+  /** Every history length the frame after a reset. */
+  async denoiseReset() {
+    const g = await gpu();
+    const { r, w } = await setup(g);
+    for (let f = 0; f < 16; f++) r.render(DOWN, 0, f);
+    r.flags = FLAGS.HISTORY_RESET;
+    r.render(DOWN, 0, 16);
+    r.flags = 0;
+    const moments = await rgba(r, 'hMoments');
+    const hit = new Uint32Array(await readTexture(r.texture('hHit')));
+    let surfaces = 0;
+    let longest = 0;
+    for (let i = 0; i < hit.length / 2; i++) {
+      if (((hit[i * 2] >>> 24) & 7) >= 6) continue;
+      surfaces++;
+      longest = Math.max(longest, moments[i * 4 + 2]);
+    }
+    for (const b of [w.table, w.sectors, w.heap, w.palette, w.pyramid]) b.destroy();
+    return { surfaces, longest, errors: [...g.errors] };
+  },
+};
