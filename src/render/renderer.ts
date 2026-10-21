@@ -244,6 +244,8 @@ export class Renderer {
   private canvasSize: [number, number] = [0, 0];
   private frameIndex = 0;
   private prevPose: CameraPose | null = null;
+  /** The jitter the last frame applied (none if it turned jitter off): its history was rendered through it. */
+  private prevJitter: [number, number] = [0, 0];
   private lightCount = 0;
 
   static async create(gpu: Gpu, canvas: HTMLCanvasElement | null, world: GpuWorld, plan: WorldPlan | null, options: RendererOptions = {}): Promise<Renderer> {
@@ -397,6 +399,11 @@ export class Renderer {
     this.prevRes = null;
   }
 
+  /** A copy of the frame uniform's bytes as the last frame wrote them (see FRAME's layout). */
+  frameUniform(): ArrayBuffer {
+    return this.writer.buffer.slice(0);
+  }
+
   /** The scene bind group the last frame used, for running a single pass in tests. */
   sceneBindGroup(): GPUBindGroup {
     if (!this.sceneGroup) throw new Error('no frame rendered yet');
@@ -448,9 +455,10 @@ export class Renderer {
 
     const w = this.writer;
     const j = jitter(this.frameIndex);
+    const applied: [number, number] = this.flags & FLAGS.JITTER_OFF ? [0, 0] : j;
     writeWorldInfo(w, this.world);
     writeCamera(w, 'cam', pose, voxel, j);
-    writeCamera(w, 'prev', this.prevPose ?? pose, voxel, j);
+    writeCamera(w, 'prev', this.prevPose ?? pose, voxel, reset || !this.prevPose ? applied : this.prevJitter);
     w.set('res', this.res);
     w.set('alloc', this.alloc);
     w.set('prevRes', reset || !this.prevRes ? this.res : this.prevRes);
@@ -511,6 +519,7 @@ export class Renderer {
     this.timer.collect();
 
     this.prevPose = { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch, fov: pose.fov };
+    this.prevJitter = applied;
     this.prevRes = [...this.res];
     this.frameIndex++;
     this.stats = {

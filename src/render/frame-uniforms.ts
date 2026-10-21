@@ -45,6 +45,7 @@ export const FRAME: StructDef = {
   name: 'Frame',
   fields: [
     ['world', WORLD_INFO],
+    // This frame's camera, and the last frame's with the jitter that frame applied (zero if none).
     ['cam', CAMERA],
     ['prev', CAMERA],
     // The internal image this frame renders, the size its textures were allocated at, and

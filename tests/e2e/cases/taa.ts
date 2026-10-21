@@ -1,8 +1,9 @@
 import { BrickMap } from '../../../src/world/bricks';
 import { HeapMirror } from '../../../src/world/encode';
 import { P } from '../../../src/world/materials';
-import { projectToPixel, type CameraPose } from '../../../src/render/camera';
-import { PROBE_DUSK, type FrameSky } from '../../../src/render/frame-uniforms';
+import { jitter, projectToPixel, type CameraPose } from '../../../src/render/camera';
+import { CAMERA, FLAGS, FRAME, PROBE_DUSK, type FrameSky } from '../../../src/render/frame-uniforms';
+import { structLayout } from '../../../src/render/layout';
 import { GpuWorld } from '../../../src/render/gpu-world';
 import { compileFrame, Renderer } from '../../../src/render/renderer';
 import { gpu, readTexture } from '../support/gpu';
@@ -15,6 +16,28 @@ const rgba = async (t: GPUTexture) => Array.from(new Uint16Array(await readTextu
 const aces = (x: number) => Math.min(1, Math.max(0, (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)));
 
 export const cases = {
+  /** Four frames, the third unjittered: each frame's own jitter and the jitter it says the last frame applied. */
+  async frameJitters() {
+    const g = await gpu();
+    const map = new BrickMap({ x: 32, y: 32, z: 32 });
+    map.fillBox(0, 0, 0, 32, 8, 32, P.SOD);
+    const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
+    const r = await Renderer.create(g, null, world, null, { size: [32, 32] });
+    r.setLights([], 0);
+    // A camera's jitter: the camera's offset in the frame plus the jitter's in the camera.
+    const at = (camera: 'cam' | 'prev') => structLayout(FRAME).offsets[camera] + structLayout(CAMERA).offsets.jitter;
+    const read = (camera: 'cam' | 'prev') => Array.from(new Float32Array(r.frameUniform(), at(camera), 2));
+    const frames: { cam: number[]; prev: number[] }[] = [];
+    for (let f = 0; f < 4; f++) {
+      r.flags = f === 2 ? FLAGS.JITTER_OFF : 0;
+      r.render({ position: [1.6, 1.5, 1.6], yaw: 0, pitch: -20 }, 0, f);
+      frames.push({ cam: read('cam'), prev: read('prev') });
+    }
+    for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
+    const halton = [0, 1, 2, 3].map((f) => Array.from(new Float32Array(jitter(f))));
+    return { frames, halton, errors: [...g.errors] };
+  },
+
   /** Mean frame-to-frame change of the TAA output after `frames` still frames. */
   async taaSettle(args: { frames: number }) {
     const g = await gpu();

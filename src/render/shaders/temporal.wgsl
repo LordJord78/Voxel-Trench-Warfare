@@ -33,8 +33,8 @@ fn sameSpot(t: vec2i, face: u32, plane: i32, at: vec3f, reach: f32) -> bool {
   }
   let o = select(BAYER4[(frame.frame - 1u) & 15u], BAYER2[(frame.frame - 1u) & 3u], frame.lightScale == 2u);
   let p = min(vec2u(t) * frame.lightScale + o, frame.prevRes - 1u);
-  let jitterBefore = select(frame.prev.jitter, vec2f(0.0), (frame.flags & FLAG_JITTER_OFF) != 0u);
-  let rd = cameraRay(frame.prev, vec2f(p) + 0.5 + jitterBefore, vec2f(frame.prevRes));
+  // The previous camera carries the jitter its frame applied (zero if it had none).
+  let rd = cameraRay(frame.prev, vec2f(p) + 0.5 + frame.prev.jitter, vec2f(frame.prevRes));
   let there = frame.prev.origin + rd * textureLoad(depthBefore, t, 0).r;
   return distance(there, at) <= reach;
 }
