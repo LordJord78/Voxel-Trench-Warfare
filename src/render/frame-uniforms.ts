@@ -5,7 +5,7 @@
  * never disagree about an offset. Positions and distances in it are voxels.
  */
 
-import { cameraBasis, type CameraPose } from './camera';
+import { cameraBasis, tanHalf, type CameraPose } from './camera';
 import type { StructDef, StructWriter } from './layout';
 import type { PyramidLevel } from './pyramid';
 
@@ -118,7 +118,7 @@ export function writeWorldInfo(w: StructWriter, world: { map: { dims: { x: numbe
 export function writeCamera(w: StructWriter, path: 'cam' | 'prev', pose: CameraPose, voxel: number, jitter: readonly [number, number]): void {
   const { forward, right, up } = cameraBasis(pose.yaw, pose.pitch);
   w.set(`${path}.origin`, pose.position.map((m) => m / voxel));
-  w.set(`${path}.tanHalf`, 1);
+  w.set(`${path}.tanHalf`, tanHalf(pose));
   w.set(`${path}.forward`, forward);
   w.set(`${path}.right`, right);
   w.set(`${path}.up`, up);

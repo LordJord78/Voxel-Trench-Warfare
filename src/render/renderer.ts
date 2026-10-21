@@ -510,7 +510,7 @@ export class Renderer {
     device.queue.submit([encoder.finish()]);
     this.timer.collect();
 
-    this.prevPose = { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch };
+    this.prevPose = { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch, fov: pose.fov };
     this.prevRes = [...this.res];
     this.frameIndex++;
     this.stats = {

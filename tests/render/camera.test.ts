@@ -50,4 +50,28 @@ describe('the camera', () => {
     const angle = Math.acos(edge[0] * forward[0] + edge[1] * forward[1] + edge[2] * forward[2]);
     expect(Math.abs(angle - Math.PI / 4)).toBeLessThan(1e-9);
   });
+
+  it('narrows to its field of view: a 60° camera sees 30° either side', () => {
+    const pose: CameraPose = { position: [0, 0, 0], yaw: 30, pitch: 10, fov: 60 };
+    const { forward } = cameraBasis(30, 10);
+    const res: [number, number] = [200, 100];
+    for (const px of [0, 200]) {
+      const d = rayDir(pose, res, px, 50);
+      const cos = d[0] * forward[0] + d[1] * forward[1] + d[2] * forward[2];
+      expect((Math.acos(cos) * 180) / Math.PI).toBeCloseTo(30, 9);
+    }
+  });
+  it('projects back where it cast at any field of view', () => {
+    const pose: CameraPose = { position: [1, 2, 3], yaw: -40, pitch: 20, fov: 60 };
+    const res: [number, number] = [320, 180];
+    const rng = Rng.root(5);
+    for (let i = 0; i < 100; i++) {
+      const px = rng.uniform(0, 320);
+      const py = rng.uniform(0, 180);
+      const d = rayDir(pose, res, px, py);
+      const p = projectToPixel(pose, res, [1 + d[0] * 7, 2 + d[1] * 7, 3 + d[2] * 7])!;
+      expect(close(p, [px, py], 1e-9)).toBe(true);
+    }
+  });
 });
+
