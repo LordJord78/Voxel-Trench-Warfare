@@ -14,7 +14,9 @@
 import { hash32x4 } from '../../core/hash';
 import { BrickMap, UNIFORM } from '../bricks';
 import { P, isLoose, isSolid, kindOf, K } from '../materials';
+import { bandSink } from '../sink';
 import { FLAG, columnModel, type ColumnModel } from './columns';
+import { stampDugout, stampSandbags } from './furniture';
 import { vx } from './params';
 import { bayList, type WorldPlan } from './plan';
 import type { BayPlan } from './trenches';
@@ -190,8 +192,26 @@ export function bandMap(plan: WorldPlan, band: number): BrickMap {
       }
     }
   }
+  stampFurniture(plan, map, x0);
   map.takeDirty();
   return map;
+}
+
+/** Sandbag crests and dugouts, drawn whole and clipped to the band. */
+function stampFurniture(plan: WorldPlan, map: BrickMap, x0: number): void {
+  const sink = bandSink(map, x0);
+  const clip = { x0, x1: x0 + BAND };
+  const reach = plan.params.trench.leg + 8;
+  for (const line of plan.lines) {
+    for (const bay of line.bays) {
+      if (bay.x1 + reach < clip.x0 || bay.x0 - reach >= clip.x1) continue;
+      stampSandbags(sink, clip, bay, plan.params);
+    }
+    for (const d of line.dugouts) {
+      if (d.hi[0] + 16 < clip.x0 || d.lo[0] - 16 >= clip.x1) continue;
+      stampDugout(sink, clip, d, plan.params);
+    }
+  }
 }
 
 /** One band as transferable bricks: the table, and the dense bricks' bytes in table order. */

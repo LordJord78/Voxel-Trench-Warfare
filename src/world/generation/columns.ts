@@ -170,6 +170,20 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number): ColumnMode
         m.flags[c] |= FLAG.PARADOS;
       }
     }
+    // Burster course: at least 1 m of spoil over a dugout's roof, falling away at 45°.
+    for (const d of line.dugouts) {
+      const target = d.roofY + 2 + Math.floor(1.0 / p.voxel + 0.5);
+      const spread = target - p.waterTable;
+      forBox(m, 0, d.lo[0] - spread, d.hi[0] + spread, d.lo[2] - spread, d.hi[2] + spread, (c) => {
+        if (m.flags[c] & FLAG.TRENCH) return;
+        const x = Math.floor(c / nz) + mx0;
+        const z = c % nz;
+        const dx = x < d.lo[0] ? d.lo[0] - x : x >= d.hi[0] ? x - d.hi[0] + 1 : 0;
+        const dz = z < d.lo[2] ? d.lo[2] - z : z >= d.hi[2] ? z - d.hi[2] + 1 : 0;
+        const t = target - Math.max(dx, dz);
+        if (t > m.surface[c] && t > m.spoilTop[c]) m.spoilTop[c] = t;
+      });
+    }
     bayBase += line.bays.length;
   }
 
