@@ -21,11 +21,11 @@ function standing(): Session {
 describe('the camera rig', () => {
   it('puts the eye 1.62 m over a standing player and 1.10 m over a crouched one', () => {
     const s = standing();
-    const rig = new CameraRig(rigTunables(tun));
-    expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(2.0 + 1.62, 9);
+    expect(new CameraRig(rigTunables(tun)).pose(s, 1 / 60).position[1]).toBeCloseTo(2.0 + 1.62, 9);
     s.player.stance = Stance.CROUCHED;
     s.player.height = 1.25;
-    expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(2.0 + 1.1, 9);
+    // A fresh rig: one that had drawn the standing eye would ease down to this (see below).
+    expect(new CameraRig(rigTunables(tun)).pose(s, 1 / 60).position[1]).toBeCloseTo(2.0 + 1.1, 9);
   });
 
   it('bobs only while moving, by at most the amplitude', () => {
@@ -62,5 +62,66 @@ describe('the camera rig', () => {
     expect(rig.pose(s, 1 / 60).fov! / 90).toBeCloseTo(0.9323, 4);
     for (let f = 1; f < 60; f++) rig.pose(s, 1 / 60);
     expect(Math.abs(rig.fovScale - 0.42)).toBeLessThan(0.001);
+  });
+});
+
+describe('the eye over steps', () => {
+  const FRAME = 1 / 60;
+  /** Move the player's foot straight to y (as a tick that snapped it would), and draw one frame. */
+  function snapTo(s: Session, rig: CameraRig, y: number, vy = 0) {
+    const p = s.player.position;
+    s.prevPosition = new Vec3(p.x, y, p.z);
+    s.player.position = new Vec3(p.x, y, p.z);
+    s.player.velocity = new Vec3(0, vy, 0);
+    return rig.pose(s, FRAME).position[1];
+  }
+
+  it('eases up a 0.3 m step instead of jumping, and arrives', () => {
+    const s = standing();
+    const rig = new CameraRig(rigTunables(tun));
+    let before = snapTo(s, rig, 2.0);
+    let worst = 0;
+    for (let f = 0; f < 18; f++) {
+      const now = snapTo(s, rig, 2.3);
+      worst = Math.max(worst, Math.abs(now - before));
+      before = now;
+    }
+    expect(worst).toBeLessThan(0.12);
+    expect(Math.abs(before - (2.3 + 1.62))).toBeLessThan(0.005);
+  });
+
+  it('eases a stand from a crouch the same way', () => {
+    const s = standing();
+    const rig = new CameraRig(rigTunables(tun));
+    s.player.stance = Stance.CROUCHED;
+    s.player.height = 1.25;
+    let before = rig.pose(s, FRAME).position[1];
+    s.player.stance = Stance.STANDING;
+    s.player.height = 1.8;
+    let worst = 0;
+    for (let f = 0; f < 24; f++) {
+      const now = rig.pose(s, FRAME).position[1];
+      worst = Math.max(worst, Math.abs(now - before));
+      before = now;
+    }
+    expect(worst).toBeLessThan(0.15);
+    expect(Math.abs(before - (2.0 + 1.62))).toBeLessThan(0.005);
+  });
+
+  it('follows a fall exactly: continuous motion is not a step', () => {
+    const s = standing();
+    const rig = new CameraRig(rigTunables(tun));
+    snapTo(s, rig, 20);
+    for (let f = 1; f <= 30; f++) {
+      const y = 20 - 10 * f * FRAME;
+      expect(Math.abs(snapTo(s, rig, y, -10) - (y + 1.62))).toBeLessThan(0.01);
+    }
+  });
+
+  it('snaps to a teleport', () => {
+    const s = standing();
+    const rig = new CameraRig(rigTunables(tun));
+    snapTo(s, rig, 2.0);
+    expect(Math.abs(snapTo(s, rig, 9.0) - (9.0 + 1.62))).toBeLessThan(0.01);
   });
 });
