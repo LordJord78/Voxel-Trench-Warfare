@@ -110,6 +110,41 @@ export class BrickMap {
     this.markDirty(bi);
   }
 
+  /**
+   * Fill the half-open box [x0, x1) × [y0, y1) × [z0, z1), clamped to the world.
+   * Bricks wholly inside become uniform (or empty) without touching the pool;
+   * only the bricks the box's faces cut through are written voxel by voxel.
+   */
+  fillBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, p: number): void {
+    checkId(p);
+    const ax = Math.max(0, Math.floor(x0));
+    const ay = Math.max(0, Math.floor(y0));
+    const az = Math.max(0, Math.floor(z0));
+    const bx = Math.min(this.dims.x, Math.ceil(x1));
+    const by = Math.min(this.dims.y, Math.ceil(y1));
+    const bz = Math.min(this.dims.z, Math.ceil(z1));
+    if (ax >= bx || ay >= by || az >= bz) return;
+    for (let kz = az >> 3; kz <= (bz - 1) >> 3; kz++) {
+      const z0b = Math.max(az, kz << 3);
+      const z1b = Math.min(bz, (kz << 3) + BRICK);
+      for (let ky = ay >> 3; ky <= (by - 1) >> 3; ky++) {
+        const y0b = Math.max(ay, ky << 3);
+        const y1b = Math.min(by, (ky << 3) + BRICK);
+        for (let kx = ax >> 3; kx <= (bx - 1) >> 3; kx++) {
+          const x0b = Math.max(ax, kx << 3);
+          const x1b = Math.min(bx, (kx << 3) + BRICK);
+          if (x1b - x0b === BRICK && y1b - y0b === BRICK && z1b - z0b === BRICK) {
+            this.setUniform(this.brickIndex(kx, ky, kz), p);
+            continue;
+          }
+          for (let z = z0b; z < z1b; z++)
+            for (let y = y0b; y < y1b; y++)
+              for (let x = x0b; x < x1b; x++) this.set(x, y, z, p);
+        }
+      }
+    }
+  }
+
   /** The brick's 512 voxels into `out`, indexed `lx + ly*8 + lz*64`. */
   readBrick(bi: number, out: Uint8Array): void {
     const e = this.table[bi];
