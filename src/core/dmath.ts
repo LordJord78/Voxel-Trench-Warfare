@@ -116,11 +116,20 @@ const PIO2_3T = 8.47842766036889956997e-32;
 let remY0 = 0;
 let remY1 = 0;
 
+// Multiples of π/2 whose high word marks where the medium-range reduction can
+// cancel: fdlibm's npio2_hw, recomputed from π in integer arithmetic.
+const NPIO2_HW = [
+  0x3ff921fb, 0x400921fb, 0x4012d97c, 0x401921fb, 0x401f6a7a, 0x4022d97c, 0x4025fdbb, 0x402921fb,
+  0x402c463a, 0x402f6a7a, 0x4031475c, 0x4032d97c, 0x40346b9c, 0x4035fdbb, 0x40378fdb, 0x403921fb,
+  0x403ab41b, 0x403c463a, 0x403dd85a, 0x403f6a7a, 0x40407e4c, 0x4041475c, 0x4042106c, 0x4042d97c,
+  0x4043a28c, 0x40446b9c, 0x404534ac, 0x4045fdbb, 0x4046c6cb, 0x40478fdb, 0x404858eb, 0x404921fb,
+];
+
 /**
  * fdlibm __ieee754_rem_pio2: x = n·π/2 + (remY0 + remY1), returning n.
- * Arguments past 2^19·π/2 take the same three-step Cody–Waite reduction rather
- * than Payne–Hanek; that is still deterministic, merely less accurate at angles
- * the game never produces.
+ * Medium arguments take Cody–Waite with fdlibm's quick path; anything past
+ * 2^19·π/2 goes through `kernelRemPio2` (Payne–Hanek), so every finite angle
+ * reduces exactly as fdlibm reduces it.
  */
 function remPio2(x: number): number {
   const hx = highWord(x);
@@ -154,6 +163,30 @@ function remPio2(x: number): number {
     }
     return -1;
   }
+  if (ix > 0x413921fb) {
+    if (ix >= 0x7ff00000) {
+      remY0 = remY1 = x - x;
+      return 0;
+    }
+    // z = |x| scaled to [2^23, 2^24), split into three 24-bit pieces.
+    const e0 = (ix >> 20) - 1046;
+    let z = fromWords(ix - (e0 << 20), lowWord(x));
+    const tx = [0, 0, 0];
+    for (let k = 0; k < 2; k++) {
+      tx[k] = Math.trunc(z);
+      z = (z - tx[k]) * TWO24;
+    }
+    tx[2] = z;
+    let nx = 3;
+    while (tx[nx - 1] === 0) nx--;
+    const n = kernelRemPio2(tx, e0, nx);
+    if (hx < 0) {
+      remY0 = -remY0;
+      remY1 = -remY1;
+      return -n;
+    }
+    return n;
+  }
   const t0 = Math.abs(x);
   const n = Math.trunc(t0 * INV_PIO2 + 0.5);
   const fn = n;
@@ -162,7 +195,7 @@ function remPio2(x: number): number {
   const j = ix >> 20;
   remY0 = r - w;
   let i = j - ((highWord(remY0) >> 20) & 0x7ff);
-  if (i > 16) {
+  if ((n >= 32 || ix === NPIO2_HW[n - 1]) && i > 16) {
     let t = r;
     w = fn * PIO2_2;
     r = t - w;
@@ -184,6 +217,162 @@ function remPio2(x: number): number {
     return -n;
   }
   return n;
+}
+
+const TWO24 = 16777216;
+const TWON24 = 5.9604644775390625e-8;
+
+// 2/π in 24-bit pieces (fdlibm's two_over_pi), recomputed from π in integer arithmetic.
+const IPIO2 = [
+  0xa2f983, 0x6e4e44, 0x1529fc, 0x2757d1, 0xf534dd, 0xc0db62, 0x95993c, 0x439041, 0xfe5163, 0xabdebb, 0xc561b7,
+  0x246e3a, 0x424dd2, 0xe00649, 0x2eea09, 0xd1921c, 0xfe1deb, 0x1cb129, 0xa73ee8, 0x8235f5, 0x2ebb44, 0x84e99c,
+  0x7026b4, 0x5f7e41, 0x3991d6, 0x398353, 0x39f49c, 0x845f8b, 0xbdf928, 0x3b1ff8, 0x97ffde, 0x05980f, 0xef2f11,
+  0x8b5a0a, 0x6d1f6d, 0x367ecf, 0x27cb09, 0xb74f46, 0x3f669e, 0x5fea2d, 0x7527ba, 0xc7ebe5, 0xf17b3d, 0x0739f7,
+  0x8a5292, 0xea6bfb, 0x5fb11f, 0x8d5d08, 0x560330, 0x46fc7b, 0x6babf0, 0xcfbc20, 0x9af436, 0x1da9e3, 0x91615e,
+  0xe61b08, 0x659985, 0x5f14a0, 0x68408d, 0xffd880, 0x4d7327, 0x310606, 0x1556ca, 0x73a8c9, 0x60e27b, 0xc08c6b,
+];
+
+// π/2 in doubles of 24 significant bits each (fdlibm's PIo2).
+const PIO2_PIECES = [
+  1.570796251296997, 7.549789415861596e-8, 5.390302529957765e-15, 3.282003415807913e-22,
+  1.270655753080676e-29, 1.2293330898111133e-36, 2.7337005381646456e-44, 2.1674168387780482e-51,
+];
+
+/** x·2^n, exactly, by building the power of two in the exponent bits. */
+function scalbn(x: number, n: number): number {
+  while (n > 1023) {
+    x *= 8.98846567431158e307;
+    n -= 1023;
+  }
+  while (n < -1022) {
+    x *= 2.2250738585072014e-308;
+    n += 1022;
+  }
+  return x * fromWords((n + 1023) << 20, 0);
+}
+
+/** fdlibm __kernel_rem_pio2 at double precision (prec 2): Payne–Hanek reduction. */
+function kernelRemPio2(x: number[], e0: number, nx: number): number {
+  const jk = 4;
+  const jp = 4;
+  const jx = nx - 1;
+  const jv = Math.max(0, Math.trunc((e0 - 3) / 24));
+  let q0 = e0 - 24 * (jv + 1);
+  const f = new Float64Array(20);
+  const q = new Float64Array(20);
+  const fq = new Float64Array(20);
+  const iq = new Int32Array(20);
+
+  for (let i = 0, j = jv - jx; i <= jx + jk; i++, j++) f[i] = j < 0 ? 0 : IPIO2[j];
+  for (let i = 0; i <= jk; i++) {
+    let fw = 0;
+    for (let j = 0; j <= jx; j++) fw += x[j] * f[jx + i - j];
+    q[i] = fw;
+  }
+
+  let jz = jk;
+  let z = 0;
+  let n = 0;
+  let ih = 0;
+  for (;;) {
+    z = q[jz];
+    for (let i = 0, j = jz; j > 0; i++, j--) {
+      const fw = Math.trunc(TWON24 * z);
+      iq[i] = Math.trunc(z - TWO24 * fw);
+      z = q[j - 1] + fw;
+    }
+    z = scalbn(z, q0);
+    z -= 8 * Math.floor(z * 0.125);
+    n = Math.trunc(z);
+    z -= n;
+    ih = 0;
+    if (q0 > 0) {
+      const i = iq[jz - 1] >> (24 - q0);
+      n += i;
+      iq[jz - 1] -= i << (24 - q0);
+      ih = iq[jz - 1] >> (23 - q0);
+    } else if (q0 === 0) {
+      ih = iq[jz - 1] >> 23;
+    } else if (z >= 0.5) {
+      ih = 2;
+    }
+    if (ih > 0) {
+      n += 1;
+      let carry = 0;
+      for (let i = 0; i < jz; i++) {
+        const v = iq[i];
+        if (carry === 0) {
+          if (v !== 0) {
+            carry = 1;
+            iq[i] = 0x1000000 - v;
+          }
+        } else {
+          iq[i] = 0xffffff - v;
+        }
+      }
+      if (q0 === 1) iq[jz - 1] &= 0x7fffff;
+      else if (q0 === 2) iq[jz - 1] &= 0x3fffff;
+      if (ih === 2) {
+        z = 1 - z;
+        if (carry !== 0) z -= scalbn(1, q0);
+      }
+    }
+    if (z === 0) {
+      let j = 0;
+      for (let i = jz - 1; i >= jk; i--) j |= iq[i];
+      if (j === 0) {
+        let k = 1;
+        while (iq[jk - k] === 0) k++;
+        for (let i = jz + 1; i <= jz + k; i++) {
+          f[jx + i] = IPIO2[jv + i];
+          let fw = 0;
+          for (let jj = 0; jj <= jx; jj++) fw += x[jj] * f[jx + i - jj];
+          q[i] = fw;
+        }
+        jz += k;
+        continue;
+      }
+    }
+    break;
+  }
+
+  if (z === 0) {
+    jz -= 1;
+    q0 -= 24;
+    while (iq[jz] === 0) {
+      jz--;
+      q0 -= 24;
+    }
+  } else {
+    z = scalbn(z, -q0);
+    if (z >= TWO24) {
+      const fw = Math.trunc(TWON24 * z);
+      iq[jz] = Math.trunc(z - TWO24 * fw);
+      jz += 1;
+      q0 += 24;
+      iq[jz] = fw;
+    } else {
+      iq[jz] = Math.trunc(z);
+    }
+  }
+
+  let fw = scalbn(1, q0);
+  for (let i = jz; i >= 0; i--) {
+    q[i] = fw * iq[i];
+    fw *= TWON24;
+  }
+  for (let i = jz; i >= 0; i--) {
+    let sum = 0;
+    for (let k = 0; k <= jp && k <= jz - i; k++) sum += PIO2_PIECES[k] * q[i + k];
+    fq[jz - i] = sum;
+  }
+  let head = 0;
+  for (let i = jz; i >= 0; i--) head += fq[i];
+  remY0 = ih === 0 ? head : -head;
+  let tail = fq[0] - head;
+  for (let i = 1; i <= jz; i++) tail += fq[i];
+  remY1 = ih === 0 ? tail : -tail;
+  return n & 7;
 }
 
 export function sin(x: number): number {
@@ -340,18 +529,52 @@ export function log(x: number): number {
   return dk * LN2_HI - ((s * (f - R) - dk * LN2_LO) - f);
 }
 
+function isOddInteger(y: number): boolean {
+  return Number.isInteger(y) && Math.abs(y % 2) === 1;
+}
+
+/** x^n for integer n by repeated squaring: multiplications only, exact when the result is representable. */
+function integerPow(x: number, y: number): number {
+  let n = Math.abs(y);
+  let base = x;
+  let result = 1;
+  while (n > 0) {
+    if (n % 2 === 1) result *= base;
+    n = Math.floor(n / 2);
+    if (n > 0) base *= base;
+  }
+  return y < 0 ? 1 / result : result;
+}
+
 /**
- * x^y as exp(y·log x). Not fdlibm's e_pow, so a few ulps looser, but built from
- * the deterministic exp and log above, which is the property that matters here.
+ * x^y with JavaScript's special values (ECMA-262 Number::exponentiate).
+ * Integer powers are repeated squaring, so 2^3 is 8 and 10^2 is 100; y = 0.5 is
+ * a square root; everything else is exp(y·log x) from the deterministic exp
+ * and log above.
  */
 export function pow(x: number, y: number): number {
+  if (y !== y) return NaN;
   if (y === 0) return 1;
-  if (x !== x || y !== y) return NaN;
-  if (x === 0) return y > 0 ? 0 : Infinity;
-  if (x > 0) return exp(y * log(x));
-  if (Math.floor(y) !== y || !Number.isFinite(y)) return NaN;
-  const magnitude = exp(y * log(-x));
-  return Math.abs(y % 2) === 1 ? -magnitude : magnitude;
+  if (x !== x) return NaN;
+  if (x === Infinity) return y > 0 ? Infinity : 0;
+  if (x === -Infinity) {
+    if (y > 0) return isOddInteger(y) ? -Infinity : Infinity;
+    return isOddInteger(y) ? -0 : 0;
+  }
+  if (x === 0) {
+    const negative = Object.is(x, -0) && isOddInteger(y);
+    if (y > 0) return negative ? -0 : 0;
+    return negative ? -Infinity : Infinity;
+  }
+  if (y === Infinity || y === -Infinity) {
+    const a = Math.abs(x);
+    if (a === 1) return NaN;
+    return (a > 1) === (y > 0) ? Infinity : 0;
+  }
+  if (Number.isInteger(y)) return integerPow(x, y);
+  if (x < 0) return NaN;
+  if (y === 0.5) return Math.sqrt(x);
+  return exp(y * log(x));
 }
 
 // --- atan / atan2 -----------------------------------------------------------------
