@@ -15,10 +15,12 @@ import { hash32x4 } from '../../core/hash';
 import { BrickMap, UNIFORM } from '../bricks';
 import { P, isLoose, isSolid, kindOf, K } from '../materials';
 import { bandSink } from '../sink';
-import { FLAG, columnModel, type ColumnModel } from './columns';
+import { FLAG, columnModel, rememberColumns, type ColumnModel } from './columns';
 import { stampDugout, stampSandbags } from './furniture';
 import { vx } from './params';
-import { bayList, type WorldPlan } from './plan';
+import { bayList } from './bays';
+import type { WorldPlan } from './plan';
+import { propReach, stampProp } from './props';
 import type { BayPlan } from './trenches';
 
 export const BAND = 32;
@@ -148,6 +150,7 @@ export function bandMap(plan: WorldPlan, band: number): BrickMap {
   const p = plan.params;
   const x0 = band * BAND;
   const m = columnModel(plan, x0, x0 + BAND);
+  rememberColumns(plan, band, m);
   const map = new BrickMap({ x: BAND, y: p.dims.y, z: p.dims.z });
   const ctx = context(plan);
   const deep = ctx.clay + 1;
@@ -193,8 +196,20 @@ export function bandMap(plan: WorldPlan, band: number): BrickMap {
     }
   }
   stampFurniture(plan, map, x0);
+  stampProps(plan, map, x0);
   map.takeDirty();
   return map;
+}
+
+/** Landscape props in plan order, each drawn whole and clipped to the band. */
+function stampProps(plan: WorldPlan, map: BrickMap, x0: number): void {
+  const sink = bandSink(map, x0);
+  const clip = { x0, x1: x0 + BAND };
+  for (const prop of plan.props) {
+    const reach = propReach(prop);
+    if (prop.x + reach < clip.x0 || prop.x - reach >= clip.x1) continue;
+    stampProp(sink, clip, plan, prop);
+  }
 }
 
 /** Sandbag crests and dugouts, drawn whole and clipped to the band. */

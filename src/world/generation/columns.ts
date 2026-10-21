@@ -10,7 +10,7 @@
  */
 
 import { CraterField } from './craters';
-import { bayList, type WorldPlan } from './plan';
+import type { WorldPlan } from './plan';
 import { ditchAt, fieldHeight } from './terrain';
 import type { BayPlan, LegPlan } from './trenches';
 
@@ -20,6 +20,8 @@ export interface ColumnModel {
   /** First column held, including the one-column halo either side of the band. */
   x0: number;
   x1: number;
+  /** First z held, and how many: a band holds every z; a single-column query holds one. */
+  z0: number;
   nz: number;
   /** Undisturbed field surface: the reference strata are laid against. */
   ground: Int16Array;
@@ -57,12 +59,18 @@ function forBox(m: ColumnModel, longAxis: 0 | 2, a0: number, a1: number, b0: num
   const [x0, x1, z0, z1] = longAxis === 0 ? [a0, a1, b0, b1] : [b0, b1, a0, a1];
   const xa = Math.max(x0, m.x0);
   const xb = Math.min(x1, m.x1);
-  const za = Math.max(z0, 0);
-  const zb = Math.min(z1, m.nz);
+  const za = Math.max(z0, m.z0);
+  const zb = Math.min(z1, m.z0 + m.nz);
   for (let x = xa; x < xb; x++) {
-    const row = (x - m.x0) * m.nz;
+    const row = (x - m.x0) * m.nz - m.z0;
     for (let z = za; z < zb; z++) fn(row + z);
   }
+}
+
+/** Does an along/cross box overlap the model's columns at all? */
+function touches(m: ColumnModel, longAxis: 0 | 2, a0: number, a1: number, b0: number, b1: number): boolean {
+  const [x0, x1, z0, z1] = longAxis === 0 ? [a0, a1, b0, b1] : [b0, b1, a0, a1];
+  return x1 > m.x0 && x0 < m.x1 && z1 > m.z0 && z0 < m.z0 + m.nz;
 }
 
 function openTrench(m: ColumnModel, c: number, floorY: number, bay: number): void {
@@ -75,15 +83,15 @@ function openTrench(m: ColumnModel, c: number, floorY: number, bay: number): voi
   m.flags[c] = (m.flags[c] & (FLAG.DITCH | FLAG.CRATER)) | FLAG.TRENCH;
 }
 
-export function columnModel(plan: WorldPlan, x0: number, x1: number): ColumnModel {
+export function columnModel(plan: WorldPlan, x0: number, x1: number, z0 = 0, z1 = plan.params.dims.z): ColumnModel {
   const p = plan.params;
   const T = p.trench;
   const mx0 = x0 - 1;
   const mx1 = x1 + 1;
-  const nz = p.dims.z;
+  const nz = z1 - z0;
   const n = (mx1 - mx0) * nz;
   const m: ColumnModel = {
-    x0: mx0, x1: mx1, nz,
+    x0: mx0, x1: mx1, z0, nz,
     ground: new Int16Array(n), surface: new Int16Array(n), floor: new Int16Array(n).fill(-1),
     solidTop: new Int16Array(n).fill(-1), spoilTop: new Int16Array(n).fill(-1),
     revetTop: new Int16Array(n).fill(-1), revetFrom: new Int16Array(n).fill(-1),
@@ -93,8 +101,8 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number): ColumnMode
   // The field, then ditches (pure functions of the terrain).
   const cut = Math.floor(1.5 / p.voxel + 0.5);
   for (let x = mx0; x < mx1; x++) {
-    const row = (x - mx0) * nz;
-    for (let z = 0; z < nz; z++) {
+    const row = (x - mx0) * nz - z0;
+    for (let z = z0; z < z1; z++) {
       const h = Math.max(p.waterTable + 2, Math.min(p.dims.y - 80, Math.floor(fieldHeight(plan.terrain, p, x, z) + 0.5)));
       m.ground[row + z] = h;
       if (ditchAt(plan.terrain, p, x, z)) {
@@ -117,6 +125,9 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number): ColumnMode
     parados.fill(0);
 
     line.bays.forEach((bay, i) => {
+      // Everything a bay touches lies within its footprint widened by its banks: skip it if that misses us.
+      const bank = Math.max(bay.crestY - bay.groundY, T.paradosH) + T.crestFlat + 2;
+      if (!touches(m, axis, bay.a0, bay.a1 + T.leg, bay.b0 - bank, bay.b1 + bank)) return;
       const id = bayBase + i;
       forBox(m, axis, bay.a0, bay.a1, bay.b0, bay.b1, (c) => openTrench(m, c, bay.floorY, id));
       if (bay.firingSteps) firingStep(m, p.trench, bay, axis, facing);
@@ -156,6 +167,7 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number): ColumnMode
       }
     });
     line.legs.forEach((leg: LegPlan, i) => {
+      if (!touches(m, axis, leg.a0, leg.a1, leg.b0, leg.b1)) return;
       forBox(m, axis, leg.a0, leg.a1, leg.b0, leg.b1, (c) => openTrench(m, c, leg.floorY, bayBase + i));
     });
 
@@ -174,10 +186,11 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number): ColumnMode
     for (const d of line.dugouts) {
       const target = d.roofY + 2 + Math.floor(1.0 / p.voxel + 0.5);
       const spread = target - p.waterTable;
+      if (!touches(m, 0, d.lo[0] - spread, d.hi[0] + spread, d.lo[2] - spread, d.hi[2] + spread)) continue;
       forBox(m, 0, d.lo[0] - spread, d.hi[0] + spread, d.lo[2] - spread, d.hi[2] + spread, (c) => {
         if (m.flags[c] & FLAG.TRENCH) return;
         const x = Math.floor(c / nz) + mx0;
-        const z = c % nz;
+        const z = (c % nz) + z0;
         const dx = x < d.lo[0] ? d.lo[0] - x : x >= d.hi[0] ? x - d.hi[0] + 1 : 0;
         const dz = z < d.lo[2] ? d.lo[2] - z : z >= d.hi[2] ? z - d.hi[2] + 1 : 0;
         const t = target - Math.max(dx, dz);
@@ -190,8 +203,8 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number): ColumnMode
   // Craters last, as in Python: bowls cut field and parapet alike; rims heap only on bare field.
   const field = craterField(plan);
   for (let x = mx0; x < mx1; x++) {
-    const row = (x - mx0) * nz;
-    for (let z = 0; z < nz; z++) {
+    const row = (x - mx0) * nz - z0;
+    for (let z = z0; z < z1; z++) {
       const c = row + z;
       if (m.flags[c] & FLAG.TRENCH) continue;
       const base = m.surface[c];
@@ -258,4 +271,46 @@ function firingStep(m: ColumnModel, T: WorldPlan['params']['trench'], bay: BayPl
   }
 }
 
-export { bayList };
+
+const modelCache = new WeakMap<WorldPlan, Map<number, ColumnModel>>();
+
+/** Keep a band's model for `columnTopAt`, so stamping a band reuses the model its fill built. */
+export function rememberColumns(plan: WorldPlan, band: number, m: ColumnModel): void {
+  let cache = modelCache.get(plan);
+  if (!cache) {
+    cache = new Map();
+    modelCache.set(plan, cache);
+  }
+  cache.delete(band);
+  cache.set(band, m);
+  if (cache.size > 6) cache.delete(cache.keys().next().value!);
+}
+
+const pointCache = new WeakMap<WorldPlan, Map<number, number>>();
+
+/**
+ * The top of any column — first air above its ground mass, after trenches,
+ * parapets and craters — so a prop stands on the real ground wherever it is
+ * drawn. A band whose model is cached answers at once; anywhere else gets a
+ * one-column model, remembered for a while.
+ */
+export function columnTopAt(plan: WorldPlan, x: number, z: number): number {
+  const xi = Math.floor(x);
+  const zi = Math.max(0, Math.min(plan.params.dims.z - 1, Math.floor(z)));
+  const band = modelCache.get(plan)?.get(Math.floor(xi / 32));
+  if (band) return band.top[(xi - band.x0) * band.nz + zi - band.z0];
+  let points = pointCache.get(plan);
+  if (!points) {
+    points = new Map();
+    pointCache.set(plan, points);
+  }
+  const key = xi * 4096 + zi;
+  let top = points.get(key);
+  if (top === undefined) {
+    const m = columnModel(plan, xi, xi + 1, zi, zi + 1);
+    top = m.top[(xi - m.x0) * m.nz];
+    if (points.size > 65536) points.clear();
+    points.set(key, top);
+  }
+  return top;
+}

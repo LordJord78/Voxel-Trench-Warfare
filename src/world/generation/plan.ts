@@ -11,7 +11,8 @@ import { Rng } from '../../core/rng';
 import { planCraters, type Crater, type DirectHit } from './craters';
 import type { GenParams } from './params';
 import { buildTerrain, surfaceAt, type TerrainModel } from './terrain';
-import { planLine, type BayPlan, type LinePlan } from './trenches';
+import { planProps } from './props';
+import { planLine, type LinePlan } from './trenches';
 
 export interface PropPlan {
   kind: string;
@@ -42,13 +43,14 @@ export function planWorld(params: GenParams, seed: number): WorldPlan {
     .filter((l) => l.spec.firingSteps)
     .map((l) => ({ z: l.spec.crossBase, facing: l.spec.facing }));
   const { open, direct } = planCraters(params, terrain, root.derive('craters'), fronts);
-  return { seed, params, terrain, craters: open, direct, lines, props: [] };
+  const plan: WorldPlan = { seed, params, terrain, craters: open, direct, lines, props: [] };
+  const placed = planProps(plan, root);
+  plan.props = placed.props;
+  plan.direct = [...direct, ...placed.hits];
+  return plan;
 }
 
-/** Every bay of every line, in plan order; a bay's index here is its global id. */
-export function bayList(plan: WorldPlan): BayPlan[] {
-  return plan.lines.flatMap((line) => line.bays);
-}
+export { bayList } from './bays';
 
 export interface BayLookup {
   at(x: number, z: number): { line: number; bay: number } | null;
