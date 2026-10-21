@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TRENCHLINE</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0b0d; color: #d8d2c4; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+      #status { position: fixed; left: 16px; top: 12px; white-space: pre; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="status">TRENCHLINE — building</div>
+    <script type="module" src="/src/app/main.ts"></script>
+  </body>
+</html>
