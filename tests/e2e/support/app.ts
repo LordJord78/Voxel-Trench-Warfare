@@ -25,6 +25,17 @@ export interface Hooks {
   setQuality(q: { preset?: 'high' | 'low'; dynres?: boolean; scale?: number; budgetMs?: number }): void;
   loseDevice(): void;
   simulateGap(ms: number): void;
+  play(): void;
+  walk(): void;
+  teleport(at: { position: [number, number, number]; yaw: number; pitch: number }): void;
+  player(): { position: [number, number, number]; velocity: [number, number, number]; stance: number; height: number; onGround: boolean; onFiringStep: boolean; wadeDepth: number };
+  camera(): { position: [number, number, number]; yaw: number; pitch: number; fov?: number };
+  mode(): 'loading' | 'ready' | 'playing' | 'paused' | 'fly';
+  waitConverged(): Promise<void>;
+  promptMs?: number;
+  phases: string[];
+  views: Record<string, { position: [number, number, number]; yaw: number; pitch: number; time: number }>;
+  world: { spawn: { position: [number, number, number] } };
 }
 
 export async function openGame(page: Page): Promise<string[]> {

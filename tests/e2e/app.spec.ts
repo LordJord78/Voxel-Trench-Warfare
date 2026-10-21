@@ -95,3 +95,22 @@ test('dynamic resolution gives way to an impossible budget, and comes back', asy
   expect(await hooks(page, (h) => h.stats().scale)).toBeGreaterThan(0.5);
   expect(errors).toEqual([]);
 });
+
+test('the page loads to a click-to-play prompt over the world, and a teleport starts the image afresh', async ({ page }) => {
+  const errors = await openGame(page);
+  await expect(page.locator('#play')).toBeVisible();
+  expect(await hooks(page, (h) => h.mode())).toBe('ready');
+  expect(await hooks(page, (h) => h.phases.length)).toBeGreaterThanOrEqual(3);
+  await page.locator('#play').click();
+  await expect(page.locator('#loading')).toBeHidden();
+  expect(await hooks(page, (h) => h.mode())).toBe('playing');
+  await hooks(page, (h) => h.waitFrames(5));
+  const reset = await hooks(page, async (h) => {
+    const spawn = h.world.spawn.position;
+    h.teleport({ position: [spawn[0], spawn[1], spawn[2]], yaw: 0, pitch: 0 });
+    await h.waitFrames(1);
+    return h.stats().reset;
+  });
+  expect(reset).toBe(true);
+  expect(errors).toEqual([]);
+});

@@ -1,13 +1,21 @@
 /**
- * Bootstrap: generate the world in workers while the GPU device comes up,
- * upload it, compile the renderer, and draw it from a fly camera at the
- * front-line bay at dusk. Keys (keys.ts) jump between views and change the
- * time of day and quality; F3 shows what every frame costs. When the game
- * cannot run, or the GPU goes away, it stops and says why in the status line.
- * `window.__trenchline` exposes hooks the tests use.
+ * Bootstrap and the game loop.
+ *
+ * The page asks for WebGPU first and says at once if there is none. The world
+ * generates in workers while the loading screen inks a trench trace; it is
+ * uploaded, and the player is drawn standing in the front-line bay behind a
+ * "click to play" prompt. Playing, every frame turns the mouse, runs the
+ * 60 Hz simulation over the frame's time, places the camera between the last
+ * two ticks and draws. Esc (or losing the pointer lock) pauses to a menu with
+ * the world still drawn behind it. The standard views are a free-flying
+ * camera (`fly`), and the backquote key toggles it. When the game cannot run,
+ * or the GPU goes away, it stops and says why. `window.__trenchline` exposes
+ * hooks the tests use.
  */
 
 import { loadTunables } from '../core/tunables';
+import { Stance } from '../physics/character';
+import type { CameraPose } from '../render/camera';
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
 import { FarFieldGpu } from '../render/farfield-gpu';
 import { GpuWorld } from '../render/gpu-world';
@@ -15,33 +23,41 @@ import { sceneLights } from '../render/lights';
 import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
+import { Session } from '../sim/session';
+import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
+import { PauseMenu } from '../ui/pause';
+import { PeriscopeFrame } from '../ui/periscope';
+import { defaultSettings, loadSettings, saveSettings, type Settings } from '../ui/settings';
 import { fingerprint } from '../world/fingerprint';
+import { CameraRig, rigTunables } from './camera-rig';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
+import { Input } from './input';
 import { actionFor, nextTimeKey, stepTime, type KeyAction } from './keys';
 import { standardViews, VIEW_NAMES, type ViewName } from './views';
 
+const SEED = 7;
 /** A canvas resize settles this long before the internal images are reallocated. */
 const RESIZE_SETTLE_MS = 150;
 
-const statusEl = document.getElementById('status')!;
+type Mode = 'loading' | 'ready' | 'playing' | 'paused' | 'fly';
+
 const canvas = document.getElementById('view') as HTMLCanvasElement;
-const hooks: Record<string, unknown> = { ready: false };
+const loading = new LoadingScreen(document);
+const hooks: Record<string, unknown> = { ready: false, phases: loading.phases };
 (window as unknown as { __trenchline: unknown }).__trenchline = hooks;
 /** Set once the game has stopped for good: its message stays, and no more frames are drawn. */
 let stopped = false;
 
-function say(text: string): void {
-  if (!stopped) statusEl.textContent = text;
-}
-
 function stop(message: string): void {
-  say(message);
+  if (stopped) return;
   stopped = true;
+  loading.fail(message);
   hooks.error = message;
   hooks.ready = true;
   hooks.ms ??= Math.round(performance.now());
+  if (document.pointerLockElement) document.exitPointerLock();
 }
 
 function fail(error: unknown): void {
@@ -58,21 +74,53 @@ function canvasTarget(): [number, number] {
   return [Math.max(1, Math.floor(canvas.clientWidth * dpr)), Math.max(1, Math.floor(canvas.clientHeight * dpr))];
 }
 
+/** Ask for the pointer; a refusal (headless, too soon after Esc, the user) leaves play running without it. */
+function lockPointer(): void {
+  try {
+    const request = canvas.requestPointerLock() as unknown;
+    if (request instanceof Promise) request.catch(() => {});
+  } catch {
+    // Pointer lock is unavailable here: the mouse simply does not turn the view.
+  }
+}
+
+/** The next paint, so the loading screen can show a phase before work that holds the page. */
+const nextPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+
+const storage = (() => {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+})();
+
 async function start(): Promise<void> {
-  say('TRENCHLINE — generating the world…');
+  loading.progress('Starting', null, 0.02);
   // The device comes up and the pipelines compile while the workers generate.
   const asError = (e: unknown) => (e instanceof Error ? e : new Error(String(e)));
   const gpuReady: Promise<Gpu | Error> = createGpu().catch(asError);
   // Without a GPU there is nothing to draw: say so at once, not after generating a world.
   void gpuReady.then((g) => g instanceof Error && fail(g));
   const compiling = gpuReady.then((g) => (g instanceof Error ? g : compileFrame(g.device).catch(asError)));
-  const world = await generateInWorkers(7, (phase, done, total) => say(`TRENCHLINE — generating: ${phase} ${done}/${total}`));
+  const world = await generateInWorkers(
+    SEED,
+    (phase, done, total) => {
+      if (phase === 'fill') loading.progress('Digging the trenches', `strip ${done} of ${total}`, 0.05 + 0.6 * (done / total));
+    },
+    async () => {
+      loading.progress("Shelling no man's land", null, 0.7);
+      await nextPaint();
+    },
+  );
   const gpu = await gpuReady;
   if (gpu instanceof Error || stopped) return;
   void gpu.device.lost.then((info) => {
     console.warn(`[gpu] device lost (${info.reason}): ${info.message}`);
     stop(`The graphics device was lost (${info.reason}). Reload the page to continue.`);
   });
+  loading.progress('Sending the world to the GPU', null, 0.88);
+  await nextPaint();
 
   let t = performance.now();
   const gpuWorld = GpuWorld.create(gpu.device, world);
@@ -86,16 +134,23 @@ async function start(): Promise<void> {
   world.timings.pipelinesWait = Math.round(performance.now() - t);
   [canvas.width, canvas.height] = canvasTarget();
   const tun = loadTunables();
-  const renderer = await Renderer.create(gpu, canvas, gpuWorld, world.plan, { ...rendererTunables(tun), far, compiled, dynres: true });
+  const render = rendererTunables(tun);
+  const renderer = await Renderer.create(gpu, canvas, gpuWorld, world.plan, { ...render, far, compiled, dynres: true });
 
   const views = standardViews(world.plan, world.spawn);
-  const cam = new FlyCam(views.bay);
-  let timeOfDay = views.bay.time;
-  const goTo = (name: ViewName) => {
-    const v = views[name];
-    cam.pose = { position: [...v.position], yaw: v.yaw, pitch: v.pitch };
-    timeOfDay = v.time;
-  };
+  const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn }, tun, SEED, views.bay.yaw);
+  const rig = new CameraRig(rigTunables(tun));
+  const input = new Input();
+  const fly = new FlyCam(views.bay);
+  const pitchLimit = tun.f('player.pitch_limit');
+  const periscopeScale = session.controller.t.stances[Stance.PERISCOPE].fovScale;
+  let settings: Settings = loadSettings(storage, defaultSettings(tun));
+  renderer.setQuality({ preset: settings.preset });
+  let mode: Mode = 'loading';
+  /** The mode a pause returns to. */
+  let resumeTo: 'playing' | 'fly' = 'playing';
+  let timeOfDay = 0;
+
   // The light follows the time of day; the flares burn as it says.
   const lights = sceneLights(world.plan, tun);
   let litFor = Number.NaN;
@@ -107,7 +162,52 @@ async function start(): Promise<void> {
     renderer.setLights(lights, sky.flares);
   };
 
+  const changeSettings = (next: Settings) => {
+    if (next.preset !== settings.preset) renderer.setQuality({ preset: next.preset });
+    settings = next;
+    saveSettings(storage, settings);
+  };
   const overlay = new Overlay(document.body);
+  const periscope = new PeriscopeFrame(document);
+  const pauseMenu = new PauseMenu(document, {
+    resume: () => resume(),
+    change: changeSettings,
+    time: (value) => (timeOfDay = value),
+  });
+
+  const play = (lock: boolean) => {
+    if (stopped) return;
+    loading.hide();
+    mode = 'playing';
+    if (lock) lockPointer();
+  };
+  const pause = () => {
+    if (mode !== 'playing' && mode !== 'fly') return;
+    resumeTo = mode;
+    mode = 'paused';
+    input.blur();
+    held.clear();
+    // The menu needs the cursor; an Esc the browser did not act on can leave the lock held.
+    if (document.pointerLockElement) document.exitPointerLock();
+    pauseMenu.open(settings, timeOfDay);
+  };
+  const resume = () => {
+    if (mode !== 'paused') return;
+    pauseMenu.close();
+    mode = resumeTo;
+    lockPointer();
+  };
+  const enterFly = (pose: CameraPose) => {
+    loading.hide();
+    fly.pose = { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch };
+    mode = 'fly';
+    renderer.resetHistory();
+  };
+  const goTo = (name: ViewName) => {
+    enterFly(views[name]);
+    timeOfDay = views[name].time;
+  };
+
   const act = (a: KeyAction) => {
     switch (a.kind) {
       case 'view':
@@ -120,7 +220,7 @@ async function start(): Promise<void> {
         timeOfDay = stepTime(timeOfDay, a.by);
         break;
       case 'preset':
-        renderer.setQuality({ preset: renderer.quality.preset === 'high' ? 'low' : 'high' });
+        changeSettings({ ...settings, preset: settings.preset === 'high' ? 'low' : 'high' });
         break;
       case 'dynres':
         renderer.setQuality({ dynres: !renderer.quality.dynres });
@@ -130,23 +230,54 @@ async function start(): Promise<void> {
         break;
     }
   };
-  const keys = new Set<string>();
+  /** Keys held, for the fly camera. */
+  const held = new Set<string>();
   const look: [number, number] = [0, 0];
   window.addEventListener('keydown', (e) => {
-    keys.add(e.code);
-    // Leave the browser's own shortcuts (reload, find) alone; held keys repeat only the time steps.
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    // Leave the browser's own shortcuts (reload, find) alone.
+    if (e.metaKey || e.ctrlKey || e.altKey || stopped) return;
+    if (e.code === 'Escape') {
+      // With the pointer locked the browser takes Esc itself, and the lost lock pauses instead.
+      pause();
+      return;
+    }
+    if (mode === 'paused' || mode === 'loading') return;
+    if (e.code === 'Backquote' && !e.repeat) {
+      if (mode === 'fly') mode = 'playing';
+      else enterFly(lastPose);
+      return;
+    }
+    held.add(e.code);
+    if (mode === 'playing') input.keyDown(e.code, e.repeat);
     const action = actionFor(e.code);
+    // Held keys repeat only the time steps.
     if (!action || (e.repeat && action.kind !== 'time-step')) return;
     e.preventDefault();
     act(action);
   });
-  window.addEventListener('keyup', (e) => keys.delete(e.code));
-  canvas.addEventListener('click', () => canvas.requestPointerLock());
+  window.addEventListener('keyup', (e) => {
+    held.delete(e.code);
+    input.keyUp(e.code);
+  });
+  // Focus left the page: let go of everything, or the player walks on with W stuck down.
+  window.addEventListener('blur', () => {
+    held.clear();
+    input.blur();
+  });
+  canvas.addEventListener('click', () => {
+    if (mode === 'ready') play(true);
+    else if ((mode === 'playing' || mode === 'fly') && document.pointerLockElement !== canvas) lockPointer();
+  });
+  document.addEventListener('pointerlockchange', () => {
+    if (document.pointerLockElement !== canvas && (mode === 'playing' || mode === 'fly')) pause();
+  });
   window.addEventListener('mousemove', (e) => {
     if (document.pointerLockElement !== canvas) return;
-    look[0] += e.movementX;
-    look[1] += e.movementY;
+    if (mode === 'playing') input.mouse(e.movementX, e.movementY);
+    else if (mode === 'fly') {
+      look[0] += e.movementX;
+      look[1] += e.movementY;
+    }
   });
 
   // A new canvas size is applied once it has held for RESIZE_SETTLE_MS, so dragging a window
@@ -171,6 +302,7 @@ async function start(): Promise<void> {
   let interval = 0;
   /** Added to the clock, to test a long pause (simulateGap). */
   let skipped = 0;
+  let lastPose: CameraPose = rig.pose(session, 0, settings.fov);
   const waiting: { until: number; resolve: () => void }[] = [];
   let snapshot: ((stats: { mean: number; std: number }) => void) | null = null;
 
@@ -179,21 +311,40 @@ async function start(): Promise<void> {
     const now = time + skipped;
     const ms = now - last;
     if (ms > 0 && ms < 250) interval = interval === 0 ? ms : interval * 0.95 + ms * 0.05;
-    const dt = Math.min(0.1, ms / 1000);
+    const dt = Math.min(0.1, Math.max(0, ms) / 1000);
     last = now;
     followCanvas(now);
-    cam.update(dt, keys, look);
-    look[0] = 0;
-    look[1] = 0;
+    let pose: CameraPose;
+    if (mode === 'fly') {
+      fly.sensitivity = settings.sensitivity;
+      fly.update(dt, held, look);
+      look[0] = 0;
+      look[1] = 0;
+      pose = { ...fly.pose, fov: settings.fov };
+      periscope.set(0);
+    } else {
+      if (mode === 'playing') {
+        input.look(session.player, settings.sensitivity, pitchLimit);
+        session.intent = input.intent();
+        session.advance(ms / 1000);
+        if (!session.player.onFiringStep) input.lowerPeriscope();
+      }
+      pose = rig.pose(session, dt, settings.fov);
+      periscope.set((1 - rig.fovScale) / (1 - periscopeScale));
+    }
     light();
-    renderer.render(cam.pose, timeOfDay, now);
+    renderer.render(pose, timeOfDay, now);
+    lastPose = pose;
     frames++;
     if (snapshot) {
       const take = snapshot;
       snapshot = null;
       take(canvasStats());
     }
-    if (!hooks.ready) {
+    if (mode === 'loading') {
+      mode = 'ready';
+      loading.ready(() => play(true));
+      hooks.promptMs = Math.round(performance.now());
       hooks.ready = true;
       hooks.ms = Math.round(now);
     }
@@ -206,8 +357,6 @@ async function start(): Promise<void> {
     if (now - shown > 250) {
       shown = now;
       const s = renderer.stats;
-      const p = cam.pose;
-      say(`TRENCHLINE  ${s.gpuMs === null ? '…' : `${s.gpuMs.toFixed(2)} ms GPU`}  ${s.res[0]}×${s.res[1]}  F3 for more`);
       overlay.show({
         gpuMs: s.gpuMs,
         passes: s.passes,
@@ -218,11 +367,11 @@ async function start(): Promise<void> {
         preset: s.preset,
         dynres: s.dynres,
         world: gpuWorld.stats,
-        position: p.position,
-        yaw: p.yaw,
-        pitch: p.pitch,
+        position: pose.position,
+        yaw: pose.yaw,
+        pitch: pose.pitch,
         timeOfDay,
-        place: placeName(world.plan, p.position[0], p.position[2]),
+        place: placeName(world.plan, pose.position[0], pose.position[2]),
       });
     }
     requestAnimationFrame(frame);
@@ -248,23 +397,52 @@ async function start(): Promise<void> {
     return { mean, std: Math.sqrt(Math.max(0, sq / n - mean * mean)) };
   }
 
+  const waitFrames = (n: number) => new Promise<void>((resolve) => waiting.push({ until: frames + n, resolve }));
   Object.assign(hooks, {
     world,
     renderer,
+    session,
+    views,
     timings: world.timings,
     view(name: ViewName) {
       if (!VIEW_NAMES.includes(name)) throw new Error(`no view '${name}'`);
       goTo(name);
     },
+    walk() {
+      if (mode === 'fly') mode = 'playing';
+    },
+    play: () => play(false),
+    teleport(at: { position: [number, number, number]; yaw: number; pitch: number }) {
+      session.teleport(at.position, at.yaw, at.pitch);
+      renderer.resetHistory();
+    },
+    player() {
+      const p = session.player;
+      return {
+        position: p.position.toArray(),
+        velocity: p.velocity.toArray(),
+        stance: p.stance,
+        height: p.height,
+        onGround: p.onGround,
+        onFiringStep: p.onFiringStep,
+        wadeDepth: p.wadeDepth,
+      };
+    },
+    camera: () => lastPose,
+    mode: () => mode,
     setTimeOfDay(value: number) {
       timeOfDay = value;
     },
     frames: () => frames,
-    waitFrames: (n: number) => new Promise<void>((resolve) => waiting.push({ until: frames + n, resolve })),
+    waitFrames,
+    waitConverged: () => waitFrames(render.denoise.historyMax + 8),
     stats: () => renderer.stats,
     snapshot: () => new Promise<{ mean: number; std: number }>((resolve) => (snapshot = resolve)),
     fingerprint: () => fingerprint(world.map),
-    setQuality: (q: Partial<Quality> & { budgetMs?: number }) => renderer.setQuality(q),
+    setQuality: (q: Partial<Quality> & { budgetMs?: number }) => {
+      renderer.setQuality(q);
+      if (q.preset) settings = { ...settings, preset: q.preset };
+    },
     loseDevice: () => gpu.device.destroy(),
     simulateGap: (ms: number) => {
       skipped += ms;

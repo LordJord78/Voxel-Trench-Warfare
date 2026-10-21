@@ -16,7 +16,12 @@ export type Progress = (phase: string, done: number, total: number) => void;
 
 type Job = { type: 'band'; band: number } | { type: 'farfield'; row0: number; row1: number };
 
-export async function generateInWorkers(seed: number, onProgress?: Progress): Promise<GeneratedWorld> {
+/**
+ * `onFilled` runs once the bands are filled, before the main thread assembles
+ * them and lands the shelling: a chance to show that phase before work that
+ * holds the page.
+ */
+export async function generateInWorkers(seed: number, onProgress?: Progress, onFilled?: () => Promise<void>): Promise<GeneratedWorld> {
   const t0 = performance.now();
   const plan: WorldPlan = planWorld(genParams(loadTunables()), seed);
   const planMs = Math.round(performance.now() - t0);
@@ -69,6 +74,7 @@ export async function generateInWorkers(seed: number, onProgress?: Progress): Pr
           far.height.set(data.height, data.row0 * far.size);
           far.material.set(data.material, data.row0 * far.size);
         }, 'farfield').then(() => farDone(far), farFail);
+        await onFilled?.();
         return results;
       },
       () => farReady,

@@ -399,6 +399,11 @@ export class Renderer {
     this.prevRes = null;
   }
 
+  /** Start every history afresh next frame: the camera jumped, and what it saw before is no guide. */
+  resetHistory(): void {
+    this.resetNext = true;
+  }
+
   /** A copy of the frame uniform's bytes as the last frame wrote them (see FRAME's layout). */
   frameUniform(): ArrayBuffer {
     return this.writer.buffer.slice(0);

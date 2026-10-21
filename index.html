@@ -6,15 +6,137 @@
     <title>TRENCHLINE</title>
     <link rel="icon" href="data:," />
     <style>
-      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0b0d; color: #d8d2c4; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      /* Colours from the render itself: the night sky, the dusk haze, duckboards, and a trench map's red ink. */
+      :root {
+        --night: #17141f;
+        --haze: #e7d3b8;
+        --duckboard: #a89880;
+        --map-red: #a8402c;
+        --flare: #f2e3b3;
+        --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+      }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: var(--night); color: var(--haze); font: 16px/1.5 var(--serif); }
       #view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
-      #status { position: fixed; left: 16px; top: 12px; white-space: pre; }
-      #overlay { position: fixed; right: 16px; top: 12px; margin: 0; padding: 8px 12px; font: inherit; white-space: pre; background: rgba(11, 11, 13, 0.72); pointer-events: none; }
+      [hidden] { display: none !important; }
+
+      /* A sheet over the canvas: solid until the world draws, then a scrim that keeps the title block legible. */
+      .sheet {
+        position: fixed; inset: 0; box-sizing: border-box; display: flex; align-items: flex-end;
+        padding: clamp(24px, 7vh, 72px) clamp(16px, 6vw, 88px);
+        background: var(--night);
+      }
+      .sheet.over-world { background: linear-gradient(to top right, rgba(23, 20, 31, 0.94) 0%, rgba(23, 20, 31, 0.72) 42%, rgba(23, 20, 31, 0.12) 100%); }
+      .block { width: 100%; max-width: 34rem; }
+      h1, h2 { font-weight: 400; margin: 0; line-height: 1; }
+      h1 { font-size: clamp(2.6rem, 7.5vw, 4.75rem); letter-spacing: 0.16em; margin-left: -0.05em; }
+      h2 { font-size: 2rem; letter-spacing: 0.08em; margin-bottom: 1.25rem; }
+      .lede { margin: 0.9rem 0 1.75rem; color: var(--duckboard); font-style: italic; max-width: 29rem; }
+
+      /* The progress: a trench trace of bays and traverses, inked over the dotted line still to dig. */
+      .trace { display: block; width: 100%; max-width: 30rem; height: 26px; overflow: visible; }
+      .trace path { fill: none; stroke-width: 2.4; stroke-linejoin: miter; }
+      .trace .planned { stroke: rgba(168, 152, 128, 0.42); stroke-dasharray: 2 4; stroke-width: 1.4; }
+      .trace .dug { stroke: var(--map-red); stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset 0.45s ease-out; }
+      #status { margin: 0.55rem 0 0; min-height: 1.5em; color: var(--duckboard); font-style: italic; }
+      #loading.failed #status { color: var(--haze); font-style: normal; font-size: 1.1rem; max-width: 30rem; }
+      #loading.failed .trace, #loading.failed .lede { display: none; }
+
+      button {
+        font: inherit; color: var(--night); background: var(--haze); border: 0; border-radius: 2px;
+        padding: 0.5em 1.35em; cursor: pointer;
+      }
+      button:hover { background: var(--flare); }
+      button:focus-visible, input:focus-visible { outline: 2px solid var(--flare); outline-offset: 3px; }
+      #play { margin-top: 1.5rem; font-size: 1.15rem; }
+
+      /* The controls, as a map's legend: the symbol, then what it means. */
+      .legend { display: grid; grid-template-columns: max-content 9.5rem max-content auto; gap: 0.4rem 0.9rem; margin: 1.6rem 0 0; font-size: 0.92rem; color: var(--duckboard); align-items: baseline; }
+      .legend dt { justify-self: end; white-space: nowrap; }
+      .legend dd { margin: 0; }
+      kbd { font: 0.82rem/1 var(--serif); color: var(--haze); border: 1px solid rgba(231, 211, 184, 0.42); border-radius: 3px; padding: 0.18em 0.42em; }
+      @media (max-width: 560px) { .legend { grid-template-columns: max-content auto; } }
+
+      /* The pause menu: the same title block, holding the four settings. */
+      #pause .block { max-width: 24rem; }
+      .setting { display: grid; grid-template-columns: 1fr auto; align-items: baseline; margin: 0 0 1.1rem; }
+      .setting label, .setting .name { color: var(--haze); }
+      .setting output { color: var(--duckboard); font-variant-numeric: tabular-nums; }
+      .setting input[type='range'] { grid-column: 1 / -1; width: 100%; margin: 0.35rem 0 0; accent-color: var(--haze); }
+      .ends { grid-column: 1 / -1; display: flex; justify-content: space-between; color: var(--duckboard); font-size: 0.85rem; font-style: italic; }
+      .choice { grid-column: 1 / -1; display: flex; gap: 1.25rem; margin-top: 0.35rem; color: var(--duckboard); }
+      .choice label { display: flex; gap: 0.4rem; align-items: center; cursor: pointer; }
+      .choice input { accent-color: var(--haze); margin: 0; }
+      #resume { margin-top: 0.5rem; }
+
+      /* Looking through a trench periscope: dark all round a long mirror. */
+      #periscope { position: fixed; inset: 0; pointer-events: none; }
+      #periscope .mirror {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        width: min(78vw, 1150px); height: min(28vw, 36vh); border-radius: 5px;
+        box-shadow: 0 0 0 200vmax rgba(9, 8, 11, 0.97), inset 0 0 70px rgba(0, 0, 0, 0.7), inset 0 0 0 1px rgba(231, 211, 184, 0.14);
+      }
+
+      /* F3: what the frame costs. A developer's readout, so it is set as one. */
+      #overlay {
+        position: fixed; right: 16px; top: 12px; margin: 0; padding: 8px 12px; white-space: pre; pointer-events: none;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--haze); background: rgba(23, 20, 31, 0.78);
+      }
+      @media (prefers-reduced-motion: reduce) { .trace .dug { transition: none; } }
     </style>
   </head>
   <body>
     <canvas id="view"></canvas>
-    <div id="status">TRENCHLINE — building</div>
+    <div id="periscope" hidden><div class="mirror"></div></div>
+    <section id="loading" class="sheet" aria-label="Loading">
+      <div class="block">
+        <h1>TRENCHLINE</h1>
+        <p class="lede">A front-line trench at dusk, ten centimetres to the voxel, ray traced live in your browser.</p>
+        <svg class="trace" viewBox="0 0 471 26" preserveAspectRatio="xMinYMid meet" role="progressbar" aria-label="Generating the world" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <path class="planned" d="M0 18 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h12" />
+          <path class="dug" pathLength="1" d="M0 18 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h12" />
+        </svg>
+        <p id="status" aria-live="polite">Starting</p>
+        <button id="play" type="button" hidden>Click to play</button>
+        <dl class="legend" id="controls" hidden>
+          <dt><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></dt><dd>Move</dd>
+          <dt><kbd>Shift</kbd></dt><dd>Sprint</dd>
+          <dt><kbd>Space</kbd></dt><dd>Jump</dd>
+          <dt><kbd>C</kbd></dt><dd>Crouch</dd>
+          <dt><kbd>Z</kbd></dt><dd>Go prone</dd>
+          <dt><kbd>Q</kbd></dt><dd>Periscope, on a firing step</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Pause</dd>
+          <dt><kbd>F3</kbd></dt><dd>Frame timings</dd>
+        </dl>
+      </div>
+    </section>
+    <section id="pause" class="sheet over-world" aria-label="Paused" hidden>
+      <form class="block" id="settings" autocomplete="off">
+        <h2>Paused</h2>
+        <div class="setting">
+          <span class="name" id="quality-name">Quality</span>
+          <div class="choice" role="radiogroup" aria-labelledby="quality-name">
+            <label><input type="radio" name="preset" value="high" /> High</label>
+            <label><input type="radio" name="preset" value="low" /> Low</label>
+          </div>
+        </div>
+        <div class="setting">
+          <label for="sensitivity">Mouse sensitivity</label>
+          <output for="sensitivity" id="sensitivity-value"></output>
+          <input id="sensitivity" type="range" min="0.02" max="0.6" step="0.01" />
+        </div>
+        <div class="setting">
+          <label for="fov">Field of view</label>
+          <output for="fov" id="fov-value"></output>
+          <input id="fov" type="range" min="60" max="110" step="1" />
+        </div>
+        <div class="setting">
+          <label for="time">Time of day</label>
+          <input id="time" type="range" min="0" max="1" step="0.01" />
+          <div class="ends" aria-hidden="true"><span>Dusk</span><span>Night</span></div>
+        </div>
+        <button id="resume" type="button">Resume</button>
+      </form>
+    </section>
     <script type="module" src="/src/app/main.ts"></script>
   </body>
 </html>
