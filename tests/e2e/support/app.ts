@@ -7,6 +7,7 @@ export interface Hooks {
   ms: number;
   view(name: string): void;
   setTimeOfDay(t: number): void;
+  timeOfDay(): number;
   frames(): number;
   waitFrames(n: number): Promise<void>;
   stats(): {

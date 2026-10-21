@@ -433,6 +433,7 @@ async function start(): Promise<void> {
     setTimeOfDay(value: number) {
       timeOfDay = value;
     },
+    timeOfDay: () => timeOfDay,
     frames: () => frames,
     waitFrames,
     waitConverged: () => waitFrames(render.denoise.historyMax + 8),
