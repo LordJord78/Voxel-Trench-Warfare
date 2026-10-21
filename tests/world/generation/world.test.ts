@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { loadTunables } from '../../../src/core/tunables';
 import { UNIFORM } from '../../../src/world/bricks';
@@ -11,6 +12,8 @@ import { genParams } from '../../../src/world/generation/params';
 import { planWorld } from '../../../src/world/generation/plan';
 import { columnModel } from '../../../src/world/generation/columns';
 import { structureFootprints } from '../../../src/world/generation/props';
+
+const golden = JSON.parse(readFileSync(new URL('../../fixtures/golden.json', import.meta.url), 'utf8')) as { seed: number; fingerprint: string };
 
 const p = genParams(loadTunables());
 const plan = planWorld(p, 7);
@@ -63,7 +66,8 @@ describe('the generated world', () => {
     expect(world.mirror.takeEdits()).toEqual([]);
   });
   it('matches the golden fingerprint for seed 7', async () => {
-    expect(await fingerprint(world.map)).toBe('dea2a4cd7809b3b83cecf714ba851600f20a91d85da08b1f17e9f4be8da4d67c');
+    expect(golden.seed).toBe(7);
+    expect(await fingerprint(world.map)).toBe(golden.fingerprint);
   });
   it('meets the far field along every edge column', () => {
     const ff = world.farField;

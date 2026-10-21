@@ -31,6 +31,7 @@ import { PeriscopeFrame } from '../ui/periscope';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from '../ui/settings';
 import { fingerprint } from '../world/fingerprint';
 import { CameraRig, rigTunables } from './camera-rig';
+import { reporter, runCheck } from './check';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
@@ -49,6 +50,11 @@ const hooks: Record<string, unknown> = { ready: false, phases: loading.phases };
 (window as unknown as { __trenchline: unknown }).__trenchline = hooks;
 /** Set once the game has stopped for good: its message stays, and no more frames are drawn. */
 let stopped = false;
+/** `?check=<run>`: measure and photograph the standard views and report them (check.ts). */
+const checkRun = (() => {
+  const run = new URLSearchParams(location.search).get('check');
+  return run && /^[a-z0-9-]+$/.test(run) ? run : null;
+})();
 
 function stop(message: string): void {
   if (stopped) return;
@@ -58,6 +64,8 @@ function stop(message: string): void {
   hooks.ready = true;
   hooks.ms ??= Math.round(performance.now());
   if (document.pointerLockElement) document.exitPointerLock();
+  // A check that cannot run still reports why, so its runner is not left waiting.
+  if (checkRun) void reporter(checkRun)('report.json', JSON.stringify({ run: checkRun, userAgent: navigator.userAgent, views: [], errors: [message] }));
 }
 
 function fail(error: unknown): void {
@@ -305,6 +313,8 @@ async function start(): Promise<void> {
   let lastPose: CameraPose = rig.pose(session, 0, settings.fov);
   const waiting: { until: number; resolve: () => void }[] = [];
   let snapshot: ((stats: { mean: number; std: number }) => void) | null = null;
+  let shot: ((taken: { png: Blob; spread: number }) => void) | null = null;
+  let work: { count: number; left: number; samples: number[]; done: (samples: number[]) => void } | null = null;
 
   const frame = (time: number) => {
     if (stopped) return;
@@ -336,10 +346,31 @@ async function start(): Promise<void> {
     renderer.render(pose, timeOfDay, now);
     lastPose = pose;
     frames++;
+    if (work && work.left > 0) {
+      // From this frame's submit to its work finishing: the GPU's time where no timestamps say it.
+      work.left--;
+      const w = work;
+      const t0 = performance.now();
+      void gpu.device.queue.onSubmittedWorkDone().then(() => {
+        w.samples.push(performance.now() - t0);
+        if (w.samples.length === w.count) w.done(w.samples);
+      });
+    }
     if (snapshot) {
       const take = snapshot;
       snapshot = null;
-      take(canvasStats());
+      take(canvasStats(canvas));
+    }
+    if (shot) {
+      // A WebGPU canvas holds this frame only until it is presented: copy it now, encode later.
+      const take = shot;
+      shot = null;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      copy.getContext('2d')!.drawImage(canvas, 0, 0);
+      const spread = canvasStats(copy).std;
+      copy.toBlob((png) => take({ png: png!, spread }), 'image/png');
     }
     if (mode === 'loading') {
       mode = 'ready';
@@ -377,13 +408,13 @@ async function start(): Promise<void> {
     requestAnimationFrame(frame);
   };
 
-  /** The canvas, shrunk to 160 × 100, as luminance statistics: a frame that is not blank has spread. */
-  function canvasStats(): { mean: number; std: number } {
+  /** An image shrunk to 160 × 100, as luminance statistics: a frame that is not blank has spread. */
+  function canvasStats(source: HTMLCanvasElement): { mean: number; std: number } {
     const small = document.createElement('canvas');
     small.width = 160;
     small.height = 100;
     const g = small.getContext('2d')!;
-    g.drawImage(canvas, 0, 0, 160, 100);
+    g.drawImage(source, 0, 0, 160, 100);
     const px = g.getImageData(0, 0, 160, 100).data;
     let sum = 0;
     let sq = 0;
@@ -450,6 +481,30 @@ async function start(): Promise<void> {
     },
   });
   requestAnimationFrame(frame);
+
+  if (checkRun) {
+    // After the first frame, so the prompt's time is known.
+    await waitFrames(1);
+    hooks.checkReport = await runCheck(
+      checkRun,
+      {
+        // `&timer=submitted-work` times by submitted work even where timestamps exist, as Safari may have to.
+        timestamps: gpu.timestamps && new URLSearchParams(location.search).get('timer') !== 'submitted-work',
+        promptMs: hooks.promptMs as number,
+        timings: world.timings,
+        setQuality: (q) => renderer.setQuality(q),
+        view: goTo,
+        viewTime: (name) => views[name].time,
+        waitFrames,
+        waitConverged: () => waitFrames(render.denoise.historyMax + 8),
+        stats: () => renderer.stats,
+        fingerprint: () => fingerprint(world.map),
+        shot: () => new Promise((resolve) => (shot = resolve)),
+        submittedWork: (count) => new Promise((resolve) => (work = { count, left: count, samples: [], done: resolve })),
+      },
+      reporter(checkRun),
+    );
+  }
 }
 
 start().catch(fail);
