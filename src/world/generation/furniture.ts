@@ -6,7 +6,7 @@
 
 import { hash32x4 } from '../../core/hash';
 import { P } from '../materials';
-import type { Clip, VoxelSink } from '../sink';
+import { firmRing, type Clip, type VoxelSink } from '../sink';
 import { vx, type GenParams } from './params';
 import type { BayPlan, DugoutPlan } from './trenches';
 
@@ -69,11 +69,13 @@ export function stampDugout(sink: VoxelSink, clip: Clip, d: DugoutPlan, p: GenPa
   const depth = p.trench.treadDepth;
 
   box(sink, clip, cx0, cx1, airY0, airY1, cz0, cz1, P.AIR);
+  firmRing(sink, clip, cx0, cx1, cz0, cz1, d.dugFloor, airY1 + 2);
   box(sink, clip, cx0, cx1, d.dugFloor, d.dugFloor + 1, cz0, cz1, P.DUCKBOARD);
   box(sink, clip, cx0, cx1, airY1, airY1 + 1, cz0, cz1, P.TIMBER);
   box(sink, clip, cx0, cx1, airY1 + 1, airY1 + 2, cz0, cz1, P.CORRUGATE);
 
   box(sink, clip, e.x0, e.x1, airY0, headroom, e.z0, e.z1, P.AIR);
+  firmRing(sink, clip, e.x0, e.x1, e.z0, e.z1, d.dugFloor, headroom + 1);
   box(sink, clip, e.x0, e.x1, d.dugFloor, d.dugFloor + 1, e.z0, e.z1, P.DUCKBOARD);
   box(sink, clip, e.x0, e.x1, headroom, headroom + 1, e.z0, e.z1, P.TIMBER);
 
@@ -97,9 +99,11 @@ export function stampDugout(sink: VoxelSink, clip: Clip, d: DugoutPlan, p: GenPa
     }
   }
 
-  // The gas curtain hangs across the passage's chamber end, from the floor to the chamber roof.
+  // The gas curtain hangs across the passage's chamber end, from the floor up to
+  // the chamber roof or the passage lintel, whichever is lower: cloth holds
+  // nothing up, so it must never replace the timber the earth rests on.
   const [gx0, gx1, gz0, gz1] = cell(along - 1);
-  box(sink, clip, gx0, gx1, d.dugFloor + 1, airY1, gz0, gz1, P.CLOTH);
+  box(sink, clip, gx0, gx1, d.dugFloor + 1, Math.min(airY1, headroom), gz0, gz1, P.CLOTH);
 
   // A lantern on the back wall at 1.6 m, centred.
   const lanternY = d.dugFloor + 1 + vx(1.6, p.voxel);

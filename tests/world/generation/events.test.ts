@@ -55,6 +55,18 @@ describe('detonate', () => {
     expect(r.hangingGranular).toBe(0);
     expect(r.looseSteep).toBe(0);
   });
+  it('floods over the whole region the collapse worked, not just the blast box', () => {
+    const w = new BrickMap({ x: 160, y: 64, z: 64 });
+    w.fillBox(0, 0, 0, 160, 30, 64, P.CLAY);
+    w.fillBox(0, 20, 20, 160, 30, 44, P.AIR);
+    w.fillBox(0, 20, 20, 160, 25, 44, P.WATER);
+    w.fillBox(0, 30, 44, 160, 40, 56, P.SPOIL);
+    detonate(w, 80, 32, 44, 9, Rng.root(4), { hardLimit: 2, core: 0.55, loosen: 1.45, waterTable: 24 });
+    const r = checkInvariants(w, 24);
+    expect(r.waterAboveTable, r.samples.join('\n')).toBe(0);
+    expect(r.looseSteep, r.samples.join('\n')).toBe(0);
+    expect(r.hangingGranular).toBe(0);
+  });
   it('leaves concrete standing outside the core', () => {
     const w = new BrickMap({ x: 64, y: 64, z: 64 });
     w.fillBox(0, 0, 0, 64, 30, 64, P.MUD);

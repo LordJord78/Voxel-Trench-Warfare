@@ -45,4 +45,17 @@ describe('trench furniture', () => {
     expect(cloth).toBeGreaterThan(0);
     expect(checkInvariants(map, p.waterTable, { ditchWater: true }).hangingGranular).toBe(0);
   });
+  it('cuts dugouts without leaving spoil past repose or earth hanging around their passages', () => {
+    const seen = new Set<number>();
+    for (const line of plan.lines) {
+      for (const d of line.dugouts) {
+        const band = Math.floor(((d.passage.x0 + d.passage.x1) >> 1) / 32);
+        if (seen.has(band)) continue;
+        seen.add(band);
+        const r = checkInvariants(bandMap(plan, band), p.waterTable, { ditchWater: true });
+        expect(r.looseSteep, `${line.spec.name} dugout band ${band}: ${r.samples.join('; ')}`).toBe(0);
+        expect(r.hangingGranular, `${line.spec.name} dugout band ${band}: ${r.samples.join('; ')}`).toBe(0);
+      }
+    }
+  }, 60_000);
 });

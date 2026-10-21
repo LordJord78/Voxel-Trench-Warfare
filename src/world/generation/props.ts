@@ -15,7 +15,7 @@ import { hash32x4 } from '../../core/hash';
 import { Rng } from '../../core/rng';
 import { carveWith } from '../destruction';
 import { P } from '../materials';
-import type { Clip, VoxelSink } from '../sink';
+import { firmRing, type Clip, type VoxelSink } from '../sink';
 import { columnTopAt } from './columns';
 import type { DirectHit } from './craters';
 import { vx } from './params';
@@ -396,6 +396,7 @@ function stampBuilding(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan
       for (let y = base; y < base + high + 20; y++) put(sink, clip, x, y, z, P.AIR);
     }
   }
+  firmRing(sink, clip, x0, x0 + w, z0, z0 + d, base - 1, base + high + 20);
   const down = [r.randint(0, 4)];
   down.push((down[0] + 1 + r.randint(0, 3)) % 4);
   const wallTop = [0, 1, 2, 3].map((side) => (down.includes(side) ? base + r.randint(vx(1.0, p.voxel), vx(2.5, p.voxel) + 1) : base + high));
@@ -466,6 +467,7 @@ function stampChurch(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan):
   for (let i = 0; i < 2; i++) {
     carveWith(sink, clip, x0 + r.uniform(0, s), base + r.uniform(vx(2, p.voxel), high - vx(2, p.voxel)), r.chance(0.5) ? z0 + 1 : z0 + s - 2, r.uniform(vx(0.6, p.voxel), vx(1.2, p.voxel)), r.derive(`hole${i}`), { protect });
   }
+  firmRing(sink, clip, x0, x0 + s, z0, z0 + s, base - 1, base + high);
   heap(sink, clip, q.x, base, q.z, 6, P.RUBBLE_BRICK, P.RUBBLE);
 }
 

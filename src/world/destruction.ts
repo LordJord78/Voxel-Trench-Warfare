@@ -203,16 +203,29 @@ export function detonate(map: BrickMap, cx: number, cy: number, cz: number, radi
     x0: Math.floor(cx - reach), y0: Math.floor(cy - fall), z0: Math.floor(cz - reach),
     x1: Math.ceil(cx + reach) + 1, y1: Math.ceil(cy + reach) + 1, z1: Math.ceil(cz + reach) + 1,
   };
-  collapseRegion(map, box);
-  floodRegion(map, box, o.waterTable);
-  return clampBox(box, map.dims);
+  // Flood over everything the collapse touched: slumps displace water out past the blast box.
+  const worked = { ...box };
+  collapseRegion(map, box, {
+    onWork: (w) => {
+      worked.x0 = Math.min(worked.x0, w.x0);
+      worked.y0 = Math.min(worked.y0, w.y0);
+      worked.z0 = Math.min(worked.z0, w.z0);
+      worked.x1 = Math.max(worked.x1, w.x1);
+      worked.y1 = Math.max(worked.y1, w.y1);
+      worked.z1 = Math.max(worked.z1, w.z1);
+    },
+  });
+  floodRegion(map, worked, o.waterTable);
+  return clampBox(worked, map.dims);
 }
 
 export interface CollapseOptions {
-  /** Safety cap on vertical-plus-repose passes; defaults to 64 or four per voxel of region height. */
+  /** Safety cap on vertical-plus-repose passes; defaults to 64 or 24 per voxel of region height. */
   maxPasses?: number;
   /** Let loose material slump sideways to its angle of repose. */
   repose?: boolean;
+  /** Told each work region collapse settled, so a caller can flood or track exactly that. */
+  onWork?: (work: Box) => void;
 }
 
 // Per-palette-id lookups for the collapse passes.
@@ -220,6 +233,8 @@ const GRANULAR = Uint8Array.from({ length: 256 }, (_, p) => (isGranular(p) ? 1 :
 const LOOSE = Uint8Array.from({ length: 256 }, (_, p) => (isLoose(p) ? 1 : 0));
 const SOLID = Uint8Array.from({ length: 256 }, (_, p) => (isSolid(p) ? 1 : 0));
 const WATER = Uint8Array.from({ length: 256 }, (_, p) => (kindOf(p) === K.WATER ? 1 : 0));
+/** Air or water: where a slumping voxel can go (water is displaced, as it is by a falling one). */
+const OPEN = Uint8Array.from({ length: 256 }, (_, p) => (p === 0 || kindOf(p) === K.WATER ? 1 : 0));
 /** Solid and not granular: timber, brick, steel. They hold, and soil rests on them. */
 const FIXED = Uint8Array.from({ length: 256 }, (_, p) => (SOLID[p] && !GRANULAR[p] ? 1 : 0));
 
@@ -304,7 +319,7 @@ function columnBounds(r: Region, col: number, floor: Int16Array, top: Int16Array
   const z = (col - x) / sx;
   const base = z * sy * sx + x;
   let lo = 0;
-  while (lo < sy && data[base + lo * sx] !== 0) lo++;
+  while (lo < sy && !OPEN[data[base + lo * sx]]) lo++;
   let hi = sy;
   while (hi > 0 && data[base + (hi - 1) * sx] === 0) hi--;
   floor[col] = lo;
@@ -314,7 +329,9 @@ function columnBounds(r: Region, col: number, floor: Int16Array, top: Int16Array
 /**
  * One repose pass over the candidate columns, column by column (z, then x) and
  * bottom-up within each: a loose voxel resting on something solid steps down
- * and sideways into a cell that is air with air beneath it. Bounds may go
+ * and sideways into open cells (air or water) beside and beneath, displacing
+ * any water into the cell it left, so draining a puddle afterwards can never
+ * leave spoil standing past its angle of repose. Bounds may go
  * stale within a pass; a column that moved is revisited next pass with fresh
  * ones, so a stale bound only ever delays a slump, never loses one.
  */
@@ -339,9 +356,10 @@ function slumpColumns(r: Region, candidates: number[], changed: Uint8Array, floo
         const nz = z + dz;
         if (nx < 0 || nz < 0 || nx >= sx || nz >= sz) continue;
         const side = (nz * sy + y) * sx + nx;
-        if (data[side] !== 0 || data[side - sx] !== 0) continue;
+        if (!OPEN[data[side]] || !OPEN[data[side - sx]]) continue;
+        const displaced = data[side - sx];
         data[side - sx] = p;
-        data[i] = 0;
+        data[i] = displaced;
         changed[col] = 1;
         changed[nz * sx + nx] = 1;
         moved++;
@@ -371,24 +389,61 @@ function nextActive(r: Region, changed: Uint8Array): number[] {
   return out;
 }
 
+/** Does a resting loose voxel on the work region's outer columns face open air past the region? */
+function steepAtEdge(map: BrickMap, work: Box): boolean {
+  const outward = (x: number, z: number): [number, number][] => {
+    const out: [number, number][] = [];
+    if (x === work.x0) out.push([x - 1, z]);
+    if (x === work.x1 - 1) out.push([x + 1, z]);
+    if (z === work.z0) out.push([x, z - 1]);
+    if (z === work.z1 - 1) out.push([x, z + 1]);
+    return out;
+  };
+  const check = (x: number, z: number): boolean => {
+    const dirs = outward(x, z).filter(([nx, nz]) => map.inBounds(nx, 0, nz));
+    if (dirs.length === 0) return false;
+    for (let y = Math.max(1, work.y0); y < work.y1; y++) {
+      const v = map.get(x, y, z);
+      if (!LOOSE[v] || !SOLID[map.get(x, y - 1, z)]) continue;
+      for (const [nx, nz] of dirs) if (OPEN[map.get(nx, y, nz)] && OPEN[map.get(nx, y - 1, nz)]) return true;
+    }
+    return false;
+  };
+  for (let x = work.x0; x < work.x1; x++) if (check(x, work.z0) || check(x, work.z1 - 1)) return true;
+  for (let z = work.z0; z < work.z1; z++) if (check(work.x0, z) || check(work.x1 - 1, z)) return true;
+  return false;
+}
+
 /**
  * Settle granular material in and around `box`: soil with nothing solid under
  * it falls (sinking through water, crushing wire), and loose spoil slumps to
  * 45°. The work region is the box widened sideways so a heap has room to
  * spread, extended down through every non-solid gap under any of its columns
- * and up through whatever rests on them. After the first pass only columns
- * that moved, and their neighbours, are revisited, so the cost follows the
- * material that moves rather than the volume. A last vertical pass means a run
- * stopped by the cap can leave slopes steep but never leaves soil hanging.
- * Returns how many column updates and slumps it took.
+ * and up through whatever rests on them; if a heap still reaches the region's
+ * edge with open air beyond, the region widens and settles again. After the
+ * first pass only columns that moved, and their neighbours, are revisited, so
+ * the cost follows the material that moves rather than the volume. A last
+ * vertical pass means a run stopped by the cap can leave slopes steep but
+ * never leaves soil hanging. Returns how many column updates and slumps it took.
  */
 export function collapseRegion(map: BrickMap, box: Box, opts: CollapseOptions = {}): number {
+  let total = 0;
+  for (let widen = 0, round = 0; round < 6; round++, widen += 24) {
+    const { moved, work } = settleOnce(map, box, opts, widen);
+    total += moved;
+    if (work) opts.onWork?.(work);
+    if (!work || !(opts.repose ?? true) || !steepAtEdge(map, work)) break;
+  }
+  return total;
+}
+
+function settleOnce(map: BrickMap, box: Box, opts: CollapseOptions, widen: number): { moved: number; work: Box | null } {
   const repose = opts.repose ?? true;
   const b = clampBox(box, map.dims);
-  if (!b) return 0;
-  const pad = repose ? Math.min(24, Math.max(4, b.y1 - b.y0)) : 0;
+  if (!b) return { moved: 0, work: null };
+  const pad = (repose ? Math.min(24, Math.max(4, b.y1 - b.y0)) : 0) + widen;
   const foot = clampBox({ x0: b.x0 - pad, y0: b.y0, z0: b.z0 - pad, x1: b.x1 + pad, y1: b.y1, z1: b.z1 + pad }, map.dims);
-  if (!foot) return 0;
+  if (!foot) return { moved: 0, work: null };
 
   let low = b.y0;
   let high = b.y1;
@@ -402,9 +457,12 @@ export function collapseRegion(map: BrickMap, box: Box, opts: CollapseOptions = 
       if (top > high) high = top;
     }
   }
-  const region = Region.extract(map, { ...foot, y0: low, y1: high });
+  const work = { ...foot, y0: low, y1: high };
+  const region = Region.extract(map, work);
   const columns = region.sx * region.sz;
-  const maxPasses = opts.maxPasses ?? Math.max(64, 4 * region.sy);
+  // A safety net, not a budget: passes revisit only moving columns, and a parapet
+  // sliding into a trench needs hundreds of one-step slumps to come to rest.
+  const maxPasses = opts.maxPasses ?? Math.max(64, 24 * region.sy);
   const changed = new Uint8Array(columns);
   const floor = new Int16Array(columns);
   const top = new Int16Array(columns);
@@ -423,7 +481,7 @@ export function collapseRegion(map: BrickMap, box: Box, opts: CollapseOptions = 
   }
   total += fallColumns(region, Array.from({ length: columns }, (_, i) => i), changed);
   region.commit(map);
-  return total;
+  return { moved: total, work };
 }
 
 /**

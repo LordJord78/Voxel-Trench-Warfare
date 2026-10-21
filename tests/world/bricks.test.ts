@@ -45,6 +45,18 @@ describe('BrickMap', () => {
     expect(w.denseCount).toBe(0);
     expect(w.slotsIssued).toBe(8);
   });
+  it('loads whole bricks without marking them dirty', () => {
+    const w = new BrickMap(D);
+    const raw = new Uint8Array(512);
+    raw[5] = 9;
+    w.loadBrick(w.brickIndex(1, 0, 0), 0, raw);
+    w.loadBrick(w.brickIndex(2, 0, 0), (UNIFORM | 4) >>> 0);
+    expect(w.get(8 + 5, 0, 0)).toBe(9);
+    expect(w.get(16, 3, 3)).toBe(4);
+    expect(w.denseCount).toBe(1);
+    expect(w.sectorCount(0)).toBe(2);
+    expect(w.takeDirty()).toEqual([]);
+  });
   it('refuses brick indices outside the table and short bricks', () => {
     const w = new BrickMap(D);
     const raw = new Uint8Array(512);

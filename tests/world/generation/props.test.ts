@@ -3,6 +3,7 @@ import { loadTunables } from '../../../src/core/tunables';
 import { BrickMap } from '../../../src/world/bricks';
 import { P } from '../../../src/world/materials';
 import { bandMap } from '../../../src/world/generation/fill';
+import { checkInvariants } from '../../../src/world/generation/invariants';
 import { genParams } from '../../../src/world/generation/params';
 import { planWorld } from '../../../src/world/generation/plan';
 import { stampProp } from '../../../src/world/generation/props';
@@ -34,6 +35,17 @@ describe('props', () => {
       for (let i = 0; i < 4000; i++) {
         const x = 64 + (i * 7) % 128, y = 150 + (i * 13) % 100, z = 64 + (i * 29) % 128;
         expect(a.get(x, y, z), `${kind} at ${x},${y},${z}`).toBe(b.get(x, y, z));
+      }
+    }
+  });
+  it('levels building sites without leaving spoil past repose at their edge', () => {
+    for (const kind of ['farm', 'church', 'hamlet']) {
+      const prop = plan.props.find((q) => q.kind === kind)!;
+      const band = Math.floor(prop.x / 32);
+      for (const b of [band - 1, band, band + 1]) {
+        const map = bandMap(plan, b);
+        const r = checkInvariants(map, p.waterTable, { ditchWater: true });
+        expect(r.looseSteep, `${kind} band ${b}: ${r.samples.join('; ')}`).toBe(0);
       }
     }
   });

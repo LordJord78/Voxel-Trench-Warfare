@@ -84,6 +84,51 @@ describe('collapseRegion', () => {
       }
     }
   });
+  it('settles a parapet sliding into a trench completely, not just up to a pass cap', () => {
+    const w = new BrickMap({ x: 128, y: 96, z: 128 });
+    w.fillBox(0, 0, 0, 128, 40, 128, P.CLAY);
+    w.fillBox(0, 15, 40, 128, 40, 65, P.AIR);
+    for (let k = 0; k < 24; k++) w.fillBox(0, 40, 65 + k, 128, 64 - Math.max(0, k - 6), 66 + k, P.SPOIL);
+    w.fillBox(40, 15, 55, 80, 70, 75, P.AIR);
+    collapseRegion(w, { x0: 30, y0: 10, z0: 45, x1: 90, y1: 70, z1: 85 });
+    let steep = 0;
+    for (let z = 1; z < 127; z++) for (let y = 1; y < 96; y++) for (let x = 25; x < 95; x++) {
+      if (!isLoose(w.get(x, y, z))) continue;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (w.get(x + dx, y, z + dz) === P.AIR && w.get(x + dx, y - 1, z + dz) === P.AIR) { steep++; break; }
+    }
+    expect(steep).toBe(0);
+    expect(hanging(w)).toBe(0);
+  });
+  it('widens its work region when a heap spreads to the edge of it', () => {
+    const w = new BrickMap({ x: 192, y: 96, z: 64 });
+    w.fillBox(0, 0, 0, 192, 20, 64, P.CLAY);
+    w.fillBox(90, 20, 28, 102, 70, 36, P.SPOIL);
+    collapseRegion(w, { x0: 92, y0: 20, z0: 30, x1: 100, y1: 26, z1: 34 });
+    let steep = 0;
+    for (let z = 1; z < 63; z++) for (let y = 1; y < 96; y++) for (let x = 1; x < 191; x++) {
+      if (!isLoose(w.get(x, y, z))) continue;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (w.get(x + dx, y, z + dz) === P.AIR && w.get(x + dx, y - 1, z + dz) === P.AIR) { steep++; break; }
+    }
+    expect(steep).toBe(0);
+    expect(hanging(w)).toBe(0);
+  });
+  it('lets spoil slump into water, so draining a puddle never leaves it past repose', () => {
+    const w = new BrickMap({ x: 96, y: 64, z: 64 });
+    w.fillBox(0, 0, 0, 96, 30, 64, P.CLAY);
+    w.fillBox(0, 20, 20, 96, 30, 40, P.AIR);
+    w.fillBox(0, 20, 20, 96, 25, 40, P.WATER);
+    w.fillBox(40, 25, 26, 56, 45, 34, P.SPOIL);
+    const box = { x0: 30, y0: 15, z0: 16, x1: 66, y1: 50, z1: 44 };
+    collapseRegion(w, box);
+    floodRegion(w, box, 24);
+    let steep = 0;
+    for (let z = 1; z < 63; z++) for (let y = 1; y < 64; y++) for (let x = 1; x < 95; x++) {
+      if (!isLoose(w.get(x, y, z))) continue;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (w.get(x + dx, y, z + dz) === P.AIR && w.get(x + dx, y - 1, z + dz) === P.AIR) { steep++; break; }
+    }
+    expect(steep).toBe(0);
+    expect(hanging(w)).toBe(0);
+  });
   it('settles a shell-sized region in well under a second', () => {
     const w = new BrickMap({ x: 160, y: 96, z: 160 });
     w.fillBox(0, 0, 0, 160, 50, 160, P.CLAY);

@@ -185,6 +185,26 @@ export class BrickMap {
     this.compact(bi);
   }
 
+  /**
+   * Install a brick wholesale without marking it dirty, for assembling bands
+   * that were compacted where they were filled: with `raw`, a dense brick from
+   * those bytes; without, the table entry `e` (0 or UNIFORM | id).
+   */
+  loadBrick(bi: number, e: number, raw?: Uint8Array): void {
+    this.checkBrick(bi);
+    const old = this.table[bi];
+    if (old !== 0 && !(old & UNIFORM)) this.release(old - 1);
+    if (raw) {
+      if (raw.length < 512) throw new RangeError(`a brick is 512 voxels; got ${raw.length}`);
+      const slot = this.alloc();
+      this.chunks[slot >> CHUNK_SHIFT].set(raw.subarray(0, 512), (slot & CHUNK_MASK) << 9);
+      this.setEntry(bi, slot + 1);
+      return;
+    }
+    if (e !== 0 && !(e & UNIFORM)) throw new RangeError('a dense brick needs its bytes');
+    this.setEntry(bi, e >>> 0);
+  }
+
   /** Make a whole brick one palette id (0 empties it), releasing any dense slot. */
   setUniform(bi: number, p: number): void {
     this.checkBrick(bi);
