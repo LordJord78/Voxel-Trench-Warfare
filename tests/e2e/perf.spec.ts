@@ -10,6 +10,8 @@ const BUDGET_MS = 14;
 
 test('every standard view renders within the GPU budget at 1.5 MP', async ({ page }) => {
   const errors = await openGame(page);
+  // Measured at the high preset's full 1.5 MP: dynamic resolution would hide a slow view.
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
   const first = await hooks(page, (h) => h.stats());
   test.skip(first.gpuMs === null && (await hooks(page, async (h) => (await h.waitFrames(30), h.stats().gpuMs))) === null, 'no timestamp queries on this GPU');
   const timings: Record<string, number> = {};

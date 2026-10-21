@@ -9,8 +9,22 @@ export interface Hooks {
   setTimeOfDay(t: number): void;
   frames(): number;
   waitFrames(n: number): Promise<void>;
-  stats(): { gpuMs: number | null; passes: Record<string, number>; res: [number, number]; frame: number };
+  stats(): {
+    gpuMs: number | null;
+    passes: Record<string, number>;
+    res: [number, number];
+    alloc: [number, number];
+    canvas: [number, number];
+    scale: number;
+    preset: 'high' | 'low';
+    dynres: boolean;
+    reset: boolean;
+    frame: number;
+  };
   snapshot(): Promise<{ mean: number; std: number }>;
+  setQuality(q: { preset?: 'high' | 'low'; dynres?: boolean; scale?: number; budgetMs?: number }): void;
+  loseDevice(): void;
+  simulateGap(ms: number): void;
 }
 
 export async function openGame(page: Page): Promise<string[]> {

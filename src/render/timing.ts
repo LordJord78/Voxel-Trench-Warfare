@@ -3,16 +3,59 @@
  * it begins and ends; the frame resolves them into one of three readback
  * buffers, and the times arrive a frame or two later, smoothed. A frame's GPU
  * time is its first pass's start to its last pass's end. Without timestamp
- * queries nothing is measured here (the frame interval stands in elsewhere).
+ * queries nothing is measured here: the renderer measures the interval
+ * between frames instead, against frameBudget's allowance for the display.
  */
 
 const RING = 3;
+
+/** 60 Hz with a third to spare. */
+const INTERVAL_BUDGET_MS = (1000 / 60) * (4 / 3);
+
+/**
+ * The time dynamic resolution holds a frame to. With timestamps that is GPU
+ * time, against `gpuBudgetMs`. Without them it is the interval between
+ * frames, which the display paces: a frame that keeps up with 60 Hz must read
+ * as room to grow, and one that misses every other refresh as over budget.
+ */
+export function frameBudget(timestamps: boolean, gpuBudgetMs: number): number {
+  return timestamps ? gpuBudgetMs : Math.max(gpuBudgetMs, INTERVAL_BUDGET_MS);
+}
+
+export interface PassStamps {
+  name: string;
+  /** Nanoseconds; a pass the GPU did not time has end <= begin. */
+  begin: number;
+  end: number;
+}
+
+/**
+ * Milliseconds per pass, in submission order, and for the frame (first start
+ * to last end). A pass is timed from the later of its own start and the
+ * previous pass's end: on a tile-based GPU a render pass's vertex work starts
+ * while the compute passes it waits on still run, and that wait is theirs.
+ */
+export function passTimes(stamps: readonly PassStamps[]): { passes: Record<string, number>; frameMs: number | null } {
+  const passes: Record<string, number> = {};
+  let first = Infinity;
+  let last = -Infinity;
+  for (const { name, begin, end } of stamps) {
+    if (!(end > begin)) continue;
+    passes[name] = (end - Math.max(begin, last)) / 1e6;
+    first = Math.min(first, begin);
+    last = Math.max(last, end);
+  }
+  return { passes, frameMs: last > first ? (last - first) / 1e6 : null };
+}
 
 export class GpuTimer {
   readonly enabled: boolean;
   /** Smoothed milliseconds per pass, and for the whole frame. */
   passes: Record<string, number> = {};
   gpuMs: number | null = null;
+  /** The latest measured frame, unsmoothed, and how many frames have been measured. */
+  lastMs: number | null = null;
+  samples = 0;
   private readonly names: readonly string[];
   private readonly querySet: GPUQuerySet | null = null;
   private readonly resolveBuffer: GPUBuffer | null = null;
@@ -63,21 +106,19 @@ export class GpuTimer {
     slot.buffer.mapAsync(GPUMapMode.READ).then(
       () => {
         const t = new BigUint64Array(slot.buffer.getMappedRange());
-        let first = Infinity;
-        let last = -Infinity;
-        for (const name of slot.used) {
-          const i = this.names.indexOf(name);
-          const begin = Number(t[2 * i]);
-          const end = Number(t[2 * i + 1]);
-          if (!(end > begin)) continue;
-          const ms = (end - begin) / 1e6;
+        const { passes, frameMs } = passTimes(
+          slot.used.map((name) => {
+            const i = this.names.indexOf(name);
+            return { name, begin: Number(t[2 * i]), end: Number(t[2 * i + 1]) };
+          }),
+        );
+        for (const [name, ms] of Object.entries(passes)) {
           this.passes[name] = this.passes[name] === undefined ? ms : this.passes[name] * 0.9 + ms * 0.1;
-          first = Math.min(first, begin);
-          last = Math.max(last, end);
         }
-        if (last > first) {
-          const ms = (last - first) / 1e6;
-          this.gpuMs = this.gpuMs === null ? ms : this.gpuMs * 0.9 + ms * 0.1;
+        if (frameMs !== null) {
+          this.gpuMs = this.gpuMs === null ? frameMs : this.gpuMs * 0.9 + frameMs * 0.1;
+          this.lastMs = frameMs;
+          this.samples++;
         }
         slot.buffer.unmap();
         slot.free = true;

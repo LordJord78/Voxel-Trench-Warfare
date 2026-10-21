@@ -47,9 +47,11 @@ export const FRAME: StructDef = {
     ['world', WORLD_INFO],
     ['cam', CAMERA],
     ['prev', CAMERA],
-    // The internal image this frame renders, and the size its textures were allocated at.
+    // The internal image this frame renders, the size its textures were allocated at, and
+    // the image the last frame rendered (dynamic resolution changes it between frames).
     ['res', 'vec2u'],
     ['alloc', 'vec2u'],
+    ['prevRes', 'vec2u'],
     ['lightRes', 'vec2u'],
     ['lightScale', 'u32'],
     ['frame', 'u32'],

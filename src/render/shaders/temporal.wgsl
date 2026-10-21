@@ -31,9 +31,10 @@ fn sameSpot(t: vec2i, face: u32, plane: i32, at: vec3f, reach: f32) -> bool {
   if (hitFace(h) != face || hitPlane(h) != plane) {
     return false;
   }
-  let p = representativeOn(vec2u(t), frame.frame - 1u);
+  let o = select(BAYER4[(frame.frame - 1u) & 15u], BAYER2[(frame.frame - 1u) & 3u], frame.lightScale == 2u);
+  let p = min(vec2u(t) * frame.lightScale + o, frame.prevRes - 1u);
   let jitterBefore = select(frame.prev.jitter, vec2f(0.0), (frame.flags & FLAG_JITTER_OFF) != 0u);
-  let rd = cameraRay(frame.prev, vec2f(p) + 0.5 + jitterBefore, vec2f(frame.res));
+  let rd = cameraRay(frame.prev, vec2f(p) + 0.5 + jitterBefore, vec2f(frame.prevRes));
   let there = frame.prev.origin + rd * textureLoad(depthBefore, t, 0).r;
   return distance(there, at) <= reach;
 }
@@ -96,12 +97,14 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
     // Where this lighting pixel was last frame: moved by the surface point's motion, not by
     // its representative's place in the block, which changes every frame and would smear
     // the history sideways even with the camera still.
+    // In the last frame's lighting grid, which dynamic resolution may have sized differently.
     let motion = project(frame.prev, at, res) - project(frame.cam, at, res);
-    let grid = vec2f(q) + motion / f32(frame.lightScale);
+    let scale = f32(frame.lightScale);
+    let grid = ((vec2f(q) + 0.5) * scale + motion) * (vec2f(frame.prevRes) / res) / scale - 0.5;
     let base = vec2i(floor(grid));
     let f = grid - floor(grid);
     var total = 0.0;
-    let size = vec2i(frame.lightRes);
+    let size = vec2i((frame.prevRes + frame.lightScale - 1u) / frame.lightScale);
     for (var k = 0; k < 4; k++) {
       let o = vec2i(k & 1, k >> 1);
       let t = base + o;

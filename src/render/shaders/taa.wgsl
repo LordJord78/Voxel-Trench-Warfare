@@ -36,8 +36,9 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let res = vec2i(frame.res);
   let current = textureLoad(colourNow, p, 0).rgb;
   let m = textureLoad(motion, p, 0).xy;
-  let uv = (vec2f(g.xy) + 0.5 + m) / vec2f(frame.alloc);
-  let onScreen = all(uv >= vec2f(0.0)) && all(uv <= vec2f(frame.res) / vec2f(frame.alloc));
+  // Where this pixel was in the last frame's image, which dynamic resolution may have sized differently.
+  let uv = (vec2f(g.xy) + 0.5 + m) * (vec2f(frame.prevRes) / vec2f(frame.res)) / vec2f(frame.alloc);
+  let onScreen = all(uv >= vec2f(0.0)) && all(uv <= vec2f(frame.prevRes) / vec2f(frame.alloc));
   if (!onScreen || (frame.flags & FLAG_HISTORY_RESET) != 0u) {
     textureStore(historyOut, p, vec4f(current, 1.0));
     return;
@@ -51,7 +52,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
       hi = max(hi, c);
     }
   }
-  let before = catmullRom(historyBefore, linear, uv, vec2f(frame.alloc)).rgb;
+  let before = catmullRom(historyBefore, linear, uv, vec2f(frame.alloc), vec2f(frame.prevRes)).rgb;
   let history = fromYCoCg(clamp(toYCoCg(before), lo, hi));
   let a = clamp(0.06 + 0.04 * length(m), 0.06, 0.25);
   let wc = a / (1.0 + luma(current));

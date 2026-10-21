@@ -36,7 +36,7 @@ fn aces(x: vec3f) -> vec3f {
 @fragment
 fn fs(v: VOut) -> @location(0) vec4f {
   let uv = v.pos.xy / present.canvas * present.res / present.alloc;
-  let c = catmullRom(image, linear, uv, present.alloc).rgb * present.exposure;
+  let c = catmullRom(image, linear, uv, present.alloc, present.res).rgb * present.exposure;
   let encoded = pow(aces(c), vec3f(1.0 / 2.2));
   let rank = textureLoad(dither, vec2i(v.pos.xy) & vec2i(63), 0).r;
   let noise = (f32(rank) + 0.5) / 4096.0 - 0.5;

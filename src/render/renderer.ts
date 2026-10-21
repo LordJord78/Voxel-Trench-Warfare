@@ -16,18 +16,26 @@
  * need only the device (see compileFrame), so they can compile while the
  * world generates.
  *
- * Without a canvas (tests), the renderer draws at a fixed size and its
- * textures can be read back by name.
+ * Textures are allocated for the preset's internal image; dynamic resolution
+ * renders a scaled part of them (50 to 100% per axis), and the passes that
+ * read last frame's images rescale to the size it had, so a scale change
+ * keeps the histories. A resize, a preset change or a gap of over half a
+ * second between frames starts them afresh.
+ *
+ * Without a canvas (tests), the renderer draws at a fixed size, at full scale
+ * unless told otherwise, and its textures can be read back by name.
  */
 
 import type { WorldPlan } from '../world/generation/plan';
 import { jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
+import { DynamicResolution } from './dynres';
 import { FarFieldGpu } from './farfield-gpu';
 import { FLAGS, FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
 import { lightBuffer, MAX_LIGHTS, type SceneLight } from './lights';
+import { LIGHT_SCALE, scaledSize, type Preset, type RenderSettings } from './quality';
 import { sceneExtras, sceneGroup, sceneLayout } from './scene';
 import { moduleSource } from './shaders';
 import atrousSrc from './shaders/atrous.wgsl';
@@ -38,34 +46,48 @@ import primarySrc from './shaders/primary.wgsl';
 import shadeSrc from './shaders/shade.wgsl';
 import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
-import { GpuTimer } from './timing';
+import { frameBudget, GpuTimer } from './timing';
 
 const PASSES = ['primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'present'] as const;
 type ComputePass = 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas';
 type Timed = (typeof PASSES)[number];
 
+/** A gap between frames longer than this (a hidden tab, a debugger) leaves histories too stale to blend. */
+const GAP_MS = 500;
+
 export interface RenderStats {
   gpuMs: number | null;
   passes: Record<string, number>;
+  /** The internal image this frame, the size its textures hold, and the canvas (device pixels). */
   res: [number, number];
+  alloc: [number, number];
+  canvas: [number, number];
+  scale: number;
+  preset: Preset;
+  dynres: boolean;
+  /** Whether this frame started its histories afresh. */
+  reset: boolean;
   frame: number;
 }
 
-export interface RendererOptions {
+export interface Quality {
+  preset: Preset;
+  /** Whether dynamic resolution chooses the scale. */
+  dynres: boolean;
+  /** The internal image per axis, 0.5 to 1, in steps of 1/32. */
+  scale: number;
+}
+
+export interface RendererOptions extends Partial<RenderSettings> {
   /** The internal size when there is no canvas. */
   size?: [number, number];
-  /** The internal image's target size, in megapixels: 1.5 for the "high" preset. */
-  megapixels?: number;
-  /** Bytes of world edits uploaded per frame. */
-  uploadBudget?: number;
   /** The ground past the map's edge; none if absent. */
   far?: FarFieldGpu;
   /** Pipelines compiled ahead of time (see compileFrame); compiled now if absent. */
   compiled?: CompiledFrame;
-  /** The denoiser: frames of history at most, and its filter's edge widths (render.history_max, atrous_sigma_*). */
-  denoise?: { historyMax: number; sigmaLuma: number; sigmaPlane: number };
-  /** Sharpening after TAA, 0 to 1 (render.cas_sharpness). */
-  sharpness?: number;
+  preset?: Preset;
+  /** Start with dynamic resolution on (the game); off, the image stays at full scale (tests). */
+  dynres?: boolean;
 }
 
 /** The internal image for a canvas: the canvas itself, or `megapixels` at its aspect if that is smaller. */
@@ -187,7 +209,7 @@ export class Renderer {
   flags = 0;
   /** What the frame is lit by. */
   sky: FrameSky = PROBE_DUSK;
-  stats: RenderStats = { gpuMs: null, passes: {}, res: [0, 0], frame: 0 };
+  stats: RenderStats = { gpuMs: null, passes: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
 
   private readonly canvas: HTMLCanvasElement | null;
   private readonly context: GPUCanvasContext | null;
@@ -207,8 +229,18 @@ export class Renderer {
   private readonly steps: GPUBuffer[];
   private resetNext = true;
   private textures: Record<string, GPUTexture> = {};
+  /** The size the internal images are allocated at, and the scaled part of it this frame renders. */
+  private alloc: [number, number] = [0, 0];
   private res: [number, number] = [0, 0];
-  private lightScale = 2;
+  /** What the last frame rendered: its histories cover that much of their textures. */
+  private prevRes: [number, number] | null = null;
+  private preset: Preset;
+  private lightScale: number;
+  private scale = 1;
+  private budgetMs: number;
+  private dynres: DynamicResolution | null = null;
+  private timerSamples = 0;
+  private lastNow: number | null = null;
   private canvasSize: [number, number] = [0, 0];
   private frameIndex = 0;
   private prevPose: CameraPose | null = null;
@@ -237,6 +269,10 @@ export class Renderer {
     this.presentBuffer = device.createBuffer({ label: 'present', size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     this.far = options.far ?? FarFieldGpu.empty(device);
+    this.preset = options.preset ?? 'high';
+    this.lightScale = LIGHT_SCALE[this.preset];
+    this.budgetMs = options.budgetMs ?? 14;
+    if (options.dynres) this.dynres = new DynamicResolution(frameBudget(this.timer.enabled, this.budgetMs));
     this.steps = [1, 2, 4].map((step) => {
       const b = device.createBuffer({ label: `atrous step ${step}`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
       device.queue.writeBuffer(b, 0, new Int32Array([step, 0, 0, 0]));
@@ -244,9 +280,38 @@ export class Renderer {
     });
   }
 
-  /** The lighting image's size: the internal image over the lighting scale, rounded up. */
+  /** The lighting image's size this frame: the internal image over the lighting scale, rounded up. */
   get lightResolution(): [number, number] {
-    return [Math.ceil(this.res[0] / this.lightScale), Math.ceil(this.res[1] / this.lightScale)];
+    return this.lightSize(this.res);
+  }
+
+  private lightSize(size: readonly [number, number]): [number, number] {
+    return [Math.ceil(size[0] / this.lightScale), Math.ceil(size[1] / this.lightScale)];
+  }
+
+  get quality(): Quality {
+    return { preset: this.preset, dynres: this.dynres !== null, scale: this.scale };
+  }
+
+  /**
+   * Change the preset (which reallocates the lighting images and starts the
+   * histories afresh), turn dynamic resolution on or off (off returns to full
+   * scale unless a scale is given), set the scale, or the GPU budget.
+   */
+  setQuality(q: Partial<Quality> & { budgetMs?: number }): void {
+    if (q.budgetMs !== undefined) this.budgetMs = q.budgetMs;
+    if (q.dynres !== undefined) {
+      this.dynres = q.dynres ? new DynamicResolution(frameBudget(this.timer.enabled, this.budgetMs)) : null;
+      if (!q.dynres && q.scale === undefined) this.scale = 1;
+    }
+    if (q.scale !== undefined) this.scale = Math.min(1, Math.max(0.5, Math.round(q.scale * 32) / 32));
+    if (this.dynres) this.dynres.scale = this.scale;
+    this.res = scaledSize(this.alloc, this.scale);
+    if (q.preset !== undefined && q.preset !== this.preset) {
+      this.preset = q.preset;
+      this.lightScale = LIGHT_SCALE[q.preset];
+      this.allocate();
+    }
   }
 
   /** The point lights, with flares burning at `flares` (0 to 1) of their strength. */
@@ -265,10 +330,15 @@ export class Renderer {
       this.canvas.width = w;
       this.canvas.height = h;
       this.context.configure({ device: this.device, format: this.format, alphaMode: 'opaque' });
-      this.res = internalSize(w, h, this.options.megapixels ?? 1.5);
+      this.alloc = internalSize(w, h, this.options.megapixels ?? 1.5);
     } else {
-      this.res = [w, h];
+      this.alloc = [w, h];
     }
+    this.allocate();
+  }
+
+  /** (Re)create the internal images at the allocated size, and the bind groups over them. */
+  private allocate(): void {
     for (const t of Object.values(this.textures)) t.destroy();
     this.textures = {};
     const make = (name: string, format: GPUTextureFormat, size: [number, number]) => {
@@ -279,14 +349,14 @@ export class Renderer {
         usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
       });
     };
-    make('gDepth', 'r32float', this.res);
-    make('gHit', 'rg32uint', this.res);
-    make('gMotion', 'rgba16float', this.res);
-    make('colour', 'rgba16float', this.res);
-    make('taa0', 'rgba16float', this.res);
-    make('taa1', 'rgba16float', this.res);
-    make('sharp', 'rgba16float', this.res);
-    const light = this.lightResolution;
+    make('gDepth', 'r32float', this.alloc);
+    make('gHit', 'rg32uint', this.alloc);
+    make('gMotion', 'rgba16float', this.alloc);
+    make('colour', 'rgba16float', this.alloc);
+    make('taa0', 'rgba16float', this.alloc);
+    make('taa1', 'rgba16float', this.alloc);
+    make('sharp', 'rgba16float', this.alloc);
+    const light = this.lightSize(this.alloc);
     make('lNoisy', 'rgba16float', light);
     for (const k of [0, 1]) {
       make(`hDepth${k}`, 'r32float', light);
@@ -321,8 +391,10 @@ export class Renderer {
         present: group('present', [view('sharp'), this.sampler, { buffer: this.presentBuffer }, this.compiled.noise.createView()]),
       };
     });
+    this.res = scaledSize(this.alloc, this.scale);
     this.resetNext = true;
     this.prevPose = null;
+    this.prevRes = null;
   }
 
   /** The scene bind group the last frame used, for running a single pass in tests. */
@@ -339,9 +411,26 @@ export class Renderer {
     return t;
   }
 
-  /** Draw one frame from `pose` (metres, degrees) at a time of day (0 dusk, 1 night). */
+  /** Draw one frame from `pose` (metres, degrees) at a time of day (0 dusk, 1 night), at `now` (ms). */
   render(pose: CameraPose, timeOfDay: number, now: number): void {
     const device = this.device;
+    const gap = this.lastNow !== null && now - this.lastNow > GAP_MS;
+    if (this.dynres) {
+      // Each frame the GPU timed, once; without timestamps, the interval since the last frame.
+      this.dynres.budget = frameBudget(this.timer.enabled, this.budgetMs);
+      if (this.timer.enabled) {
+        if (this.timer.samples !== this.timerSamples && this.timer.lastMs !== null) {
+          this.timerSamples = this.timer.samples;
+          this.dynres.update(this.timer.lastMs);
+        }
+      } else if (this.lastNow !== null) {
+        this.dynres.update(now - this.lastNow);
+      }
+      this.scale = this.dynres.scale;
+    }
+    this.lastNow = now;
+    this.res = scaledSize(this.alloc, this.scale);
+    const reset = this.resetNext || gap;
     const voxel = this.voxelSize();
     const eye: [number, number, number] = [pose.position[0] / voxel, pose.position[1] / voxel, pose.position[2] / voxel];
     this.world.flush(this.options.uploadBudget ?? 1 << 20, eye);
@@ -363,12 +452,13 @@ export class Renderer {
     writeCamera(w, 'cam', pose, voxel, j);
     writeCamera(w, 'prev', this.prevPose ?? pose, voxel, j);
     w.set('res', this.res);
-    w.set('alloc', this.res);
+    w.set('alloc', this.alloc);
+    w.set('prevRes', reset || !this.prevRes ? this.res : this.prevRes);
     w.set('lightRes', this.lightResolution);
     w.set('lightScale', this.lightScale);
     w.set('frame', this.frameIndex);
     // A history from before a resize is in textures that no longer exist.
-    w.set('flags', this.flags | (this.resetNext ? FLAGS.HISTORY_RESET : 0));
+    w.set('flags', this.flags | (reset ? FLAGS.HISTORY_RESET : 0));
     this.resetNext = false;
     w.set('lightCount', this.lightCount);
     w.set('voxel', voxel);
@@ -404,7 +494,7 @@ export class Renderer {
     pass('taa', 'taa', this.res);
     pass('cas', 'cas', this.res);
     if (this.context) {
-      const present = new Float32Array([this.res[0], this.res[1], this.res[0], this.res[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, 0]);
+      const present = new Float32Array([this.res[0], this.res[1], this.alloc[0], this.alloc[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, 0]);
       device.queue.writeBuffer(this.presentBuffer, 0, present);
       const p = encoder.beginRenderPass({
         label: 'present',
@@ -421,9 +511,20 @@ export class Renderer {
     this.timer.collect();
 
     this.prevPose = { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch };
+    this.prevRes = [...this.res];
     this.frameIndex++;
-    this.stats = { gpuMs: this.timer.gpuMs, passes: { ...this.timer.passes }, res: [...this.res], frame: this.frameIndex };
-    void now;
+    this.stats = {
+      gpuMs: this.timer.gpuMs,
+      passes: { ...this.timer.passes },
+      res: [...this.res],
+      alloc: [...this.alloc],
+      canvas: [...this.canvasSize],
+      scale: this.scale,
+      preset: this.preset,
+      dynres: this.dynres !== null,
+      reset: reset || (this.flags & FLAGS.HISTORY_RESET) !== 0,
+      frame: this.frameIndex,
+    };
   }
 
   private voxelSize(): number {

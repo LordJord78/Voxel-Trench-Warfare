@@ -19,7 +19,8 @@ const DEFAULTS: DynamicResolutionOptions = { min: 0.5, max: 1, step: 1 / 32, eve
 
 export class DynamicResolution {
   scale: number;
-  private readonly budget: number;
+  /** The frame time to hold under, in ms. */
+  budget: number;
   private readonly options: DynamicResolutionOptions;
   private average: number | null = null;
   private frames = 0;

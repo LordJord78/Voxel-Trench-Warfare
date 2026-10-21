@@ -12,7 +12,7 @@
 import type { BrickMap } from '../world/bricks';
 import type { HeapMirror } from '../world/encode';
 import { paletteData } from '../world/materials';
-import { GpuUnavailable } from './device';
+import { checkLimits, GpuUnavailable } from './device';
 import { buildPyramid, type Pyramid, type PyramidLevel } from './pyramid';
 import { UploadQueue, type GpuSink } from './uploads';
 
@@ -50,6 +50,10 @@ export class GpuWorld {
     if (dims.x > 4096 || dims.z > 4096 || dims.y > 65536) {
       throw new GpuUnavailable('limits', `a ${dims.x} × ${dims.y} × ${dims.z} world does not fit the G-buffer's voxel coordinates`);
     }
+    // Refused before anything is uploaded, naming what the GPU lacks.
+    const heap = Math.ceil(world.mirror.usedUnits * (1 + (opts.headroom ?? 0.25))) * 16;
+    const short = checkLimits(device.limits, { storageBinding: Math.max(heap, world.map.table.length * 4) });
+    if (short.length) throw new GpuUnavailable('limits', `this GPU cannot hold the world: ${short.join('; ')}`);
     return new GpuWorld(device, world.map, world.mirror, world.pyramid ?? buildPyramid(world.map), opts.headroom ?? 0.25);
   }
 
