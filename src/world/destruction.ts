@@ -242,18 +242,19 @@ export function floodRegion(map: BrickMap, box: Box, waterTable: number): void {
   if (!b) return;
   const region = Region.extract(map, { ...b, y0: Math.max(0, b.y0 - 1) });
   const { sx, sy, sz, data } = region;
-  const base = region.box.y0;
+  const base: number = region.box.y0;
+  const start: number = b.y0 - base;
   for (let z = 0; z < sz; z++) {
     for (let x = 0; x < sx; x++) {
-      for (let y = b.y0 - base; y < sy; y++) {
+      for (let y = start; y < sy; y++) {
         const i = (z * sy + y) * sx + x;
         if (base + y <= waterTable && data[i] === P.AIR) data[i] = P.WATER;
       }
-      for (let y = b.y0 - base; y < sy; y++) {
+      for (let y = start; y < sy; y++) {
         const i = (z * sy + y) * sx + x;
         if (!WATER[data[i]]) continue;
-        const worldY = base + y;
-        const below = worldY === 0 ? -1 : y > 0 ? data[i - sx] : map.get(region.box.x0 + x, worldY - 1, region.box.z0 + z);
+        const worldY: number = base + y;
+        const below: number = worldY === 0 ? -1 : y > 0 ? data[i - sx] : map.get(region.box.x0 + x, worldY - 1, region.box.z0 + z);
         const held = below === -1 || SOLID[below] === 1 || WATER[below] === 1;
         if (!held) data[i] = P.AIR;
       }
