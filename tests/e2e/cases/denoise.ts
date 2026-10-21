@@ -214,6 +214,38 @@ export const cases = {
   },
 
   /** Every history length the frame after a reset. */
+  /**
+   * A wide (8°) key light, so the wall's shadow has a penumbra a metre across: converge, then
+   * start the history afresh and filter one frame. Of the penumbra's lighting pixels (converged
+   * key visibility 0.2 to 0.8, whole blocks), how many the filter left as raw 0s and 1s, and
+   * their mean distance from the converged value.
+   */
+  async denoiseFresh() {
+    const g = await gpu();
+    const { r, w } = await setup(g);
+    r.sky = { ...r.sky, keyCone: (8 * Math.PI) / 180 };
+    for (let f = 0; f < 64; f++) r.render(DOWN, 0, f);
+    const converged = await rgba(r, 'hColour');
+    const whole = await wholeBlocks(r);
+    r.flags = FLAGS.HISTORY_RESET;
+    r.render(DOWN, 0, 64);
+    r.flags = 0;
+    const fresh = await rgba(r, 'denoised');
+    let penumbra = 0;
+    let binary = 0;
+    let error = 0;
+    for (let i = 0; i < whole.length; i++) {
+      const a = converged[i * 4 + 3];
+      if (!whole[i] || a < 0.2 || a > 0.8) continue;
+      penumbra++;
+      const v = fresh[i * 4 + 3];
+      if (v < 0.02 || v > 0.98) binary++;
+      error += Math.abs(v - a);
+    }
+    for (const b of [w.table, w.sectors, w.heap, w.palette, w.pyramid]) b.destroy();
+    return { penumbra, binary, error: error / penumbra, errors: [...g.errors] };
+  },
+
   async denoiseReset() {
     const g = await gpu();
     const { r, w } = await setup(g);

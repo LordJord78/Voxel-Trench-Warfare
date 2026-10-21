@@ -33,3 +33,13 @@ test('a reset clears the history', async ({ page }) => {
   expect(r.surfaces).toBeGreaterThan(100);
   expect(r.longest).toBe(1);
 });
+
+test('a fresh history in a penumbra is filtered by its neighbours, not left as raw 0s and 1s', async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ penumbra: number; binary: number; error: number; errors: string[] }>(page, 'denoiseFresh');
+  expect(r.errors).toEqual([]);
+  expect(r.penumbra).toBeGreaterThan(30);
+  // Unfiltered, every one was a raw 0 or 1, 0.45 from the converged value on average.
+  expect(r.binary / r.penumbra).toBeLessThan(0.3);
+  expect(r.error).toBeLessThan(0.35);
+});

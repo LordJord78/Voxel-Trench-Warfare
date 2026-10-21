@@ -6,6 +6,9 @@
 // brightness and its tracked variance) and for the key light (by visibility:
 // samples are each 0 or 1, so a mean a over n frames has variance a(1 - a)/n).
 // So the sky's noise never blurs a shadow edge, and a converged edge stays put.
+// A pixel with under four frames of history has no mean of its own (its few
+// samples are each 0 or 1, which would say it has no noise at all), so its
+// key light's noise is judged from its coplanar neighbours' average instead.
 // The filter only makes the image shown; the history keeps the plain average.
 #include "lightgrid.wgsl"
 
@@ -45,6 +48,28 @@ fn blurredVariance(q: vec2i) -> f32 {
   return sum / total;
 }
 
+// The key light's visibility averaged over q's coplanar 3 × 3 neighbours, or q's own if it has none.
+fn neighbourKey(q: vec2i, face: u32, plane: i32, own: f32) -> f32 {
+  let size = vec2i(frame.lightRes);
+  var sum = 0.0;
+  var count = 0.0;
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      let t = q + vec2i(dx, dy);
+      if (any(t < vec2i(0)) || any(t >= size)) {
+        continue;
+      }
+      let h = textureLoad(hits, t, 0).xy;
+      if (hitFace(h) != face || hitPlane(h) != plane) {
+        continue;
+      }
+      sum += textureLoad(colourIn, t, 0).a;
+      count += 1.0;
+    }
+  }
+  return select(own, sum / count, count > 0.0);
+}
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) g: vec3u) {
   if (g.x >= frame.lightRes.x || g.y >= frame.lightRes.y) {
@@ -63,7 +88,8 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let l = luminance(centre.rgb);
   let length = max(textureLoad(varianceIn, q, 0).g, 1.0);
   let spread = frame.sigmaLuma * sqrt(blurredVariance(q)) + 1e-4;
-  let spreadKey = SIGMA_KEY * sqrt(centre.a * (1.0 - centre.a) / length) + 1e-3;
+  let a = select(centre.a, neighbourKey(q, face, plane, centre.a), length < 4.0);
+  let spreadKey = SIGMA_KEY * sqrt(a * (1.0 - a) / length) + 1e-3;
   let size = vec2i(frame.lightRes);
   var rgb = vec3f(0.0);
   var key = 0.0;
