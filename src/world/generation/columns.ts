@@ -11,7 +11,7 @@
 
 import { CraterField } from './craters';
 import type { WorldPlan } from './plan';
-import { ditchAt, fieldHeight } from './terrain';
+import { ditchDepth, fieldHeight } from './terrain';
 import type { BayPlan, LegPlan } from './trenches';
 
 export const FLAG = { DITCH: 1, CRATER: 2, TRENCH: 4, PARAPET: 8, PARADOS: 16, REVET: 32 } as const;
@@ -99,18 +99,14 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number, z0 = 0, z1 
   };
 
   // The field, then ditches (pure functions of the terrain).
-  const cut = Math.floor(1.5 / p.voxel + 0.5);
   for (let x = mx0; x < mx1; x++) {
     const row = (x - mx0) * nz - z0;
     for (let z = z0; z < z1; z++) {
       const h = Math.max(p.waterTable + 2, Math.min(p.dims.y - 80, Math.floor(fieldHeight(plan.terrain, p, x, z) + 0.5)));
       m.ground[row + z] = h;
-      if (ditchAt(plan.terrain, p, x, z)) {
-        m.surface[row + z] = h - cut;
-        m.flags[row + z] = FLAG.DITCH;
-      } else {
-        m.surface[row + z] = h;
-      }
+      const cut = ditchDepth(plan.terrain, p, x, z);
+      m.surface[row + z] = h - cut;
+      if (cut > 0) m.flags[row + z] = FLAG.DITCH;
     }
   }
 
@@ -123,13 +119,20 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number, z0 = 0, z1 
     const facing = line.spec.facing;
     parapet.fill(0);
     parados.fill(0);
+    // A crossing line floors each column from its profile; others floor a bay at its own height.
+    const profile = line.profile;
+    const floorOf = (c: number, flat: number) => {
+      if (!profile) return flat;
+      const a = axis === 0 ? Math.floor(c / nz) + mx0 : (c % nz) + z0;
+      return profile.floors[a - profile.a0];
+    };
 
     line.bays.forEach((bay, i) => {
       // Everything a bay touches lies within its footprint widened by its banks: skip it if that misses us.
       const bank = Math.max(bay.crestY - bay.groundY, T.paradosH) + T.crestFlat + 2;
       if (!touches(m, axis, bay.a0, bay.a1 + T.leg, bay.b0 - bank, bay.b1 + bank)) return;
       const id = bayBase + i;
-      forBox(m, axis, bay.a0, bay.a1, bay.b0, bay.b1, (c) => openTrench(m, c, bay.floorY, id));
+      forBox(m, axis, bay.a0, bay.a1, bay.b0, bay.b1, (c) => openTrench(m, c, floorOf(c, bay.floorY), id));
       if (bay.firingSteps) firingStep(m, p.trench, bay, axis, facing);
 
       // Parapet courses outward from the face: flat for crestFlat, then 45° down to the field.
@@ -168,7 +171,7 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number, z0 = 0, z1 
     });
     line.legs.forEach((leg: LegPlan, i) => {
       if (!touches(m, axis, leg.a0, leg.a1, leg.b0, leg.b1)) return;
-      forBox(m, axis, leg.a0, leg.a1, leg.b0, leg.b1, (c) => openTrench(m, c, leg.floorY, bayBase + i));
+      forBox(m, axis, leg.a0, leg.a1, leg.b0, leg.b1, (c) => openTrench(m, c, floorOf(c, leg.floorY), bayBase + i));
     });
 
     // Spoil piles only on standing ground: never into a trench, parados never over parapet.

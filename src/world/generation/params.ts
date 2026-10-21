@@ -180,7 +180,7 @@ export function genParams(tun: Tunables, override?: (raw: Record<string, unknown
       facing: 1, firingSteps: false, dugoutEvery: 0,
     })),
     ...layout.enemyComm.map((x, i): LineSpec => ({
-      name: `enemy_comm_${i}`, side: 1, longAxis: 2, crossBase: x, aStart: layout.enemyFront - m(3.0), aEnd: layout.enemyReserve + 1,
+      name: `enemy_comm_${i}`, side: 1, longAxis: 2, crossBase: x, aStart: layout.enemyFront + m(3.0), aEnd: layout.enemyReserve + 1,
       facing: -1, firingSteps: false, dugoutEvery: 0,
     })),
   ];

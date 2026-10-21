@@ -51,4 +51,13 @@ describe('terrain', () => {
     expect(ditchAt(t, p, 1000, z)).toBe(true);
     expect(surfaceAt(t, p, 1000, z)).toBeLessThan(Math.floor(fieldHeight(t, p, 1000, z) + 0.5));
   });
+  it('runs ditches out to nothing at the map edge, where the far field takes over', () => {
+    for (const d of t.ditches) {
+      for (const x of [0, p.dims.x - 1]) {
+        const z = Math.trunc(d.z + d.drift * (x - p.dims.x / 2));
+        const field = Math.max(p.waterTable + 2, Math.min(p.dims.y - 80, Math.floor(fieldHeight(t, p, x, z) + 0.5)));
+        expect(surfaceAt(t, p, x, z)).toBe(field);
+      }
+    }
+  });
 });

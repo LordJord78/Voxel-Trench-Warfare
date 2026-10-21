@@ -7,8 +7,8 @@ import { generateWorld, type GeneratedWorld } from '../../../src/world/generatio
 import { checkInvariants } from '../../../src/world/generation/invariants';
 import { genParams } from '../../../src/world/generation/params';
 import { planWorld } from '../../../src/world/generation/plan';
-import { buildFarField } from '../../../src/world/generation/farfield';
-import { fieldHeight } from '../../../src/world/generation/terrain';
+import { columnModel } from '../../../src/world/generation/columns';
+import { structureFootprints } from '../../../src/world/generation/props';
 
 const p = genParams(loadTunables());
 const plan = planWorld(p, 7);
@@ -35,18 +35,51 @@ describe('the generated world', () => {
     expect(await fingerprint(reversed.map)).toBe(await fingerprint(world.map));
   }, 120_000);
   it('matches the golden fingerprint for seed 7', async () => {
-    expect(await fingerprint(world.map)).toBe('009cfe7daa5a7dade317fb92854774fc804483ae75ed9f6dc9e0144605e93cd9');
+    expect(await fingerprint(world.map)).toBe('dea2a4cd7809b3b83cecf714ba851600f20a91d85da08b1f17e9f4be8da4d67c');
   });
-  it('meets the far field at the map edge, from the same terrain function', () => {
-    const ff = world.farField ?? buildFarField(plan);
-    for (const z of [300, 1280, 2200]) {
-      const col = Math.floor((0 - ff.originX) / ff.cell) - 1;
-      const row = Math.floor((z - ff.originZ) / ff.cell);
-      const cx = ff.originX + (col + 0.5) * ff.cell;
-      const cz = ff.originZ + (row + 0.5) * ff.cell;
-      expect(Math.abs(ff.height[row * ff.size + col] - fieldHeight(plan.terrain, p, cx, cz))).toBeLessThanOrEqual(1);
+  it('meets the far field along every edge column', () => {
+    const ff = world.farField;
+    // The first ring of far-field cells outside the map, interpolated along the edge as the renderer draws it.
+    const along = (fixed: number, t: number, fixedIsColumn: boolean) => {
+      const f = (t - (fixedIsColumn ? ff.originZ : ff.originX)) / ff.cell - 0.5;
+      const k = Math.floor(f);
+      const w = f - k;
+      const cell = (n: number) => (fixedIsColumn ? ff.height[n * ff.size + fixed] : ff.height[fixed * ff.size + n]);
+      return cell(k) * (1 - w) + cell(k + 1) * w;
+    };
+    const left = Math.floor((-1 - ff.originX) / ff.cell);
+    const right = Math.floor((p.dims.x - ff.originX) / ff.cell);
+    const near = Math.floor((-1 - ff.originZ) / ff.cell);
+    const far = Math.floor((p.dims.z - ff.originZ) / ff.cell);
+    const off: string[] = [];
+    const check = (x: number, z: number, top: number, height: number) => {
+      if (Math.abs(top - height) > 2) off.push(`${x},${z}: ground ${top}, far field ${height.toFixed(1)}`);
+    };
+    for (const [x, col] of [[0, left], [p.dims.x - 1, right]]) {
+      const m = columnModel(plan, x, x + 1);
+      for (let z = 0; z < p.dims.z; z++) check(x, z, m.top[(x - m.x0) * m.nz + z], along(col, z, true));
     }
-    const inside = (Math.floor((1280 - ff.originZ) / ff.cell)) * ff.size + Math.floor((1280 - ff.originX) / ff.cell);
+    for (const [z, row] of [[0, near], [p.dims.z - 1, far]]) {
+      const m = columnModel(plan, 0, p.dims.x, z, z + 1);
+      for (let x = 0; x < p.dims.x; x++) check(x, z, m.top[(x - m.x0) * m.nz + z - m.z0], along(row, x, false));
+    }
+    expect(off.slice(0, 8)).toEqual([]);
+    const inside = Math.floor((1280 - ff.originZ) / ff.cell) * ff.size + Math.floor((1280 - ff.originX) / ff.cell);
     expect(ff.material[inside]).toBe(0);
+  });
+  it('stands every structure on solid ground', () => {
+    const floating: string[] = [];
+    for (const s of structureFootprints(plan)) {
+      if (s.underY === undefined) continue;
+      let n = 0;
+      for (let x = s.x0; x < s.x1; x++) {
+        for (let z = s.z0; z < s.z1; z++) {
+          const v = world.map.get(x, s.underY, z);
+          if (v === P.AIR || v === P.WATER) n++;
+        }
+      }
+      if (n > 0) floating.push(`${s.kind} at ${s.x0},${s.z0}: ${n} columns over air or water`);
+    }
+    expect(floating).toEqual([]);
   });
 });

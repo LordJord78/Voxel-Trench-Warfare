@@ -11,8 +11,8 @@ import { Rng } from '../../core/rng';
 import { planCraters, type Crater, type DirectHit } from './craters';
 import type { GenParams } from './params';
 import { buildTerrain, surfaceAt, type TerrainModel } from './terrain';
-import { planProps } from './props';
-import { planLine, type LinePlan } from './trenches';
+import { planProps, propHits, structureFootprints } from './props';
+import { planDugout, planLine, type DugoutPlan, type LinePlan } from './trenches';
 
 export interface PropPlan {
   kind: string;
@@ -38,16 +38,70 @@ export function planWorld(params: GenParams, seed: number): WorldPlan {
   const root = Rng.root(seed);
   const terrain = buildTerrain(params, root);
   const surface = (x: number, z: number) => surfaceAt(terrain, params, x, z);
-  const lines = params.lines.map((spec) => planLine(params, spec, surface, root.derive(`trench.${spec.name}`)));
+  // Each line sees the lines before it: a communication trench meets their floors.
+  const lines: LinePlan[] = [];
+  for (const spec of params.lines) lines.push(planLine(params, spec, surface, root.derive(`trench.${spec.name}`), lines));
+  placeDugouts(params, lines);
   const fronts = lines
     .filter((l) => l.spec.firingSteps)
     .map((l) => ({ z: l.spec.crossBase, facing: l.spec.facing }));
   const { open, direct } = planCraters(params, terrain, root.derive('craters'), fronts);
   const plan: WorldPlan = { seed, params, terrain, craters: open, direct, lines, props: [] };
-  const placed = planProps(plan, root);
-  plan.props = placed.props;
-  plan.direct = [...direct, ...placed.hits];
+  plan.props = planProps(plan, root);
+  // Nothing built stands over an open crater: those that would reach a structure are not dug.
+  // This runs before anything asks for the ground, which the crater list shapes.
+  const structures = structureFootprints(plan, false);
+  plan.craters = open.filter((c) => {
+    const reach = Math.ceil(1.4 * c.r) + 1;
+    return !structures.some((s) => c.x - reach < s.x1 && s.x0 < c.x + reach && c.z - reach < s.z1 && s.z0 < c.z + reach);
+  });
+  plan.direct = [...direct, ...propHits(plan)];
   return plan;
+}
+
+type Rect = { x0: number; x1: number; z0: number; z1: number };
+
+const touching = (a: Rect, b: Rect) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
+
+/**
+ * Keep every dugout clear of every trench but its own: one planned under a
+ * communication trench would have its chamber open into that trench and its
+ * roof hanging in the air. Try it where it was, then moved along its bay;
+ * failing that, it is not dug.
+ */
+function placeDugouts(p: GenParams, lines: LinePlan[]): void {
+  const trenches: { line: number; bay: number; rect: Rect }[] = [];
+  lines.forEach((line, li) => {
+    line.bays.forEach((b, bi) => trenches.push({ line: li, bay: bi, rect: { x0: b.x0, x1: b.x1, z0: b.z0, z1: b.z1 } }));
+    for (const l of line.legs) {
+      const rect = l.longAxis === 0 ? { x0: l.a0, x1: l.a1, z0: l.b0, z1: l.b1 } : { x0: l.b0, x1: l.b1, z0: l.a0, z1: l.a1 };
+      trenches.push({ line: li, bay: -1, rect });
+    }
+  });
+  const body = (d: DugoutPlan): Rect[] => {
+    const chamber = { x0: d.lo[0] - 1, x1: d.hi[0] + 1, z0: d.lo[2] - 1, z1: d.hi[2] + 1 };
+    const e = d.passage;
+    return [chamber, { x0: e.x0 - 1, x1: e.x1 + 1, z0: e.z0 - 1, z1: e.z1 + 1 }];
+  };
+  const dug: Rect[] = [];
+  lines.forEach((line, li) => {
+    const kept: DugoutPlan[] = [];
+    for (const d of line.dugouts) {
+      const bay = line.bays[d.bay];
+      for (const shift of [0, 20, -20, 30, -30]) {
+        const c = shift === 0 ? d : planDugout(p, line.spec, bay, shift, d.seed);
+        if (!c) continue;
+        const parts = body(c);
+        const clash = trenches.some((t) => !(t.line === li && t.bay === d.bay) && parts.some((r) => touching(r, t.rect)))
+          || dug.some((r) => parts.some((q) => touching(q, r)));
+        if (clash) continue;
+        kept.push(c);
+        dug.push(...parts);
+        break;
+      }
+    }
+    line.dugouts = kept;
+  });
 }
 
 export { bayList } from './bays';

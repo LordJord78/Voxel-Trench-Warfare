@@ -72,20 +72,30 @@ function ditchHalf(p: GenParams): number {
   return Math.max(1, vx(0.5, p.voxel));
 }
 
-export function ditchAt(t: TerrainModel, p: GenParams, x: number, z: number): boolean {
-  if (x < 0 || x >= p.dims.x) return false;
+/**
+ * How deep a drainage ditch cuts this column, in voxels: 1.5 m, running out
+ * to nothing over the last 8 m before the map edge, so the ditch meets the
+ * far field (which has none) at the field's own height. 0 off the ditches.
+ */
+export function ditchDepth(t: TerrainModel, p: GenParams, x: number, z: number): number {
+  if (x < 0 || x >= p.dims.x || z < 0 || z >= p.dims.z) return 0;
   const half = ditchHalf(p);
   for (const d of t.ditches) {
     const zc = Math.trunc(d.z + d.drift * (x - p.dims.x / 2));
-    if (Math.abs(z - zc) <= half) return true;
+    if (Math.abs(z - zc) > half) continue;
+    const edge = Math.min(x, p.dims.x - 1 - x, z, p.dims.z - 1 - z);
+    return Math.round(vx(1.5, p.voxel) * Math.min(1, edge / vx(8.0, p.voxel)));
   }
-  return false;
+  return 0;
+}
+
+export function ditchAt(t: TerrainModel, p: GenParams, x: number, z: number): boolean {
+  return ditchDepth(t, p, x, z) > 0;
 }
 
 /** First air voxel above the field: integer, clamped as Python clamped it, lowered in a ditch. */
 export function surfaceAt(t: TerrainModel, p: GenParams, x: number, z: number): number {
   let h = Math.floor(fieldHeight(t, p, x, z) + 0.5);
   h = Math.max(p.waterTable + 2, Math.min(p.dims.y - 80, h));
-  if (ditchAt(t, p, x, z)) h -= vx(1.5, p.voxel);
-  return h;
+  return h - ditchDepth(t, p, x, z);
 }

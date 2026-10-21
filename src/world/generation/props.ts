@@ -78,13 +78,16 @@ function heap(sink: VoxelSink, clip: Clip, cx: number, base: number, cz: number,
 
 // --- planning --------------------------------------------------------------------
 
-/** Every landscape prop, and the collapses some of them cause (the culvert's dropped span). */
-export function planProps(plan: WorldPlan, root: Rng): { props: PropPlan[]; hits: DirectHit[] } {
+/**
+ * Every landscape prop, by position, size and seed. Nothing here reads the
+ * ground: the crater list is settled after the props are placed (see
+ * `structureFootprints`), and the ground depends on it.
+ */
+export function planProps(plan: WorldPlan, root: Rng): PropPlan[] {
   const p = plan.params;
   const m = (metres: number) => vx(metres, p.voxel);
   const L = p.layout;
   const props: PropPlan[] = [];
-  const hits: DirectHit[] = [];
 
   // Shelterbelts: the shattered windbreaks between fields, Python's spacing in metres.
   const belts = root.derive('props.tree');
@@ -139,10 +142,9 @@ export function planProps(plan: WorldPlan, root: Rng): { props: PropPlan[]; hits
   const land = root.derive('props.landmarks');
   props.push({ kind: 'hull', x: L.hull[0], z: L.hull[1], seed: land.nextU32() });
   props.push({ kind: 'farm', x: L.farm[0], z: L.farm[1], seed: land.nextU32() });
-  const culvert: PropPlan = { kind: 'culvert', x: L.culvert[0], z: L.culvert[1], seed: land.nextU32() };
-  props.push(culvert);
-  const top = columnTopAt(plan, culvert.x, culvert.z);
-  hits.push({ x: culvert.x, y: top - m(2.0) + m(2.5), z: culvert.z, r: m(2.0), seed: land.nextU32() });
+  // The culvert's middle span drops in a planned collapse; `a` seeds it (see `propHits`).
+  const culvertSeed = land.nextU32();
+  props.push({ kind: 'culvert', x: L.culvert[0], z: L.culvert[1], seed: culvertSeed, a: land.nextU32() });
 
   // The hamlet behind our lines: a road, six wrecked buildings, a church tower.
   const hamlet = root.derive('props.hamlet');
@@ -159,7 +161,117 @@ export function planProps(plan: WorldPlan, root: Rng): { props: PropPlan[]; hits
   }
   props.push({ kind: 'church', x: m(115), z: mid - m(14), seed: hamlet.nextU32(), a: hamlet.randint(m(9), m(12) + 1) });
 
-  return { props, hits };
+  return props;
+}
+
+/** The collapses props cause at load: the culvert's dropped span, under the settled ground. */
+export function propHits(plan: WorldPlan): DirectHit[] {
+  const m = (metres: number) => vx(metres, plan.params.voxel);
+  const hits: DirectHit[] = [];
+  for (const q of plan.props) {
+    if (q.kind !== 'culvert') continue;
+    const top = columnTopAt(plan, q.x, q.z);
+    hits.push({ x: q.x, y: top - m(2.0) + m(2.5), z: q.z, r: m(2.0), seed: q.a! });
+  }
+  return hits;
+}
+
+export interface StructureFootprint {
+  kind: string;
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
+  /** The level that must be solid under the structure, for those that stand on the ground. */
+  underY?: number;
+}
+
+interface Site {
+  x0: number;
+  z0: number;
+  w: number;
+  d: number;
+}
+
+function buildingSite(plan: WorldPlan, q: PropPlan): Site {
+  const v = plan.params.voxel;
+  const [w, d] = q.kind === 'farm' ? [vx(8.0, v), vx(5.5, v)] : [q.a!, q.b!];
+  return { x0: q.x - (w >> 1), z0: q.z - (d >> 1), w, d };
+}
+
+function churchSite(plan: WorldPlan, q: PropPlan): Site {
+  const s = vx(3.0, plan.params.voxel);
+  return { x0: q.x - (s >> 1), z0: q.z - (s >> 1), w: s, d: s };
+}
+
+function hullSite(plan: WorldPlan, q: PropPlan): Site {
+  const len = vx(7.0, plan.params.voxel);
+  const wide = vx(3.5, plan.params.voxel);
+  return { x0: q.x - (len >> 1), z0: q.z - (wide >> 1), w: len, d: wide };
+}
+
+function culvertBox(plan: WorldPlan, q: PropPlan): Site {
+  const len = vx(9.0, plan.params.voxel);
+  const half = vx(2.5, plan.params.voxel) >> 1;
+  return { x0: q.x - (len >> 1), z0: q.z - half, w: len, d: vx(2.5, plan.params.voxel) };
+}
+
+function culvertBase(plan: WorldPlan, q: PropPlan): number {
+  return columnTopAt(plan, q.x, q.z) - vx(2.0, plan.params.voxel);
+}
+
+/** The level the slab or plates of a site sit on: the median ground over it. */
+function siteBase(plan: WorldPlan, s: Site): number {
+  return medianTop(plan, s.x0, s.z0, s.w, s.d);
+}
+
+/**
+ * The ground plans of everything built to stand level — buildings, the church,
+ * the hull, the culvert and its embankment — and of every dugout, which open
+ * craters must keep clear of. With `heights`, also the level each standing
+ * structure needs solid under it (this reads the ground, so the plan's craters
+ * must be final).
+ */
+export function structureFootprints(plan: WorldPlan, heights = true): StructureFootprint[] {
+  const out: StructureFootprint[] = [];
+  const v = plan.params.voxel;
+  const site = (kind: string, s: Site, under?: () => number) =>
+    out.push({ kind, x0: s.x0, x1: s.x0 + s.w, z0: s.z0, z1: s.z0 + s.d, ...(heights && under ? { underY: under() } : {}) });
+  for (const q of plan.props) {
+    if (q.kind === 'farm' || q.kind === 'hamlet') {
+      const s = buildingSite(plan, q);
+      site(q.kind, s, () => siteBase(plan, s) - 2);
+    } else if (q.kind === 'church') {
+      const s = churchSite(plan, q);
+      site('church', s, () => siteBase(plan, s) - 2);
+    } else if (q.kind === 'hull') {
+      const s = hullSite(plan, q);
+      site('hull', s, () => siteBase(plan, s) - 2);
+    } else if (q.kind === 'culvert') {
+      const box = culvertBox(plan, q);
+      site('culvert', box, () => culvertBase(plan, q) - 1);
+      const spread = vx(7.0, v);
+      site('embankment', { x0: box.x0 - spread, z0: q.z - vx(2.5, v), w: box.w + 2 * spread, d: vx(5.0, v) });
+    }
+  }
+  for (const line of plan.lines) {
+    for (const d of line.dugouts) {
+      const e = d.passage;
+      const x0 = Math.min(d.lo[0], e.x0);
+      const z0 = Math.min(d.lo[2], e.z0);
+      site('dugout', { x0, z0, w: Math.max(d.hi[0], e.x1) - x0, d: Math.max(d.hi[2], e.z1) - z0 });
+    }
+  }
+  return out;
+}
+
+/** Fill from the ground up to (not including) `top` under every column of a site, so nothing built hangs over a dip. */
+function foundation(sink: VoxelSink, clip: Clip, plan: WorldPlan, s: Site, top: number, material: (x: number, y: number, z: number) => number): void {
+  for (let x = Math.max(s.x0, clip.x0); x < Math.min(s.x0 + s.w, clip.x1); x++) {
+    for (let z = s.z0; z < s.z0 + s.d; z++) {
+      for (let y = columnTopAt(plan, x, z); y < top; y++) sink.set(x, y, z, material(x, y, z));
+    }
+  }
 }
 
 /** How far from its anchor x a prop can reach, for culling bands. */
@@ -190,8 +302,8 @@ export function stampProp(sink: VoxelSink, clip: Clip, plan: WorldPlan, prop: Pr
     case 'pole': return stampPole(sink, clip, plan, prop);
     case 'fence': return stampFence(sink, clip, plan, prop);
     case 'hull': return stampHull(sink, clip, plan, prop);
-    case 'farm': return stampBuilding(sink, clip, plan, prop, vx(8.0, plan.params.voxel), vx(5.5, plan.params.voxel), vx(4.5, plan.params.voxel));
-    case 'hamlet': return stampBuilding(sink, clip, plan, prop, prop.a!, prop.b!, prop.c!);
+    case 'farm': return stampBuilding(sink, clip, plan, prop, vx(4.5, plan.params.voxel));
+    case 'hamlet': return stampBuilding(sink, clip, plan, prop, prop.c!);
     case 'church': return stampChurch(sink, clip, plan, prop);
     case 'culvert': return stampCulvert(sink, clip, plan, prop);
     case 'road': return stampRoad(sink, clip, plan, prop);
@@ -342,12 +454,15 @@ function onlyCarve(...ids: number[]): Uint8Array {
 function stampHull(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan): void {
   const p = plan.params;
   const r = Rng.root(q.seed);
-  const len = vx(7.0, p.voxel);
-  const wide = vx(3.5, p.voxel);
+  const site = hullSite(plan, q);
+  const len = site.w;
+  const wide = site.d;
   const high = vx(2.5, p.voxel);
-  const x0 = q.x - (len >> 1);
-  const z0 = q.z - (wide >> 1);
-  const base = medianTop(plan, x0, z0, len, wide) - 1;
+  const x0 = site.x0;
+  const z0 = site.z0;
+  const base = siteBase(plan, site) - 1;
+  // It has settled into packed mud: no daylight under the plates.
+  foundation(sink, clip, plan, site, base, () => P.MUD_DARK);
   const plate = (x: number, y: number, z: number) => (h8(x, y, z, 91) < 64 ? P.HULL_RUST : P.HULL);
   for (let x = x0; x < x0 + len; x++) {
     const glacis = x - (x0 + len - 10);
@@ -382,14 +497,15 @@ function brickVoxel(x: number, y: number, z: number, base: number): number {
 }
 
 /** A wrecked brick building: Python's farm outbuilding, and the hamlet's houses. */
-function stampBuilding(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan, w: number, d: number, high: number): void {
+function stampBuilding(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan, high: number): void {
   const p = plan.params;
   const r = Rng.root(q.seed);
-  const x0 = q.x - (w >> 1);
-  const z0 = q.z - (d >> 1);
-  const base = medianTop(plan, x0, z0, w, d);
+  const site = buildingSite(plan, q);
+  const { x0, z0, w, d } = site;
+  const base = siteBase(plan, site);
   const t = 3;
-  // The site is levelled: a concrete slab, open air above it.
+  // The site is levelled: a footing where the ground falls away, a concrete slab, open air above it.
+  foundation(sink, clip, plan, site, base - 1, (x, _y, z) => (h8(x, 1, z, 102) < 60 ? P.CONCRETE_STAINED : P.CONCRETE));
   for (let x = x0; x < x0 + w; x++) {
     for (let z = z0; z < z0 + d; z++) {
       put(sink, clip, x, base - 1, z, h8(x, 0, z, 102) < 60 ? P.CONCRETE_STAINED : P.CONCRETE);
@@ -439,11 +555,13 @@ function stampBuilding(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan
 function stampChurch(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan): void {
   const p = plan.params;
   const r = Rng.root(q.seed);
-  const s = vx(3.0, p.voxel);
+  const site = churchSite(plan, q);
+  const s = site.w;
   const t = 4;
-  const x0 = q.x - (s >> 1);
-  const z0 = q.z - (s >> 1);
-  const base = medianTop(plan, x0, z0, s, s);
+  const x0 = site.x0;
+  const z0 = site.z0;
+  const base = siteBase(plan, site);
+  foundation(sink, clip, plan, site, base - 1, () => P.CONCRETE);
   const high = q.a ?? 100;
   const ragged = vx(3.0, p.voxel);
   for (let x = x0; x < x0 + s; x++) {
@@ -473,12 +591,13 @@ function stampChurch(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan):
 
 function stampCulvert(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan): void {
   const p = plan.params;
-  const len = vx(9.0, p.voxel);
-  const box = vx(2.5, p.voxel);
+  const site = culvertBox(plan, q);
+  const len = site.w;
+  const box = site.d;
   const bore = vx(1.5, p.voxel);
-  const x0 = q.x - (len >> 1);
+  const x0 = site.x0;
   const half = box >> 1;
-  const base = columnTopAt(plan, q.x, q.z) - vx(2.0, p.voxel);
+  const base = culvertBase(plan, q);
   // The track's embankment: packed earth, flat-topped, falling away at 45°.
   const flat = { x0: x0 - vx(6, p.voxel), x1: x0 + len + vx(6, p.voxel), z0: q.z - vx(1.5, p.voxel), z1: q.z + vx(1.5, p.voxel) };
   const rise = vx(1.0, p.voxel);

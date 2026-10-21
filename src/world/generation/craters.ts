@@ -42,6 +42,12 @@ export function planCraters(
 ): { open: Crater[]; direct: DirectHit[] } {
   const edge = vx(1.5, p.voxel);
   const open: Crater[] = [];
+  // Pull a crater in from the map's sides until its rim clears them: the far
+  // field continues the bare field there, so a bowl at the boundary is a cliff.
+  const inside = (v: number, r: number, size: number) => {
+    const keep = Math.ceil(1.4 * r) + 2;
+    return keep + ((v - edge) * (size - 2 * keep)) / (size - 2 * edge);
+  };
 
   // No man's land, densest near the parapets: the ground nobody crosses twice.
   const nml = rng.derive('craters.nml');
@@ -50,7 +56,8 @@ export function planCraters(
   for (let i = 0; i < p.craters.nml; i++) {
     const x = nml.randint(edge, p.dims.x - edge);
     const z = zLo + nml.beta(0.7, 0.7) * (zHi - zLo);
-    open.push({ x, z, r: radius(p, nml, p.craters.radiusCap) });
+    const r = radius(p, nml, p.craters.radiusCap);
+    open.push({ x: inside(x, r, p.dims.x), z, r });
   }
 
   // Harassing fire behind both lines.
@@ -59,7 +66,8 @@ export function planCraters(
     const x = rear.randint(edge, p.dims.x - edge);
     let z = rear.randint(edge, p.dims.z - edge);
     while (z >= p.layout.front && z <= p.layout.enemyFront) z = rear.randint(edge, p.dims.z - edge);
-    open.push({ x, z, r: radius(p, rear, p.craters.radiusCap) });
+    const r = radius(p, rear, p.craters.radiusCap);
+    open.push({ x: inside(x, r, p.dims.x), z: inside(z, r, p.dims.z), r });
   }
 
   // Direct hits on each front line: real breaches in the parapet.
