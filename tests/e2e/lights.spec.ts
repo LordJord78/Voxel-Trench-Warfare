@@ -70,3 +70,39 @@ test('each lighting pixel keeps a reservoir from frame to frame: 8 candidates a 
     expect(s.weight).toBeGreaterThan(0);
   }
 });
+
+test('no light crosses a corner: each face of a block lit from its own side has only its own light, frame after frame', async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ front: number; side: number; blueOnFront: number; redOnSide: number; frontRed: number; sideBlue: number; errors: string[] }>(page, 'restirCorner', { frames: 48 });
+  expect(r.errors).toEqual([]);
+  expect(r.front).toBeGreaterThan(48 * 40);
+  expect(r.side).toBeGreaterThan(48 * 40);
+  expect(r.blueOnFront).toBe(0);
+  expect(r.redOnSide).toBe(0);
+  expect(r.frontRed).toBeGreaterThan(0);
+  expect(r.sideBlue).toBeGreaterThan(0);
+});
+
+test('neighbours sharing their picks bring the point light nearer the lights\' sum, settled and most of all just after a cut', async ({ page }) => {
+  test.setTimeout(180_000);
+  await openHarness(page);
+  // 256 pixels across the floor's 11 m: 12 lighting pixels are a metre, as a view's are a few metres off.
+  const run = (spatial: boolean, cycle?: number) => runCase<{ error: number; errors: string[] }>(page, 'restirNoise', { frames: 32, warm: cycle ? 0 : 24, size: 256, spatial, cycle });
+  const [alone, shared, aloneCut, sharedCut] = [await run(false), await run(true), await run(false, 8), await run(true, 8)];
+  for (const r of [alone, shared, aloneCut, sharedCut]) expect(r.errors).toEqual([]);
+  console.log(`error against the sum: settled ${alone.error.toFixed(4)} alone, ${shared.error.toFixed(4)} shared; cut every 8 frames ${aloneCut.error.toFixed(4)} alone, ${sharedCut.error.toFixed(4)} shared`);
+  expect(shared.error).toBeLessThan(alone.error);
+  expect(sharedCut.error).toBeLessThan(0.8 * aloneCut.error);
+});
+
+test('where neighbours\' lights differ most, sharing costs a settled pixel little: its history stays its own', async ({ page }) => {
+  await openHarness(page);
+  // 64 pixels across 11 m, lights 2 m up: 12 lighting pixels are 4 m, and the lights' light differs
+  // several-fold across them. Shared reservoirs kept as history made the error several times worse.
+  const run = (spatial: boolean) => runCase<{ error: number; errors: string[] }>(page, 'restirNoise', { frames: 32, warm: 24, size: 64, spatial });
+  const [alone, shared] = [await run(false), await run(true)];
+  expect(alone.errors).toEqual([]);
+  expect(shared.errors).toEqual([]);
+  console.log(`error against the sum, coarse: ${alone.error.toFixed(4)} alone, ${shared.error.toFixed(4)} shared`);
+  expect(shared.error).toBeLessThan(1.2 * alone.error);
+});

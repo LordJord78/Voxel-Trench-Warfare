@@ -2,7 +2,7 @@ import { BrickMap } from '../../../src/world/bricks';
 import { HeapMirror } from '../../../src/world/encode';
 import { P } from '../../../src/world/materials';
 import type { CameraPose } from '../../../src/render/camera';
-import { PROBE_DUSK, type FrameSky } from '../../../src/render/frame-uniforms';
+import { FLAGS, PROBE_DUSK, type FrameSky } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
 import { lanternLight, MAX_LIGHTS, type SceneLight } from '../../../src/render/lights';
 import { Renderer } from '../../../src/render/renderer';
@@ -66,7 +66,7 @@ export const cases = {
    * visibility (a); the mean of the sky samples it traced, and how many; the history's colour
    * after the last frame; and the analytic expectations.
    */
-  async lighting(args: { scene: Scene; frames: number; keyElevation?: number }) {
+  async lighting(args: { scene: Scene; frames: number; keyElevation?: number; spatial?: boolean }) {
     const g = await gpu();
     const { map, pose, lights } = scene(args.scene);
     const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
@@ -75,6 +75,7 @@ export const cases = {
     const sky: FrameSky = { ...PROBE_DUSK, keyDir: [0, Math.sin(el), Math.cos(el)], keyColour: [1, 1, 1] };
     renderer.sky = sky;
     renderer.setLights(lights, 1);
+    if (args.spatial === false) renderer.flags |= FLAGS.SPATIAL_OFF;
     const [lw, lh] = renderer.lightResolution;
     const qx = lw >> 1;
     const qy = lh >> 1;

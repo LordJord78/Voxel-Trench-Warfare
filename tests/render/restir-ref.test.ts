@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/core/rng';
-import { HISTORY_MAX, NONE, resample, type Pixel, type Reservoir } from '../support/restir-ref';
+import { HISTORY_MAX, NONE, resample, share, type Pixel, type Reservoir } from '../support/restir-ref';
 
 // Six lights a pixel's cell lists, each lighting it by its target (a light's estimate is f(y) × W,
 // with f its target here), and two more that light it but are not in its list.
@@ -90,4 +90,85 @@ describe('ReSTIR on the CPU', () => {
     expect(r.count).toBe(8 + HISTORY_MAX);
     expect(HISTORY_MAX).toBe(160);
   });
+
+  it('shares neighbours\' picks without bias, where some neighbours could not have drawn the light', () => {
+    // This pixel's lights 0-3; one neighbour has the same; one is reached by lights 2, 3 and 5 only
+    // (5 not reaching this pixel); one by none.
+    const here: Pixel = { list: [0, 1, 2, 3], target: (l) => (l <= 3 ? LIGHT[l] : 0), targetBefore: (l) => (l <= 3 ? LIGHT[l] : 0) };
+    const same = here;
+    const part: Pixel = { list: [2, 3, 5], target: (l) => ([2, 3, 5].includes(l) ? LIGHT[l] * 1.5 : 0), targetBefore: () => 0 };
+    const dark: Pixel = { list: [0, 1], target: () => 0, targetBefore: () => 0 };
+    const m = mean(1e5, (random) => {
+      const own = resample(here, null, random);
+      const neighbours = [same, part, dark].map((p) => ({ reservoir: resample(p, null, random), target: p.target }));
+      return estimate(here, share(here, own, neighbours, random));
+    });
+    expect(Math.abs(m / sum(here) - 1)).toBeLessThan(0.01);
+  });
+
+  it('shares a neighbour\'s pick that is far brighter here than where it was drawn without letting it swamp the rest', () => {
+    // A neighbour where light 0 is a twentieth as bright as here: its picks of it carry a W twenty
+    // times too large for here. Shared by equal shares (1 / Z) they make the estimate's spread far wider.
+    const here: Pixel = { list: [0, 1, 3, 5], target: (l) => LIGHT[l], targetBefore: (l) => LIGHT[l] };
+    const far: Pixel = { list: [0, 1, 3, 5], target: (l) => (l === 0 ? LIGHT[0] / 20 : LIGHT[l]), targetBefore: () => 0 };
+    const rng = Rng.root(9).derive('test.restir.spread');
+    const random = () => rng.float();
+    let s1 = 0;
+    let s2 = 0;
+    const n = 4e4;
+    for (let i = 0; i < n; i++) {
+      const own = resample(here, null, random);
+      const near = [far, far, far].map((p) => ({ reservoir: resample(p, null, random), target: p.target }));
+      const e = estimate(here, share(here, own, near, random));
+      s1 += e;
+      s2 += e * e;
+    }
+    const m = s1 / n;
+    expect(Math.abs(m / sum(here) - 1)).toBeLessThan(0.02);
+    // The spread of one estimate over its mean.
+    expect(Math.sqrt(s2 / n - m * m) / m).toBeLessThan(0.6);
+  });
+
+  it('stays unbiased frame after frame, each frame merging its own history and then sharing with its neighbours', () => {
+    // A row of five pixels, each lit by its own mix of the lights; each frame every pixel resamples
+    // with its history, then shares with the pixels either side; its history next frame is its own.
+    const row: Pixel[] = [0, 1, 2, 3, 4].map((i) => {
+      const lit = (l: number) => (l === 5 && i > 2 ? 0 : LIGHT[l] * (1 + 0.3 * Math.sin(i + l)));
+      return { list: [0, 1, 2, 3, 5, 6].filter((l) => lit(l) > 0 || l !== 5), target: lit, targetBefore: lit };
+    });
+    const m = mean(4000, (random) => {
+      let histories: (Reservoir | null)[] = row.map(() => null);
+      let shared: Reservoir[] = [];
+      for (let f = 0; f < 12; f++) {
+        const fresh = row.map((p, i) => resample(p, histories[i], random));
+        shared = row.map((p, i) => {
+          const near = [i - 1, i + 1].filter((j) => j >= 0 && j < row.length).map((j) => ({ reservoir: fresh[j], target: row[j].target }));
+          return share(p, fresh[i], near, random);
+        });
+        histories = fresh;
+      }
+      return row.reduce((t, p, i) => t + estimate(p, shared[i]) / sum(p), 0) / row.length;
+    });
+    expect(Math.abs(m - 1)).toBeLessThan(0.015);
+  });
+
+  it('trusts a neighbour for one frame\'s candidates: a pixel whose own history is long is barely moved, a fresh one leans on its neighbours', () => {
+    const here: Pixel = { list: [0, 1, 3, 5], target: (l) => LIGHT[l], targetBefore: (l) => LIGHT[l] };
+    const rng = Rng.root(13).derive('test.restir.trust');
+    const random = () => rng.float();
+    // A history of 160 for light 5, its W exact; a neighbour of 160 for light 0, its W exact.
+    const own: Reservoir = { light: 5, weight: sum(here) / LIGHT[5], count: 168, target: LIGHT[5] };
+    const near = [{ reservoir: { light: 0, weight: sum(here) / LIGHT[0], count: 168, target: LIGHT[0] }, target: here.target }];
+    let kept = 0;
+    for (let i = 0; i < 1e4; i++) if (share(here, own, near, random).light === 5) kept++;
+    // Each light as bright at both pixels, the balance heuristic shares by confidence alone: its
+    // own light 168 / 176 of the time.
+    expect(Math.abs(kept / 1e4 - 168 / 176)).toBeLessThan(0.01);
+    const fresh: Reservoir = { ...own, count: 8 };
+    let leaned = 0;
+    for (let i = 0; i < 1e4; i++) if (share(here, fresh, near, random).light === 0) leaned++;
+    // Fresh, 8 against 8: the neighbour's light half the time.
+    expect(Math.abs(leaned / 1e4 - 0.5)).toBeLessThan(0.02);
+  });
 });
+

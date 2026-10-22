@@ -79,8 +79,9 @@ test('a light with no finite weight is never chosen, and the rest are lit as if 
 });
 
 test('a frame takes as many as 1,024 lights, and the last of them lights as it would alone', async ({ page }) => {
-  const crowd = await run(page, { scene: 'crowd', frames: 64 });
-  const alone = await run(page, { scene: 'single', frames: 64 });
+  // Each pixel by itself: neighbours past the cell's edge list the crowd, and sharing with them is another test's.
+  const crowd = await run(page, { scene: 'crowd', frames: 64, spatial: false });
+  const alone = await run(page, { scene: 'single', frames: 64, spatial: false });
   expect(crowd.lit).toHaveLength(1024);
   expect(alone.mean[0]).toBeGreaterThan(0);
   for (let c = 0; c < 4; c++) expect(crowd.mean[c]).toBe(alone.mean[c]);

@@ -12,6 +12,7 @@
  *              cell (light-cells.ts);
  *   restir   — the point light each lighting pixel shades by, resampled from
  *              its cell's and carried from frame to frame (restir.ts);
+ *   spatial  — shared between neighbours on the same plane;
  *   lighting — the light reaching one pixel of each 2 × 2 block (the sky's
  *              ray in half of them, by turns, each frame), with one shadow ray
  *              to its chosen point light;
@@ -70,7 +71,7 @@ import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['sky', 'beam', 'primary', 'cells', 'restir', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'bloom', 'expose', 'present'] as const;
+const PASSES = ['sky', 'beam', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'bloom', 'expose', 'present'] as const;
 type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas' | 'exposure';
 type Timed = (typeof PASSES)[number];
 
@@ -452,7 +453,7 @@ export class Renderer {
       return {
         beam: group('beam', [view('beam')]),
         primary: group('primary', [view('gDepth'), view('gHit'), view('gMotion'), view('beam')]),
-        lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view('lSky'), { buffer: this.restir.written(cur) }]),
+        lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view('lSky'), { buffer: this.restir.shaded }]),
         temporal: group('temporal', [
           view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view(`hHit${prev}`), view(`hColour${prev}`), view(`hMoments${prev}`),
           view(`hColour${cur}`), view(`hMoments${cur}`), view('variance'), view(`hDepth${prev}`), view('lSky'),
@@ -488,9 +489,9 @@ export class Renderer {
     return this.sceneGroup;
   }
 
-  /** The reservoirs the last frame wrote (restir.ts), in rows of `lightStride`. */
+  /** The reservoirs the last frame shaded by (restir.ts), in rows of `lightStride`. */
   reservoirs(): GPUBuffer {
-    return this.restir.written((this.frameIndex + 1) & 1);
+    return this.restir.shaded;
   }
 
   /** The reservoirs' row stride, in reservoirs. */
@@ -600,7 +601,7 @@ export class Renderer {
     pass('beam', 'beam', [Math.ceil(this.res[0] / 8), Math.ceil(this.res[1] / 8)]);
     pass('primary', 'primary', this.res);
     this.cells.encode(encoder, this.lightCount, this.timer.writes('cells'));
-    this.restir.encode(encoder, this.frameIndex & 1, light, this.timer.writes('restir'));
+    this.restir.encode(encoder, this.frameIndex & 1, light, { candidates: this.timer.writes('restir'), spatial: this.timer.writes('spatial') });
     pass('lighting', 'lighting', light);
     pass('temporal', 'temporal', light);
     pass('atrous1', 'atrous', light);

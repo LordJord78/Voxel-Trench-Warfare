@@ -1,7 +1,7 @@
 import { Rng } from '../../../src/core/rng';
 import { loadTunables } from '../../../src/core/tunables';
 import { jitter, rayDir, type CameraPose } from '../../../src/render/camera';
-import { PROBE_DUSK } from '../../../src/render/frame-uniforms';
+import { FLAGS, PROBE_DUSK } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
 import { cellGrid, CELL_LIGHTS, CELL_METRES, LightCells } from '../../../src/render/light-cells';
 import { lightBuffer, MAX_LIGHTS, type SceneLight } from '../../../src/render/lights';
@@ -39,21 +39,23 @@ function testLights(seed: number, voxel: number, crowdAt: [number, number]): Sce
 /**
  * An open floor 4 m down, 12.8 m square, the camera 5.6 m over its middle looking straight down
  * (as the lighting cases have it), lit by `lights` at dusk with the key and sky dark: the renderer,
- * and the point light at the middle lighting pixel each frame.
+ * and the point light at the middle lighting pixel each frame. Given `block`, a box stands on the
+ * floor and the camera looks at its corner instead.
  */
-async function floor(lights: SceneLight[]) {
+async function floor(lights: SceneLight[], block?: { from: [number, number, number]; to: [number, number, number]; pose: CameraPose }, size = 64) {
   const g = await gpu();
   const map = new BrickMap({ x: 128, y: 128, z: 128 });
   map.fillBox(0, 0, 0, 128, 40, 128, P.SOD);
+  if (block) map.fillBox(...block.from, ...block.to, P.CONCRETE);
   const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
-  const renderer = await Renderer.create(g, null, world, null, { size: [64, 64] });
+  const renderer = await Renderer.create(g, null, world, null, { size: [size, size] });
   renderer.sky = { ...PROBE_DUSK, keyColour: [0, 0, 0], sunLight: [0, 0, 0], moonLight: [0, 0, 0] };
   renderer.setLights(lights, 1);
-  const pose: CameraPose = { position: [6.4, 9.6, 6.4], yaw: 0, pitch: -89.9 };
+  const pose: CameraPose = block?.pose ?? { position: [6.4, 9.6, 6.4], yaw: 0, pitch: -89.9 };
   const [lw, lh] = renderer.lightResolution;
   const middle = ((lh >> 1) * lw + (lw >> 1)) * 4;
   let frame = 0;
-  if (lw !== 32 || lh !== 32) throw new Error(`the floor's lighting grid is ${lw} × ${lh}, not 32 × 32 at scale 2`);
+  if (lw !== size / 2 || lh !== size / 2) throw new Error(`the floor's lighting grid is ${lw} × ${lh}, not half of ${size} at scale 2`);
   return {
     g,
     renderer,
@@ -75,7 +77,7 @@ async function floor(lights: SceneLight[]) {
       const f = frame;
       renderer.render(pose, 0, frame++ * 16);
       const px = new Uint16Array(await readTexture(renderer.texture('lNoisy')));
-      const [res, scale] = [[64, 64] as [number, number], 2];
+      const [res, scale] = [[size, size] as [number, number], 2];
       const o = [[0, 0], [1, 1], [1, 0], [0, 1]][f & 3];
       const j = jitter(f);
       const light: number[][] = [];
@@ -188,12 +190,82 @@ export const cases = {
   },
 
   /**
-   * The middle lighting pixel's reservoir (light, W, M) after each of `frames` frames, the
+   * A block's corner, its -z face lit red from in front and its +x face blue from the side, each
+   * light behind the other face's plane: over `frames` frames, how many lighting pixels lay on
+   * each face, the most blue any pixel on the -z face had and the most red any on the +x face had,
+   * and each face's mean of its own light.
+   */
+  async restirCorner(args: { frames: number }) {
+    const red = bulb([5.5, 6.0, 4.5], 3, [1, 0, 0]);
+    const blue = bulb([8.5, 6.0, 7.5], 3, [0, 0, 1]);
+    // The block from (4, 4, 6) m to (7, 8, 9) m; the camera off its corner at (7, 6, 6), looking at it.
+    const s = await floor([red, blue], { from: [40, 40, 60], to: [70, 80, 90], pose: { position: [9.5, 6.5, 3.5], yaw: -45, pitch: -8 } });
+    const [lw, lh] = s.renderer.lightResolution;
+    const out = { front: 0, side: 0, blueOnFront: 0, redOnSide: 0, frontRed: 0, sideBlue: 0 };
+    for (let f = 0; f < args.frames; f++) {
+      const { light } = await s.renderAll();
+      const hit = new Uint32Array(await readTexture(s.renderer.texture('hHit')));
+      for (let i = 0; i < lw * lh; i++) {
+        const face = (hit[i * 2] >>> 24) & 7;
+        if (face === 4) {
+          out.front++;
+          out.blueOnFront = Math.max(out.blueOnFront, light[i][2]);
+          out.frontRed += light[i][0];
+        } else if (face === 1) {
+          out.side++;
+          out.redOnSide = Math.max(out.redOnSide, light[i][0]);
+          out.sideBlue += light[i][2];
+        }
+      }
+    }
+    s.destroy();
+    return { ...out, frontRed: out.frontRed / out.front, sideBlue: out.sideBlue / out.side, errors: [...s.g.errors] };
+  },
+
+  /**
+   * Six lights 2 to 3 m over the floor, rendered `size` square: each lighting pixel's point light
+   * (its luminance) over `frames` frames after `warm`, its error against the lights' own sum at its
+   * point, root-mean-square over its share of that sum; the history started afresh every `cycle`
+   * frames if given (as a camera cut does); with neighbours sharing their picks, or (`spatial`
+   * false) not.
+   */
+  async restirNoise(args: { frames: number; warm: number; size: number; spatial: boolean; cycle?: number }) {
+    const lights = [
+      bulb([4.0, 6.5, 5.0], 3),
+      bulb([8.5, 6.0, 4.5], 3),
+      bulb([6.4, 7.0, 8.8], 3),
+      bulb([3.5, 6.0, 8.5], 2),
+      bulb([9.0, 6.5, 8.0], 2),
+      bulb([6.4, 6.0, 2.5], 2),
+    ];
+    const s = await floor(lights, undefined, args.size);
+    if (!args.spatial) s.renderer.flags |= FLAGS.SPATIAL_OFF;
+    const lum = (v: number[]) => 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+    let err = 0;
+    let n = 0;
+    for (let f = 0; f < args.warm + args.frames; f++) {
+      if (args.cycle && f % args.cycle === 0) s.renderer.resetHistory();
+      const { light, at } = await s.renderAll();
+      if (f < args.warm) continue;
+      light.forEach((v, i) => {
+        const want = lum([0, 1, 2].map((c) => lights.reduce((t, x) => t + analytic(x, at[i])[c], 0)));
+        err += ((lum(v) - want) / want) ** 2;
+        n++;
+      });
+    }
+    s.destroy();
+    return { error: Math.sqrt(err / n), errors: [...s.g.errors] };
+  },
+
+  /**
+   * The middle lighting pixel's temporal reservoir (light, W, M) after each of `frames` frames, the
    * history started afresh before frame `reset`; and whether every lighting pixel's reservoir
    * holds one of the frame's lights (or none) with a weight that is a number, not negative.
    */
   async restirReservoirs(args: { frames: number; reset: number }) {
     const s = await floor([bulb([5.0, 6.0, 6.4], 3), bulb([8.0, 5.0, 7.0], 1), bulb([6.4, 8.0, 3.0], 5)]);
+    // The temporal merge's own reservoirs: neighbours do not share, so the shaded ones are those.
+    s.renderer.flags |= FLAGS.SPATIAL_OFF;
     const [lw, lh] = s.renderer.lightResolution;
     const middle = (lh >> 1) * s.renderer.lightStride + (lw >> 1);
     const seen: { light: number; weight: number; count: number }[] = [];

@@ -2,9 +2,17 @@
  * ReSTIR's reservoir arithmetic (restir.wgsl) on the CPU, for one lighting pixel (Bitterli et al.
  * 2020, with the generalised RIS of Lin et al. 2022): candidates drawn uniformly from the pixel's
  * cell list and resampled to one by their target, then last frame's reservoir merged in, weighed
- * by its light's target now. The chosen light's contribution weight W is normalised by Z, the
- * candidates of the reservoirs that could have drawn it: this frame's if it is in the cell's list,
- * the history's if its light reached the pixel last frame. A light's estimate is f(y) × W.
+ * by its light's target now (`resample`); then its neighbours' reservoirs shared in, each weighed
+ * by its light's target at this pixel (`share`). The chosen light's contribution weight W is
+ * normalised by Z, the candidates of the reservoirs that could have drawn it: in the temporal
+ * merge, this frame's if it is in the cell's list and the history's if its light reached the pixel
+ * last frame. The spatial merge weighs each reservoir's light instead by the generalised balance
+ * heuristic (Lin et al. 2022): its share of that light among all the reservoirs, by their
+ * confidence and the light's target at their pixels, which keeps a light far brighter here than
+ * where it was drawn from swamping the rest. A pixel's own reservoir is trusted for the candidates
+ * it stands for; a neighbour's for at most one frame's (`confidence`): its history is for its own
+ * pixel. The shared reservoir is what the pixel shades by; its history next frame is its own,
+ * unshared. A light's estimate is f(y) × W.
  */
 
 export const NONE = -1;
@@ -74,4 +82,41 @@ export function resample(pixel: Pixel, history: Reservoir | null, random: () => 
   // No reservoir could have drawn it (a history's light that reached the spot neither then nor in this frame's list).
   if (!(z > 0)) return { ...EMPTY, count: drawn + kept };
   return { light, weight: sum / (z * target), count: drawn + kept, target };
+}
+
+/** A neighbour's reservoir, and the target there of any light. */
+export interface Neighbour {
+  reservoir: Reservoir;
+  target: (light: number) => number;
+}
+
+/**
+ * `own`, this pixel's reservoir, with its neighbours' shared in (the spatial merge), from
+ * `random`; each neighbour trusted for at most `confidence` candidates.
+ */
+export function share(pixel: Pixel, own: Reservoir, neighbours: readonly Neighbour[], random: () => number, confidence = CANDIDATES): Reservoir {
+  const all: Neighbour[] = [
+    { reservoir: own, target: pixel.target },
+    ...neighbours.map((n) => ({ reservoir: { ...n.reservoir, count: Math.min(n.reservoir.count, confidence) }, target: n.target })),
+  ];
+  let light = NONE;
+  let target = 0;
+  let sum = 0;
+  for (const { reservoir: r, target: there } of all) {
+    if (r.light === NONE) continue;
+    const t = pixel.target(r.light);
+    // This reservoir's share of its light among them all, by their candidates and its target at each pixel.
+    const among = all.reduce((d, n) => d + n.reservoir.count * n.target(r.light), 0);
+    const w = among > 0 ? ((r.count * there(r.light)) / among) * t * r.weight : 0;
+    const pick = random();
+    if (!(w > 0) || !Number.isFinite(w)) continue;
+    sum += w;
+    if (pick * sum < w) {
+      light = r.light;
+      target = t;
+    }
+  }
+  const count = all.reduce((m, n) => m + n.reservoir.count, 0);
+  if (light === NONE) return { ...EMPTY, count };
+  return { light, weight: sum / target, count, target };
 }
