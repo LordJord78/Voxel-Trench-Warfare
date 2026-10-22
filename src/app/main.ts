@@ -565,7 +565,9 @@ async function start(): Promise<void> {
         timings: world.timings,
         setQuality: (q) => renderer.setQuality(q),
         view: goTo,
-        viewHours: (name) => views[name].hours,
+        setTimeOfDay: (hours) => {
+          timeOfDay = hours;
+        },
         waitFrames,
         waitConverged: () => waitFrames(render.denoise.historyMax + 8),
         stats: () => renderer.stats,

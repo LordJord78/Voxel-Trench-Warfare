@@ -1,18 +1,19 @@
-import { CLOCK_KEYS } from '../../src/core/sky-clock';
+import { CLOCK_KEYS, clockText } from '../../src/core/sky-clock';
 import { describe, expect, it } from 'vitest';
-import { runCheck, type CheckGame, type CheckReport } from '../../src/app/check';
+import { CHECK_KEYS, DAY_HOURS, runCheck, type CheckGame, type CheckReport } from '../../src/app/check';
 import { VIEW_NAMES } from '../../src/app/views';
 import type { RenderStats } from '../../src/render/renderer';
 
-function game(over: Partial<CheckGame> = {}): CheckGame {
+/** A game for the check; `seen` gathers where it is sent, a view and then its hour. */
+function game(over: Partial<CheckGame> = {}, seen: string[] = []): CheckGame {
   const stats = { gpuMs: 9.5, res: [1549, 968] } as unknown as RenderStats;
   return {
     timestamps: true,
     promptMs: 3500,
     timings: { fill: 1500 },
     setQuality: () => {},
-    view: () => {},
-    viewHours: (name) => (name === 'nml-night' ? CLOCK_KEYS.night : CLOCK_KEYS.dusk),
+    view: (name) => void seen.push(name),
+    setTimeOfDay: (hours) => void seen.push(clockText(hours)),
     waitFrames: async () => {},
     waitConverged: async () => {},
     stats: () => stats,
@@ -31,19 +32,33 @@ async function run(g: CheckGame): Promise<{ report: CheckReport; posted: string[
 }
 
 describe('the check', () => {
-  it('reports every view, its shot and the GPU time the timestamps give', async () => {
+  it('reports every view at each of the four keys, its shot and the GPU time the timestamps give', async () => {
     const { report, posted } = await run(game());
     expect(report.timer).toBe('timestamps');
-    expect(report.views.map((v) => v.name)).toEqual([...VIEW_NAMES]);
-    expect(report.views.map((v) => v.gpuMs)).toEqual(VIEW_NAMES.map(() => 9.5));
-    expect(report.views.find((v) => v.name === 'nml-night')!.shot).toBe('nml-night-night.png');
+    expect(report.views.map((v) => v.shot)).toEqual(VIEW_NAMES.flatMap((n) => CHECK_KEYS.map((k) => `${n}-${k}.png`)));
+    expect(report.views.map((v) => v.hours)).toEqual(VIEW_NAMES.flatMap(() => CHECK_KEYS.map((k) => CLOCK_KEYS[k])));
+    expect(report.views.every((v) => v.gpuMs === 9.5)).toBe(true);
     expect(posted).toEqual([...report.views.map((v) => v.shot), 'report.json']);
   });
-  it('without timestamps, times each view by the median of its submitted work', async () => {
+  it('reports the overview through the day: every second hour, and round sunrise and sunset', async () => {
+    const { report } = await run(game());
+    expect(report.day.map((d) => clockText(d.hours))).toEqual([
+      '00:00', '02:00', '04:00', '06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00', '06:40', '07:10', '17:50', '17:55',
+    ]);
+    expect(report.day.every((d) => d.gpuMs === 9.5)).toBe(true);
+  });
+  it('sends the game to each view and then sets its hour, the view setting its own first', async () => {
+    const seen: string[] = [];
+    await run(game({}, seen));
+    const pairs = [...VIEW_NAMES.flatMap((n) => CHECK_KEYS.map((k) => [n, clockText(CLOCK_KEYS[k])])), ...DAY_HOURS.map((h) => ['overview', clockText(h)])];
+    expect(seen).toEqual(pairs.flat());
+  });
+  it('without timestamps, times each view and hour by the median of its submitted work', async () => {
     const { report } = await run(game({ timestamps: false }));
     expect(report.timer).toBe('submitted-work');
     // A third of the samples are 30 ms stalls; the median is the 11 ms the work takes.
     expect(report.views.every((v) => v.gpuMs === 11)).toBe(true);
+    expect(report.day.every((d) => d.gpuMs === 11)).toBe(true);
   });
   it('still reports, with the error, when a step fails', async () => {
     const { report, posted } = await run(game({ fingerprint: async () => Promise.reject(new Error('crypto.subtle is unavailable')) }));
@@ -57,6 +72,11 @@ describe('the check, as it runs', () => {
     const posted: string[] = [];
     await runCheck('t', game(), async (file, body) => void posted.push(file === 'progress.json' ? `progress:${JSON.parse(body as string).stage}` : file));
     const progress = posted.filter((p) => p.startsWith('progress:'));
-    expect(progress).toEqual(['progress:fingerprint', ...VIEW_NAMES.map((n) => `progress:view ${n}`), 'progress:done']);
+    expect(progress).toEqual([
+      'progress:fingerprint',
+      ...VIEW_NAMES.flatMap((n) => CHECK_KEYS.map((k) => `progress:view ${n} at ${k}`)),
+      ...DAY_HOURS.map((h) => `progress:the overview at ${clockText(h)}`),
+      'progress:done',
+    ]);
   });
 });

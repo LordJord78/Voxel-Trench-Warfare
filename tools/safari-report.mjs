@@ -1,7 +1,8 @@
 // The Safari report run (npm run safari): serve the dev build, which carries the report
 // endpoint, open the check page in Safari, wait for its report, and judge it by the spec's
-// "done" table: the click-to-play prompt within 8 s, the golden world bytes, and every
-// standard view within the 14 ms GPU budget at the high preset's 1.5 MP.
+// "done" table: the click-to-play prompt within 8 s, the golden world bytes, every standard
+// view at each of the clock's four keys within the 14 ms GPU budget at the high preset's
+// 1.5 MP, and the overview within it through the day.
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'vite';
@@ -14,6 +15,11 @@ const GPU_BUDGET_MS = 14;
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 const golden = JSON.parse(readFileSync('tests/fixtures/golden.json', 'utf8')).fingerprint;
+/** An hour of the clock as HH:MM. */
+const hhmm = (hours) => {
+  const m = Math.round(hours * 60);
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+};
 const reportFile = `artifacts/${RUN}/report.json`;
 rmSync(`artifacts/${RUN}`, { recursive: true, force: true });
 
@@ -51,8 +57,10 @@ try {
     console.log(`GPU time by ${report.timer}${report.timer === 'submitted-work' ? ' (an overestimate: it includes submitting and completing)' : ''}`);
     for (const v of report.views) {
       const mp = (v.res[0] * v.res[1]) / 1e6;
-      check(v.gpuMs <= GPU_BUDGET_MS && mp >= 1.48 && v.spread > 4 / 255, `${v.name.padEnd(10)} ${v.gpuMs.toFixed(2)} ms at ${v.res.join('×')} (${mp.toFixed(2)} MP), spread ${v.spread.toFixed(3)}`);
+      check(v.gpuMs <= GPU_BUDGET_MS && mp >= 1.48 && v.spread > 4 / 255, `${v.shot.replace('.png', '').padEnd(16)} ${v.gpuMs.toFixed(2)} ms at ${v.res.join('×')} (${mp.toFixed(2)} MP), spread ${v.spread.toFixed(3)}`);
     }
+    check(report.views.length === 24 && report.day.length === 16, `${report.views.length} views (six at four keys) and ${report.day.length} hours of the day`);
+    for (const d of report.day) check(d.gpuMs <= GPU_BUDGET_MS, `overview at ${hhmm(d.hours)}  ${d.gpuMs.toFixed(2)} ms`);
   }
 } catch (e) {
   console.error(e instanceof Error ? e.message : String(e));

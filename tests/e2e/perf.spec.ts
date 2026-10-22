@@ -10,6 +10,9 @@ const VIEWS = ['bay', 'step', 'nml-night', 'overview', 'dugout', 'hamlet'];
 // The clock's four keys: each view at dusk and at night, as before, at noon, the sky's brightest,
 // and at dawn.
 const TIMES: Record<string, number> = { dusk: 17 + 35 / 60, night: 21, noon: 12, dawn: 6 + 50 / 60 };
+// The overview through the day: every second hour, and round sunrise and sunset, where the sun 0–2°
+// up makes the lighting pass's key rays skim the ground (07:10 0.1°, 17:55 1.4°, 18:00 0.6°).
+const DAY_HOURS = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 6 + 40 / 60, 7 + 10 / 60, 17 + 50 / 60, 17 + 55 / 60];
 const BUDGET_MS = 14;
 // Frames for the histories and the GPU's clocks to settle at a view, then frames whose GPU times
 // are read: one frame's time wanders by a millisecond or two, their median does not.
@@ -115,15 +118,15 @@ function sample(page: import('@playwright/test').Page, from: number | null) {
     page,
     async (h, a) => {
       const [start, settle, n] = a as [number | null, number, number];
-      const out: { gpu: number; primary: number; froxels: number }[] = [];
+      const out: { gpu: number; primary: number; froxels: number; lighting: number }[] = [];
       for (let k = 0; k < settle + n; k++) {
         if (start !== null) h.setTimeOfDay(start + k / 360);
         await h.waitFrames(1);
         const s = h.stats();
-        if (k >= settle && s.gpuMs !== null) out.push({ gpu: s.gpuMs, primary: s.passes.primary, froxels: s.passes.froxels });
+        if (k >= settle && s.gpuMs !== null) out.push({ gpu: s.gpuMs, primary: s.passes.primary, froxels: s.passes.froxels, lighting: s.passes.lighting });
       }
-      const median = (key: 'gpu' | 'primary' | 'froxels') => out.map((o) => o[key]).sort((x, y) => x - y)[out.length >> 1];
-      return { gpu: median('gpu'), primary: median('primary'), froxels: median('froxels'), count: out.length };
+      const median = (key: 'gpu' | 'primary' | 'froxels' | 'lighting') => out.map((o) => o[key]).sort((x, y) => x - y)[out.length >> 1];
+      return { gpu: median('gpu'), primary: median('primary'), froxels: median('froxels'), lighting: median('lighting'), count: out.length };
     },
     [from, SETTLE, SAMPLES],
   );
@@ -180,3 +183,31 @@ test('at night with the flares sinking, the overview renders within the budget, 
   expect(running.gpu).toBeLessThanOrEqual(BUDGET_MS);
   expect(shafts).toBeLessThanOrEqual(0.6);
 });
+
+// The overview through the day at the high preset's 1.5 MP, the clock held at each hour.
+test('the overview renders within the budget through the day', async ({ page }) => {
+  test.setTimeout(400_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  const lines: string[] = [];
+  const medians: number[] = [];
+  for (const t of DAY_HOURS) {
+    await hooks(page, (h, v) => {
+      h.view('overview');
+      h.setTimeOfDay(v as number);
+    }, t);
+    const s = await sample(page, null);
+    test.skip(s.count === 0, 'no timestamp queries on this GPU');
+    medians.push(s.gpu);
+    lines.push(`${hhmm(t)} ${s.gpu.toFixed(2)} (lighting ${s.lighting.toFixed(2)})`);
+  }
+  console.log(`The overview through the day, GPU ms, median of ${SAMPLES} frames: ${lines.join(', ')}`);
+  expect(errors).toEqual([]);
+  DAY_HOURS.forEach((t, k) => expect(medians[k], hhmm(t)).toBeLessThanOrEqual(BUDGET_MS));
+});
+
+/** An hour of the clock as HH:MM. */
+function hhmm(hours: number): string {
+  const m = Math.round(hours * 60);
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}

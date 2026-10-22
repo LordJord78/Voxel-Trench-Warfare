@@ -1,8 +1,9 @@
 /**
  * The check (`?check=<run>`): once the game is ready, measure and photograph
- * the six standard views, each at its own time of day, at the high preset's
- * full resolution with dynamic resolution off, and post a report and the PNGs
- * to the dev server (tools/vite-plugin-report.ts). Chrome runs it in the e2e
+ * the six standard views at each of the clock's four keys, then measure the
+ * overview through the day, at the high preset's full resolution with dynamic
+ * resolution off, and post a report and the PNGs to the dev server
+ * (tools/vite-plugin-report.ts). Chrome runs it in the e2e
  * suite and Safari through `npm run safari`; whoever reads the report judges
  * it, against the golden fingerprint among other things.
  *
@@ -20,8 +21,8 @@ export interface CheckGame {
   timings: Record<string, number>;
   setQuality(q: { preset: 'high'; dynres: false }): void;
   view(name: ViewName): void;
-  /** The clock's hour a view is seen at. */
-  viewHours(name: ViewName): number;
+  /** Set the clock, after view() (which sets the view's own hour). */
+  setTimeOfDay(hours: number): void;
   waitFrames(n: number): Promise<void>;
   waitConverged(): Promise<void>;
   stats(): RenderStats;
@@ -41,6 +42,12 @@ export interface CheckView {
   spread: number;
 }
 
+/** The overview at an hour of the day. */
+export interface CheckHour {
+  hours: number;
+  gpuMs: number;
+}
+
 export interface CheckReport {
   run: string;
   userAgent: string;
@@ -49,8 +56,18 @@ export interface CheckReport {
   timings: Record<string, number>;
   fingerprint: string;
   views: CheckView[];
+  day: CheckHour[];
   errors: string[];
 }
+
+/** The clock's keys each view is seen at, in turn. */
+export const CHECK_KEYS = ['dusk', 'night', 'noon', 'dawn'] as const;
+
+/**
+ * The hours the overview is measured at through the day: every second hour, and round sunrise and
+ * sunset, where the sun 0-2° up makes the key light's rays skim the ground (07:10 0.1°, 17:55 1.4°).
+ */
+export const DAY_HOURS: readonly number[] = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 6 + 40 / 60, 7 + 10 / 60, 17 + 50 / 60, 17 + 55 / 60];
 
 export type Post = (file: string, body: Blob | string) => Promise<void>;
 
@@ -82,25 +99,37 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
     timings: game.timings,
     fingerprint: '',
     views: [],
+    day: [],
     errors: [],
   };
   // Where the check has got to, so a run that stalls says where.
   const progress = (stage: string) => post('progress.json', JSON.stringify({ stage }));
+  // A view at an hour, settled: its GPU time.
+  const measure = async (name: ViewName, hours: number) => {
+    game.view(name);
+    game.setTimeOfDay(hours);
+    await game.waitConverged();
+    await game.waitFrames(30);
+    return game.timestamps ? (game.stats().gpuMs ?? 0) : median(await game.submittedWork(30));
+  };
   try {
     await progress('fingerprint');
     report.fingerprint = await game.fingerprint();
     game.setQuality({ preset: 'high', dynres: false });
     for (const name of VIEW_NAMES) {
-      await progress(`view ${name}`);
-      game.view(name);
-      await game.waitConverged();
-      await game.waitFrames(30);
-      const gpuMs = game.timestamps ? (game.stats().gpuMs ?? 0) : median(await game.submittedWork(30));
-      const { png, spread } = await game.shot();
-      const hours = game.viewHours(name);
-      const shot = `${name}-${clockName(hours)}.png`;
-      await post(shot, png);
-      report.views.push({ name, hours, gpuMs, res: game.stats().res, shot, spread });
+      for (const key of CHECK_KEYS) {
+        await progress(`view ${name} at ${key}`);
+        const hours = CLOCK_KEYS[key];
+        const gpuMs = await measure(name, hours);
+        const { png, spread } = await game.shot();
+        const shot = `${name}-${clockName(hours)}.png`;
+        await post(shot, png);
+        report.views.push({ name, hours, gpuMs, res: game.stats().res, shot, spread });
+      }
+    }
+    for (const hours of DAY_HOURS) {
+      await progress(`the overview at ${clockText(hours)}`);
+      report.day.push({ hours, gpuMs: await measure('overview', hours) });
     }
     await progress('done');
   } catch (e) {
