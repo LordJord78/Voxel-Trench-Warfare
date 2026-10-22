@@ -180,12 +180,12 @@ export class Atmosphere {
     return { transmittance, scattering, skyView, irradiance, irradianceSum };
   }
 
-  /** The LUTs for `model`, with transmittance and multiple scattering built now; `update` builds the rest. */
-  static create(device: GPUDevice, pipelines: AtmospherePipelines, model: AtmosphereModel): Atmosphere {
-    return new Atmosphere(device, pipelines, model);
+  /** The LUTs for `model`, with transmittance and multiple scattering built now (timed by `timestampWrites`, if given); `update` builds the rest. */
+  static create(device: GPUDevice, pipelines: AtmospherePipelines, model: AtmosphereModel, timestampWrites?: GPUComputePassTimestampWrites): Atmosphere {
+    return new Atmosphere(device, pipelines, model, timestampWrites);
   }
 
-  private constructor(device: GPUDevice, pipelines: AtmospherePipelines, model: AtmosphereModel) {
+  private constructor(device: GPUDevice, pipelines: AtmospherePipelines, model: AtmosphereModel, timestampWrites?: GPUComputePassTimestampWrites) {
     this.device = device;
     this.pipelines = pipelines;
     this.model = model;
@@ -237,7 +237,7 @@ export class Atmosphere {
     writeAtmosphere(this.writer, '', model, this.sunDir, this.moonDir, this.viewHeightKm);
     device.queue.writeBuffer(this.uniform, 0, this.writer.buffer);
     const encoder = device.createCommandEncoder({ label: 'atmosphere' });
-    const pass = encoder.beginComputePass({ label: 'atmosphere' });
+    const pass = encoder.beginComputePass({ label: 'atmosphere', timestampWrites });
     pass.setPipeline(pipelines.transmittance);
     pass.setBindGroup(0, transmittanceGroup);
     pass.dispatchWorkgroups(SIZES.transmittance[0] / 8, SIZES.transmittance[1] / 8);

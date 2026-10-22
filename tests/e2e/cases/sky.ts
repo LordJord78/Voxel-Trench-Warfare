@@ -162,6 +162,35 @@ export const cases = {
     return { ...(await sample('fog', dirs, sky, 2)), dirs, keyDir: [...sky.keyDir], keyColour: [...sky.keyColour] };
   },
 
+  /**
+   * The GPU time the atmosphere's LUTs take to build at load (transmittance and multiple scattering,
+   * one pass), in ms: the first build's, on a GPU still at its idle clocks, and the median of `runs`
+   * builds after `warm` more, at the clocks it settles to; null without timestamp queries.
+   */
+  async skyBuild(args: { warm: number; runs: number }) {
+    const g = await gpu();
+    if (!g.timestamps) return { first: null, ms: null, times: [] as number[], errors: [...g.errors] };
+    const device = g.device;
+    const pipelines = await Atmosphere.compile(device);
+    const model = atmosphereModel(loadTunables());
+    const times: number[] = [];
+    for (let i = 0; i < args.warm + args.runs; i++) {
+      const querySet = device.createQuerySet({ type: 'timestamp', count: 2 });
+      const resolved = device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+      const atmosphere = Atmosphere.create(device, pipelines, model, { querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 });
+      const encoder = device.createCommandEncoder();
+      encoder.resolveQuerySet(querySet, 0, 2, resolved, 0);
+      device.queue.submit([encoder.finish()]);
+      const [t0, t1] = new BigUint64Array(await readBuffer(resolved, 16));
+      times.push(Number(t1 - t0) / 1e6);
+      atmosphere.destroy();
+      querySet.destroy();
+      resolved.destroy();
+    }
+    const settled = times.slice(args.warm).sort((a, b) => a - b);
+    return { first: times[0], ms: settled[settled.length >> 1], times, errors: [...g.errors] };
+  },
+
   /** The sky with its discs and stars along each of `dirs`, lit as `sky` says (unit lights unless set), from 2 m. */
   async skyBodies(args: { dirs: number[][]; sky: Partial<FrameSky> & { sunDir: number[]; moonDir: number[] } }) {
     return sample('bodies', args.dirs, { sunLight: [0, 0, 0], moonLight: [0, 0, 0], moonFull: [1, 1, 1], ...args.sky }, 2);

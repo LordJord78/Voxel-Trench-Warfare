@@ -203,6 +203,18 @@ test('the multiple-scattering LUT holds Ψms at every texel', () => {
   expect(worst).toBeLessThan(0.03);
 });
 
+test('the LUTs build at load in under 5 ms of GPU time', async ({ page }) => {
+  await openHarness(page);
+  // The GPU's clocks rise over its first builds, as over a game's first frames: timed at the clocks
+  // they settle to, the first build's time reported beside them.
+  const r = await runCase<{ first: number | null; ms: number | null; times: number[]; errors: string[] }>(page, 'skyBuild', { warm: 6, runs: 9 });
+  expect(r.errors).toEqual([]);
+  test.skip(r.ms === null, 'no timestamp queries on this GPU');
+  console.log(`LUT build at load: ${r.ms!.toFixed(2)} ms of GPU time, the first build ${r.first!.toFixed(2)} (all: ${r.times.map((t) => t.toFixed(2)).join(', ')})`);
+  expect(r.ms!).toBeGreaterThan(0);
+  expect(r.ms!).toBeLessThan(5);
+});
+
 test('no LUT texel and no sample of the sky is NaN', () => {
   expect(r.compileErrors ?? []).toEqual([]);
   expect(r.bad).toEqual({ transmittance: 0, scattering: 0, skyView: 0 });
