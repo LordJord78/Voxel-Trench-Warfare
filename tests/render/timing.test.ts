@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { frameBudget, passTimes } from '../../src/render/timing';
+import { frameBudget, passTimes, smoothPasses } from '../../src/render/timing';
 
 describe('the frame budget dynamic resolution holds', () => {
   it('is the GPU budget when passes are timed', () => {
@@ -48,5 +48,22 @@ describe('pass times', () => {
   });
   it('report no frame when nothing was timed', () => {
     expect(passTimes([]).frameMs).toBeNull();
+  });
+});
+
+describe('smoothed pass times', () => {
+  it("hold a tenth of each frame's time against the rest of the passes' before", () => {
+    const s = smoothPasses({ primary: 5, lighting: 2 }, { primary: 6, lighting: 1 });
+    expect(Object.keys(s)).toEqual(['primary', 'lighting']);
+    expect(s.primary).toBeCloseTo(5.1, 12);
+    expect(s.lighting).toBeCloseTo(1.9, 12);
+  });
+  it('start a pass at its first time', () => {
+    const s = smoothPasses({ primary: 5 }, { primary: 6, maps: 0.2 });
+    expect(s.primary).toBeCloseTo(5.1, 12);
+    expect(s.maps).toBe(0.2);
+  });
+  it("drop a pass the frame did not run, so its last time does not stand for this frame's", () => {
+    expect(smoothPasses({ primary: 5, maps: 0.2 }, { primary: 5 })).toEqual({ primary: 5 });
   });
 });

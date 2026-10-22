@@ -118,15 +118,16 @@ function sample(page: import('@playwright/test').Page, from: number | null) {
     page,
     async (h, a) => {
       const [start, settle, n] = a as [number | null, number, number];
-      const out: { gpu: number; primary: number; froxels: number; lighting: number }[] = [];
+      const out: { gpu: number; primary: number; froxels: number; lighting: number; maps: number }[] = [];
       for (let k = 0; k < settle + n; k++) {
         if (start !== null) h.setTimeOfDay(start + k / 360);
         await h.waitFrames(1);
         const s = h.stats();
-        if (k >= settle && s.gpuMs !== null) out.push({ gpu: s.gpuMs, primary: s.passes.primary, froxels: s.passes.froxels, lighting: s.passes.lighting });
+        // The flares' maps in a pass of their own, on a frame the key's has nothing to trace.
+        if (k >= settle && s.gpuMs !== null) out.push({ gpu: s.gpuMs, primary: s.passes.primary, froxels: s.passes.froxels, lighting: s.passes.lighting, maps: s.passes.maps ?? 0 });
       }
-      const median = (key: 'gpu' | 'primary' | 'froxels' | 'lighting') => out.map((o) => o[key]).sort((x, y) => x - y)[out.length >> 1];
-      return { gpu: median('gpu'), primary: median('primary'), froxels: median('froxels'), lighting: median('lighting'), count: out.length };
+      const median = (key: 'gpu' | 'primary' | 'froxels' | 'lighting' | 'maps') => out.map((o) => o[key]).sort((x, y) => x - y)[out.length >> 1];
+      return { gpu: median('gpu'), primary: median('primary'), froxels: median('froxels'), lighting: median('lighting'), maps: median('maps'), count: out.length };
     },
     [from, SETTLE, SAMPLES],
   );
@@ -161,9 +162,10 @@ test('with the clock running, the overview renders within the budget, the shafts
 });
 
 // The flares' shadows: at night the scene's flares burn and sink (the lights' clock running), so
-// their maps are traced every frame in front of the primary rays; held at rest, they are traced
-// once. The overview at night within the budget so, and the shafts all told (the froxels, and what
-// the moving flares' maps add to the primary pass) within 0.6 ms.
+// their maps are traced every frame, in a pass of their own while the key's map has nothing to
+// trace; held at rest, they are traced once. The overview at night within the budget so, and the
+// shafts all told (the froxels, the flares' maps, and anything they add to the primary pass) within
+// 0.6 ms.
 test('at night with the flares sinking, the overview renders within the budget, the shafts within 0.6 ms', async ({ page }) => {
   test.setTimeout(240_000);
   const errors = await openGame(page);
@@ -177,9 +179,10 @@ test('at night with the flares sinking, the overview renders within the budget, 
   test.skip(held.count === 0, 'no timestamp queries on this GPU');
   await hooks(page, (h) => h.runLights());
   const running = await sample(page, null);
-  const shafts = running.froxels + running.primary - held.primary;
-  console.log(`The overview at night: ${running.gpu.toFixed(2)} ms, the flares sinking (${held.gpu.toFixed(2)} held), the shafts ${shafts.toFixed(3)} ms (froxels ${running.froxels.toFixed(3)}, the flares' maps ${(running.primary - held.primary).toFixed(3)})`);
+  const shafts = running.froxels + running.maps + running.primary - held.primary;
+  console.log(`The overview at night: ${running.gpu.toFixed(2)} ms, the flares sinking (${held.gpu.toFixed(2)} held), the shafts ${shafts.toFixed(3)} ms (froxels ${running.froxels.toFixed(3)}, the flares' maps ${running.maps.toFixed(3)}, the primary ${(running.primary - held.primary).toFixed(3)} more)`);
   expect(errors).toEqual([]);
+  expect(running.maps).toBeGreaterThan(0);
   expect(running.gpu).toBeLessThanOrEqual(BUDGET_MS);
   expect(shafts).toBeLessThanOrEqual(0.6);
 });

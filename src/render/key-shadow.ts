@@ -133,6 +133,8 @@ export class KeyShadow {
   private readonly tracedWorld: number[] = [];
   private world = 0;
   private count = 0;
+  /** The flares' texels share() left to a pass of their own (traceAlone), this frame. */
+  private aloneTexels = 0;
 
   /** The build's own pipeline, over the scene's group 0 (`scene`, scene.ts), with the map's groups' layouts. */
   static async compile(device: GPUDevice, scene: GPUBindGroupLayout, layouts: KeyShadowLayouts = keyShadowLayouts(device)): Promise<KeyShadowPipelines> {
@@ -219,15 +221,36 @@ export class KeyShadow {
 
   /**
    * As update, but for another pass to trace in front of its own work: one whose dispatch is
-   * `width` workgroups of 64 across, with the rows this returns put first (none, if nothing is to
-   * be traced); which binds buildGroup as its group 2 and asks keyShare (key-shadow.wgsl) at each
-   * workgroup, as primary.wgsl's `keyed` does.
+   * `width` workgroups of 64 across, with the rows this returns put first; which binds buildGroup
+   * as its group 2 and asks keyShare (key-shadow.wgsl) at each workgroup, as primary.wgsl's `keyed`
+   * does. Only if the key has texels to trace: its rays run the map's length, so alone the longest
+   * would take the time. The flares' alone (none of the key's: every frame at night, as they sink)
+   * are short, and traceAlone traces them in a pass of their own (0.14 ms), not in `keyed`, whose
+   * second traversal costs Safari 1.5-2 ms on the overview.
    */
   share(keyDir: Vec3, key: Key, width: number, flares = 0): number {
     const texels = this.next(keyDir, key);
-    const rows = Math.ceil((texels.count + flares) / 64 / width);
+    const rows = texels.count ? Math.ceil((texels.count + flares) / 64 / width) : 0;
+    this.aloneTexels = texels.count ? 0 : flares;
     this.place(texels, rows, width);
     return rows;
+  }
+
+  /** Whether share() left the flares' texels this frame to traceAlone. */
+  get alone(): boolean {
+    return this.aloneTexels > 0;
+  }
+
+  /** The flares' texels share() left this frame, in a pass of their own, through the world in the scene's group 0 (`scene`). */
+  traceAlone(encoder: GPUCommandEncoder, scene: GPUBindGroup, timestampWrites?: GPUComputePassTimestampWrites): void {
+    if (!this.aloneTexels) return;
+    const pass = encoder.beginComputePass({ label: 'flare shadows', timestampWrites });
+    pass.setPipeline(this.pipelines.build);
+    pass.setBindGroup(0, scene);
+    pass.setBindGroup(1, this.none);
+    pass.setBindGroup(2, this.buildGroup);
+    pass.dispatchWorkgroups(Math.ceil(this.aloneTexels / 64));
+    pass.end();
   }
 
   /** This frame's texels for a key toward `keyDir` (none, if none is stale), and the map's plane for it written. */

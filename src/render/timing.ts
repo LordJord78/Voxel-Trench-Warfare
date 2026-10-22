@@ -48,6 +48,17 @@ export function passTimes(stamps: readonly PassStamps[]): { passes: Record<strin
   return { passes, frameMs: last > first ? (last - first) / 1e6 : null };
 }
 
+/**
+ * The passes' smoothed times after a frame: each pass the frame ran holds a tenth of its time
+ * against nine of its time before (or starts at it); a pass the frame did not run drops out, so its
+ * last time does not stand for this frame's.
+ */
+export function smoothPasses(before: Readonly<Record<string, number>>, frame: Readonly<Record<string, number>>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [name, ms] of Object.entries(frame)) out[name] = before[name] === undefined ? ms : before[name] * 0.9 + ms * 0.1;
+  return out;
+}
+
 export class GpuTimer {
   readonly enabled: boolean;
   /** Smoothed milliseconds per pass, and for the whole frame. */
@@ -75,7 +86,10 @@ export class GpuTimer {
     }
   }
 
-  /** The timestamp writes for a pass, if timing is on. */
+  /**
+   * The timestamp writes for a pass, if timing is on. Ask only for a pass encoded this frame: its
+   * slots, unwritten, would hold another frame's times, and stretch this frame's span.
+   */
   writes(name: string): GPUComputePassTimestampWrites | undefined {
     if (!this.querySet) return undefined;
     const i = this.names.indexOf(name);
@@ -112,9 +126,7 @@ export class GpuTimer {
             return { name, begin: Number(t[2 * i]), end: Number(t[2 * i + 1]) };
           }),
         );
-        for (const [name, ms] of Object.entries(passes)) {
-          this.passes[name] = this.passes[name] === undefined ? ms : this.passes[name] * 0.9 + ms * 0.1;
-        }
+        this.passes = smoothPasses(this.passes, passes);
         if (frameMs !== null) {
           this.gpuMs = this.gpuMs === null ? frameMs : this.gpuMs * 0.9 + frameMs * 0.1;
           this.lastMs = frameMs;

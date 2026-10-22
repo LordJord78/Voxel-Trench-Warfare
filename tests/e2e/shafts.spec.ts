@@ -276,6 +276,18 @@ test.describe("the flares' shadow maps", () => {
     expect(r.unmapped.lit).toBe(r.unmapped.total);
   });
 
+  test("the renderer keeps a moving flare's map, the key's idle: hung still, within a voxel of the reference at every texel", async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ texels: { hits: number; mismatches: number; ties: number; maxError: number; wrong: string[] }; errors: string[] }>(page, 'flareRendered');
+    expect(r.errors).toEqual([]);
+    console.log(`the renderer's flare map: ${r.texels.hits} texels meet the world (${r.texels.ties} grazing an edge), worst ${r.texels.maxError.toFixed(4)} voxels`);
+    expect(r.texels.wrong).toEqual([]);
+    expect(r.texels.mismatches).toBe(0);
+    expect(r.texels.ties).toBeLessThanOrEqual(r.texels.hits / 1000);
+    expect(r.texels.hits).toBeGreaterThan(10_000);
+    expect(r.texels.maxError).toBeLessThanOrEqual(1);
+  });
+
   test("a flare's map follows it: a sixteenth a frame when it moves, all of it when it jumps, nothing when it is out; eight maps for nine flares, none by day", async ({ page }) => {
     await openHarness(page);
     const r = await runCase<{ counts: number[]; mapped: number[]; byDay: number[]; errors: string[] }>(page, 'flareMotion');

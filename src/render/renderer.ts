@@ -80,7 +80,7 @@ import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['sky', 'beam', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'froxels', 'shade', 'taa', 'cas', 'bloom', 'expose', 'present'] as const;
+const PASSES = ['sky', 'beam', 'maps', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'froxels', 'shade', 'taa', 'cas', 'bloom', 'expose', 'present'] as const;
 type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas' | 'exposure';
 type Timed = (typeof PASSES)[number];
 
@@ -643,6 +643,9 @@ export class Renderer {
     const key: Key = this.sky.keyDir.every((c, k) => c === this.sky.sunDir[k]) ? 'sun' : 'moon';
     const across = Math.ceil(this.res[0] / 8);
     const keyRows = this.keyShadow.share([this.sky.keyDir[0], this.sky.keyDir[1], this.sky.keyDir[2]], key, across, this.flareShadows.next());
+    // The flares' texels, if the key has none to share them with. (Timed only when it runs: a slot
+    // not written this frame would hold another frame's times.)
+    if (this.keyShadow.alone) this.keyShadow.traceAlone(encoder, this.sceneGroup!, this.timer.writes('maps'));
     if (keyRows > 0) {
       const primary = encoder.beginComputePass({ label: 'primary', timestampWrites: this.timer.writes('primary') });
       primary.setPipeline(this.compiled.pipelines.primaryKeyed);

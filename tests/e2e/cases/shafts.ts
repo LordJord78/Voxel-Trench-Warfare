@@ -89,6 +89,54 @@ async function hazeRenderer(map: BrickMap, sky: FrameSky, lights: SceneLight[] =
   return renderer;
 }
 
+/**
+ * The first flare's map in an atlas (the first tile below the key's map) against the CPU reference
+ * for a flare at `at` reaching `reach` (voxels): the texels whose rays meet the world, those that
+ * disagree, those that disagree as two right answers can (a ray grazing a voxel's edge where it hit,
+ * as the traversal's test allows: within 0.01 of a boundary on two axes), and the worst distance.
+ */
+function flareTexels(atlas: Float32Array, map: BrickMap, at: Vec3, reach: number) {
+  let hits = 0;
+  let mismatches = 0;
+  let ties = 0;
+  let maxError = 0;
+  const wrong: string[] = [];
+  const grazing = (i: number, j: number, t: number) => {
+    const ray = flareRef.texelRay(at, i, j)!;
+    return [0, 1, 2].filter((k) => {
+      const v = ray.o[k] + ray.d[k] * t;
+      return Math.abs(v - Math.round(v)) < 0.01;
+    }).length >= 2;
+  };
+  for (let j = 0; j < FLARE_MAP_SIZE; j++) {
+    for (let i = 0; i < FLARE_MAP_SIZE; i++) {
+      const g = atlas[(KEY_MAP_SIZE + j) * KEY_MAP_SIZE + i];
+      const ref = flareRef.texelDistance(map, at, reach, i, j);
+      if (ref === flareRef.OPEN) {
+        if (!(g >= OPEN_GPU)) {
+          if (grazing(i, j, g)) ties++;
+          else {
+            mismatches++;
+            if (wrong.length < 8) wrong.push(`(${i}, ${j}): gpu ${g}, ref open`);
+          }
+        }
+        continue;
+      }
+      hits++;
+      if (!(g < OPEN_GPU)) {
+        if (grazing(i, j, ref)) ties++;
+        else {
+          mismatches++;
+          if (wrong.length < 8) wrong.push(`(${i}, ${j}): gpu open, ref ${ref.toFixed(3)}`);
+        }
+        continue;
+      }
+      maxError = Math.max(maxError, Math.abs(g - ref));
+    }
+  }
+  return { hits, mismatches, ties, maxError, wrong };
+}
+
 /** Render `frames` frames from `pose`, on from `now` (ms); the time after. */
 function frames(renderer: Renderer, pose: CameraPose, count: number, now: number): number {
   for (let k = 0; k < count; k++) renderer.render(pose, 0, (now += 16));
@@ -428,50 +476,8 @@ export const cases = {
     const encoder = device.createCommandEncoder();
     shadow.update(encoder, scene, KEY, 'sun', flares.next());
     device.queue.submit([encoder.finish()]);
-    // The flare's map: the first tile below the key's map in the atlas.
-    const atlas = new Float32Array(await readTexture(shadow.map));
     const at: Vec3 = [SLIT_FLARE.position[0] / VOXEL, SLIT_FLARE.position[1] / VOXEL, SLIT_FLARE.position[2] / VOXEL];
-    const reach = SLIT_FLARE.radius / VOXEL;
-    let hits = 0;
-    let mismatches = 0;
-    let ties = 0;
-    let maxError = 0;
-    const wrong: string[] = [];
-    // A disagreement two right answers can have: the ray grazing a voxel's edge where it hit (as the
-    // traversal's test allows), within 0.01 of a boundary on two axes.
-    const grazing = (i: number, j: number, t: number) => {
-      const ray = flareRef.texelRay(at, i, j)!;
-      return [0, 1, 2].filter((k) => {
-        const v = ray.o[k] + ray.d[k] * t;
-        return Math.abs(v - Math.round(v)) < 0.01;
-      }).length >= 2;
-    };
-    for (let j = 0; j < FLARE_MAP_SIZE; j++) {
-      for (let i = 0; i < FLARE_MAP_SIZE; i++) {
-        const g = atlas[(KEY_MAP_SIZE + j) * KEY_MAP_SIZE + i];
-        const ref = flareRef.texelDistance(map, at, reach, i, j);
-        if (ref === flareRef.OPEN) {
-          if (!(g >= OPEN_GPU)) {
-            if (grazing(i, j, g)) ties++;
-            else {
-              mismatches++;
-              if (wrong.length < 8) wrong.push(`(${i}, ${j}): gpu ${g}, ref open`);
-            }
-          }
-          continue;
-        }
-        hits++;
-        if (!(g < OPEN_GPU)) {
-          if (grazing(i, j, ref)) ties++;
-          else {
-            mismatches++;
-            if (wrong.length < 8) wrong.push(`(${i}, ${j}): gpu open, ref ${ref.toFixed(3)}`);
-          }
-          continue;
-        }
-        maxError = Math.max(maxError, Math.abs(g - ref));
-      }
-    }
+    const texels = flareTexels(new Float32Array(await readTexture(shadow.map)), map, at, SLIT_FLARE.radius / VOXEL);
     // flareLit through the test shader, for points (xyz) of a light (w).
     const module = device.createShaderModule({ code: moduleSource(flareLitTest) });
     const info = await module.getCompilationInfo();
@@ -545,11 +551,34 @@ export const cases = {
     shadow.destroy();
     for (const b of [gw.table, gw.sectors, gw.heap, gw.palette, gw.pyramid, frameBuffer]) b.destroy();
     return {
-      texels: { hits, mismatches, ties, maxError, wrong },
+      texels,
       lit: { total: points.length, agree, shadowed, nearEdge, farFromEdge },
       unmapped: { total: dark.length, lit: Array.from(unmapped).filter((v) => v === 1).length },
       errors: [...errors],
     };
+  },
+
+  /**
+   * The renderer's own build of a flare's map, the key's idle (held, after the first frame): the
+   * flare beyond the slit's wall sinks 1.5 m over ten frames, then hangs still for seventeen, in
+   * which each sixteenth traced before it stopped is traced again; its texels against the reference
+   * where it hangs.
+   */
+  async flareRendered() {
+    const map = slitWorld();
+    const renderer = await hazeRenderer(map, { ...HAZE_SKY, keyDir: SLIT_KEY }, [SLIT_FLARE]);
+    const pose: CameraPose = { position: [6.4, 3, 6.4], yaw: 0, pitch: 0 };
+    let flare = SLIT_FLARE;
+    let now = frames(renderer, pose, 1, 0);
+    for (let k = 1; k <= 10; k++) {
+      flare = { ...SLIT_FLARE, position: [SLIT_FLARE.position[0], SLIT_FLARE.position[1] - 0.15 * k, SLIT_FLARE.position[2]] };
+      renderer.setLights([flare], 1);
+      now = frames(renderer, pose, 1, now);
+    }
+    frames(renderer, pose, 17, now);
+    const at: Vec3 = [flare.position[0] / VOXEL, flare.position[1] / VOXEL, flare.position[2] / VOXEL];
+    const texels = flareTexels(new Float32Array(await readTexture(renderer.texture('keyShadow'))), map, at, flare.radius / VOXEL);
+    return { texels, errors: [...(await gpu()).errors] };
   },
 
   /**
