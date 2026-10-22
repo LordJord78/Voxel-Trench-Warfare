@@ -486,6 +486,16 @@ lantern_intensity   = 2.5
 # is whichever of the sun and moon is brighter.
 # ---------------------------------------------------------------------------
 
+[sky]
+# Where and when the sky is: the Somme, the night before the full moon of October 1916. The day
+# runs on a 24-hour clock (sky-clock.ts); dusk is 17:35, when the sun is 4.5° up as the approved
+# dusk had it, and night is 21:00, under a moon 34° up and 99.6% lit.
+latitude_deg        = 50.0
+longitude_deg       = 2.7      # east
+date                = [1916, 10, 10]
+utc_offset_h        = 1.0
+map_bearing_deg     = 236.0    # compass bearing of +z (toward the enemy): it puts the dusk sun 18° right of ahead
+
 [time_of_day]
 default             = 0.0
 sun_azimuth_deg     = [18.0, 23.0, 28.0]
