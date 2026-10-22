@@ -41,6 +41,31 @@ export const CAMERA: StructDef = {
   ],
 };
 
+/**
+ * The atmosphere (see atmosphere.ts) in kilometres: Rayleigh scattering and its scale height, ozone's
+ * absorption round its peak, Mie scattering and extinction, the radii of the ground and the top,
+ * and the viewer the sky view is built for: the sun (y up) and the camera's height.
+ */
+export const ATMOSPHERE: StructDef = {
+  name: 'Atmosphere',
+  fields: [
+    ['rayleigh', 'vec3f'],
+    ['rayleighHeight', 'f32'],
+    ['ozone', 'vec3f'],
+    ['ozoneCentre', 'f32'],
+    ['mieScattering', 'f32'],
+    ['mieExtinction', 'f32'],
+    ['mieHeight', 'f32'],
+    ['mieG', 'f32'],
+    ['ozoneHalfWidth', 'f32'],
+    ['albedo', 'f32'],
+    ['bottom', 'f32'],
+    ['top', 'f32'],
+    ['sunDir', 'vec3f'],
+    ['viewHeight', 'f32'],
+  ],
+};
+
 export const FRAME: StructDef = {
   name: 'Frame',
   fields: [
@@ -85,6 +110,8 @@ export const FRAME: StructDef = {
     ['skyRay', 'f32'],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
+    // The atmosphere as this frame's sky view was built.
+    ['atmosphere', ATMOSPHERE],
   ],
 };
 

@@ -2,6 +2,8 @@
  * The frame: every pass, its textures and bind groups, in order.
  *
  * Compute passes render the internal image:
+ *   sky      — the atmosphere's sky view for this frame's sun and camera height
+ *              (see atmosphere.ts);
  *   beam     — per 8 × 8 tile, how far its rays can go before meeting anything;
  *   primary  — one jittered ray per pixel into the G-buffer, from its tile's beam;
  *   lighting — the light reaching one pixel of each 2 × 2 block;
@@ -27,7 +29,9 @@
  * unless told otherwise, and its textures can be read back by name.
  */
 
+import { loadTunables } from '../core/tunables';
 import type { WorldPlan } from '../world/generation/plan';
+import { Atmosphere, atmosphereModel, type AtmospherePipelines } from './atmosphere';
 import { jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
@@ -37,7 +41,7 @@ import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
 import { lightBuffer, MAX_LIGHTS, type SceneLight } from './lights';
 import { LIGHT_SCALE, scaledSize, type Preset, type RenderSettings } from './quality';
-import { sceneExtras, sceneGroup, sceneLayout } from './scene';
+import { sceneExtras, sceneGroup, sceneLayout, type SkyLuts } from './scene';
 import { moduleSource } from './shaders';
 import atrousSrc from './shaders/atrous.wgsl';
 import beamSrc from './shaders/beam.wgsl';
@@ -50,7 +54,7 @@ import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['beam', 'primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'present'] as const;
+const PASSES = ['sky', 'beam', 'primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'present'] as const;
 type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas';
 type Timed = (typeof PASSES)[number];
 
@@ -131,8 +135,11 @@ export interface CompiledFrame {
   scene: GPUBindGroupLayout;
   layouts: Record<ComputePass | 'present', GPUBindGroupLayout>;
   pipelines: Record<ComputePass, GPUComputePipeline> & { present: GPURenderPipeline };
+  atmosphere: AtmospherePipelines;
   lights: GPUBuffer;
   noise: GPUTexture;
+  /** Empty sky LUTs, for scenes built without an atmosphere. */
+  sky: SkyLuts;
 }
 
 /** Compile the frame's pipelines, in parallel. Needs only the device, so it can run while the world generates. */
@@ -185,7 +192,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, present] = await Promise.all([
+  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, present, atmosphere] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
@@ -201,8 +208,9 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
       fragment: { module: presentModule, entryPoint: 'fs', targets: [{ format: navigator.gpu.getPreferredCanvasFormat() }] },
       primitive: { topology: 'triangle-list' },
     }),
+    Atmosphere.compile(device),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, present }, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, present }, atmosphere, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -226,6 +234,7 @@ export class Renderer {
   private readonly compiled: CompiledFrame;
   private readonly sampler: GPUSampler;
   private readonly far: FarFieldGpu;
+  private readonly atmosphere: Atmosphere;
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
   /** Bind groups by frame parity: histories ping-pong between two sets of textures. */
@@ -275,6 +284,7 @@ export class Renderer {
     this.presentBuffer = device.createBuffer({ label: 'present', size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     this.far = options.far ?? FarFieldGpu.empty(device);
+    this.atmosphere = Atmosphere.create(device, compiled.atmosphere, options.atmosphere ?? atmosphereModel(loadTunables()));
     this.preset = options.preset ?? 'high';
     this.lightScale = LIGHT_SCALE[this.preset];
     this.budgetMs = options.budgetMs ?? 14;
@@ -460,6 +470,7 @@ export class Renderer {
         far: this.far,
         lights: this.compiled.lights,
         noise: this.compiled.noise,
+        sky: this.atmosphere.views(),
       });
       this.sceneGeneration = this.world.generation;
     }
@@ -490,9 +501,12 @@ export class Renderer {
     w.set('casSharpness', this.options.sharpness ?? 0.4);
     writeSky(w, this.sky);
     w.set('far', this.far.info);
+    const encoder = device.createCommandEncoder({ label: `frame ${this.frameIndex}` });
+    // The sky view for this frame's sun, from the camera's height over the ground (none in a trench).
+    this.atmosphere.update(encoder, this.sky.sunDir, pose.position[1] - this.sky.fogBase, this.timer.writes('sky'));
+    this.atmosphere.writeTo(w, 'atmosphere');
     device.queue.writeBuffer(this.frameBuffer, 0, w.buffer);
 
-    const encoder = device.createCommandEncoder({ label: `frame ${this.frameIndex}` });
     const groups = this.groups[this.frameIndex & 1];
     const pass = (name: Timed & keyof typeof groups, pipeline: ComputePass, size: readonly [number, number]) => {
       const p = encoder.beginComputePass({ label: name, timestampWrites: this.timer.writes(name) });

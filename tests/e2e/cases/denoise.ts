@@ -326,7 +326,7 @@ export const cases = {
     writer.set('sigmaPlane', 1);
     const frame = device.createBuffer({ size: writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(frame, 0, writer.buffer);
-    const scene = sceneGroup(device, compiled.scene, { frame, world, far: FarFieldGpu.empty(device), lights: compiled.lights, noise: compiled.noise });
+    const scene = sceneGroup(device, compiled.scene, { frame, world, far: FarFieldGpu.empty(device), lights: compiled.lights, noise: compiled.noise, sky: compiled.sky });
     const run = async (pipeline: GPUComputePipeline, step: number) => {
       const colourOut = tex('rgba16float', outUsage);
       const varianceOut = tex('rg32float', outUsage);

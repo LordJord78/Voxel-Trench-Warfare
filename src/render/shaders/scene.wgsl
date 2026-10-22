@@ -23,3 +23,9 @@ struct Light {
 @group(0) @binding(6) var<storage, read> lights: array<Light>;
 // 64 × 64 blue-noise ranks (see bluenoise.ts).
 @group(0) @binding(10) var blueNoise: texture_2d<u32>;
+// The atmosphere's LUTs (see atmosphere.ts): transmittance, multiple scattering (read by hand) and
+// the sky as this frame's camera sees it, read through atmosphere-model.wgsl with this linear sampler.
+@group(0) @binding(11) var transmittanceLut: texture_2d<f32>;
+@group(0) @binding(12) var scatteringLut: texture_2d<f32>;
+@group(0) @binding(13) var skyViewLut: texture_2d<f32>;
+@group(0) @binding(14) var lutSampler: sampler;

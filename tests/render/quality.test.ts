@@ -20,6 +20,21 @@ describe('quality', () => {
       budgetMs: 14,
       denoise: { historyMax: 32, sigmaLuma: 4, sigmaPlane: 1 },
       sharpness: 0.4,
+      // Earth's atmosphere as Hillaire (2020) gives it, with a ground albedo of 0.3.
+      atmosphere: {
+        bottom: 6360,
+        top: 6460,
+        rayleigh: [5.802e-3, 13.558e-3, 33.1e-3],
+        rayleighHeight: 8,
+        mieScattering: 3.996e-3,
+        mieExtinction: 4.44e-3,
+        mieHeight: 1.2,
+        mieG: 0.8,
+        ozone: [0.65e-3, 1.881e-3, 0.085e-3],
+        ozoneCentre: 25,
+        ozoneHalfWidth: 15,
+        albedo: 0.3,
+      },
     });
   });
 });

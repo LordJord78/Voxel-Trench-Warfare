@@ -145,7 +145,7 @@ export const cases = {
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
     pass.setPipeline(compiled.pipelines.shade);
-    pass.setBindGroup(0, sceneGroup(device, compiled.scene, { frame, world, far, lights: compiled.lights, noise: compiled.noise }));
+    pass.setBindGroup(0, sceneGroup(device, compiled.scene, { frame, world, far, lights: compiled.lights, noise: compiled.noise, sky: compiled.sky }));
     pass.setBindGroup(1, group);
     pass.dispatchWorkgroups(2, 2);
     pass.end();

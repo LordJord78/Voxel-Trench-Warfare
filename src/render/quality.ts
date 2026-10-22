@@ -7,6 +7,7 @@
  */
 
 import type { Tunables } from '../core/tunables';
+import { atmosphereModel, type AtmosphereModel } from './atmosphere';
 
 export type Preset = 'high' | 'low';
 
@@ -29,6 +30,8 @@ export interface RenderSettings {
   denoise: { historyMax: number; sigmaLuma: number; sigmaPlane: number };
   /** Sharpening after TAA, 0 to 1. */
   sharpness: number;
+  /** The air the sky is made of. */
+  atmosphere: AtmosphereModel;
 }
 
 export function rendererTunables(tun: Tunables): RenderSettings {
@@ -38,5 +41,6 @@ export function rendererTunables(tun: Tunables): RenderSettings {
     budgetMs: tun.f('render.gpu_budget_ms'),
     denoise: { historyMax: tun.i('render.history_max'), sigmaLuma: tun.f('render.atrous_sigma_luma'), sigmaPlane: tun.f('render.atrous_sigma_plane') },
     sharpness: tun.f('render.cas_sharpness'),
+    atmosphere: atmosphereModel(tun),
   };
 }
