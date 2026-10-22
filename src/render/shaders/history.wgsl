@@ -6,7 +6,7 @@
 // A lighting pixel's width at `depth`, and a little more: last frame traced a different pixel of
 // the block, so the same spot can be that far off.
 fn spotReach(depth: f32) -> f32 {
-  return max(1.5, 2.5 * depth * frame.cam.tanHalf * 2.0 / f32(frame.res.x) * f32(frame.lightScale));
+  return max(1.5, 2.5 * footprint(depth));
 }
 
 // Where lighting pixel q's surface point `at` was last frame, in the last frame's lighting grid
@@ -26,10 +26,19 @@ fn lastGridSize() -> vec2i {
 }
 
 // Whether last frame's lighting pixel t saw this pixel's surface point: the
-// same face of the same plane, and its own traced point within `reach`.
+// same face of the same plane, and its own traced point within `reach`. Where a
+// lighting pixel spans more than a voxel (far off), each frame's representative
+// lands on a different voxel's face of rough ground, and an exact face and plane
+// would start every history afresh: there, planes within its span count as the
+// same, and where it spans DETAIL_SPAN voxels or more, so do the other faces.
 fn sameSpot(t: vec2i, face: u32, plane: i32, at: vec3f, reach: f32) -> bool {
   let h = textureLoad(hitBefore, t, 0).xy;
-  if (hitFace(h) != face || hitPlane(h) != plane) {
+  let span = reach / 2.5;
+  if (hitFace(h) == face) {
+    if (f32(abs(hitPlane(h) - plane)) > max(0.5, span)) {
+      return false;
+    }
+  } else if (span < DETAIL_SPAN) {
     return false;
   }
   let o = select(BAYER4[(frame.frame - 1u) & 15u], BAYER2[(frame.frame - 1u) & 3u], frame.lightScale == 2u);

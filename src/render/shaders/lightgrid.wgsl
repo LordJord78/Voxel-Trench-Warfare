@@ -34,6 +34,15 @@ fn hitPlane(hit: vec2u) -> i32 {
   return cell[face >> 1u] + i32(face & 1u);
 }
 
+// A lighting pixel's width at `depth` along its ray (voxels): how much of the world it stands for.
+// Where it is DETAIL_SPAN voxels or more, the faces it covers are the ground's detail, not edges:
+// the denoiser's history and filter treat them as one surface there.
+const DETAIL_SPAN: f32 = 4.0;
+
+fn footprint(depth: f32) -> f32 {
+  return depth * frame.cam.tanHalf * 2.0 / f32(frame.res.x) * f32(frame.lightScale);
+}
+
 fn luminance(c: vec3f) -> f32 {
   return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }

@@ -172,11 +172,11 @@ async function start(): Promise<void> {
 
   // The light follows the clock; the flares burn as it says. The point lights move with a clock of
   // their own, which runs whenever the world is drawn but paused (tests can hold them still, as
-  // planned), and are written every frame.
-  const lights = sceneLights(world.plan, tun);
+  // planned or at a moment of their motion), and are written every frame.
+  let lights = sceneLights(world.plan, tun);
   const motion = lightMotion(tun);
   let lightSeconds = 0;
-  let lightsHeld = false;
+  let lightsHeld: number | 'rest' | null = null;
   let lit: SceneLight[] = lights;
   let litFor = Number.NaN;
   let sky = skyState(tun, timeOfDay);
@@ -187,7 +187,7 @@ async function start(): Promise<void> {
       renderer.sky = frameSky(sky, tun);
     }
     if (mode !== 'paused') lightSeconds += dt;
-    lit = lightsHeld ? lights : lightsAt(lights, lightSeconds, motion);
+    lit = lightsHeld === 'rest' ? lights : lightsAt(lights, lightsHeld ?? lightSeconds, motion);
     renderer.setLights(lit, sky.flares);
   };
 
@@ -505,11 +505,14 @@ async function start(): Promise<void> {
     exposure: () => renderer.exposure(),
     exposureState: () => renderer.exposureState(),
     lights: () => lit,
-    holdLights() {
-      lightsHeld = true;
+    holdLights(seconds?: number) {
+      lightsHeld = seconds ?? 'rest';
     },
     runLights() {
-      lightsHeld = false;
+      lightsHeld = null;
+    },
+    useLights(next: SceneLight[]) {
+      lights = next;
     },
     sunElevation: () => sky.sunElevationDeg,
     frames: () => frames,

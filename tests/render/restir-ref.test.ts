@@ -18,7 +18,7 @@ function mean(trials: number, frames: (random: () => number) => number): number 
 }
 
 describe('ReSTIR on the CPU', () => {
-  it('resamples uniform candidates without bias: the mean estimate is the sum of the listed lights', () => {
+  it('resamples its candidates without bias: the mean estimate is the sum of the listed lights', () => {
     const m = mean(1e5, (random) => estimate(still, resample(still, null, random)));
     expect(Math.abs(m / sum(still) - 1)).toBeLessThan(0.01);
   });

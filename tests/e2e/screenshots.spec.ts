@@ -1,4 +1,5 @@
 import { test } from '@playwright/test';
+import { useManyLights } from './many-lights';
 import { hooks, openGame } from './support/app';
 
 // The six standard views at dusk, night, dawn and noon, and at 18:30, the darkest of the evening's
@@ -86,6 +87,28 @@ test('the dugout as the eye comes down from dusk into the lantern-lit night', as
     await hooks(page, (h, n) => h.waitFrames(n as number), frames - at);
     at = frames;
     await page.screenshot({ path: `artifacts/m5/dugout-adapt-${k}.png` });
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
+});
+
+// Row 2's scene for review by eye: the field at night under a thousand lights, 256 of them moving
+// (the lights' own clock running), from the overview and from no man's land, two frames apart.
+// Written to artifacts/l4.
+test('the field at night under a thousand lights', async ({ page }) => {
+  test.setTimeout(180_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  await useManyLights(page);
+  await hooks(page, (h) => h.runLights());
+  for (const name of ['overview', 'nml-night']) {
+    await hooks(page, (h, n) => {
+      h.view(n as string);
+      h.setTimeOfDay(21);
+    }, name);
+    await hooks(page, (h) => h.waitFrames(150));
+    await page.screenshot({ path: `artifacts/l4/many-lights-${name}-a.png` });
+    await hooks(page, (h) => h.waitFrames(2));
+    await page.screenshot({ path: `artifacts/l4/many-lights-${name}-b.png` });
   }
   if (errors.length) throw new Error(errors.join('\n'));
 });

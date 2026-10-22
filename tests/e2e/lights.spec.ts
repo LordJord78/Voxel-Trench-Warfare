@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test';
+import { readImage, useManyLights } from './many-lights';
+import { hooks, openGame } from './support/app';
 import { openHarness, runCase } from './support/run';
 
 interface Cells {
@@ -86,8 +88,10 @@ test('no light crosses a corner: each face of a block lit from its own side has 
 test('neighbours sharing their picks bring the point light nearer the lights\' sum, settled and most of all just after a cut', async ({ page }) => {
   test.setTimeout(180_000);
   await openHarness(page);
-  // 256 pixels across the floor's 11 m: 12 lighting pixels are a metre, as a view's are a few metres off.
-  const run = (spatial: boolean, cycle?: number) => runCase<{ error: number; errors: string[] }>(page, 'restirNoise', { frames: 32, warm: cycle ? 0 : 24, size: 256, spatial, cycle });
+  // 256 pixels across the floor's 11 m: 12 lighting pixels are a metre, as a view's are a few metres
+  // off. Twenty-four lights, three times a pixel's candidates: with fewer, each pixel draws every
+  // light every frame, and its own estimate is all but exact.
+  const run = (spatial: boolean, cycle?: number) => runCase<{ error: number; errors: string[] }>(page, 'restirNoise', { frames: 32, warm: cycle ? 0 : 24, size: 256, spatial, cycle, many: true });
   const [alone, shared, aloneCut, sharedCut] = [await run(false), await run(true), await run(false, 8), await run(true, 8)];
   for (const r of [alone, shared, aloneCut, sharedCut]) expect(r.errors).toEqual([]);
   console.log(`error against the sum: settled ${alone.error.toFixed(4)} alone, ${shared.error.toFixed(4)} shared; cut every 8 frames ${aloneCut.error.toFixed(4)} alone, ${sharedCut.error.toFixed(4)} shared`);
@@ -99,10 +103,150 @@ test('where neighbours\' lights differ most, sharing costs a settled pixel littl
   await openHarness(page);
   // 64 pixels across 11 m, lights 2 m up: 12 lighting pixels are 4 m, and the lights' light differs
   // several-fold across them. Shared reservoirs kept as history made the error several times worse.
-  const run = (spatial: boolean) => runCase<{ error: number; errors: string[] }>(page, 'restirNoise', { frames: 32, warm: 24, size: 64, spatial });
+  const run = (spatial: boolean) => runCase<{ error: number; errors: string[] }>(page, 'restirNoise', { frames: 32, warm: 24, size: 64, spatial, many: true });
   const [alone, shared] = [await run(false), await run(true)];
   expect(alone.errors).toEqual([]);
   expect(shared.errors).toEqual([]);
   console.log(`error against the sum, coarse: ${alone.error.toFixed(4)} alone, ${shared.error.toFixed(4)} shared`);
   expect(shared.error).toBeLessThan(1.2 * alone.error);
+});
+
+// Row 2: a thousand lights over the field at night, from the overview. The frame's test flags: no
+// sharing between neighbours (32), and no reservoir carried from frame to frame (64) — plain
+// resampling of each pixel's eight candidates, every frame afresh, the reference's sampling.
+const PLAIN = 32 | 64;
+
+test.describe('a thousand lights at night', () => {
+  test.use({ viewport: { width: 800, height: 500 }, deviceScaleFactor: 1 });
+
+  test('their mean over the field is the mean of plain resampling, four times as many frames of it, within 5%', async ({ page }) => {
+    test.setTimeout(300_000);
+    const errors = await openGame(page);
+    await hooks(page, (h) => {
+      h.setQuality({ preset: 'high', dynres: false });
+      h.view('overview');
+      h.setTimeOfDay(21);
+    });
+    await useManyLights(page);
+    await hooks(page, (h) => h.holdLights(5));
+    const mean = async (flags: number, warm: number, frames: number) => {
+      await hooks(page, (h, f) => {
+        (h as unknown as { renderer: { flags: number; resetHistory(): void } }).renderer.flags = f as number;
+        (h as unknown as { renderer: { resetHistory(): void } }).renderer.resetHistory();
+      }, flags);
+      await hooks(page, (h, n) => h.waitFrames(n as number), warm);
+      const sum = [0, 0, 0];
+      let n = 0;
+      for (let f = 0; f < frames; f++) {
+        await hooks(page, (h) => h.waitFrames(1));
+        const px = await readImage(page, 'lNoisy', true);
+        for (let i = 0; i < px.length; i += 3) for (let c = 0; c < 3; c++) sum[c] += px[i + c];
+        n += px.length / 3;
+      }
+      return sum.map((v) => v / n);
+    };
+    const restir = await mean(0, 48, 64);
+    const plain = await mean(PLAIN, 8, 256);
+    console.log(`point light over the field: ReSTIR ${restir.map((v, c) => (v / plain[c]).toFixed(4)).join(', ')} of plain resampling's`);
+    for (let c = 0; c < 3; c++) expect(Math.abs(restir[c] / plain[c] - 1)).toBeLessThanOrEqual(0.05);
+    expect(errors).toEqual([]);
+  });
+
+  test('with 256 of them moving, the image moves from frame to frame by under 2.5% of its brightness, and within half again what plain resampling\'s does', async ({ page }) => {
+    test.setTimeout(300_000);
+    const errors = await openGame(page);
+    await hooks(page, (h) => {
+      h.setQuality({ preset: 'high', dynres: false });
+      h.view('overview');
+      h.setTimeOfDay(21);
+    });
+    await useManyLights(page);
+    // The same motion in both runs: the lights' clock stepped a sixtieth of a second a frame.
+    const fizz = async (flags: number) => {
+      await hooks(page, (h, f) => {
+        (h as unknown as { renderer: { flags: number; resetHistory(): void } }).renderer.flags = f as number;
+        (h as unknown as { renderer: { resetHistory(): void } }).renderer.resetHistory();
+      }, flags);
+      let t = 3;
+      const step = async (frames: number) => {
+        for (let i = 0; i < frames; i++) {
+          await hooks(page, (h, s) => h.holdLights(s as number), (t += 1 / 60));
+          await hooks(page, (h) => h.waitFrames(1));
+        }
+      };
+      await step(60);
+      let change = 0;
+      let last = await readImage(page, 'sharp');
+      for (let f = 0; f < 48; f++) {
+        await step(1);
+        const now = await readImage(page, 'sharp');
+        let d = 0;
+        let total = 0;
+        for (let i = 0; i < now.length; i++) {
+          d += Math.abs(now[i] - last[i]);
+          total += now[i];
+        }
+        change += d / total;
+        last = now;
+      }
+      return change / 48;
+    };
+    const restir = await fizz(0);
+    const plain = await fizz(PLAIN);
+    console.log(`image change frame to frame, 256 lights moving: ReSTIR ${restir.toFixed(4)}, plain resampling ${plain.toFixed(4)}`);
+    // The night's grain (3 codes) moves a pixel's brightness some 12% a frame: the lights' own
+    // movement and noise, before it, under 2.5%. Plain resampling of the same candidates through the
+    // same denoiser, the reference's sampling, sets the second bound: ReSTIR's estimates are five
+    // to six times nearer the lights' sum than its, but the denoiser, which reads a pixel's noise
+    // from its frames, sees theirs (kept from frame to frame) as quieter than it is and smooths it
+    // less; and one run's figure wanders some 30% from the next's, the frames read as the app draws.
+    expect(restir).toBeLessThan(0.025);
+    expect(restir).toBeLessThan(1.5 * plain);
+    expect(errors).toEqual([]);
+  });
+
+  test('far off, the denoiser keeps its history on rough ground, where a pixel spans several voxels\' faces', async ({ page }) => {
+    const errors = await openGame(page);
+    await hooks(page, (h) => {
+      h.setQuality({ preset: 'high', dynres: false });
+      h.view('overview');
+      h.setTimeOfDay(21);
+    });
+    await useManyLights(page);
+    await hooks(page, (h) => h.holdLights(5));
+    await hooks(page, (h) => h.waitFrames(90));
+    // The history's length, frames, for each lighting pixel that sees a surface.
+    const moments = await readImage(page, 'hMoments', true);
+    const hits = await hooks(page, async (h) => {
+      const r = (h as unknown as { renderer: { device: GPUDevice; texture(n: string): GPUTexture; stats: { res: [number, number] } } }).renderer;
+      const t = r.texture('hHit');
+      const stride = Math.ceil((t.width * 8) / 256) * 256;
+      const buffer = r.device.createBuffer({ size: stride * t.height, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+      const encoder = r.device.createCommandEncoder();
+      encoder.copyTextureToBuffer({ texture: t }, { buffer, bytesPerRow: stride }, [t.width, t.height]);
+      r.device.queue.submit([encoder.finish()]);
+      await buffer.mapAsync(GPUMapMode.READ);
+      const [w, hgt] = [Math.ceil(r.stats.res[0] / 2), Math.ceil(r.stats.res[1] / 2)];
+      const faces: number[] = [];
+      const bytes = buffer.getMappedRange();
+      for (let y = 0; y < hgt; y++) {
+        const row = new Uint32Array(bytes, y * stride, t.width * 2);
+        for (let x = 0; x < w; x++) faces.push((row[x * 2] >>> 24) & 7);
+      }
+      buffer.unmap();
+      buffer.destroy();
+      return faces;
+    });
+    let surfaces = 0;
+    let short = 0;
+    hits.forEach((face, i) => {
+      if (face >= 6) return;
+      surfaces++;
+      if (moments[i * 3 + 2] < 8) short++;
+    });
+    console.log(`histories under 8 frames: ${short} of ${surfaces} surface pixels`);
+    // An exact face and plane, as up close, left 29% of them restarting every frame or two.
+    expect(short / surfaces).toBeLessThan(0.1);
+    expect(errors).toEqual([]);
+  });
 });

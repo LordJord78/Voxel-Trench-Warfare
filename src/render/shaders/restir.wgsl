@@ -1,6 +1,8 @@
 // ReSTIR DI (Bitterli et al. 2020): which point light each lighting pixel shades by this frame,
-// and by how much. `candidates` draws CANDIDATES lights uniformly from the pixel's light cell and
-// resamples them to one by their target, the light's unshadowed brightness at the pixel (RIS);
+// and by how much. `candidates` draws CANDIDATES lights from the pixel's light cell, one from each
+// of CANDIDATES equal stretches of its list (which runs nearest first, so every frame draws from
+// near and far alike; a list no longer than that has each light drawn once), and resamples them
+// to one by their target, the light's unshadowed brightness at the pixel (RIS);
 // then it merges last frame's reservoir for the same spot (the lighting pixel that saw it, as the
 // denoiser's history finds it), weighing that reservoir's light by its target now, with the light
 // where it is this frame. `spatial` then shares in the reservoirs of NEIGHBOURS lighting pixels
@@ -77,9 +79,10 @@ fn inList(cell: i32, count: u32, y: u32) -> bool {
   return false;
 }
 
-// Last frame's reservoir for this spot: the lighting pixel nearest where the spot was, or the next
-// of the four round it, that saw it; none if none did.
-fn history(q: vec2u, face: u32, plane: i32, surface: vec3f, depth: f32) -> Reservoir {
+// Last frame's reservoir for this spot, with where it was drawn: the lighting pixel nearest where
+// the spot was, or the next of the four round it, that saw it; none if none did. (Far off, it may
+// lie on another of the rough ground's faces: see sameSpot.)
+fn history(q: vec2u, face: u32, plane: i32, surface: vec3f, depth: f32) -> Drawn {
   let grid = lastGrid(q, surface);
   let base = vec2i(floor(grid));
   let nearest = vec2i(grid - floor(grid) > vec2f(0.5));
@@ -90,9 +93,9 @@ fn history(q: vec2u, face: u32, plane: i32, surface: vec3f, depth: f32) -> Reser
     if (any(t < vec2i(0)) || any(t >= size) || !sameSpot(t, face, plane, surface, reach)) {
       continue;
     }
-    return previous[reservoirAt(vec2u(t))].reservoir;
+    return previous[reservoirAt(vec2u(t))];
   }
-  return Reservoir(NO_LIGHT, 0.0, 0.0, 0.0);
+  return Drawn(Reservoir(NO_LIGHT, 0.0, 0.0, 0.0), vec3f(0.0), 6u);
 }
 
 @compute @workgroup_size(8, 8)
@@ -126,12 +129,15 @@ fn candidates(@builtin(global_invocation_id) g: vec3u) {
   if (cell >= 0) {
     listed = cellCount(cell);
   }
-  let draws = select(0u, CANDIDATES, listed > 0u);
+  let draws = min(listed, CANDIDATES);
   for (var k = 0u; k < draws; k++) {
-    let x = cellLight(cell, min(u32(random(&state) * f32(listed)), listed - 1u));
+    // Stretch k of the list, and a light from it.
+    let lo = k * listed / draws;
+    let size = (k + 1u) * listed / draws - lo;
+    let x = cellLight(cell, lo + min(u32(random(&state) * f32(size)), size - 1u));
     let t = targetOf(lights[x], at, n);
-    // A candidate's weight: its target over the chance it was drawn, 1 / listed.
-    let w = t * f32(listed);
+    // A candidate's weight: its target over the chance it was drawn, 1 / size.
+    let w = t * f32(size);
     let pick = random(&state);
     if (!(w > 0.0)) {
       continue;
@@ -142,11 +148,20 @@ fn candidates(@builtin(global_invocation_id) g: vec3u) {
       luma = t;
     }
   }
-  let tried = f32(draws);
+  // The candidates as one reservoir standing for a frame's worth of them: its weight among the
+  // reservoirs merged is its sum (Σw over its target being its W) times what it stands for.
+  let tried = select(0.0, f32(CANDIDATES), listed > 0u);
+  sum *= tried;
 
   var kept = 0.0;
-  if ((frame.flags & FLAG_HISTORY_RESET) == 0u) {
-    let h = history(g.xy, face, hitPlane(hit), surface, depth);
+  // Where the history was drawn last frame, and its face's normal.
+  var then = vec3f(0.0);
+  var nThen = n;
+  if ((frame.flags & (FLAG_HISTORY_RESET | FLAG_RESERVOIR_HISTORY_OFF)) == 0u) {
+    let past = history(g.xy, face, hitPlane(hit), surface, depth);
+    let h = past.reservoir;
+    then = past.at;
+    nThen = faceNormal(min(past.surface & 7u, 5u));
     if (h.light < min(frame.lightCount, MAX_LIGHTS)) {
       kept = min(h.count, HISTORY_MAX);
       // Weighed by its target now, with its light where it is this frame.
@@ -169,7 +184,8 @@ fn candidates(@builtin(global_invocation_id) g: vec3u) {
     if (!fromHistory || inList(cell, listed, light)) {
       z += tried;
     }
-    if (targetOf(lightsBefore[light], at, n) > 0.0) {
+    // The history could have drawn it if it reached where the history was drawn, last frame.
+    if (targetOf(lightsBefore[light], then, nThen) > 0.0) {
       z += kept;
     }
   }

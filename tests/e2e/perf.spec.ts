@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { useManyLights } from './many-lights';
 import { hooks, openGame } from './support/app';
 
 // 1600 × 1000 CSS pixels at a device scale of 1: a 1.6 MP canvas, so the
@@ -52,4 +53,39 @@ test('every standard view renders within the GPU budget at 1.5 MP, at dusk, at n
   console.log(`GPU ms per view, median of ${SAMPLES} frames (dusk/night/noon/dawn): ${VIEWS.map((v) => `${v} ${Object.keys(TIMES).map((t) => medians[v][t].toFixed(2)).join('/')}`).join(', ')}`);
   expect(errors).toEqual([]);
   for (const name of VIEWS) for (const time of Object.keys(TIMES)) expect(medians[name][time], `${name} at ${time}`).toBeLessThanOrEqual(BUDGET_MS);
+});
+
+test('a thousand lights at night, 256 of them moving, render within the GPU budget from the overview and in no man\'s land', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  await useManyLights(page);
+  await hooks(page, (h) => h.runLights());
+  const medians: Record<string, number> = {};
+  for (const name of ['overview', 'nml-night']) {
+    await hooks(page, (h, n) => {
+      h.view(n as string);
+      h.setTimeOfDay(21);
+    }, name);
+    await hooks(page, (h, n) => h.waitFrames(n as number), SETTLE);
+    const times = await hooks(
+      page,
+      async (h, n) => {
+        const out: number[] = [];
+        for (let i = 0; i < (n as number); i++) {
+          await h.waitFrames(1);
+          const s = h.stats();
+          if (s.gpuMs !== null) out.push(s.gpuMs);
+        }
+        return out;
+      },
+      SAMPLES,
+    );
+    test.skip(times.length === 0, 'no timestamp queries on this GPU');
+    times.sort((a, b) => a - b);
+    medians[name] = times[times.length >> 1];
+  }
+  console.log(`GPU ms under a thousand lights at night, median of ${SAMPLES} frames: ${Object.entries(medians).map(([v, ms]) => `${v} ${ms.toFixed(2)}`).join(', ')}`);
+  expect(errors).toEqual([]);
+  for (const [name, ms] of Object.entries(medians)) expect(ms, name).toBeLessThanOrEqual(BUDGET_MS);
 });

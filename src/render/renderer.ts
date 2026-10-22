@@ -191,7 +191,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
     atrous: device.createBindGroupLayout({
       label: 'atrous',
-      entries: [sampled(0, 'float'), sampled(1, 'unfilterable-float'), sampled(2, 'uint'), storageTexture(3, 'rgba16float'), storageTexture(4, 'rg32float'), uniform(5)],
+      entries: [sampled(0, 'float'), sampled(1, 'unfilterable-float'), sampled(2, 'uint'), storageTexture(3, 'rgba16float'), storageTexture(4, 'rg32float'), uniform(5), sampled(6, 'unfilterable-float')],
     }),
     shade: device.createBindGroupLayout({
       label: 'shade',
@@ -458,9 +458,9 @@ export class Renderer {
           view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view(`hHit${prev}`), view(`hColour${prev}`), view(`hMoments${prev}`),
           view(`hColour${cur}`), view(`hMoments${cur}`), view('variance'), view(`hDepth${prev}`), view('lSky'),
         ]),
-        atrous1: group('atrous', [view(`hColour${cur}`), view('variance'), view(`hHit${cur}`), view('filteredA'), view('varianceA'), { buffer: this.steps[0] }]),
-        atrous2: group('atrous', [view('filteredA'), view('varianceA'), view(`hHit${cur}`), view('filteredB'), view('varianceB'), { buffer: this.steps[1] }]),
-        atrous3: group('atrous', [view('filteredB'), view('varianceB'), view(`hHit${cur}`), view('denoised'), view('varianceA'), { buffer: this.steps[2] }]),
+        atrous1: group('atrous', [view(`hColour${cur}`), view('variance'), view(`hHit${cur}`), view('filteredA'), view('varianceA'), { buffer: this.steps[0] }, view(`hDepth${cur}`)]),
+        atrous2: group('atrous', [view('filteredA'), view('varianceA'), view(`hHit${cur}`), view('filteredB'), view('varianceB'), { buffer: this.steps[1] }, view(`hDepth${cur}`)]),
+        atrous3: group('atrous', [view('filteredB'), view('varianceB'), view(`hHit${cur}`), view('denoised'), view('varianceA'), { buffer: this.steps[2] }, view(`hDepth${cur}`)]),
         shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('denoised'), view(`hHit${cur}`)]),
         taa: group('taa', [view('colour'), view('gMotion'), view(`taa${prev}`), view(`taa${cur}`), this.sampler]),
         cas: group('cas', [view(`taa${cur}`), view('sharp')]),

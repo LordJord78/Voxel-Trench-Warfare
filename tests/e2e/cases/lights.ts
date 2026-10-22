@@ -229,17 +229,26 @@ export const cases = {
    * frames if given (as a camera cut does); with neighbours sharing their picks, or (`spatial`
    * false) not.
    */
-  async restirNoise(args: { frames: number; warm: number; size: number; spatial: boolean; cycle?: number }) {
-    const lights = [
-      bulb([4.0, 6.5, 5.0], 3),
-      bulb([8.5, 6.0, 4.5], 3),
-      bulb([6.4, 7.0, 8.8], 3),
-      bulb([3.5, 6.0, 8.5], 2),
-      bulb([9.0, 6.5, 8.0], 2),
-      bulb([6.4, 6.0, 2.5], 2),
-    ];
+  async restirNoise(args: { frames: number; warm: number; size: number; spatial: boolean; cycle?: number; many?: boolean; plain?: boolean }) {
+    // Six lights, or (`many`) twenty-four: three times what a pixel draws a frame, so its
+    // candidates do not take in every light.
+    const lights = args.many
+      ? Array.from({ length: 24 }, (_, i) => {
+          const a = i * 2.39996;
+          const r = 1.2 + 4.6 * Math.sqrt((i + 0.5) / 24);
+          return bulb([6.4 + r * Math.cos(a), 6.0 + (i % 3) * 0.5, 6.4 + r * Math.sin(a)], 1 + (i % 4));
+        })
+      : [
+          bulb([4.0, 6.5, 5.0], 3),
+          bulb([8.5, 6.0, 4.5], 3),
+          bulb([6.4, 7.0, 8.8], 3),
+          bulb([3.5, 6.0, 8.5], 2),
+          bulb([9.0, 6.5, 8.0], 2),
+          bulb([6.4, 6.0, 2.5], 2),
+        ];
     const s = await floor(lights, undefined, args.size);
     if (!args.spatial) s.renderer.flags |= FLAGS.SPATIAL_OFF;
+    if (args.plain) s.renderer.flags |= FLAGS.SPATIAL_OFF | FLAGS.RESERVOIR_HISTORY_OFF;
     const lum = (v: number[]) => 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
     let err = 0;
     let n = 0;

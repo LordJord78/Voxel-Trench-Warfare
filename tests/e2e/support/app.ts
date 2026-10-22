@@ -15,8 +15,10 @@ export interface Hooks {
   exposureState(): Promise<{ base: number; correction: number; want: number; metered: number }>;
   /** The point lights the last frame was lit with. */
   lights(): { position: [number, number, number]; radius: number; colour: [number, number, number]; intensity: number; kind: 'lantern' | 'flare'; phase: number }[];
-  /** Hold the lights still, as the plan placed them (their motion is new since the approved views). */
-  holdLights(): void;
+  /** Hold the lights still: as the plan placed them (their motion is new since the approved views), or as they are `seconds` into their motion. */
+  holdLights(seconds?: number): void;
+  /** Light the scene with these lights in place of its own (they move from their phases as its own do). */
+  useLights(lights: { position: [number, number, number]; radius: number; colour: [number, number, number]; intensity: number; kind: 'lantern' | 'flare'; phase: number }[]): void;
   /** Let the lights move with their own clock again. */
   runLights(): void;
   /** The sun's elevation the last frame was lit at, in degrees. */

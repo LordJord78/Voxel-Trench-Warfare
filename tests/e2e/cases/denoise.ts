@@ -351,6 +351,8 @@ export const cases = {
     const colourIn = tex('rgba16float', inUsage);
     const varianceIn = tex('rg32float', inUsage);
     const hitsIn = tex('rg32uint', inUsage);
+    // Depths are read only to judge how much ground a pixel spans; with no camera, none.
+    const depthIn = tex('r32float', inUsage);
     device.queue.writeTexture({ texture: colourIn }, colour, { bytesPerRow: size[0] * 8 }, size);
     device.queue.writeTexture({ texture: varianceIn }, variance, { bytesPerRow: size[0] * 8 }, size);
     device.queue.writeTexture({ texture: hitsIn }, hits, { bytesPerRow: size[0] * 8 }, size);
@@ -374,7 +376,9 @@ export const cases = {
       device.queue.writeBuffer(stepBuffer, 0, new Int32Array([step, 0, 0, 0]));
       const group = device.createBindGroup({
         layout: compiled.layouts.atrous,
-        entries: [colourIn.createView(), varianceIn.createView(), hitsIn.createView(), colourOut.createView(), varianceOut.createView(), { buffer: stepBuffer }].map((resource, binding) => ({ binding, resource })),
+        entries: [colourIn.createView(), varianceIn.createView(), hitsIn.createView(), colourOut.createView(), varianceOut.createView(), { buffer: stepBuffer }, depthIn.createView()].map(
+          (resource, binding) => ({ binding, resource }),
+        ),
       });
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
@@ -397,7 +401,7 @@ export const cases = {
       for (let i = 0; i < a.c.length; i++) worst.colourUlps = Math.max(worst.colourUlps, Math.abs(a.c[i] - b.c[i]));
       for (let i = 0; i < a.v.length; i++) worst.varianceRel = Math.max(worst.varianceRel, Math.abs(a.v[i] - b.v[i]) / Math.max(1e-6, Math.abs(b.v[i])));
     }
-    for (const t of [colourIn, varianceIn, hitsIn]) t.destroy();
+    for (const t of [colourIn, varianceIn, hitsIn, depthIn]) t.destroy();
     return { ...worst, errors: [...g.errors] };
   },
 };
