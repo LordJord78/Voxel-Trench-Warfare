@@ -2,7 +2,12 @@ import { loadTunables } from '../../../src/core/tunables';
 import { HeapMirror } from '../../../src/world/encode';
 import { Atmosphere, atmosphereModel } from '../../../src/render/atmosphere';
 import { FarFieldGpu } from '../../../src/render/farfield-gpu';
-import { FRAME, PROBE_DUSK, writeSky, writeWorldInfo } from '../../../src/render/frame-uniforms';
+import { FRAME, PROBE_DUSK, writeSky, writeWorldInfo, type FrameSky } from '../../../src/render/frame-uniforms';
+import { CLOCK_KEYS } from '../../../src/core/sky-clock';
+import { BrickMap } from '../../../src/world/bricks';
+import { P } from '../../../src/world/materials';
+import { Renderer } from '../../../src/render/renderer';
+import { frameSky, skyState } from '../../../src/render/sky-state';
 import { GpuWorld } from '../../../src/render/gpu-world';
 import { StructWriter } from '../../../src/render/layout';
 import { sceneExtras, sceneGroup, sceneLayout } from '../../../src/render/scene';
@@ -22,7 +27,7 @@ async function lutValues(texture: GPUTexture): Promise<number[]> {
 const bad = (values: number[], logs = false) => values.filter((v) => !Number.isFinite(v) || (!logs && v < 0)).length;
 
 /** Run sky-test.wgsl's `entry` over `dirs` with the frame's sky lit by `sky`'s lights, the sky views built for them. */
-async function sample(entry: 'main' | 'fog', dirs: number[][], sky: { sunDir: number[]; moonDir: number[]; sunLight: number[]; moonLight: number[] }, heightM: number) {
+async function sample(entry: 'main' | 'fog' | 'bodies', dirs: number[][], sky: Partial<FrameSky> & { sunDir: number[]; moonDir: number[] }, heightM: number) {
   const g = await gpu();
   const device = g.device;
   const atmosphere = Atmosphere.create(device, await Atmosphere.compile(device), atmosphereModel(loadTunables()));
@@ -146,5 +151,75 @@ export const cases = {
   /** fogColour along each of `dirs`, under the sun alone (unit light) at `sun`, from 2 m. */
   async skyFog(args: { dirs: number[][]; sun: number[] }) {
     return sample('fog', args.dirs, { sunDir: args.sun, moonDir: [0, -1, 0], sunLight: [1, 1, 1], moonLight: [0, 0, 0] }, 2);
+  },
+
+  /** The sky with its discs and stars along each of `dirs`, lit as `sky` says (unit lights unless set), from 2 m. */
+  async skyBodies(args: { dirs: number[][]; sky: Partial<FrameSky> & { sunDir: number[]; moonDir: number[] } }) {
+    return sample('bodies', args.dirs, { sunLight: [0, 0, 0], moonLight: [0, 0, 0], moonFull: [1, 1, 1], ...args.sky }, 2);
+  },
+
+  /**
+   * The night sky and the noon sky as the renderer draws them, 1024 pixels across 60° (the game's
+   * pixel size), looking 60° up over flat ground: how many pixels outshine the sky's median by 4×
+   * after `frames` frames; and how far the 30 brightest stars' centres at the middle frame lie from
+   * the nearest star at the last.
+   */
+  async skyStars(args: { frames: number }) {
+    const g = await gpu();
+    const tun = loadTunables();
+    const map = new BrickMap({ x: 64, y: 64, z: 64 });
+    map.fillBox(0, 0, 0, 64, 20, 64, P.SOD);
+    const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
+    const size: [number, number] = [1024, 1024];
+    const renderer = await Renderer.create(g, null, world, null, { size });
+    renderer.setLights([], 0);
+    const pose = { position: [3.2, 3.6, 3.2] as [number, number, number], yaw: 0, pitch: 60, fov: 60 };
+    const luminance = (px: number[], i: number) => 0.2126 * px[i * 4] + 0.7152 * px[i * 4 + 1] + 0.0722 * px[i * 4 + 2];
+    const image = async () => Array.from(new Uint16Array(await readTexture(renderer.texture('taa'))), halfToFloat);
+    const count = (px: number[]) => {
+      const l = Array.from({ length: size[0] * size[1] }, (_, i) => luminance(px, i));
+      const median = [...l].sort((a, b) => a - b)[l.length >> 1];
+      return { stars: l.filter((v) => v > 4 * median).length, median };
+    };
+    /** Local maxima over 4× the median, brightest first (the first `limit`): the stars' centres. */
+    const centres = (px: number[], median: number, limit = Infinity) => {
+      const out: [number, number, number][] = [];
+      for (let y = 1; y < size[1] - 1; y++) {
+        for (let x = 1; x < size[0] - 1; x++) {
+          const v = luminance(px, y * size[0] + x);
+          if (v <= 4 * median) continue;
+          let peak = true;
+          for (let dy = -1; dy <= 1 && peak; dy++) for (let dx = -1; dx <= 1; dx++) if ((dx || dy) && luminance(px, (y + dy) * size[0] + x + dx) > v) peak = false;
+          if (peak) out.push([x, y, v]);
+        }
+      }
+      return out.sort((a, b) => b[2] - a[2]).slice(0, limit);
+    };
+    const run = async (hours: number) => {
+      renderer.sky = frameSky(skyState(tun, hours), tun);
+      renderer.resetHistory();
+      let middle: [number, number, number][] = [];
+      let px: number[] = [];
+      for (let f = 0; f < args.frames; f++) {
+        renderer.render(pose, 0, f * 16);
+        if (f === (args.frames >> 1) || f === args.frames - 1) {
+          px = await image();
+          if (f === args.frames >> 1) middle = centres(px, count(px).median, 30);
+        }
+      }
+      const c = count(px);
+      const last = centres(px, c.median);
+      let shift = 0;
+      for (const [x, y] of middle) {
+        let best = Infinity;
+        for (const [u, v] of last) best = Math.min(best, Math.hypot(u - x, v - y));
+        shift = Math.max(shift, best);
+      }
+      return { ...c, shift, tracked: middle.length };
+    };
+    const night = await run(CLOCK_KEYS.night);
+    const noon = await run(CLOCK_KEYS.noon);
+    for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
+    return { night, noon, errors: [...g.errors] };
   },
 };

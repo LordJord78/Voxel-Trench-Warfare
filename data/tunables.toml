@@ -519,6 +519,7 @@ map_bearing_deg     = 236.0    # compass bearing of +z (toward the enemy): it pu
 sun_illuminance     = 6.55     # the sun's light above the air: it makes dusk's key light the approved one (its red 3.4)
 moon_illuminance    = 0.0912   # the full moon's: the approved night's key, not the physical 1/400,000 of the sun's (sky-state.ts)
 moon_tint           = [0.62, 1.0, 2.16]   # moonlight as it reads to the eye at night: blue-violet, as approved
+star_gain           = 10.0     # the stars over their light against the moon's: the eye picks points of light out of a moonlit sky (to magnitude 4.5 here)
 # Keyed to the clock: dawn 06:50, noon 12:00, dusk 17:35, night 21:00; linear between them by the hour.
 fog_density         = [0.02, 0.006, 0.012, 0.02]   # per metre, at the ground
 flares              = [0.2, 0.0, 0.0, 1.0]         # how brightly the static flares burn

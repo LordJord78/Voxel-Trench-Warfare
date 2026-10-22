@@ -34,6 +34,12 @@ export interface SkyState {
   /** Each light above the air: the sun's, and the moon's in its phase (zero while it is far below the horizon). */
   sunLight: Vec3;
   moonLight: Vec3;
+  /** The moon's light at full, which its disc's face is drawn in. */
+  moonFull: Vec3;
+  /** The celestial sphere's axes in the world. */
+  stars: [Vec3, Vec3, Vec3];
+  /** A magnitude-0 star's light: 8.4e-6 of the full moon's, as in the sky, times sky.star_gain. */
+  starBrightness: number;
   /** Each light where it reaches the ground: through the air, and as much of its disc as is above the horizon. */
   sunColour: Vec3;
   moonColour: Vec3;
@@ -56,6 +62,8 @@ const DISC_DEG = 0.265;
 const MOON_SKY_DEG = -10;
 /** The key's crossfade, in degrees of the sun's elevation either side of the crossing. */
 const CROSSFADE_DEG = 1;
+/** A magnitude-0 star's light against the full moon's: 2.1e-6 lux against 0.25. */
+const MAG0_PER_FULL_MOON = 8.4e-6;
 
 const RAD = Math.PI / 180;
 const KEYS = [CLOCK_KEYS.dawn, CLOCK_KEYS.noon, CLOCK_KEYS.dusk, CLOCK_KEYS.night];
@@ -141,7 +149,8 @@ export function skyState(tun: Tunables, hours: number): SkyState {
   const sunLight = scale([1, 1, 1], tun.f('sky.sun_illuminance'));
   const alpha = c.moon.phaseAngleDeg * RAD;
   const moonUp = c.moon.elevationDeg > MOON_SKY_DEG;
-  const moonLight = moonUp ? scale(triple(tun, 'sky.moon_tint'), tun.f('sky.moon_illuminance') * lambertPhase(alpha)) : ([0, 0, 0] as Vec3);
+  const moonFull = scale(triple(tun, 'sky.moon_tint'), tun.f('sky.moon_illuminance'));
+  const moonLight = moonUp ? scale(moonFull, lambertPhase(alpha)) : ([0, 0, 0] as Vec3);
   const sunColour = throughAir(m, sunLight, c.sun.elevationDeg);
   const moonColour = throughAir(m, moonLight, c.moon.elevationDeg);
   const cross = crossing(m, sunLight, luminance(moonColour));
@@ -155,6 +164,9 @@ export function skyState(tun: Tunables, hours: number): SkyState {
     sunElevationDeg: c.sun.elevationDeg,
     sunLight,
     moonLight,
+    moonFull,
+    stars: c.stars,
+    starBrightness: tun.f('sky.moon_illuminance') * MAG0_PER_FULL_MOON * tun.f('sky.star_gain'),
     sunColour,
     moonColour,
     keyDir,
@@ -179,6 +191,9 @@ export function frameSky(sky: SkyState, tun: Tunables): FrameSky {
     moonColour: sky.moonColour,
     sunLight: sky.sunLight,
     moonLight: sky.moonLight,
+    moonFull: sky.moonFull,
+    stars: sky.stars,
+    starBrightness: sky.starBrightness,
     fogDensity: sky.fogDensity,
     fogHeight: tun.f('render.fog_height_m'),
     fogBase: tun.f('world.ground_level_m'),

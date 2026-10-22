@@ -96,19 +96,26 @@ export const cases = {
     return { column, trail, nowX, thenX, errors: [...g.errors] };
   },
 
-  /** The present pass over a flat image of colour `c`: the 8-bit codes it writes, and what ACES and gamma say they should be. */
-  async present(args: { c: number; exposure: number }) {
+  /**
+   * The present pass over a flat 32 × 32 image of colour `c` (with, if given, one texel of `spot` in
+   * the middle), upscaled to a `canvas`-wide square: the 8-bit codes it writes, and what ACES and
+   * gamma say the flat colour's should be.
+   */
+  async present(args: { c: number; exposure: number; spot?: number; canvas?: number }) {
     const g = await gpu();
     const device = g.device;
     const compiled = await compileFrame(device);
     const size: [number, number] = [32, 32];
     const image = device.createTexture({ size, format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     const h = floatToHalf(args.c);
-    device.queue.writeTexture({ texture: image }, new Uint16Array(32 * 32 * 4).map((_, i) => (i % 4 === 3 ? floatToHalf(1) : h)), { bytesPerRow: 32 * 8 }, size);
+    const texels = new Uint16Array(32 * 32 * 4).map((_, i) => (i % 4 === 3 ? floatToHalf(1) : h));
+    if (args.spot !== undefined) texels.fill(floatToHalf(args.spot), (16 * 32 + 16) * 4, (16 * 32 + 16) * 4 + 3);
+    device.queue.writeTexture({ texture: image }, texels, { bytesPerRow: 32 * 8 }, size);
     const format = navigator.gpu.getPreferredCanvasFormat();
-    const target = device.createTexture({ size, format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+    const side = args.canvas ?? 32;
+    const target = device.createTexture({ size: [side, side], format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
     const uniform = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(uniform, 0, new Float32Array([32, 32, 32, 32, 32, 32, args.exposure, 0]));
+    device.queue.writeBuffer(uniform, 0, new Float32Array([32, 32, 32, 32, side, side, args.exposure, 0]));
     const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const group = device.createBindGroup({
       layout: compiled.layouts.present,
@@ -122,7 +129,7 @@ export const cases = {
     pass.end();
     device.queue.submit([encoder.finish()]);
     const bytes = new Uint8Array(await readTexture(target));
-    const green = Array.from({ length: 32 * 32 }, (_, i) => bytes[i * 4 + 1]);
+    const green = Array.from({ length: side * side }, (_, i) => bytes[i * 4 + 1]);
     const c = halfToFloat(h) * args.exposure;
     const expected = 255 * aces(c) ** (1 / 2.2);
     image.destroy();

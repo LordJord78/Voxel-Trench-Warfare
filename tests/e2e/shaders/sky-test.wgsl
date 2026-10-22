@@ -22,3 +22,12 @@ fn fog(@builtin(global_invocation_id) g: vec3u) {
   }
   radiance[g.x] = vec4f(fogColour(dirs[g.x].xyz), 0.0);
 }
+
+// The sky with the sun's and moon's discs and the stars, along each direction.
+@compute @workgroup_size(64)
+fn bodies(@builtin(global_invocation_id) g: vec3u) {
+  if (g.x >= arrayLength(&dirs)) {
+    return;
+  }
+  radiance[g.x] = vec4f(skyWithBodies(dirs[g.x].xyz), 0.0);
+}

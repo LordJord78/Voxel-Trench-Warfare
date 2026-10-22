@@ -108,11 +108,21 @@ export const FRAME: StructDef = {
     ['moonColour', 'vec3f'],
     ['fogBase', 'f32'],
     // The sun's light and the moon's above the air (the moon's in its phase): the sky views and the
-    // faces' irradiance are per unit of them.
+    // faces' irradiance are per unit of them. And a magnitude-0 star's light.
     ['sunLight', 'vec3f'],
     ['skyRay', 'f32'],
     ['moonLight', 'vec3f'],
-    ['pad4', 'f32'],
+    ['starBrightness', 'f32'],
+    // The moon's light at full, which its disc's face is drawn in, lit by the sun from where it stands.
+    ['moonFull', 'vec3f'],
+    ['pad5', 'f32'],
+    // The celestial sphere's axes in the world, turned by the sidereal clock (see sky-clock.ts).
+    ['starX', 'vec3f'],
+    ['pad6', 'f32'],
+    ['starY', 'vec3f'],
+    ['pad7', 'f32'],
+    ['starZ', 'vec3f'],
+    ['pad8', 'f32'],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
     // The atmosphere as this frame's sky view was built.
@@ -131,6 +141,10 @@ export interface FrameSky {
   moonColour: readonly number[];
   sunLight: readonly number[];
   moonLight: readonly number[];
+  moonFull: readonly number[];
+  /** The celestial sphere's axes in the world. */
+  stars: readonly (readonly number[])[];
+  starBrightness: number;
   fogDensity: number;
   fogHeight: number;
   fogBase: number;
@@ -167,6 +181,11 @@ export function writeSky(w: StructWriter, sky: FrameSky): void {
   w.set('moonColour', sky.moonColour);
   w.set('sunLight', sky.sunLight);
   w.set('moonLight', sky.moonLight);
+  w.set('moonFull', sky.moonFull);
+  w.set('starX', sky.stars[0]);
+  w.set('starY', sky.stars[1]);
+  w.set('starZ', sky.stars[2]);
+  w.set('starBrightness', sky.starBrightness);
   w.set('fogDensity', sky.fogDensity);
   w.set('fogHeight', sky.fogHeight);
   w.set('fogBase', sky.fogBase);
@@ -193,6 +212,13 @@ export const PROBE_DUSK: FrameSky = {
   moonColour: [0.019, 0.0088, 0.0016],
   sunLight: [6.55, 6.55, 6.55],
   moonLight: [0.056, 0.09, 0.195],
+  moonFull: [0.0565, 0.0912, 0.197],
+  stars: [
+    [1, 0, 0],
+    [0, 0.766, 0.643],
+    [0, -0.643, 0.766],
+  ],
+  starBrightness: 7.7e-7,
   fogDensity: 0.012,
   fogHeight: 14,
   fogBase: 16,

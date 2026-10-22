@@ -20,6 +20,8 @@ export interface Body {
 export interface Celestial {
   sun: Body;
   moon: Body & { illuminated: number; phaseAngleDeg: number };
+  /** The celestial sphere's axes in the world, turned by the sidereal clock: right ascension 0° and 90° on the equator, and the north pole. */
+  stars: [[number, number, number], [number, number, number], [number, number, number]];
 }
 
 export function celestial(tun: Tunables, hours: number): Celestial {
@@ -33,8 +35,13 @@ export function celestial(tun: Tunables, hours: number): Celestial {
   const m = moonEquatorial(jd);
   const moonAt = horizontal(m.ra, m.dec, lat, lon, jd);
   const lit = moonIllumination(jd);
+  const at = (ra: number, dec: number) => {
+    const h = horizontal(ra, dec, lat, lon, jd);
+    return toWorld(h.azimuthDeg, h.elevationDeg, bearing);
+  };
   return {
     sun: { dir: toWorld(sunAt.azimuthDeg, sunAt.elevationDeg, bearing), elevationDeg: sunAt.elevationDeg },
     moon: { dir: toWorld(moonAt.azimuthDeg, moonAt.elevationDeg, bearing), elevationDeg: moonAt.elevationDeg, ...lit },
+    stars: [at(0, 0), at(90, 0), at(0, 90)],
   };
 }

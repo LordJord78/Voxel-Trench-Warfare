@@ -79,12 +79,6 @@ fn upsampled(p: vec2u, face: u32, plane: i32, n: vec3f) -> vec4f {
   return pick;
 }
 
-// The sky, with the moon's disc.
-fn skyWithMoon(rd: vec3f) -> vec3f {
-  let disc = smoothstep(cos(radians(0.55)), cos(radians(0.45)), dot(rd, frame.moonDir));
-  return skyColour(rd) + frame.moonColour * 40.0 * disc;
-}
-
 // Height fog between the eye and a point `metres` along rd: transmittance, and the
 // colour the fog glows. Density falls off exponentially above the ground.
 fn fog(eyeY: f32, rd: vec3f, metres: f32) -> vec4f {
@@ -139,7 +133,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   var colour: vec3f;
   var metres = FAR_SKY_METRES;
   if (face == 7u) {
-    colour = skyWithMoon(rd);
+    colour = skyWithBodies(rd);
   } else {
     let depth = textureLoad(gDepth, vec2i(g.xy), 0).r;
     metres = depth * frame.voxel;
@@ -161,7 +155,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
         colour = albedo * lit + emissionOf(mat);
         if (kindOf(mat) == KIND_WATER && face == 3u) {
           let fresnel = 0.02 + 0.98 * pow(1.0 - abs(dot(rd, n)), 5.0);
-          colour = albedo * lit * 0.6 + fresnel * skyWithMoon(reflect(rd, n));
+          colour = albedo * lit * 0.6 + fresnel * skyWithBodies(reflect(rd, n));
         }
       }
     }

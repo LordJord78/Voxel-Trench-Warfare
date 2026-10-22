@@ -237,3 +237,89 @@ test("fog scatters each light by the angle a view makes with it: looking down, t
     for (let ch = 0; ch < 3; ch++) expect(Math.abs(f.values[i][ch] - want[ch])).toBeLessThanOrEqual(Math.max(0.03 * want[ch], 1e-6));
   });
 });
+
+/** Directions on a square grid `n` across, `halfDeg` either side of `centre`. */
+function around(centre: V3, halfDeg: number, n: number): V3[] {
+  const e1 = (() => {
+    const c: V3 = [centre[2], 0, -centre[0]];
+    const l = Math.hypot(...c) || 1;
+    return [c[0] / l, c[1] / l, c[2] / l] as V3;
+  })();
+  const e2: V3 = [centre[1] * e1[2] - centre[2] * e1[1], centre[2] * e1[0] - centre[0] * e1[2], centre[0] * e1[1] - centre[1] * e1[0]];
+  const t = Math.tan((halfDeg * Math.PI) / 180);
+  const out: V3[] = [];
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const a = ((i + 0.5) / n) * 2 - 1;
+      const b = ((j + 0.5) / n) * 2 - 1;
+      const d: V3 = [centre[0] + t * (a * e1[0] + b * e2[0]), centre[1] + t * (a * e1[1] + b * e2[1]), centre[2] + t * (a * e1[2] + b * e2[2])];
+      const l = Math.hypot(...d);
+      out.push([d[0] / l, d[1] / l, d[2] / l]);
+    }
+  }
+  return out;
+}
+const angleDeg = (a: V3, b: V3) => (Math.acos(Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])) * 180) / Math.PI;
+const lum = (c: number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+
+test('the moon is drawn in its phase: its lit share of the disc is the sunlit share of a sphere', async ({ page }) => {
+  await openHarness(page);
+  const moon = direction(100, 30);
+  const dirs = around(moon, 0.3, 64);
+  // Square to the moon, for turning the sun round it.
+  const w: V3 = [moon[1] * 0 - moon[2] * 1, moon[2] * 0 - moon[0] * 0, moon[0] * 1 - moon[1] * 0];
+  const lw = Math.hypot(...w);
+  const unit: V3 = [w[0] / lw, w[1] / lw, w[2] / lw];
+  const shares: number[] = [];
+  let fullMean = 0;
+  for (const phaseDeg of [0, 45, 90, 135, 180]) {
+    // The sun stands 180° less the phase angle from the moon (the moon's elongation).
+    const e = ((180 - phaseDeg) * Math.PI) / 180;
+    const sun: V3 = [Math.cos(e) * moon[0] + Math.sin(e) * unit[0], Math.cos(e) * moon[1] + Math.sin(e) * unit[1], Math.cos(e) * moon[2] + Math.sin(e) * unit[2]];
+    const r = await runCase<{ compileErrors: string[]; values: number[][]; errors: string[] }>(page, 'skyBodies', { dirs, sky: { sunDir: sun, moonDir: moon } });
+    expect(r.compileErrors).toEqual([]);
+    expect(r.errors).toEqual([]);
+    // The disc (radius 0.259°): its edge is hard, and these directions are not jittered.
+    const inside = dirs.map((d, i) => [angleDeg(d, moon), lum(r.values[i])] as const).filter(([a]) => a < 0.258);
+    if (phaseDeg === 0) fullMean = inside.reduce((s, [, l]) => s + l, 0) / inside.length;
+    const lit = inside.filter(([, l]) => l > 0.03 * fullMean).length / inside.length;
+    shares.push(lit);
+    expect(Math.abs(lit - (1 + Math.cos((phaseDeg * Math.PI) / 180)) / 2), `phase ${phaseDeg}°: lit ${lit.toFixed(3)}`).toBeLessThan(0.05);
+  }
+  // Full is full and new is dark.
+  expect(shares[0]).toBeGreaterThan(0.97);
+  expect(shares[4]).toBeLessThan(0.03);
+});
+
+test("the sun's disc is brightest at its centre, darker at its limb, and sets into the ground", async ({ page }) => {
+  await openHarness(page);
+  const high = direction(40, 20);
+  const r = await runCase<{ compileErrors: string[]; values: number[][]; errors: string[] }>(page, 'skyBodies', {
+    dirs: [high, ...around(high, 0.4, 9).map((d) => d)],
+    sky: { sunDir: high, moonDir: [0, -1, 0], sunLight: [1, 1, 1] },
+  });
+  expect(r.compileErrors).toEqual([]);
+  const centre = lum(r.values[0]);
+  // A point at 0.9 of the disc's radius (0.267°): limb-darkened, about 0.62 of the centre with u = 0.6.
+  const near = around(high, 0.4, 9).findIndex((d) => Math.abs(angleDeg(d, high) - 0.24) < 0.03);
+  const sky = lum(r.values[1]);
+  expect(centre).toBeGreaterThan(1000 * sky);
+  if (near >= 0) expect(lum(r.values[1 + near])).toBeLessThan(0.8 * centre);
+  // Set: 1° below the horizon from 2 m, no disc, only the sky's afterglow.
+  const set = direction(40, -1);
+  const below = await runCase<{ values: number[][] }>(page, 'skyBodies', { dirs: [set, direction(45, -1)], sky: { sunDir: set, moonDir: [0, -1, 0], sunLight: [1, 1, 1] } });
+  expect(lum(below.values[0])).toBeLessThan(2 * lum(below.values[1]) + 1e-6);
+});
+
+test('the stars: a field fixed in the sky at night, a few hundred pixels in a 60° patch, none at noon', async ({ page }) => {
+  test.setTimeout(240_000);
+  await openHarness(page);
+  const r = await runCase<{ night: { stars: number; shift: number; tracked: number }; noon: { stars: number }; errors: string[] }>(page, 'skyStars', { frames: 24 });
+  expect(r.errors).toEqual([]);
+  console.log(`stars: night ${r.night.stars} pixels, ${r.night.tracked} tracked, shift ${r.night.shift.toFixed(2)} px; noon ${r.noon.stars}`);
+  expect(r.night.stars).toBeGreaterThanOrEqual(150);
+  expect(r.night.stars).toBeLessThanOrEqual(600);
+  expect(r.noon.stars).toBe(0);
+  expect(r.night.tracked).toBeGreaterThan(10);
+  expect(r.night.shift).toBeLessThanOrEqual(1);
+});

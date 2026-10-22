@@ -37,6 +37,14 @@ test('dither stays within one code and breaks up flat grey', async ({ page }) =>
   expect(values.size).toBeGreaterThanOrEqual(2);
 });
 
+test("upscaling a point as bright as the sun's disc leaves no dark ring round it", async ({ page }) => {
+  await openHarness(page);
+  // 32 texels to 48 pixels: the bicubic's negative lobes reach the pixels round the point.
+  const r = await runCase<Present>(page, 'present', { c: 0.1, exposure: 1, spot: 30000, canvas: 48 });
+  expect(r.errors).toEqual([]);
+  expect(Math.min(...r.green)).toBeGreaterThanOrEqual(r.expected - 1);
+});
+
 test('CAS leaves a flat colour unchanged', async ({ page }) => {
   await openHarness(page);
   const r = await runCase<{ worst: number; errors: string[] }>(page, 'casFlat', { c: [0.3, 0.2, 0.1, 1] });
