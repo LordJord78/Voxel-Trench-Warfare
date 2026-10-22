@@ -3,7 +3,7 @@ import { loadTunables } from '../../src/core/tunables';
 import { genParams } from '../../src/world/generation/params';
 import { planWorld } from '../../src/world/generation/plan';
 import { lanternVoxel } from '../../src/world/generation/furniture';
-import { lightBuffer, sceneLights } from '../../src/render/lights';
+import { lightBuffer, MAX_LIGHTS, sceneLights, type SceneLight } from '../../src/render/lights';
 
 const tun = loadTunables();
 const p = genParams(tun);
@@ -39,8 +39,18 @@ describe('the scene\'s lights', () => {
       expect(f.position[1]).toBeGreaterThanOrEqual(tun.f('world.ground_level_m') + 18);
     }
   });
-  it('stays within the 64 lights a frame can sample', () => {
-    expect(lights.length).toBeLessThanOrEqual(64);
+  it('takes as many as 1,024 lights a frame, and gives each a phase of its own', () => {
+    expect(MAX_LIGHTS).toBe(1024);
+    expect(lights.length).toBeLessThanOrEqual(MAX_LIGHTS);
+    for (const l of lights) {
+      expect(l.phase).toBeGreaterThanOrEqual(0);
+      expect(l.phase).toBeLessThan(1);
+    }
+    expect(new Set(lights.map((l) => l.phase)).size).toBe(lights.length);
+  });
+  it('packs as many as 1,024 lights for the GPU, and refuses one more', () => {
+    expect(lightBuffer(Array<SceneLight>(MAX_LIGHTS).fill(lights[0]), 1, v)).toHaveLength(MAX_LIGHTS * 8);
+    expect(() => lightBuffer(Array<SceneLight>(MAX_LIGHTS + 1).fill(lights[0]), 1, v)).toThrow(RangeError);
   });
   it('dims the flares with the time of day and leaves the lanterns lit', () => {
     const data = lightBuffer(lights, 0.25, v);

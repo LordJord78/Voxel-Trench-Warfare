@@ -13,13 +13,7 @@
 @group(0) @binding(8) var farMips: texture_2d<f32>;
 @group(0) @binding(9) var farMaterials: texture_2d<u32>;
 
-// Point lights (see lights.ts): position and radius in voxels, colour, intensity.
-struct Light {
-  pos: vec3f,
-  radius: f32,
-  colour: vec3f,
-  intensity: f32,
-}
+#include "light.wgsl"
 @group(0) @binding(6) var<storage, read> lights: array<Light>;
 // 64 × 64 blue-noise ranks (see bluenoise.ts).
 @group(0) @binding(10) var blueNoise: texture_2d<u32>;

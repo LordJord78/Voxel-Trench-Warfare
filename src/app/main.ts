@@ -20,7 +20,8 @@ import type { CameraPose } from '../render/camera';
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
 import { FarFieldGpu } from '../render/farfield-gpu';
 import { GpuWorld } from '../render/gpu-world';
-import { sceneLights } from '../render/lights';
+import { lightMotion, lightsAt } from '../render/light-motion';
+import { sceneLights, type SceneLight } from '../render/lights';
 import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
@@ -169,16 +170,25 @@ async function start(): Promise<void> {
   /** How fast the clock runs, in game minutes a second: held (0), or time-lapse. */
   let lapse = 0;
 
-  // The light follows the clock; the flares burn as it says.
+  // The light follows the clock; the flares burn as it says. The point lights move with a clock of
+  // their own, which runs whenever the world is drawn but paused (tests can hold them still, as
+  // planned), and are written every frame.
   const lights = sceneLights(world.plan, tun);
+  const motion = lightMotion(tun);
+  let lightSeconds = 0;
+  let lightsHeld = false;
+  let lit: SceneLight[] = lights;
   let litFor = Number.NaN;
   let sky = skyState(tun, timeOfDay);
-  const light = () => {
-    if (timeOfDay === litFor) return;
-    litFor = timeOfDay;
-    sky = skyState(tun, timeOfDay);
-    renderer.sky = frameSky(sky, tun);
-    renderer.setLights(lights, sky.flares);
+  const light = (dt: number) => {
+    if (timeOfDay !== litFor) {
+      litFor = timeOfDay;
+      sky = skyState(tun, timeOfDay);
+      renderer.sky = frameSky(sky, tun);
+    }
+    if (mode !== 'paused') lightSeconds += dt;
+    lit = lightsHeld ? lights : lightsAt(lights, lightSeconds, motion);
+    renderer.setLights(lit, sky.flares);
   };
 
   const changeSettings = (next: Settings) => {
@@ -370,7 +380,7 @@ async function start(): Promise<void> {
       pose = rig.pose(session, dt, settings.fov);
       periscope.set((1 - rig.fovScale) / (1 - periscopeScale));
     }
-    light();
+    light(dt);
     renderer.render(pose, timeOfDay, now);
     lastPose = pose;
     frames++;
@@ -494,6 +504,13 @@ async function start(): Promise<void> {
     timeOfDay: () => timeOfDay,
     exposure: () => renderer.exposure(),
     exposureState: () => renderer.exposureState(),
+    lights: () => lit,
+    holdLights() {
+      lightsHeld = true;
+    },
+    runLights() {
+      lightsHeld = false;
+    },
     sunElevation: () => sky.sunElevationDeg,
     frames: () => frames,
     waitFrames,

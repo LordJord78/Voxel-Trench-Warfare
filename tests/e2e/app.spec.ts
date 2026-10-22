@@ -115,6 +115,44 @@ test('the page loads to a click-to-play prompt over the world, and a teleport st
   expect(errors).toEqual([]);
 });
 
+test('the lights move with their own clock, frame by frame, and stop for the pause menu', async ({ page }) => {
+  const errors = await openGame(page);
+  // Held, as every other test has them: as planned, frame after frame.
+  const rest = await hooks(page, (h) => h.lights());
+  await hooks(page, (h) => h.waitFrames(5));
+  expect(await hooks(page, (h) => h.lights())).toEqual(rest);
+  const lanterns = rest.flatMap((l, i) => (l.kind === 'lantern' ? [i] : []));
+  const flares = rest.flatMap((l, i) => (l.kind === 'flare' ? [i] : []));
+  expect(lanterns.length).toBeGreaterThan(0);
+  expect(flares.length).toBeGreaterThan(0);
+  // Running, over the free camera: every lantern's light wavers from one moment to the next, and
+  // every flare hangs lower than it was lit at.
+  const [a, b] = await hooks(page, async (h) => {
+    h.view('dugout');
+    h.runLights();
+    await h.waitFrames(20);
+    const first = h.lights();
+    await h.waitFrames(20);
+    return [first, h.lights()];
+  });
+  for (const i of lanterns) {
+    expect(a[i].position).toEqual(rest[i].position);
+    expect(b[i].intensity).not.toBe(a[i].intensity);
+  }
+  for (const i of flares) expect(b[i].position[1]).not.toBe(a[i].position[1]);
+  // Paused, they wait.
+  await page.keyboard.press('Escape');
+  expect(await hooks(page, (h) => h.mode())).toBe('paused');
+  const paused = await hooks(page, async (h) => {
+    await h.waitFrames(2);
+    const first = h.lights();
+    await h.waitFrames(10);
+    return [first, h.lights()];
+  });
+  expect(paused[1]).toEqual(paused[0]);
+  expect(errors).toEqual([]);
+});
+
 test('an exception in the frame loop stops the game and says so', async ({ page }) => {
   await openGame(page);
   await hooks(page, (h) => h.waitFrames(3));

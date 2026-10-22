@@ -58,20 +58,6 @@ fn cosineDir(n: vec3f, u1: f32, u2: f32) -> vec3f {
   return normalize(basis(n) * vec3f(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1))));
 }
 
-// A light's contribution to a face, as if nothing were in the way (distances in metres).
-fn unshadowed(l: Light, p: vec3f, n: vec3f) -> vec3f {
-  let d = l.pos - p;
-  let dist = length(d);
-  if (dist >= l.radius || dist < 1e-3) {
-    return vec3f(0.0);
-  }
-  let ndl = max(dot(n, d / dist), 0.0);
-  let x = dist / l.radius;
-  let win = clamp(1.0 - x * x * x * x, 0.0, 1.0);
-  let m = dist * frame.voxel;
-  return l.colour * (l.intensity * ndl * win * win / (m * m + 1.0));
-}
-
 // Pick one light by its unshadowed contribution; its weighted contribution
 // and the direction and length of its shadow ray, or zero if none reaches.
 struct Pick {
@@ -92,7 +78,7 @@ const LIGHT_FITTING: f32 = 1.5;
 // the weight it was chosen with, not one recomputed (which may round to 0).
 fn pickLight(p: vec3f, n: vec3f, u0: f32) -> Pick {
   var out = Pick(vec3f(0.0), vec3f(0.0, 1.0, 0.0), 0.0);
-  let count = min(frame.lightCount, 64u);
+  let count = min(frame.lightCount, MAX_LIGHTS);
   var total = 0.0;
   var picked = -1;
   var pickedW = 0.0;

@@ -47,7 +47,7 @@ import { FarFieldGpu } from './farfield-gpu';
 import { FLAGS, FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
-import { lightBuffer, MAX_LIGHTS, type SceneLight } from './lights';
+import { lightBuffer, type SceneLight } from './lights';
 import { LIGHT_SCALE, scaledSize, type Preset, type RenderSettings } from './quality';
 import { sceneExtras, sceneGroup, sceneLayout, type SkyLuts } from './scene';
 import { moduleSource } from './shaders';
@@ -368,7 +368,6 @@ export class Renderer {
 
   /** The point lights, with flares burning at `flares` (0 to 1) of their strength. */
   setLights(lights: readonly SceneLight[], flares: number): void {
-    if (lights.length > MAX_LIGHTS) throw new RangeError(`${lights.length} lights is over the ${MAX_LIGHTS} a frame samples`);
     this.device.queue.writeBuffer(this.compiled.lights, 0, lightBuffer(lights, flares, this.voxelSize()));
     this.lightCount = lights.length;
   }

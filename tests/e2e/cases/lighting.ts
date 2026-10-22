@@ -4,13 +4,13 @@ import { P } from '../../../src/world/materials';
 import type { CameraPose } from '../../../src/render/camera';
 import { PROBE_DUSK, type FrameSky } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
-import { lanternLight, type SceneLight } from '../../../src/render/lights';
+import { lanternLight, MAX_LIGHTS, type SceneLight } from '../../../src/render/lights';
 import { Renderer } from '../../../src/render/renderer';
 import { gpu, readBuffer, readTexture } from '../support/gpu';
 import { halfToFloat } from '../support/half';
 
 const DIMS = { x: 128, y: 128, z: 128 };
-type Scene = 'open' | 'roof' | 'box' | 'lantern' | 'pair' | 'single' | 'broken';
+type Scene = 'open' | 'roof' | 'box' | 'lantern' | 'pair' | 'single' | 'broken' | 'crowd';
 
 /** Small worlds for one lighting question each; the camera looks straight down at the middle of the floor. */
 function scene(name: Scene): { map: BrickMap; pose: CameraPose; lights: SceneLight[] } {
@@ -19,7 +19,7 @@ function scene(name: Scene): { map: BrickMap; pose: CameraPose; lights: SceneLig
   let pose: CameraPose = { position: [6.4, 9.6, 6.4], yaw: 0, pitch: -89.9 };
   const lights: SceneLight[] = [];
   const light = (x: number, y: number, z: number, intensity: number): SceneLight => ({
-    position: [x, y, z], radius: 30, colour: [1, 1, 1], intensity, kind: 'lantern',
+    position: [x, y, z], radius: 30, colour: [1, 1, 1], intensity, kind: 'lantern', phase: 0,
   });
   if (name === 'roof') {
     // The camera stands under the slab, looking at the ground it shades.
@@ -41,6 +41,11 @@ function scene(name: Scene): { map: BrickMap; pose: CameraPose; lights: SceneLig
   // A light whose weight is NaN, after one the pick has already taken; and that one alone.
   if (name === 'broken') lights.push(light(6.0, 6.5, 6.4, 3), light(6.8, 6.5, 6.4, NaN));
   if (name === 'single') lights.push(light(6.0, 6.5, 6.4, 3));
+  // A frame's worth of lights, all out of reach but the last: the single scene's light.
+  if (name === 'crowd') {
+    for (let i = 0; i < MAX_LIGHTS - 1; i++) lights.push({ ...light(10 + (i % 32) * 0.05, 0.5, 10 + Math.floor(i / 32) * 0.05, 3), radius: 0.2 });
+    lights.push(light(6.0, 6.5, 6.4, 3));
+  }
   return { map, pose, lights };
 }
 
@@ -150,7 +155,7 @@ export const cases = {
     const renderer = await Renderer.create(g, null, world, null, { size: [128, 128] });
     renderer.sky = { ...PROBE_DUSK, keyColour: [0, 0, 0], sunLight: [0, 0, 0], moonLight: [0, 0, 0] };
     // The room is toward -z: the lantern faces it.
-    const light: SceneLight = { position: lanternLight(glass, [0, 0, -1], 0.1), radius: 7, colour: [1, 1, 1], intensity: 2.5, kind: 'lantern' };
+    const light: SceneLight = { position: lanternLight(glass, [0, 0, -1], 0.1), radius: 7, colour: [1, 1, 1], intensity: 2.5, kind: 'lantern', phase: 0 };
     renderer.setLights([light], 1);
     const pose: CameraPose = { position: [6.45, 6.05, 8.0], yaw: 0, pitch: 0 };
     const [lw, lh] = [64, 64];

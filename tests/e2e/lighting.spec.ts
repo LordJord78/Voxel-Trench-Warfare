@@ -72,6 +72,14 @@ test('a light with no finite weight is never picked, and the rest are lit as if 
   }
 });
 
+test('a frame takes as many as 1,024 lights, and the last of them lights as it would alone', async ({ page }) => {
+  const crowd = await run(page, { scene: 'crowd', frames: 64 });
+  const alone = await run(page, { scene: 'single', frames: 64 });
+  expect(crowd.lit).toHaveLength(1024);
+  expect(alone.mean[0]).toBeGreaterThan(0);
+  for (let c = 0; c < 4; c++) expect(crowd.mean[c]).toBe(alone.mean[c]);
+});
+
 test('half the lighting pixels trace the sky each frame, in bands of four rows that take turns', async ({ page }) => {
   await openHarness(page);
   const r = await runCase<{ broken: number; traced: number[]; pixels: number; errors: string[] }>(page, 'skyBands');

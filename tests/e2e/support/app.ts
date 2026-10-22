@@ -13,6 +13,12 @@ export interface Hooks {
   exposure(): Promise<number>;
   /** The exposure's adaptation after the last frame: the base reckoned from the light, the correction and its want, the metered mean (stops). */
   exposureState(): Promise<{ base: number; correction: number; want: number; metered: number }>;
+  /** The point lights the last frame was lit with. */
+  lights(): { position: [number, number, number]; radius: number; colour: [number, number, number]; intensity: number; kind: 'lantern' | 'flare'; phase: number }[];
+  /** Hold the lights still, as the plan placed them (their motion is new since the approved views). */
+  holdLights(): void;
+  /** Let the lights move with their own clock again. */
+  runLights(): void;
   /** The sun's elevation the last frame was lit at, in degrees. */
   sunElevation(): number;
   frames(): number;
@@ -54,6 +60,13 @@ export async function openGame(page: Page): Promise<string[]> {
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/');
   await page.waitForFunction(() => (window as unknown as { __trenchline?: Hooks }).__trenchline?.ready === true, null, { timeout: 90_000 });
+  // The views were approved, and their looks are measured, with the lights still: from the next
+  // frame. (A game that stopped before it had a world has no lights to hold.)
+  await hooks(page, async (h) => {
+    if (h.error !== undefined) return;
+    h.holdLights();
+    await h.waitFrames(1);
+  });
   return errors;
 }
 

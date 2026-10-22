@@ -1,9 +1,9 @@
 /**
  * The point lights of the scene, from the plan: a lantern in every dugout,
- * always lit, and a handful of static flares hanging over no man's land that
- * burn as brightly as the time of day says. The lighting pass samples one of
- * them per pixel per frame, by its weighted importance, so their number costs
- * a loop rather than shadow rays; this sub-project caps them at 64.
+ * always lit, and a handful of flares hanging over no man's land that burn as
+ * brightly as the time of day says. They are the lights at rest: each has a
+ * phase, and light-motion.ts moves them from it, frame by frame (lanterns
+ * flicker, flares sink and gutter out). A frame takes as many as 1,024.
  */
 
 import { Rng } from '../core/rng';
@@ -12,7 +12,7 @@ import { lanternFacing, lanternVoxel } from '../world/generation/furniture';
 import type { WorldPlan } from '../world/generation/plan';
 import { P, paletteData } from '../world/materials';
 
-export const MAX_LIGHTS = 64;
+export const MAX_LIGHTS = 1024;
 
 export interface SceneLight {
   /** Metres. */
@@ -23,7 +23,12 @@ export interface SceneLight {
   colour: [number, number, number];
   intensity: number;
   kind: 'lantern' | 'flare';
+  /** In [0, 1): where the light is in its motion's cycles (light-motion.ts), its own. */
+  phase: number;
 }
+
+/** Each light's phase, by its index: the golden ratio's sequence, so no two match and they spread evenly. */
+const phaseOf = (i: number) => (0.5 + i * 0.6180339887498949) % 1;
 
 /**
  * Where a lantern's light goes (metres): its flame, a voxel out from the middle of its glass the way
@@ -49,6 +54,7 @@ export function sceneLights(plan: WorldPlan, tun: Tunables): SceneLight[] {
         colour: lanternColour,
         intensity: tun.f('render.lantern_intensity'),
         kind: 'lantern',
+        phase: phaseOf(lights.length),
       });
     }
   }
@@ -65,14 +71,16 @@ export function sceneLights(plan: WorldPlan, tun: Tunables): SceneLight[] {
       colour: red ? [1.0, 0.25, 0.15] : [1.0, 0.88, 0.7],
       intensity: tun.f('render.flare_intensity'),
       kind: 'flare',
+      phase: phaseOf(lights.length),
     });
   }
-  if (lights.length > MAX_LIGHTS) throw new RangeError(`${lights.length} lights is over the ${MAX_LIGHTS} a frame samples`);
+  if (lights.length > MAX_LIGHTS) throw new RangeError(`${lights.length} lights is over the ${MAX_LIGHTS} a frame takes`);
   return lights;
 }
 
 /** Eight floats per light, as the shader reads them: position and radius in voxels, colour, intensity (flares dimmed by `flares`). */
 export function lightBuffer(lights: readonly SceneLight[], flares: number, voxel: number): Float32Array {
+  if (lights.length > MAX_LIGHTS) throw new RangeError(`${lights.length} lights is over the ${MAX_LIGHTS} a frame takes`);
   const out = new Float32Array(Math.max(1, lights.length) * 8);
   lights.forEach((l, i) => {
     out.set([l.position[0] / voxel, l.position[1] / voxel, l.position[2] / voxel, l.radius / voxel, ...l.colour, l.kind === 'flare' ? l.intensity * flares : l.intensity], i * 8);

@@ -6,6 +6,7 @@
  */
 
 import { blueNoise } from './bluenoise';
+import { MAX_LIGHTS } from './lights';
 
 import type { FarFieldGpu } from './farfield-gpu';
 import type { GpuWorld } from './gpu-world';
@@ -56,11 +57,11 @@ export interface SceneResources {
 }
 
 /**
- * The lights buffer (room for 64), the blue-noise texture and empty (black) sky LUTs a scene needs
- * before any light or atmosphere is set.
+ * The lights buffer (room for a frame's MAX_LIGHTS, 32 bytes each), the blue-noise texture and empty
+ * (black) sky LUTs a scene needs before any light or atmosphere is set.
  */
 export function sceneExtras(device: GPUDevice): { lights: GPUBuffer; noise: GPUTexture; sky: SkyLuts } {
-  const lights = device.createBuffer({ label: 'lights', size: 64 * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const lights = device.createBuffer({ label: 'lights', size: MAX_LIGHTS * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   const noise = device.createTexture({ label: 'blue noise', size: [64, 64], format: 'r16uint', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
   device.queue.writeTexture({ texture: noise }, blueNoise(64), { bytesPerRow: 128 }, [64, 64]);
   const empty = (layers = 1) =>
