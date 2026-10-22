@@ -11,10 +11,11 @@ import { cases as primary } from './cases/primary';
 import { cases as response } from './cases/response';
 import { cases as scale } from './cases/scale';
 import { cases as shade } from './cases/shade';
+import { cases as shafts } from './cases/shafts';
 import { cases as sky } from './cases/sky';
 import { cases as taa } from './cases/taa';
 import { cases as traverse } from './cases/traverse';
 import { cases as world } from './cases/world';
 
-const registry: Record<string, (args: never) => Promise<unknown>> = { ...device, ...world, ...traverse, ...primary, ...farfield, ...lighting, ...lights, ...denoise, ...shade, ...taa, ...scale, ...sky, ...response };
+const registry: Record<string, (args: never) => Promise<unknown>> = { ...device, ...world, ...traverse, ...primary, ...farfield, ...lighting, ...lights, ...denoise, ...shade, ...taa, ...scale, ...sky, ...response, ...shafts };
 (window as unknown as { harness: typeof registry }).harness = registry;

@@ -8,6 +8,8 @@
  *              give (exposure.wgsl);
  *   beam     — per 8 × 8 tile, how far its rays can go before meeting anything;
  *   primary  — one jittered ray per pixel into the G-buffer, from its tile's beam;
+ *              and in front of them, the same dispatch traces a sixteenth of the
+ *              key light's height map, seen from the light (key-shadow.ts);
  *   cells    — the frame's point lights gridded over the map, the nearest 32 a
  *              cell (light-cells.ts);
  *   restir   — the point light each lighting pixel shades by, resampled from
@@ -53,6 +55,7 @@ import { FarFieldGpu } from './farfield-gpu';
 import { FLAGS, FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
+import { KeyShadow, keyShadowLayouts, type Key, type KeyShadowPipelines } from './key-shadow';
 import { cellGrid, LightCells } from './light-cells';
 import { lightBuffer, type SceneLight } from './lights';
 import { Restir, type RestirPipelines } from './restir';
@@ -157,6 +160,7 @@ export interface CompiledFrame {
   autoExposure: AutoExposurePipelines;
   cells: GPUComputePipeline;
   restir: RestirPipelines;
+  keyShadow: KeyShadowPipelines;
   lights: GPUBuffer;
   noise: GPUTexture;
   /** Empty sky LUTs, for scenes built without an atmosphere. */
@@ -166,6 +170,7 @@ export interface CompiledFrame {
 /** Compile the frame's pipelines, in parallel. Needs only the device, so it can run while the world generates. */
 export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
   const scene = sceneLayout(device);
+  const keyLayouts = keyShadowLayouts(device);
   const layouts = {
     beam: device.createBindGroupLayout({ label: 'beam', entries: [storageTexture(0, 'r32float')] }),
     primary: device.createBindGroupLayout({
@@ -225,9 +230,9 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir] = await Promise.all([
+  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
-    compute(device, 'primary', primarySrc, [scene, layouts.primary]),
+    compute(device, 'primary', primarySrc, [scene, layouts.primary, keyLayouts.write]),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
     compute(device, 'temporal', temporalSrc, [scene, layouts.temporal]),
     compute(device, 'atrous', atrousSrc, [scene, layouts.atrous]),
@@ -247,8 +252,9 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     AutoExposure.compile(device),
     LightCells.compile(device),
     Restir.compile(device),
+    KeyShadow.compile(device, scene, keyLayouts),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -280,6 +286,8 @@ export class Renderer {
   /** The frame's lights gridded over the map, and each lighting pixel's light drawn from them. */
   private readonly cells: LightCells;
   private readonly restir: Restir;
+  /** Where the key light is blocked, seen from its side. */
+  private readonly keyShadow: KeyShadow;
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
   /** Bind groups by frame parity: histories ping-pong between two sets of textures. */
@@ -340,6 +348,7 @@ export class Renderer {
     this.bloom = Bloom.create(device, compiled.bloom);
     this.cells = LightCells.create(device, compiled.cells, compiled.lights, cellGrid(world.map.dims, this.voxelSize()), this.voxelSize());
     this.restir = Restir.create(device, compiled.restir, this.frameBuffer, compiled.lights, this.cells);
+    this.keyShadow = KeyShadow.create(device, compiled.keyShadow, world.map.dims, this.voxelSize());
     this.preset = options.preset ?? 'high';
     this.lightScale = LIGHT_SCALE[this.preset];
     this.budgetMs = options.budgetMs ?? 14;
@@ -501,8 +510,9 @@ export class Renderer {
 
   /** A texture by name; a history (hDepth, hHit, hColour, hMoments, taa) is the one the last frame wrote. */
   texture(name: string): GPUTexture {
-    // The bloom's top, half the image's size.
+    // The bloom's top, half the image's size; the key light's height map.
     if (name === 'bloom0') return this.bloom.output;
+    if (name === 'keyShadow') return this.keyShadow.map;
     const last = (this.frameIndex + 1) & 1;
     const t = this.textures[name] ?? this.textures[`${name}${last}`];
     if (!t) throw new Error(`no texture '${name}'`);
@@ -599,7 +609,18 @@ export class Renderer {
     };
     const light = this.lightResolution;
     pass('beam', 'beam', [Math.ceil(this.res[0] / 8), Math.ceil(this.res[1] / 8)]);
-    pass('primary', 'primary', this.res);
+    // The pixels' rays, with this frame's texels of the key light's height map in front of them.
+    // The key is the sun while it gives the light (sky-state.ts), and the moon after.
+    const key: Key = this.sky.keyDir.every((c, k) => c === this.sky.sunDir[k]) ? 'sun' : 'moon';
+    const across = Math.ceil(this.res[0] / 8);
+    const keyRows = this.keyShadow.share([this.sky.keyDir[0], this.sky.keyDir[1], this.sky.keyDir[2]], key, across);
+    const primary = encoder.beginComputePass({ label: 'primary', timestampWrites: this.timer.writes('primary') });
+    primary.setPipeline(this.compiled.pipelines.primary);
+    primary.setBindGroup(0, this.sceneGroup!);
+    primary.setBindGroup(1, groups.primary!);
+    primary.setBindGroup(2, this.keyShadow.buildGroup);
+    primary.dispatchWorkgroups(across, Math.ceil(this.res[1] / 8) + keyRows);
+    primary.end();
     this.cells.encode(encoder, this.lightCount, this.timer.writes('cells'));
     this.restir.encode(encoder, this.frameIndex & 1, light, { candidates: this.timer.writes('restir'), spatial: this.timer.writes('spatial') });
     pass('lighting', 'lighting', light);
