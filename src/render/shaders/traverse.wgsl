@@ -1,7 +1,8 @@
 // One traversal for every ray: a hierarchical DDA through 32³ sectors, 8³
 // bricks and voxels. An empty sector is crossed in one step, an empty brick in
-// one step, a uniform brick is a hit, and a dense brick is walked voxel by
-// voxel through its occupancy mask. Before crossing empty space or entering a
+// one step, a uniform brick is a hit, and a dense brick is walked through its
+// occupancy mask: an empty 4³ or 2³ block of it in one step, else voxel by
+// voxel. Before crossing empty space or entering a
 // dense brick, the ray asks the max-height pyramid whether it stays above
 // everything in the column cell it is crossing; if so it jumps to that cell's
 // exit, which is what makes long, low dusk shadow rays affordable.
@@ -38,6 +39,27 @@ fn brickEntry(b: vec3i) -> u32 {
 fn sectorOccupied(s: vec3i) -> bool {
   let d = worldDims() >> vec3u(5u);
   return sectors[u32((s.z * d.y + s.y) * d.x + s.x)] != 0u;
+}
+
+// Whether the 4³ block of a dense brick's voxels that `cell` lies in is empty. In the brick's mask
+// (bit x | y << 3 | z << 6), the four rows of y 0-3 (or 4-7) of a z slice share a word.
+fn emptyBlock4(entry: u32, cell: vec3i) -> bool {
+  let words = (entry & UNIT_MASK) * 4u + 4u + u32((cell.y & 4) >> 2);
+  let z0 = u32(cell.z & 4);
+  let mask = 0x0f0f0f0fu << u32(cell.x & 4);
+  var bits = 0u;
+  for (var z = z0; z < z0 + 4u; z++) {
+    bits |= heap[words + (z << 1u)] & mask;
+  }
+  return bits == 0u;
+}
+
+// Whether the 2³ block that `cell` lies in is empty: two rows of two slices.
+fn emptyBlock2(entry: u32, cell: vec3i) -> bool {
+  let words = (entry & UNIT_MASK) * 4u + 4u + u32((cell.y & 4) >> 2);
+  let z0 = u32(cell.z & 6);
+  let mask = (0x0303u << u32(cell.x & 6)) << (u32(cell.y & 2) * 8u);
+  return ((heap[words + (z0 << 1u)] | heap[words + ((z0 + 1u) << 1u)]) & mask) == 0u;
 }
 
 fn voxelOccupied(entry: u32, li: u32) -> bool {
@@ -109,6 +131,12 @@ fn traceWorld(ro: vec3f, rd: vec3f, tMin: f32, tMax: f32, wantMaterial: bool) ->
   let pyramidOn = (frame.flags & FLAG_PYRAMID_OFF) == 0u && frame.world.levels > 0u;
   let topLevel = min(frame.world.levels, 7u) - 1u;
   var askedBrick = vec3i(-1);
+  // The 4³ and 2³ blocks last asked whether they are empty, and the answers.
+  let blocksOn = (frame.flags & FLAG_BLOCKS_OFF) == 0u;
+  var block4 = vec3i(-1);
+  var open4 = false;
+  var block2 = vec3i(-1);
+  var open2 = false;
   // The sector and brick the last step was in: a ray walking voxels through a
   // dense brick reads only the mask, not the sector and table again.
   var sector = vec3i(-1);
@@ -118,7 +146,7 @@ fn traceWorld(ro: vec3f, rd: vec3f, tMin: f32, tMax: f32, wantMaterial: bool) ->
 
   for (var i = 0u; i < MAX_STEPS; i++) {
     h.steps = i + 1u;
-    // The empty cell to step out of: a voxel, a brick (8) or a sector (32), as a shift.
+    // The empty cell to step out of: a voxel, a block (2 or 4), a brick (8) or a sector (32), as a shift.
     var shift = 0u;
     var ask = false;
     let s = cell >> vec3u(5u);
@@ -154,6 +182,24 @@ fn traceWorld(ro: vec3f, rd: vec3f, tMin: f32, tMax: f32, wantMaterial: bool) ->
           h.face = face;
           h.mat = select(0u, decodeMaterial(e, li), wantMaterial);
           return h;
+        }
+        // An empty voxel: step out of the empty block of the brick round it, 4³ or 2³, if there is one.
+        if (blocksOn) {
+          if (any((cell >> vec3u(2u)) != block4)) {
+            block4 = cell >> vec3u(2u);
+            open4 = emptyBlock4(e, cell);
+          }
+          if (open4) {
+            shift = 2u;
+          } else {
+            if (any((cell >> vec3u(1u)) != block2)) {
+              block2 = cell >> vec3u(1u);
+              open2 = emptyBlock2(e, cell);
+            }
+            if (open2) {
+              shift = 1u;
+            }
+          }
         }
         // Ask once per dense brick, on the way in.
         if (any(brick != askedBrick)) {

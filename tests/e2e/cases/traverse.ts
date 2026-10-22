@@ -134,6 +134,7 @@ export const cases = {
     };
     const on = await run(0, true);
     const off = await run(FLAGS.PYRAMID_OFF, true);
+    const noBlocks = await run(FLAGS.BLOCKS_OFF, true);
     const occupancy = await run(0, false);
 
     const same = (a: Result, b: { hit: boolean; cell: readonly number[]; face: number; mat: number }) =>
@@ -150,10 +151,12 @@ export const cases = {
     const wrong: string[] = [];
     let ties = 0;
     let pyramidDiffs = 0;
+    let blockDiffs = 0;
     let occupancyDiffs = 0;
     let maxSteps = 0;
     let grazingOn = 0;
     let grazingOff = 0;
+    let grazingBlocksOff = 0;
     let grazing = 0;
     rays.forEach((ray, i) => {
       const ref = traceRef(map, ray.o, ray.d, 1e6);
@@ -162,18 +165,20 @@ export const cases = {
       else if (tie(g, ref, ray)) ties++;
       else if (wrong.length < 12) wrong.push(`${ray.kind} o ${ray.o.map((v) => v.toFixed(3))} d ${ray.d.map((v) => v.toFixed(4))}: gpu ${JSON.stringify(g)} ref ${JSON.stringify(ref)}`);
       if (!same(g, off[i]) || (g.hit && Math.abs(g.t - off[i].t) > 1e-3)) pyramidDiffs++;
+      if (!same(g, noBlocks[i]) || (g.hit && Math.abs(g.t - noBlocks[i].t) > 1e-3)) blockDiffs++;
       if (g.hit !== occupancy[i].hit || (g.hit && Math.abs(g.t - occupancy[i].t) > 1e-3)) occupancyDiffs++;
-      maxSteps = Math.max(maxSteps, g.steps, off[i].steps);
+      maxSteps = Math.max(maxSteps, g.steps, off[i].steps, noBlocks[i].steps);
       if (ray.kind === 'grazing') {
         grazing++;
         grazingOn += g.steps;
         grazingOff += off[i].steps;
+        grazingBlocksOff += noBlocks[i].steps;
       }
     });
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid, results, rayBuffer, frameBuffer]) b.destroy();
     return {
-      total: count, agree, ties, wrong, pyramidDiffs, occupancyDiffs, maxSteps,
-      grazingStepsOn: grazingOn / grazing, grazingStepsOff: grazingOff / grazing, errors: [...errors],
+      total: count, agree, ties, wrong, pyramidDiffs, blockDiffs, occupancyDiffs, maxSteps,
+      grazingStepsOn: grazingOn / grazing, grazingStepsOff: grazingOff / grazing, grazingStepsBlocksOff: grazingBlocksOff / grazing, errors: [...errors],
     };
   },
 };

@@ -8,10 +8,12 @@ interface Summary {
   ties: number;
   wrong: string[];
   pyramidDiffs: number;
+  blockDiffs: number;
   occupancyDiffs: number;
   maxSteps: number;
   grazingStepsOn: number;
   grazingStepsOff: number;
+  grazingStepsBlocksOff: number;
   errors: string[];
 }
 
@@ -41,6 +43,12 @@ test('occupancy rays agree with material rays', () => {
 test('pyramid skipping changes nothing but the step count', () => {
   expect(r.pyramidDiffs).toBe(0);
   expect(r.grazingStepsOn).toBeLessThanOrEqual(0.6 * r.grazingStepsOff);
+});
+
+test("skipping a dense brick's empty 4³ and 2³ blocks changes nothing but the step count", () => {
+  console.log(`grazing rays' steps: ${r.grazingStepsOn.toFixed(1)}, without the blocks ${r.grazingStepsBlocksOff.toFixed(1)}`);
+  expect(r.blockDiffs).toBe(0);
+  expect(r.grazingStepsOn).toBeLessThanOrEqual(0.9 * r.grazingStepsBlocksOff);
 });
 
 test('no ray exhausts its steps', () => {
