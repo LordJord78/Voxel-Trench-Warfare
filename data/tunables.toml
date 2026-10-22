@@ -524,6 +524,7 @@ star_gain           = 16.0     # the stars over their light against the moon's: 
 # Keyed to the clock: dawn 06:50, noon 12:00, dusk 17:35, night 21:00; between them by the hour.
 fog_density         = [0.02, 0.006, 0.012, 0.02]   # per metre, at the ground
 flares              = [0.2, 0.0, 0.0, 1.0]         # how brightly the static flares burn
+grain               = [2.0, 0.6, 1.5, 3.0]         # film grain's deviation, in 8-bit steps: by day under the dither's step
 # The frame is exposed by a bias over the light it shows (exposure.wgsl), keyed to hours of its
 # own and geometric between them, round the clock. Dusk's and night's keep their approved exposures
 # (1.0 and 3.2); night stays dark on purpose, held to 04:30. Twilight is darker than the moonlit

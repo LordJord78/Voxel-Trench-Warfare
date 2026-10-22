@@ -167,6 +167,8 @@ export interface FrameSky {
   smokeDensity: number;
   smokeHeight: number;
   skyRay: number;
+  /** Film grain's deviation in 8-bit steps, for the present pass (not the frame uniform). */
+  grain: number;
 }
 
 export function writeWorldInfo(w: StructWriter, world: { map: { dims: { x: number; y: number; z: number } }; pyramidLevels: readonly PyramidLevel[] }): void {
@@ -257,4 +259,5 @@ export const PROBE_DUSK: FrameSky = {
   smokeDensity: 0.00053,
   smokeHeight: 300,
   skyRay: 40,
+  grain: 1.5,
 };

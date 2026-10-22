@@ -103,10 +103,11 @@ export const cases = {
    */
   /**
    * The present pass over a flat 32 × 32 image of `c` (with one texel of `spot`, if given), its bloom
-   * flat at `bloom` (by default `c`: a flat image's bloom is itself) mixed in at `bloomWeight`, onto
-   * a `canvas`-pixel square: each pixel's green byte, and the byte a flat mix should give.
+   * flat at `bloom` (by default `c`: a flat image's bloom is itself) mixed in at `bloomWeight`, with
+   * `grain` (8-bit steps) shifted by `shift` into the noise tile, onto a `canvas`-pixel square: each
+   * pixel's green byte, and the byte a flat mix should give without grain.
    */
-  async present(args: { c: number; exposure: number; spot?: number; canvas?: number; bloom?: number; bloomWeight?: number }) {
+  async present(args: { c: number; exposure: number; spot?: number; canvas?: number; bloom?: number; bloomWeight?: number; grain?: number; shift?: [number, number] }) {
     const g = await gpu();
     const device = g.device;
     const compiled = await compileFrame(device);
@@ -124,7 +125,8 @@ export const cases = {
     const bloom = device.createTexture({ size: [16, 16], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     device.queue.writeTexture({ texture: bloom }, new Uint16Array(16 * 16 * 4).map((_, i) => (i % 4 === 3 ? floatToHalf(1) : b)), { bytesPerRow: 16 * 8 }, [16, 16]);
     const uniform = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(uniform, 0, new Float32Array([32, 32, 32, 32, side, side, args.exposure, weight, 0, 0, 0, 0]));
+    const shift = args.shift ?? [0, 0];
+    device.queue.writeBuffer(uniform, 0, new Float32Array([32, 32, 32, 32, side, side, args.exposure, weight, args.grain ?? 0, shift[0], shift[1], 0]));
     const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const group = device.createBindGroup({
       layout: compiled.layouts.present,

@@ -1,7 +1,7 @@
 /**
  * The sky at an hour of the clock (see sky-clock.ts): the sun and moon where
  * the ephemeris puts them, their light through the atmosphere, the key light,
- * and the fog, flares and exposure keyed to the clock.
+ * and the fog, flares, grain and exposure keyed to the clock.
  *
  * Units. The sun's light above the air is `sky.sun_illuminance`, set so that
  * dusk's key light is the approved one; the atmosphere's sky views are per
@@ -56,6 +56,8 @@ export interface SkyState {
   exposure: number;
   /** How brightly the static flares burn, 0 to 1. */
   flares: number;
+  /** Film grain's deviation, in 8-bit steps. */
+  grain: number;
 }
 
 /** The camera's height for the key light's path through the air, in km: a man's eye over the ground. */
@@ -186,6 +188,7 @@ export function skyState(tun: Tunables, hours: number): SkyState {
     fogDensity: keyed(tun, 'fog_density', hours),
     exposure: exposureBias(tun, hours),
     flares: keyed(tun, 'flares', hours),
+    grain: keyed(tun, 'grain', hours),
   };
 }
 
@@ -217,5 +220,6 @@ export function frameSky(sky: SkyState, tun: Tunables): FrameSky {
     smokeDensity: tun.f('sky.smoke_density'),
     smokeHeight: tun.f('sky.smoke_height_m'),
     skyRay: tun.f('render.sky_ray_m') / voxel,
+    grain: sky.grain,
   };
 }

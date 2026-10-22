@@ -1,7 +1,7 @@
 // To the canvas: the sharpened internal image upscaled bicubically (kept within
 // the texels round each sample, so it does not ring), its bloom mixed in, exposed,
-// through the ACES fit, gamma-2.2 encoded (the probe's look), and dithered
-// with blue noise below a single 8-bit step, so night skies do not band.
+// through the ACES fit, gamma-2.2 encoded (the probe's look), grained, and
+// dithered with blue noise below a single 8-bit step, so night skies do not band.
 #include "catmull.wgsl"
 
 struct Present {
@@ -12,6 +12,11 @@ struct Present {
   exposure: f32,
   // How much of the image's light its bloom spreads (render.bloom_weight).
   bloomWeight: f32,
+  // Film grain's deviation in 8-bit steps, and this frame's shift into the noise tile.
+  grain: f32,
+  shiftX: f32,
+  shiftY: f32,
+  pad: f32,
 }
 
 @group(0) @binding(0) var image: texture_2d<f32>;
@@ -58,5 +63,9 @@ fn fs(v: VOut) -> @location(0) vec4f {
   let encoded = pow(aces(c), vec3f(1.0 / 2.2));
   let rank = textureLoad(dither, vec2i(v.pos.xy) & vec2i(63), 0).r;
   let noise = (f32(rank) + 0.5) / 4096.0 - 0.5;
-  return vec4f(encoded + noise / 255.0, 1.0);
+  // Grain: the same blue noise shifted each frame, its ranks (even over the tile) scaled to the
+  // hour's deviation (√12 is a uniform spread's over its width), on all three channels alike.
+  let shifted = textureLoad(dither, (vec2i(v.pos.xy) + vec2i(i32(present.shiftX), i32(present.shiftY))) & vec2i(63), 0).r;
+  let grain = ((f32(shifted) + 0.5) / 4096.0 - 0.5) * 3.4641016 * present.grain;
+  return vec4f(encoded + (noise + grain) / 255.0, 1.0);
 }

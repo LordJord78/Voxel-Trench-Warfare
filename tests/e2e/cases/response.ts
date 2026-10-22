@@ -1,9 +1,12 @@
+import { loadTunables } from '../../../src/core/tunables';
 import { AutoExposure, type ExposureParams } from '../../../src/render/auto-exposure';
 import { Bloom } from '../../../src/render/bloom';
+import { frameSky, skyState } from '../../../src/render/sky-state';
 import { bloom as bloomRef, level } from '../../support/bloom-ref';
 import { adapt, binOf, centre, histogram, meteredMean, zoneCorrection } from '../../support/exposure-ref';
 import { gpu, readBuffer, readTexture } from '../support/gpu';
 import { floatToHalf, halfToFloat } from '../support/half';
+import { cases as taa } from './taa';
 
 /** The meter and its adaptation, alone, with a present uniform to write into. */
 async function meter(device: GPUDevice) {
@@ -24,6 +27,21 @@ function greyTexture(device: GPUDevice, w: number, h: number, halves: ArrayLike<
 const NAN_HALF = 0x7e00;
 
 export const cases = {
+  /**
+   * Grain as the present pass lays it over a flat grey on a 64 × 64 canvas (the blue-noise tile's
+   * size) at the clock's `hours`: the hour's grain (8-bit steps), and the green bytes with that grain
+   * at each of two shifts into the tile, and without it.
+   */
+  async grain(args: { hours: number; shifts: [[number, number], [number, number]] }) {
+    const tun = loadTunables();
+    const key = frameSky(skyState(tun, args.hours), tun).grain;
+    const show = (grain: number, shift: [number, number]) => taa.present({ c: 0.18, exposure: 1, canvas: 64, grain, shift });
+    const a = await show(key, args.shifts[0]);
+    const b = await show(key, args.shifts[1]);
+    const none = await show(0, args.shifts[0]);
+    return { key, a: a.green, b: b.green, none: none.green, errors: [...a.errors, ...b.errors, ...none.errors] };
+  },
+
   /**
    * The meter's counts over a `w` × `h` image of greys at bins' middles from below the range to past
    * it, with NaN, infinite, zero and negative texels among them, and bright texels beyond the

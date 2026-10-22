@@ -77,3 +77,67 @@ test('the exposure adapts at its rates: down three stops a second to a brighter 
   // A reset lands on the want at once.
   expect(r.got[250].correction).toBeCloseTo(-2.5625, 4);
 });
+
+interface Grain {
+  key: number;
+  a: number[];
+  b: number[];
+  none: number[];
+  errors: string[];
+}
+
+const mean = (x: number[]) => x.reduce((s, v) => s + v, 0) / x.length;
+const deviation = (x: number[]) => {
+  const m = mean(x);
+  return Math.sqrt(mean(x.map((v) => (v - m) ** 2)));
+};
+
+/** The mean power of a 64 × 64 field's modes whose frequency (cycles across it) lies in (lo, hi]. */
+function band(field: number[], lo: number, hi: number): number {
+  const n = 64;
+  const m = mean(field);
+  let sum = 0;
+  let modes = 0;
+  for (let v = -n / 2; v < n / 2; v++) {
+    for (let u = -n / 2; u < n / 2; u++) {
+      const r = Math.hypot(u, v);
+      if (r <= lo || r > hi) continue;
+      let re = 0;
+      let im = 0;
+      for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+          const a = (-2 * Math.PI * (u * x + v * y)) / n;
+          const f = field[y * n + x] - m;
+          re += f * Math.cos(a);
+          im += f * Math.sin(a);
+        }
+      }
+      sum += re * re + im * im;
+      modes++;
+    }
+  }
+  return sum / modes;
+}
+
+test('grain is blue, keyed to the hour, and moves', async ({ page }) => {
+  test.setTimeout(240_000);
+  await openHarness(page);
+  const shifts = [[13, 41], [50, 7]];
+  const night = await runCase<Grain>(page, 'grain', { hours: 21, shifts });
+  expect(night.errors).toEqual([]);
+  // The grain alone: the same image, dithered the same, less the image without it.
+  const a = night.a.map((v, i) => v - night.none[i]);
+  const b = night.b.map((v, i) => v - night.none[i]);
+  const [low, high] = [band(a, 0, 8), band(a, 24, 32)];
+  const ma = mean(a);
+  const mb = mean(b);
+  const correlation = mean(a.map((v, i) => (v - ma) * (b[i] - mb))) / (deviation(a) * deviation(b));
+  console.log(`grain at night: key ${night.key} steps, deviation ${deviation(a).toFixed(2)}; low against high frequencies ${(low / high).toFixed(3)}; two frames correlated ${correlation.toFixed(3)}`);
+  expect(Math.abs(deviation(a) / night.key - 1)).toBeLessThan(0.1);
+  expect(low / high).toBeLessThan(0.2);
+  expect(Math.abs(correlation)).toBeLessThan(0.2);
+  // By day, below the dither's step.
+  const noon = await runCase<Grain>(page, 'grain', { hours: 12, shifts });
+  expect(noon.errors).toEqual([]);
+  expect(deviation(noon.a.map((v, i) => v - noon.none[i]))).toBeLessThan(1);
+});

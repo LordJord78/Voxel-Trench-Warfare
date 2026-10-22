@@ -597,7 +597,9 @@ export class Renderer {
     );
     if (this.context) {
       const bloomWeight = this.options.bloomWeight ?? 0.04;
-      const present = new Float32Array([this.res[0], this.res[1], this.alloc[0], this.alloc[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, bloomWeight, 0, 0, 0, 0]);
+      // The grain's shift into the 64 × 64 noise tile: an R2 sequence, so each frame's grain is unlike the last's.
+      const shift = [0.7548776662466927, 0.5698402909980532].map((a) => Math.floor(((0.5 + this.frameIndex * a) % 1) * 64));
+      const present = new Float32Array([this.res[0], this.res[1], this.alloc[0], this.alloc[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, bloomWeight, this.sky.grain, shift[0], shift[1], 0]);
       device.queue.writeBuffer(this.presentBuffer, 0, present);
       const p = encoder.beginRenderPass({
         label: 'present',

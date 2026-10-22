@@ -115,13 +115,17 @@ describe('the sky by the clock', () => {
     for (const hours of [22, 0, 3]) expect(skyState(tun, hours).exposure).toBeCloseTo(0.175, 12);
   });
 
-  it('keeps the fog and the flares on their keys, linear between them, round the clock', () => {
+  it('keeps the fog, the flares and the grain on their keys, linear between them, round the clock', () => {
     const keys = [CLOCK_KEYS.dawn, CLOCK_KEYS.noon, CLOCK_KEYS.dusk, CLOCK_KEYS.night];
     keys.forEach((hours, k) => {
       const s = skyState(tun, hours);
       expect(s.fogDensity).toBeCloseTo(keyed('fog_density')[k], 12);
       expect(s.flares).toBeCloseTo(keyed('flares')[k], 12);
+      expect(s.grain).toBeCloseTo(keyed('grain')[k], 12);
     });
+    // Stronger at night than by day, and by day under the dither's step.
+    expect(keyed('grain')[3]).toBeGreaterThan(keyed('grain')[1]);
+    expect(keyed('grain')[1]).toBeLessThan(1);
     const mid = skyState(tun, (CLOCK_KEYS.dusk + CLOCK_KEYS.night) / 2);
     expect(mid.fogDensity).toBeCloseTo((keyed('fog_density')[2] + keyed('fog_density')[3]) / 2, 12);
     // From night round to the next dawn: 1:55 is halfway.
