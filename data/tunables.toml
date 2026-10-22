@@ -523,9 +523,13 @@ star_gain           = 16.0     # the stars over their light against the moon's: 
 # Keyed to the clock: dawn 06:50, noon 12:00, dusk 17:35, night 21:00; between them by the hour.
 fog_density         = [0.02, 0.006, 0.012, 0.02]   # per metre, at the ground
 flares              = [0.2, 0.0, 0.0, 1.0]         # how brightly the static flares burn
-# The frame is exposed by this bias over the light it shows (exposure.wgsl), so dusk keeps its
-# approved exposure (1.0) and night its (3.2): night stays dark on purpose. Geometric between keys.
-exposure            = [0.15, 1.2, 1.0, 0.175]
+# The frame is exposed by a bias over the light it shows (exposure.wgsl), keyed to hours of its
+# own and geometric between them, round the clock. Dusk's and night's keep their approved exposures
+# (1.0 and 3.2); night stays dark on purpose, held to 04:30. Twilight is darker than the moonlit
+# night (the light at 18:29 is 31× under dusk's, the night's 18×), so the bias falls from dusk to
+# 19:00 as fast as the day's 2% a game minute allows, and dips again before dawn: the exposure
+# peaks at 8.4 (at 18:24), where following the light took it to 19.5.
+exposure            = [["04:30", 0.175], ["06:20", 0.07], ["12:00", 1.2], ["17:35", 1.0], ["19:00", 0.12], ["21:00", 0.175]]
 exposure_light      = 0.545    # the light (on the six faces, on average) that exposure 1 shows as approved: dusk's
 exposure_floor      = 0.002    # the least light counted: a moonless night's
 # The haze the height fog and the smoke are, far denser than the air (sky.wgsl's fogColour): it

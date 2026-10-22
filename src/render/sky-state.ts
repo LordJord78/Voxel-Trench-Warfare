@@ -22,7 +22,7 @@
  * twilight goes, as they would.
  */
 
-import { CLOCK_KEYS, celestial } from '../core/sky-clock';
+import { CLOCK_KEYS, celestial, clockHours } from '../core/sky-clock';
 import type { Tunables } from '../core/tunables';
 import { atmosphereModel, transmittanceAt, type AtmosphereModel } from './atmosphere';
 import type { FrameSky } from './frame-uniforms';
@@ -81,24 +81,41 @@ function triple(tun: Tunables, key: string): Vec3 {
   return [v[0], v[1], v[2]];
 }
 
-/**
- * A value keyed to the clock's four hours (dawn, noon, dusk, night), between them by the hour round
- * the clock: linearly, or for a scale (`geometric`) evenly in its log, so a change of eight times
- * between keys never runs fast at the small end.
- */
-function keyed(tun: Tunables, key: string, hours: number, geometric = false): number {
+/** Where `hours` falls between keys at `at` (ascending hours of the clock), round the clock: the key before it, the next, and how far on. */
+function between(at: readonly number[], hours: number): [number, number, number] {
+  const h = ((hours % 24) + 24) % 24;
+  for (let k = 0; k < at.length; k++) {
+    const from = at[k];
+    const to = k + 1 < at.length ? at[k + 1] : at[0] + 24;
+    const t = h < from ? h + 24 : h;
+    if (t >= from && t <= to) return [k, (k + 1) % at.length, (t - from) / (to - from)];
+  }
+  return [0, 0, 0];
+}
+
+/** A value keyed to the clock's four hours (dawn, noon, dusk, night), linear between them by the hour round the clock. */
+function keyed(tun: Tunables, key: string, hours: number): number {
   const values = tun.get(`sky.${key}`);
   if (!Array.isArray(values) || values.length !== KEYS.length) throw new TypeError(`sky.${key} needs ${KEYS.length} keys`);
-  const h = ((hours % 24) + 24) % 24;
-  for (let k = 0; k < KEYS.length; k++) {
-    const from = KEYS[k];
-    const to = k + 1 < KEYS.length ? KEYS[k + 1] : KEYS[0] + 24;
-    const at = h < from ? h + 24 : h;
-    const f = (at - from) / (to - from);
-    const [a, b] = [values[k], values[(k + 1) % KEYS.length]];
-    if (at >= from && at <= to) return geometric ? a * Math.pow(b / a, f) : a + (b - a) * f;
+  const [a, b, f] = between(KEYS, hours);
+  return values[a] + (values[b] - values[a]) * f;
+}
+
+/**
+ * The exposure's bias at an hour: keyed to times of its own (sky.exposure, [HH:MM, bias] pairs in
+ * the day's order), evenly in its log between them round the clock, so a change of many times
+ * between keys never runs fast at the small end.
+ */
+function exposureBias(tun: Tunables, hours: number): number {
+  const pairs = tun.get('sky.exposure');
+  if (!Array.isArray(pairs) || !pairs.every((p) => Array.isArray(p) && typeof p[0] === 'string' && typeof p[1] === 'number' && p[1] > 0)) {
+    throw new TypeError('sky.exposure needs [HH:MM, bias] pairs, each bias above zero');
   }
-  return values[0];
+  const at = pairs.map((p) => clockHours(p[0] as string));
+  if (at.some((h, k) => k > 0 && h <= at[k - 1])) throw new RangeError('sky.exposure keys must run in the day\'s order');
+  const [a, b, f] = between(at, hours);
+  const [va, vb] = [pairs[a][1] as number, pairs[b][1] as number];
+  return va * Math.pow(vb / va, f);
 }
 
 /** How much of a disc of radius `radiusDeg` whose centre stands `elevationDeg` up is above the horizon. */
@@ -167,7 +184,7 @@ export function skyState(tun: Tunables, hours: number): SkyState {
     keyColour,
     keyWeight: w,
     fogDensity: keyed(tun, 'fog_density', hours),
-    exposure: keyed(tun, 'exposure', hours, true),
+    exposure: exposureBias(tun, hours),
     flares: keyed(tun, 'flares', hours),
   };
 }

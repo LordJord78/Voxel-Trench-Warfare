@@ -259,7 +259,9 @@ export const cases = {
     };
     const night = await run(CLOCK_KEYS.night);
     const noon = await run(CLOCK_KEYS.noon);
+    // 18:23, the sun 3° down: civil twilight.
+    const twilight = await run(18 + 23 / 60);
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
-    return { night, noon, errors: [...g.errors] };
+    return { night, noon, twilight, errors: [...g.errors] };
   },
 };

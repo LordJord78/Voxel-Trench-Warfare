@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { celestial, CLOCK_KEYS } from '../../src/core/sky-clock';
+import { celestial, CLOCK_KEYS, clockHours, clockText } from '../../src/core/sky-clock';
 import { loadTunables } from '../../src/core/tunables';
 
 const tun = loadTunables();
@@ -44,5 +44,12 @@ describe('the sky clock', () => {
     expect(angle(before.moon.dir, after.moon.dir)).toBeLessThan(1);
     expect(angle(before.stars[2], after.stars[2])).toBeLessThan(0.1);
     expect(angle(before.stars[0], after.stars[0])).toBeLessThan(1);
+  });
+  it('reads a time on the clock, HH:MM, as hours, and writes it back', () => {
+    expect(clockHours('17:35')).toBeCloseTo(17 + 35 / 60, 12);
+    expect(clockHours('04:30')).toBe(4.5);
+    expect(clockText(clockHours('06:20'))).toBe('06:20');
+    expect(() => clockHours('24:00')).toThrow();
+    expect(() => clockHours('6:5')).toThrow();
   });
 });

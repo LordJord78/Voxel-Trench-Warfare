@@ -330,15 +330,16 @@ test("the sun's disc is brightest at its centre, darker at its limb, and sets in
   expect(lum(below.values[0])).toBeLessThan(2 * lum(below.values[1]) + 1e-6);
 });
 
-test('the stars: a field fixed in the sky at night, a few hundred pixels in a 60° patch, none at noon', async ({ page }) => {
+test('the stars: a field fixed in the sky at night, a few hundred pixels in a 60° patch, none at noon or in civil twilight', async ({ page }) => {
   test.setTimeout(240_000);
   await openHarness(page);
-  const r = await runCase<{ night: { stars: number; shift: number; tracked: number }; noon: { stars: number }; errors: string[] }>(page, 'skyStars', { frames: 24 });
+  const r = await runCase<{ night: { stars: number; shift: number; tracked: number }; noon: { stars: number }; twilight: { stars: number }; errors: string[] }>(page, 'skyStars', { frames: 24 });
   expect(r.errors).toEqual([]);
-  console.log(`stars: night ${r.night.stars} pixels, ${r.night.tracked} tracked, shift ${r.night.shift.toFixed(2)} px; noon ${r.noon.stars}`);
+  console.log(`stars: night ${r.night.stars} pixels, ${r.night.tracked} tracked, shift ${r.night.shift.toFixed(2)} px; noon ${r.noon.stars}; civil twilight ${r.twilight.stars}`);
   expect(r.night.stars).toBeGreaterThanOrEqual(150);
   expect(r.night.stars).toBeLessThanOrEqual(600);
   expect(r.noon.stars).toBe(0);
+  expect(r.twilight.stars).toBe(0);
   expect(r.night.tracked).toBeGreaterThan(10);
   expect(r.night.shift).toBeLessThanOrEqual(1);
 });

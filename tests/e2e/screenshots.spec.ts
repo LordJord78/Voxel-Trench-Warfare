@@ -1,20 +1,21 @@
 import { test } from '@playwright/test';
 import { hooks, openGame } from './support/app';
 
-// The six standard views at dusk, night, dawn and noon, for review by eye: grain,
-// seams, the horizon, and the look against the approved frames (artifacts/approved).
-// Written to artifacts/m4 (git-ignored); the test fails only on errors.
+// The six standard views at dusk, night, dawn and noon, and at 18:30, the darkest of the evening's
+// twilight, where the exposure peaks: for review by eye (grain, seams, the horizon, lanterns and
+// flares in twilight) and the look against the approved frames (artifacts/approved). Written to
+// artifacts/m4 (git-ignored); the test fails only on errors.
 test.use({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
 
 const VIEWS = ['bay', 'step', 'nml-night', 'overview', 'dugout', 'hamlet'];
 const DUSK = 17 + 35 / 60;
 
-test('the standard views, at dusk, night, dawn and noon', async ({ page }) => {
-  test.setTimeout(300_000);
+test('the standard views, at dusk, night, dawn, noon and twilight', async ({ page }) => {
+  test.setTimeout(360_000);
   const errors = await openGame(page);
   await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
   for (const name of VIEWS) {
-    for (const [label, time] of [['dusk', DUSK], ['night', 21], ['dawn', 6 + 50 / 60], ['noon', 12]] as const) {
+    for (const [label, time] of [['dusk', DUSK], ['night', 21], ['dawn', 6 + 50 / 60], ['noon', 12], ['twilight', 18.5]] as const) {
       await hooks(page, (h, a) => {
         const [n, t] = a as [string, number];
         h.view(n);

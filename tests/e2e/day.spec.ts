@@ -32,17 +32,20 @@ test('a whole day at time-lapse runs without a jump, and under 2% a game minute'
     h.view('nml-night');
   });
   // Ten minutes a second at 60 frames a second, from dusk round to dusk: a frame every sixth of a
-  // game minute, with its mean brightness and the sun's elevation it was lit at.
-  const frames = await hooks(page, async (h, start) => {
+  // game minute, with its mean brightness and the sun's elevation it was lit at; and each game
+  // minute, the exposure it was presented at.
+  const [frames, exposures] = await hooks(page, async (h, start) => {
     const out: [number, number][] = [];
+    const exposed: number[] = [];
     h.setTimeOfDay(start as number);
     await h.waitFrames(60);
     for (let k = 0; k <= 24 * 60 * 6; k++) {
       h.setTimeOfDay(((start as number) + k / 360) % 24);
       const s = await h.snapshot();
       out.push([s.mean, h.sunElevation()]);
+      if (k % 6 === 0) exposed.push(await h.exposure());
     }
-    return out;
+    return [out, exposed] as const;
   }, DUSK);
   const change = (k: number, back: number) => Math.abs(frames[k][0] - frames[k - back][0]) / Math.max(frames[k - back][0], 0.02);
   const clock = (k: number) => {
@@ -64,7 +67,15 @@ test('a whole day at time-lapse runs without a jump, and under 2% a game minute'
       `worst frame to frame ${(jump * 100).toFixed(2)}% at ${clock(jumpAt)}; worst minute ${(minute * 100).toFixed(2)}% at ${clock(minuteAt)}, ` +
       `with the sun clear of the horizon ${(clear * 100).toFixed(2)}% at ${clock(clearAt)}`,
   );
+  // The exposure never runs far past the approved night's (21:00). Twilight is darker than the
+  // moonlit night, and an exposure that chased its light (19.5 at 18:29) burnt out the lanterns and
+  // flares. The least it can be is set by the bound above: from dusk's approved 1.0, a dark frame
+  // may dim only some 2 stops in the 54 minutes the light takes to fall 5, so it peaks near 8.
+  const night = exposures[Math.round((21 - DUSK) * 60)];
+  const peak = Math.max(...exposures);
+  console.log(`exposure: night ${night.toFixed(2)}, the day's highest ${peak.toFixed(2)} at ${clock(exposures.indexOf(peak) * 6)}`);
   expect(errors).toEqual([]);
   expect(jump).toBeLessThan(0.02);
   expect(minute).toBeLessThan(0.02);
+  expect(peak).toBeLessThan(2.75 * night);
 });

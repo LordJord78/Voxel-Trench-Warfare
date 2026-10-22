@@ -18,6 +18,13 @@ export function clockText(hours: number): string {
   return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 }
 
+/** A 24-hour time, HH:MM, as an hour of the clock: 17:35 is 17.5833. */
+export function clockHours(text: string): number {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(text);
+  if (!m) throw new RangeError(`'${text}' is not a time on the clock (HH:MM)`);
+  return Number(m[1]) + Number(m[2]) / 60;
+}
+
 export interface Body {
   /** Unit vector in the world: +z ahead (toward the enemy), +x to the right, +y up. */
   dir: [number, number, number];

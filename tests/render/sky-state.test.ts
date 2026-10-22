@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLOCK_KEYS, celestial } from '../../src/core/sky-clock';
+import { CLOCK_KEYS, celestial, clockHours } from '../../src/core/sky-clock';
 import { loadTunables } from '../../src/core/tunables';
 import { PROBE_DUSK } from '../../src/render/frame-uniforms';
 import { frameSky, skyState } from '../../src/render/sky-state';
@@ -101,13 +101,26 @@ describe('the sky by the clock', () => {
     }
   });
 
-  it('keeps the fog, the flares and the exposure on their keys, linear between them, round the clock', () => {
+  it("keys the exposure's bias to hours of its own: the night held to 04:30, a dip before dawn and after dusk, noon, dusk and night as approved", () => {
+    const keys = tun.get('sky.exposure') as [string, number][];
+    expect(keys.map(([at]) => at)).toEqual(['04:30', '06:20', '12:00', '17:35', '19:00', '21:00']);
+    for (const [at, bias] of keys) expect(skyState(tun, clockHours(at)).exposure).toBeCloseTo(bias, 12);
+    // Dusk's and night's are the approved (exposure 1.0 and 3.2 with the light: see day.spec).
+    expect(keys[3][1]).toBe(1.0);
+    expect(keys[5][1]).toBe(0.175);
+    // Halfway in time between two keys, halfway in stops.
+    const [a, b] = [keys[3], keys[4]];
+    expect(skyState(tun, (clockHours(a[0]) + clockHours(b[0])) / 2).exposure).toBeCloseTo(Math.sqrt(a[1] * b[1]), 12);
+    // Held through the night, round midnight.
+    for (const hours of [22, 0, 3]) expect(skyState(tun, hours).exposure).toBeCloseTo(0.175, 12);
+  });
+
+  it('keeps the fog and the flares on their keys, linear between them, round the clock', () => {
     const keys = [CLOCK_KEYS.dawn, CLOCK_KEYS.noon, CLOCK_KEYS.dusk, CLOCK_KEYS.night];
     keys.forEach((hours, k) => {
       const s = skyState(tun, hours);
       expect(s.fogDensity).toBeCloseTo(keyed('fog_density')[k], 12);
       expect(s.flares).toBeCloseTo(keyed('flares')[k], 12);
-      expect(s.exposure).toBeCloseTo(keyed('exposure')[k], 12);
     });
     const mid = skyState(tun, (CLOCK_KEYS.dusk + CLOCK_KEYS.night) / 2);
     expect(mid.fogDensity).toBeCloseTo((keyed('fog_density')[2] + keyed('fog_density')[3]) / 2, 12);

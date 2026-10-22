@@ -113,6 +113,9 @@ const STAR_CELLS: f32 = 128.0;
 const STAR_CHANCE: f32 = 0.061;
 // The sky luminance at which the stars are gone.
 const STAR_FADE: f32 = 0.01;
+// The sines of the sun's depression (6° and 12°) over which they come out.
+const STAR_SUN_FROM: f32 = 0.1045;
+const STAR_SUN_TO: f32 = 0.2079;
 // The galactic north pole, in the celestial sphere (RA 192.86°, Dec 27.13°).
 const GALACTIC_POLE: vec3f = vec3f(-0.8676, -0.1981, 0.4560);
 
@@ -140,7 +143,10 @@ fn faceDir(face: u32, uv: vec2f) -> vec3f {
 }
 
 fn stars(rd: vec3f, behind: vec3f) -> vec3f {
-  let fade = clamp(1.0 - dot(behind, vec3f(0.2126, 0.7152, 0.0722)) / STAR_FADE, 0.0, 1.0);
+  // They fade as the sky behind them brightens, and come out only as the sun sinks from 6° below the
+  // horizon (civil twilight's end) to 12°: the moon's light is the approved night's, far over the
+  // physical, and would otherwise let them through a twilight sky.
+  let fade = clamp(1.0 - dot(behind, vec3f(0.2126, 0.7152, 0.0722)) / STAR_FADE, 0.0, 1.0) * smoothstep(STAR_SUN_FROM, STAR_SUN_TO, -frame.sunDir.y);
   if (fade <= 0.0 || frame.starBrightness <= 0.0) {
     return vec3f(0.0);
   }
