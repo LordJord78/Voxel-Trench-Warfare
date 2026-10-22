@@ -2,13 +2,18 @@ import { BrickMap } from '../../../src/world/bricks';
 import { HeapMirror } from '../../../src/world/encode';
 import { P } from '../../../src/world/materials';
 import { jitter, projectToPixel, rayDir, type CameraPose } from '../../../src/render/camera';
-import { FLAGS, PROBE_DUSK } from '../../../src/render/frame-uniforms';
+import { FarFieldGpu } from '../../../src/render/farfield-gpu';
+import { FLAGS, FRAME, PROBE_DUSK, writeWorldInfo } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
-import { Renderer } from '../../../src/render/renderer';
+import { StructWriter } from '../../../src/render/layout';
+import { compileFrame, Renderer } from '../../../src/render/renderer';
+import { sceneGroup } from '../../../src/render/scene';
+import { moduleSource } from '../../../src/render/shaders';
 import { Rng } from '../../../src/core/rng';
 import { gpu, readTexture } from '../support/gpu';
-import { halfToFloat } from '../support/half';
+import { floatToHalf, halfToFloat } from '../support/half';
 import { traceRef } from '../../support/trace-ref';
+import atrousReference from '../shaders/atrous-reference.wgsl';
 
 /**
  * A floor with a wall standing on it, lit by a key light from 45° in -x: the
@@ -264,5 +269,95 @@ export const cases = {
     }
     for (const b of [w.table, w.sectors, w.heap, w.palette, w.pyramid]) b.destroy();
     return { surfaces, longest, errors: [...g.errors] };
+  },
+
+  /**
+   * One à-trous pass at each step over a fixed noisy lighting image (73 × 51, so edge tiles are
+   * partial) with face and plane edges: the production shader against a copy of the shader as
+   * it was. The worst difference per channel, in f16 ulps for colour and relative for variance.
+   */
+  async atrousIdentity() {
+    const g = await gpu();
+    const device = g.device;
+    const compiled = await compileFrame(device);
+    const module = device.createShaderModule({ code: moduleSource(atrousReference) });
+    const reference = device.createComputePipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [compiled.scene, compiled.layouts.atrous] }),
+      compute: { module, entryPoint: 'main' },
+    });
+    const size: [number, number] = [73, 51];
+    const n = size[0] * size[1];
+    const rng = Rng.root(11).derive('atrous');
+    const colour = new Uint16Array(n * 4);
+    const variance = new Float32Array(n * 2);
+    const hits = new Uint32Array(n * 2);
+    for (let y = 0; y < size[1]; y++) {
+      for (let x = 0; x < size[0]; x++) {
+        const i = y * size[0] + x;
+        // Three surfaces: a floor at two planes split by a step, and a wall on the right.
+        const face = x > 52 ? 1 : 3;
+        const plane = face === 1 ? 52 : x < 26 ? 40 : 41;
+        const cell = face === 1 ? [52, y, x] : [x, plane - 1, y];
+        hits.set([(cell[0] | (cell[2] << 12) | (face << 24)) >>> 0, cell[1] | (5 << 16)], i * 2);
+        const key = x < 30 ? (rng.uniform() < 0.5 ? 1 : 0) : rng.uniform();
+        const lum = 0.2 + rng.uniform() * (y > 25 ? 2 : 0.3);
+        colour.set([lum, lum * 0.8, lum * 0.6, key].map(floatToHalf), i * 4);
+        variance.set([rng.uniform() * 0.05, 1 + rng.randint(0, 31)], i * 2);
+      }
+    }
+    const tex = (format: GPUTextureFormat, usage: number) => device.createTexture({ size, format, usage });
+    const inUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST;
+    const outUsage = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC;
+    const colourIn = tex('rgba16float', inUsage);
+    const varianceIn = tex('rg32float', inUsage);
+    const hitsIn = tex('rg32uint', inUsage);
+    device.queue.writeTexture({ texture: colourIn }, colour, { bytesPerRow: size[0] * 8 }, size);
+    device.queue.writeTexture({ texture: varianceIn }, variance, { bytesPerRow: size[0] * 8 }, size);
+    device.queue.writeTexture({ texture: hitsIn }, hits, { bytesPerRow: size[0] * 8 }, size);
+    const map = new BrickMap({ x: 32, y: 32, z: 32 });
+    const world = GpuWorld.create(device, { map, mirror: HeapMirror.fromMap(map) });
+    const writer = new StructWriter(FRAME);
+    writeWorldInfo(writer, world);
+    writer.set('res', [size[0] * 2, size[1] * 2]);
+    writer.set('alloc', [size[0] * 2, size[1] * 2]);
+    writer.set('lightRes', size);
+    writer.set('lightScale', 2);
+    writer.set('sigmaLuma', 4);
+    writer.set('sigmaPlane', 1);
+    const frame = device.createBuffer({ size: writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(frame, 0, writer.buffer);
+    const scene = sceneGroup(device, compiled.scene, { frame, world, far: FarFieldGpu.empty(device), lights: compiled.lights, noise: compiled.noise });
+    const run = async (pipeline: GPUComputePipeline, step: number) => {
+      const colourOut = tex('rgba16float', outUsage);
+      const varianceOut = tex('rg32float', outUsage);
+      const stepBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(stepBuffer, 0, new Int32Array([step, 0, 0, 0]));
+      const group = device.createBindGroup({
+        layout: compiled.layouts.atrous,
+        entries: [colourIn.createView(), varianceIn.createView(), hitsIn.createView(), colourOut.createView(), varianceOut.createView(), { buffer: stepBuffer }].map((resource, binding) => ({ binding, resource })),
+      });
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, scene);
+      pass.setBindGroup(1, group);
+      pass.dispatchWorkgroups(Math.ceil(size[0] / 8), Math.ceil(size[1] / 8));
+      pass.end();
+      device.queue.submit([encoder.finish()]);
+      const c = new Uint16Array(await readTexture(colourOut));
+      const v = new Float32Array(await readTexture(varianceOut));
+      colourOut.destroy();
+      varianceOut.destroy();
+      return { c, v };
+    };
+    const worst = { colourUlps: 0, varianceRel: 0 };
+    for (const step of [1, 2, 4]) {
+      const a = await run(compiled.pipelines.atrous, step);
+      const b = await run(reference, step);
+      for (let i = 0; i < a.c.length; i++) worst.colourUlps = Math.max(worst.colourUlps, Math.abs(a.c[i] - b.c[i]));
+      for (let i = 0; i < a.v.length; i++) worst.varianceRel = Math.max(worst.varianceRel, Math.abs(a.v[i] - b.v[i]) / Math.max(1e-6, Math.abs(b.v[i])));
+    }
+    for (const t of [colourIn, varianceIn, hitsIn]) t.destroy();
+    return { ...worst, errors: [...g.errors] };
   },
 };

@@ -43,3 +43,11 @@ test('a fresh history in a penumbra is filtered by its neighbours, not left as r
   expect(r.binary / r.penumbra).toBeLessThan(0.3);
   expect(r.error).toBeLessThan(0.35);
 });
+
+test('the à-trous filter gives the same image however it reads its tile', async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ colourUlps: number; varianceRel: number; errors: string[] }>(page, 'atrousIdentity');
+  expect(r.errors).toEqual([]);
+  expect(r.colourUlps).toBeLessThanOrEqual(1);
+  expect(r.varianceRel).toBeLessThan(1e-5);
+});

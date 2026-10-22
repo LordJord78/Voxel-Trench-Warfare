@@ -88,7 +88,11 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let l = luminance(centre.rgb);
   let length = max(textureLoad(varianceIn, q, 0).g, 1.0);
   let spread = frame.sigmaLuma * sqrt(blurredVariance(q)) + 1e-4;
-  let a = select(centre.a, neighbourKey(q, face, plane, centre.a), length < 4.0);
+  // An if, not select: select evaluates both sides, and the neighbours are read only for a short history.
+  var a = centre.a;
+  if (length < 4.0) {
+    a = neighbourKey(q, face, plane, centre.a);
+  }
   let spreadKey = SIGMA_KEY * sqrt(a * (1.0 - a) / length) + 1e-3;
   let size = vec2i(frame.lightRes);
   var rgb = vec3f(0.0);
