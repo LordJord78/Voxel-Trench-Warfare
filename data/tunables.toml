@@ -467,6 +467,7 @@ history_max         = 32       # frames the denoiser averages at most
 atrous_sigma_luma   = 4.0      # edge-stopping on brightness, in standard deviations
 atrous_sigma_plane  = 1.0      # edge-stopping on distance from the face's plane, in voxels
 cas_sharpness       = 0.4      # contrast-adaptive sharpening, 0 to 1
+bloom_weight        = 0.04     # how much of the image's light its bloom spreads: a six-level pyramid, no threshold (bloom.ts)
 gpu_budget_ms       = 14.0     # dynamic resolution holds the GPU frame under this
 internal_mp_high    = 1.5      # internal image of the "high" preset, in megapixels
 flares              = 6        # static flares hanging over no man's land at night

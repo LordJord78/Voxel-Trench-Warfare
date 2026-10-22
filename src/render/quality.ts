@@ -30,6 +30,8 @@ export interface RenderSettings {
   denoise: { historyMax: number; sigmaLuma: number; sigmaPlane: number };
   /** Sharpening after TAA, 0 to 1. */
   sharpness: number;
+  /** How much of the image's light its bloom spreads, 0 to 1. */
+  bloomWeight: number;
   /** The air the sky is made of. */
   atmosphere: AtmosphereModel;
 }
@@ -41,6 +43,7 @@ export function rendererTunables(tun: Tunables): RenderSettings {
     budgetMs: tun.f('render.gpu_budget_ms'),
     denoise: { historyMax: tun.i('render.history_max'), sigmaLuma: tun.f('render.atrous_sigma_luma'), sigmaPlane: tun.f('render.atrous_sigma_plane') },
     sharpness: tun.f('render.cas_sharpness'),
+    bloomWeight: tun.f('render.bloom_weight'),
     atmosphere: atmosphereModel(tun),
   };
 }

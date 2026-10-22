@@ -17,8 +17,9 @@
  *              sky and height fog;
  *   taa      — blended into its own reprojected history, which smooths the
  *              jitter into anti-aliased edges;
- *   cas      — sharpened back.
- * A render pass presents it to the canvas: upscaled, tonemapped, dithered. Pipelines compile in parallel and
+ *   cas      — sharpened back;
+ *   bloom    — a pyramid of six levels over that, their mean (bloom.ts).
+ * A render pass presents it to the canvas: upscaled, its bloom mixed in, tonemapped, dithered. Pipelines compile in parallel and
  * need only the device (see compileFrame), so they can compile while the
  * world generates.
  *
@@ -35,6 +36,7 @@
 import { loadTunables } from '../core/tunables';
 import type { WorldPlan } from '../world/generation/plan';
 import { Atmosphere, atmosphereModel, type AtmospherePipelines } from './atmosphere';
+import { Bloom, type BloomPipelines } from './bloom';
 import { jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
@@ -58,7 +60,7 @@ import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['sky', 'beam', 'primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'present'] as const;
+const PASSES = ['sky', 'beam', 'primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'bloom', 'present'] as const;
 type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas' | 'exposure';
 type Timed = (typeof PASSES)[number];
 
@@ -140,6 +142,7 @@ export interface CompiledFrame {
   layouts: Record<ComputePass | 'present', GPUBindGroupLayout>;
   pipelines: Record<ComputePass, GPUComputePipeline> & { present: GPURenderPipeline };
   atmosphere: AtmospherePipelines;
+  bloom: BloomPipelines;
   lights: GPUBuffer;
   noise: GPUTexture;
   /** Empty sky LUTs, for scenes built without an atmosphere. */
@@ -201,11 +204,12 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
       ],
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere] = await Promise.all([
+  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
@@ -223,8 +227,9 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
       primitive: { topology: 'triangle-list' },
     }),
     Atmosphere.compile(device),
+    Bloom.compile(device),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -251,6 +256,7 @@ export class Renderer {
   private readonly far: FarFieldGpu;
   /** The sky's LUTs and the faces' irradiance, built each frame for the frame's sky. */
   readonly atmosphere: Atmosphere;
+  private readonly bloom: Bloom;
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
   /** Bind groups by frame parity: histories ping-pong between two sets of textures. */
@@ -297,15 +303,17 @@ export class Renderer {
     this.format = navigator.gpu.getPreferredCanvasFormat();
     this.timer = new GpuTimer(device, gpu.timestamps, PASSES);
     this.frameBuffer = device.createBuffer({ label: 'frame', size: this.writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    // The present pass's uniform: the image's sizes, the exposure, the bloom's weight, the grain (12 floats).
     this.presentBuffer = device.createBuffer({
       label: 'present',
-      size: 32,
+      size: 48,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     this.exposureGroup = device.createBindGroup({ label: 'exposure', layout: compiled.layouts.exposure, entries: [{ binding: 0, resource: { buffer: this.presentBuffer } }] });
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     this.far = options.far ?? FarFieldGpu.empty(device);
     this.atmosphere = Atmosphere.create(device, compiled.atmosphere, options.atmosphere ?? atmosphereModel(loadTunables()));
+    this.bloom = Bloom.create(device, compiled.bloom);
     this.preset = options.preset ?? 'high';
     this.lightScale = LIGHT_SCALE[this.preset];
     this.budgetMs = options.budgetMs ?? 14;
@@ -394,6 +402,7 @@ export class Renderer {
     make('taa0', 'rgba16float', this.alloc);
     make('taa1', 'rgba16float', this.alloc);
     make('sharp', 'rgba16float', this.alloc);
+    this.bloom.resize(this.alloc, this.textures.sharp.createView());
     const light = this.lightSize(this.alloc);
     make('lNoisy', 'rgba16float', light);
     make('lSky', 'r32float', light);
@@ -428,7 +437,7 @@ export class Renderer {
         shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('denoised'), view(`hHit${cur}`)]),
         taa: group('taa', [view('colour'), view('gMotion'), view(`taa${prev}`), view(`taa${cur}`), this.sampler]),
         cas: group('cas', [view(`taa${cur}`), view('sharp')]),
-        present: group('present', [view('sharp'), this.sampler, { buffer: this.presentBuffer }, this.compiled.noise.createView()]),
+        present: group('present', [view('sharp'), this.sampler, { buffer: this.presentBuffer }, this.compiled.noise.createView(), this.bloom.output.createView()]),
       };
     });
     this.res = scaledSize(this.alloc, this.scale);
@@ -455,6 +464,8 @@ export class Renderer {
 
   /** A texture by name; a history (hDepth, hHit, hColour, hMoments, taa) is the one the last frame wrote. */
   texture(name: string): GPUTexture {
+    // The bloom's top, half the image's size.
+    if (name === 'bloom0') return this.bloom.output;
     const last = (this.frameIndex + 1) & 1;
     const t = this.textures[name] ?? this.textures[`${name}${last}`];
     if (!t) throw new Error(`no texture '${name}'`);
@@ -558,8 +569,10 @@ export class Renderer {
     pass('shade', 'shade', this.res);
     pass('taa', 'taa', this.res);
     pass('cas', 'cas', this.res);
+    this.bloom.encode(encoder, this.res, this.timer.writes('bloom'));
     if (this.context) {
-      const present = new Float32Array([this.res[0], this.res[1], this.alloc[0], this.alloc[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, 0]);
+      const bloomWeight = this.options.bloomWeight ?? 0.04;
+      const present = new Float32Array([this.res[0], this.res[1], this.alloc[0], this.alloc[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, bloomWeight, 0, 0, 0, 0]);
       device.queue.writeBuffer(this.presentBuffer, 0, present);
       const p = encoder.beginRenderPass({
         label: 'present',

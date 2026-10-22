@@ -4,7 +4,7 @@
 // orientations, averaged; never less than frame.exposureFloor, a moonless night's.
 #include "scene.wgsl"
 
-@group(1) @binding(0) var<storage, read_write> present: array<f32, 8>;
+@group(1) @binding(0) var<storage, read_write> present: array<f32, 12>;
 
 fn lum(c: vec3f) -> f32 {
   return dot(c, vec3f(0.2126, 0.7152, 0.0722));

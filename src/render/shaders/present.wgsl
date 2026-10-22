@@ -1,5 +1,5 @@
 // To the canvas: the sharpened internal image upscaled bicubically (kept within
-// the texels round each sample, so it does not ring), exposed,
+// the texels round each sample, so it does not ring), its bloom mixed in, exposed,
 // through the ACES fit, gamma-2.2 encoded (the probe's look), and dithered
 // with blue noise below a single 8-bit step, so night skies do not band.
 #include "catmull.wgsl"
@@ -10,13 +10,16 @@ struct Present {
   alloc: vec2f,
   canvas: vec2f,
   exposure: f32,
-  pad: f32,
+  // How much of the image's light its bloom spreads (render.bloom_weight).
+  bloomWeight: f32,
 }
 
 @group(0) @binding(0) var image: texture_2d<f32>;
 @group(0) @binding(1) var linear: sampler;
 @group(0) @binding(2) var<uniform> present: Present;
 @group(0) @binding(3) var dither: texture_2d<u32>;
+// The bloom: the mean of the image's six levels, half its size (see bloom.ts).
+@group(0) @binding(4) var bloom: texture_2d<f32>;
 
 struct VOut {
   @builtin(position) pos: vec4f,
@@ -47,7 +50,11 @@ fn fs(v: VOut) -> @location(0) vec4f {
   let t11 = textureLoad(image, clamp(at + vec2i(1, 1), vec2i(0), last), 0).rgb;
   let lo = min(min(t00, t10), min(t01, t11));
   let hi = max(max(t00, t10), max(t01, t11));
-  let c = clamp(catmullRom(image, linear, uv, present.alloc, present.res).rgb, lo, hi) * present.exposure;
+  let sharp = clamp(catmullRom(image, linear, uv, present.alloc, present.res).rgb, lo, hi);
+  // The bloom where this pixel falls, within its rendered part; mixed in, it keeps the image's light.
+  let q = clamp(v.pos.xy / present.canvas * present.res * 0.5, vec2f(0.5), ceil(present.res * 0.5) - 0.5);
+  let glow = textureSampleLevel(bloom, linear, q / ceil(present.alloc * 0.5), 0.0).rgb;
+  let c = mix(sharp, glow, present.bloomWeight) * present.exposure;
   let encoded = pow(aces(c), vec3f(1.0 / 2.2));
   let rank = textureLoad(dither, vec2i(v.pos.xy) & vec2i(63), 0).r;
   let noise = (f32(rank) + 0.5) / 4096.0 - 0.5;

@@ -37,6 +37,15 @@ test('dither stays within one code and breaks up flat grey', async ({ page }) =>
   expect(values.size).toBeGreaterThanOrEqual(2);
 });
 
+test('present mixes the bloom into the image at its weight, before the exposure', async ({ page }) => {
+  await openHarness(page);
+  // A quarter of the light from a bloom five times the image: 0.75·0.1 + 0.25·0.5 = 0.2, two codes' worth of steps from 0.1.
+  const r = await runCase<Present>(page, 'present', { c: 0.1, exposure: 1, bloom: 0.5, bloomWeight: 0.25 });
+  expect(r.errors).toEqual([]);
+  expect(Math.abs(r.expected - code(0.2))).toBeLessThan(0.5);
+  for (const g of r.green) expect(Math.abs(g - r.expected)).toBeLessThanOrEqual(1);
+});
+
 test("upscaling a point as bright as the sun's disc leaves no dark ring round it", async ({ page }) => {
   await openHarness(page);
   // 32 texels to 48 pixels: the bicubic's negative lobes reach the pixels round the point.

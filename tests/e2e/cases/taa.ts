@@ -101,7 +101,12 @@ export const cases = {
    * the middle), upscaled to a `canvas`-wide square: the 8-bit codes it writes, and what ACES and
    * gamma say the flat colour's should be.
    */
-  async present(args: { c: number; exposure: number; spot?: number; canvas?: number }) {
+  /**
+   * The present pass over a flat 32 × 32 image of `c` (with one texel of `spot`, if given), its bloom
+   * flat at `bloom` (by default `c`: a flat image's bloom is itself) mixed in at `bloomWeight`, onto
+   * a `canvas`-pixel square: each pixel's green byte, and the byte a flat mix should give.
+   */
+  async present(args: { c: number; exposure: number; spot?: number; canvas?: number; bloom?: number; bloomWeight?: number }) {
     const g = await gpu();
     const device = g.device;
     const compiled = await compileFrame(device);
@@ -114,12 +119,16 @@ export const cases = {
     const format = navigator.gpu.getPreferredCanvasFormat();
     const side = args.canvas ?? 32;
     const target = device.createTexture({ size: [side, side], format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
-    const uniform = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(uniform, 0, new Float32Array([32, 32, 32, 32, side, side, args.exposure, 0]));
+    const weight = args.bloomWeight ?? 0.04;
+    const b = floatToHalf(args.bloom ?? args.c);
+    const bloom = device.createTexture({ size: [16, 16], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    device.queue.writeTexture({ texture: bloom }, new Uint16Array(16 * 16 * 4).map((_, i) => (i % 4 === 3 ? floatToHalf(1) : b)), { bytesPerRow: 16 * 8 }, [16, 16]);
+    const uniform = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(uniform, 0, new Float32Array([32, 32, 32, 32, side, side, args.exposure, weight, 0, 0, 0, 0]));
     const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const group = device.createBindGroup({
       layout: compiled.layouts.present,
-      entries: [image.createView(), sampler, { buffer: uniform }, compiled.noise.createView()].map((resource, binding) => ({ binding, resource })),
+      entries: [image.createView(), sampler, { buffer: uniform }, compiled.noise.createView(), bloom.createView()].map((resource, binding) => ({ binding, resource })),
     });
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({ colorAttachments: [{ view: target.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
@@ -130,9 +139,10 @@ export const cases = {
     device.queue.submit([encoder.finish()]);
     const bytes = new Uint8Array(await readTexture(target));
     const green = Array.from({ length: side * side }, (_, i) => bytes[i * 4 + 1]);
-    const c = halfToFloat(h) * args.exposure;
+    const c = ((1 - weight) * halfToFloat(h) + weight * halfToFloat(b)) * args.exposure;
     const expected = 255 * aces(c) ** (1 / 2.2);
     image.destroy();
+    bloom.destroy();
     target.destroy();
     return { green, expected, errors: [...g.errors] };
   },
