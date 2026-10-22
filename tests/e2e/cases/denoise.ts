@@ -70,16 +70,24 @@ const rgba = async (r: Renderer, name: string) => {
 };
 
 export const cases = {
-  /** The denoised key visibility after `frames` still frames, against a long plain average of the raw lighting. */
+  /**
+   * The denoised key visibility after `frames` still frames, against a long plain average of the
+   * raw lighting (the frames that traced the key: it is -1 where it was not).
+   */
   async denoiseConverge(args: { frames: number; reference: number }) {
     const g = await gpu();
     const { r, w } = await setup(g);
     const [lw, lh] = r.lightResolution;
     const raw = new Float64Array(lw * lh);
+    const rawCount = new Float64Array(lw * lh);
     for (let f = 0; f < args.reference; f++) {
       r.render(DOWN, 0, f);
       const noisy = await rgba(r, 'lNoisy');
-      for (let i = 0; i < lw * lh; i++) raw[i] += noisy[i * 4 + 3];
+      for (let i = 0; i < lw * lh; i++) {
+        if (noisy[i * 4 + 3] < 0) continue;
+        raw[i] += noisy[i * 4 + 3];
+        rawCount[i]++;
+      }
     }
     r.flags = FLAGS.HISTORY_RESET;
     r.render(DOWN, 0, 0);
@@ -107,9 +115,10 @@ export const cases = {
       const i = rng.randint(0, lw * lh - 1);
       if (!whole[i]) continue;
       compared++;
-      const e = Math.abs(previous[i * 4 + 3] - raw[i] / args.reference);
+      const plain = raw[i] / Math.max(rawCount[i], 1);
+      const e = Math.abs(previous[i * 4 + 3] - plain);
       worst = Math.max(worst, e);
-      if (e > 0.05 && bad.length < 6) bad.push(`q ${i % lw},${Math.floor(i / lw)} denoised ${previous[i * 4 + 3].toFixed(3)} raw ${(raw[i] / args.reference).toFixed(3)}`);
+      if (e > 0.05 && bad.length < 6) bad.push(`q ${i % lw},${Math.floor(i / lw)} denoised ${previous[i * 4 + 3].toFixed(3)} raw ${plain.toFixed(3)}`);
     }
     for (const b of [w.table, w.sectors, w.heap, w.palette, w.pyramid]) b.destroy();
     return { worst, change, bad, errors: [...g.errors] };
@@ -147,6 +156,46 @@ export const cases = {
     for (let i = 0; i < lw * lh; i++) {
       if (!whole[i] || count[i] === 0) continue;
       const d = moments[i * 4 + 3] - sum[i] / count[i];
+      bias += d;
+      mae += Math.abs(d);
+      n++;
+    }
+    for (const b of [w.table, w.sectors, w.heap, w.palette, w.pyramid]) b.destroy();
+    return { compared: n, bias: bias / n, mae: mae / n, errors: [...g.errors] };
+  },
+
+  /**
+   * The key light's history, traced every other frame: after `frames` still frames, each
+   * whole-block pixel's key visibility history (hColour.a) against the plain average of every key
+   * sample it traced over `reference` frames. The mean and mean absolute differences.
+   */
+  async keyHistory(args: { frames: number; reference: number }) {
+    const g = await gpu();
+    const { r, w } = await setup(g);
+    const [lw, lh] = r.lightResolution;
+    const sum = new Float64Array(lw * lh);
+    const count = new Float64Array(lw * lh);
+    for (let f = 0; f < args.reference; f++) {
+      r.render(DOWN, 0, f);
+      const noisy = await rgba(r, 'lNoisy');
+      for (let i = 0; i < lw * lh; i++) {
+        if (noisy[i * 4 + 3] < 0) continue;
+        sum[i] += noisy[i * 4 + 3];
+        count[i]++;
+      }
+    }
+    r.flags = FLAGS.HISTORY_RESET;
+    r.render(DOWN, 0, 0);
+    r.flags = 0;
+    for (let f = 0; f < args.frames; f++) r.render(DOWN, 0, f);
+    const colour = await rgba(r, 'hColour');
+    const whole = await wholeBlocks(r);
+    let bias = 0;
+    let mae = 0;
+    let n = 0;
+    for (let i = 0; i < lw * lh; i++) {
+      if (!whole[i] || count[i] === 0) continue;
+      const d = colour[i * 4 + 3] - sum[i] / count[i];
       bias += d;
       mae += Math.abs(d);
       n++;

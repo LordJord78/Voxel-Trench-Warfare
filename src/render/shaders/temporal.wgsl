@@ -9,10 +9,11 @@
 // which the à-trous filter knows how noisy each pixel still is. (The key
 // light's visibility is 0 or 1 per frame, so its noise follows from its mean.)
 //
-// The sky's ray is traced every other frame (see lighting.wgsl), so the sky's
-// visibility keeps a history of its own, an average over the samples it has
-// had; a frame without one uses that average, and a pixel with neither (just
-// uncovered, on its band's off frame) borrows its traced neighbours'. The
+// The sky's ray and the key light's are traced by turns, each every other
+// frame (see lighting.wgsl), so each visibility keeps a history of its own, an
+// average over the samples it has had (the key's in the colour's alpha); a
+// frame without one uses that average, and a pixel with neither (just
+// uncovered, on that ray's off frame) borrows its traced neighbours'. The
 // colour the filter receives is the same as ever: the point light plus the
 // sky's light at that visibility.
 #include "traverse.wgsl"
@@ -41,6 +42,8 @@
 // history is assumed to have.
 struct Neighbours {
   sky: f32,
+  // Their mean key visibility, of those that traced the key this frame.
+  key: f32,
   variance: f32,
   count: f32,
 }
@@ -50,6 +53,8 @@ fn neighbours(q: vec2i, face: u32, plane: i32, n: vec3f) -> Neighbours {
   var sum = 0.0;
   var sq = 0.0;
   var count = 0.0;
+  var key = 0.0;
+  var keyCount = 0.0;
   let size = vec2i(frame.lightRes);
   let light = skyIrradiance(n);
   for (var dy = -4; dy <= 4; dy++) {
@@ -62,6 +67,11 @@ fn neighbours(q: vec2i, face: u32, plane: i32, n: vec3f) -> Neighbours {
       if (hitFace(h) != face || hitPlane(h) != plane) {
         continue;
       }
+      let k = textureLoad(noisy, t, 0).a;
+      if (k >= 0.0) {
+        key += k;
+        keyCount += 1.0;
+      }
       let v = textureLoad(skyNoisy, t, 0).r;
       if (v < 0.0) {
         continue;
@@ -73,11 +83,12 @@ fn neighbours(q: vec2i, face: u32, plane: i32, n: vec3f) -> Neighbours {
       count += 1.0;
     }
   }
+  let keyMean = select(1.0, key / keyCount, keyCount > 0.0);
   if (count == 0.0) {
-    return Neighbours(1.0, 0.0, 0.0);
+    return Neighbours(1.0, keyMean, 0.0, 0.0);
   }
   let mean = sum / count;
-  return Neighbours(sky / count, max(sq / count - mean * mean, 0.0), count);
+  return Neighbours(sky / count, keyMean, max(sq / count - mean * mean, 0.0), count);
 }
 
 @compute @workgroup_size(8, 8)
@@ -155,14 +166,17 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   }
   let length = min(moments.z + 1.0, frame.historyMax);
   let a = 1.0 / length;
-  // The sky's samples: every other frame of the history's, so half of them, rounded up.
+  // The sky's samples, and the key's: each every other frame of the history's, so half of them,
+  // rounded up.
   let samples = ceil(length * 0.5);
   let n = faceNormal(face);
   let sample = textureLoad(skyNoisy, q, 0).r;
   let traced = sample >= 0.0;
-  var near = Neighbours(1.0, 0.0, 0.0);
+  let keyTraced = current.a >= 0.0;
+  var near = Neighbours(1.0, 1.0, 0.0, 0.0);
   let fresh = moments.z == 0.0;
-  if (samples < 4.0 || (fresh && !traced)) {
+  // A fresh pixel has traced one of the two: its neighbours have the other.
+  if (samples < 4.0 || fresh) {
     near = neighbours(q, face, plane, n);
   }
   var sky = moments.w;
@@ -171,8 +185,14 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   } else if (fresh) {
     sky = near.sky;
   }
-  let full = vec4f(current.rgb + skyIrradiance(n) * (0.1 + 0.9 * select(sky, sample, traced)), current.a);
-  let colour = mix(before, full, a);
+  var key = before.a;
+  if (keyTraced) {
+    key = mix(before.a, current.a, 1.0 / samples);
+  } else if (fresh) {
+    key = near.key;
+  }
+  let full = vec4f(current.rgb + skyIrradiance(n) * (0.1 + 0.9 * select(sky, sample, traced)), 0.0);
+  let colour = vec4f(mix(before.rgb, full.rgb, a), key);
   // The brightness's moments follow whole samples, sky and point light together: frames that traced the sky.
   var m1 = moments.x;
   var m2 = moments.y;

@@ -2,9 +2,10 @@ import { expect, test } from '@playwright/test';
 import { openHarness, runCase } from './support/run';
 
 interface Result {
-  /** The point light (rgb) and key visibility (a), each frame's, averaged. */
+  /** The point light (rgb), each frame's, and the key's visibility (a), each traced frame's, averaged. */
   mean: number[];
   keyMin: number;
+  keyTraced: number;
   /** The sky samples the pixel traced, averaged, and how many. */
   skyMean: number;
   skyTraced: number;
@@ -29,6 +30,8 @@ const run = async (page: import('@playwright/test').Page, args: Record<string, u
 test('open ground is lit and sees the sky', async ({ page }) => {
   const r = await run(page, { scene: 'open', frames: 64 });
   expect(Math.abs(r.mean[3] - 1)).toBeLessThanOrEqual(0.001);
+  // The key's ray every other frame, as the sky's.
+  expect(r.keyTraced).toBe(32);
   // The sky ray every other frame, and every one finds the sky.
   expect(r.skyTraced).toBe(32);
   expect(r.skyMean).toBe(1);
@@ -93,6 +96,13 @@ test('half the lighting pixels trace the sky each frame, in bands of four rows t
   expect(r.errors).toEqual([]);
   expect(r.broken).toBe(0);
   for (const n of r.traced) expect(Math.abs(n / r.pixels - 0.5)).toBeLessThan(0.07);
+});
+
+test('the other half trace the key light: each lighting pixel traces the key or the sky each frame, by turns', async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ keyBroken: number; errors: string[] }>(page, 'skyBands');
+  expect(r.errors).toEqual([]);
+  expect(r.keyBroken).toBe(0);
 });
 
 test("a lantern does not frame itself in its own shadow", async ({ page }) => {

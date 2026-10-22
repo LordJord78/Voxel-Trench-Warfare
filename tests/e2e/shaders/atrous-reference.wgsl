@@ -1,4 +1,4 @@
-// A copy of atrous.wgsl from before light milestone 1: the filter's output is pinned to it (denoise.spec, "however it reads its tile"). Change both together when the filter is meant to change.
+// A copy of atrous.wgsl from before light milestone 1: the filter's output is pinned to it (denoise.spec, "however it reads its tile"). Change both together when the filter is meant to change (as light milestone 5 did: the key's noise by its samples).
 // One pass of the à-trous filter: a 5 × 5 B3 kernel with holes `step` lighting
 // pixels apart (1, 2, then 4), so three passes cover a wide footprint for the
 // price of 75 taps. A neighbour counts only on the same face, less the
@@ -88,9 +88,11 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let plane = hitPlane(hit);
   let l = luminance(centre.rgb);
   let length = max(textureLoad(varianceIn, q, 0).g, 1.0);
+  // Light milestone 5: the key's samples, every other frame of the history's.
+  let keySamples = ceil(length * 0.5);
   let spread = frame.sigmaLuma * sqrt(blurredVariance(q)) + 1e-4;
-  let a = select(centre.a, neighbourKey(q, face, plane, centre.a), length < 4.0);
-  let spreadKey = SIGMA_KEY * sqrt(a * (1.0 - a) / length) + 1e-3;
+  let a = select(centre.a, neighbourKey(q, face, plane, centre.a), keySamples < 4.0);
+  let spreadKey = SIGMA_KEY * sqrt(a * (1.0 - a) / keySamples) + 1e-3;
   let size = vec2i(frame.lightRes);
   var rgb = vec3f(0.0);
   var key = 0.0;

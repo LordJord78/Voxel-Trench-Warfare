@@ -83,6 +83,8 @@ export const cases = {
     let keyMin = 1;
     let skySum = 0;
     let skyTraced = 0;
+    // The key light is traced on its band's turn: its visibility is -1 where it was not.
+    let keyTraced = 0;
     // Every lighting pixel's point light, summed over every frame; whether all were numbers; and
     // which lights the reservoirs held.
     const image = [0, 0, 0];
@@ -102,15 +104,19 @@ export const cases = {
       for (let y = 0; y < lh; y++) for (let x = 0; x < lw; x++) chosen.add(held[(y * renderer.lightStride + x) * 4] | 0);
       const i = (qy * lw + qx) * 4;
       const v = [halfToFloat(px[i]), halfToFloat(px[i + 1]), halfToFloat(px[i + 2]), halfToFloat(px[i + 3])];
-      for (let k = 0; k < 4; k++) sum[k] += v[k];
-      keyMin = Math.min(keyMin, v[3]);
+      for (let k = 0; k < 3; k++) sum[k] += v[k];
+      if (v[3] >= 0) {
+        sum[3] += v[3];
+        keyTraced++;
+        keyMin = Math.min(keyMin, v[3]);
+      }
       const sky = new Float32Array(await readTexture(renderer.texture('lSky')))[qy * lw + qx];
       if (sky >= 0) {
         skySum += sky;
         skyTraced++;
       }
     }
-    const mean = sum.map((s) => s / args.frames);
+    const mean = sum.map((s, k) => s / (k < 3 ? args.frames : Math.max(keyTraced, 1)));
     const h = new Uint16Array(await readTexture(renderer.texture('hColour')));
     const history = [0, 1, 2, 3].map((k) => halfToFloat(h[(qy * lw + qx) * 4 + k]));
     // The floor's top face under the middle pixel, in metres.
@@ -121,13 +127,14 @@ export const cases = {
     const lit = lights.map((l) => analytic(l, floor));
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
     const imageMean = image.map((v) => v / (args.frames * lw * lh));
-    return { mean, keyMin, skyMean: skySum / skyTraced, skyTraced, history, skyUp, lit, imageMean, finite, chosen: [...chosen].sort((a, b) => a - b), errors: [...g.errors] };
+    return { mean, keyMin, keyTraced, skyMean: skySum / skyTraced, skyTraced, history, skyUp, lit, imageMean, finite, chosen: [...chosen].sort((a, b) => a - b), errors: [...g.errors] };
   },
 
   /**
    * Which lighting pixels trace the sky ray, over two frames of open ground: those whose row is in
-   * a band of four (rows 0-3, 4-7, ...) taking its turn, a band's turn every other frame. Pixels
-   * that break the rule, and how many traced in each frame.
+   * a band of four (rows 0-3, 4-7, ...) taking its turn, a band's turn every other frame; and the
+   * key light's ray, every other band's turn. Pixels that break each rule, and how many traced the
+   * sky in each frame.
    */
   async skyBands() {
     const g = await gpu();
@@ -136,10 +143,12 @@ export const cases = {
     const renderer = await Renderer.create(g, null, world, null, { size: [64, 64] });
     const [lw, lh] = renderer.lightResolution;
     let broken = 0;
+    let keyBroken = 0;
     const traced: number[] = [];
     for (let f = 0; f < 2; f++) {
       renderer.render(pose, 0, f * 16);
       const sky = new Float32Array(await readTexture(renderer.texture('lSky')));
+      const noisy = new Uint16Array(await readTexture(renderer.texture('lNoisy')));
       let n = 0;
       for (let y = 0; y < lh; y++) {
         for (let x = 0; x < lw; x++) {
@@ -147,12 +156,15 @@ export const cases = {
           const v = sky[y * lw + x];
           if (v >= 0) n++;
           if (turn !== v >= 0 || (v >= 0 && v !== 0 && v !== 1)) broken++;
+          // Open ground under a key at 45°: on its turn the key reaches it (1), off it no sample (-1).
+          const key = halfToFloat(noisy[(y * lw + x) * 4 + 3]);
+          if (key !== (turn ? -1 : 1)) keyBroken++;
         }
       }
       traced.push(n);
     }
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
-    return { broken, traced, pixels: lw * lh, errors: [...g.errors] };
+    return { broken, keyBroken, traced, pixels: lw * lh, errors: [...g.errors] };
   },
 
   /**

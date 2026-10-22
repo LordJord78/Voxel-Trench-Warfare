@@ -6,11 +6,12 @@
 // between pixels there), and less the more it differs than this pixel's noise
 // explains — judged separately for the sky and point light (by their
 // brightness and its tracked variance) and for the key light (by visibility:
-// samples are each 0 or 1, so a mean a over n frames has variance a(1 - a)/n).
+// samples are each 0 or 1, so a mean a over n samples has variance a(1 - a)/n;
+// it is traced every other frame, so a history of n frames holds n/2 of them).
 // So the sky's noise never blurs a shadow edge, and a converged edge stays put.
-// A pixel with under four frames of history has no mean of its own (its few
-// samples are each 0 or 1, which would say it has no noise at all), so its
-// key light's noise is judged from its coplanar neighbours' average instead.
+// A pixel with under four key samples has no mean of its own (its few samples
+// are each 0 or 1, which would say it has no noise at all), so its key light's
+// noise is judged from its coplanar neighbours' average instead.
 // The filter only makes the image shown; the history keeps the plain average.
 #include "lightgrid.wgsl"
 
@@ -90,13 +91,15 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let plane = hitPlane(hit);
   let l = luminance(centre.rgb);
   let length = max(textureLoad(varianceIn, q, 0).g, 1.0);
+  // The key's samples: every other frame of the history's (it is traced by turns with the sky).
+  let keySamples = ceil(length * 0.5);
   let spread = frame.sigmaLuma * sqrt(blurredVariance(q)) + 1e-4;
   // An if, not select: select evaluates both sides, and the neighbours are read only for a short history.
   var a = centre.a;
-  if (length < 4.0) {
+  if (keySamples < 4.0) {
     a = neighbourKey(q, face, plane, centre.a);
   }
-  let spreadKey = SIGMA_KEY * sqrt(a * (1.0 - a) / length) + 1e-3;
+  let spreadKey = SIGMA_KEY * sqrt(a * (1.0 - a) / keySamples) + 1e-3;
   let size = vec2i(frame.lightRes);
   let span = footprint(textureLoad(depths, q, 0).r);
   var rgb = vec3f(0.0);

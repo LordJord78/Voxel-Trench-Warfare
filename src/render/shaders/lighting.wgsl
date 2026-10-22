@@ -3,14 +3,16 @@
 // different one each frame, and that pixel traces what light reaches it:
 //   - the key light (sun or moon): one shadow ray, jittered within a narrow
 //     cone, so penumbrae soften as frames accumulate;
-//   - the sky: one cosine-weighted ray, a few metres long, traced by half the
-//     pixels each frame — bands of four rows, which take turns — so every
-//     pixel traces it every other frame;
+//   - the sky: one cosine-weighted ray, a few metres long;
+//     the key's and the sky's are traced by turns, bands of four rows each
+//     tracing one of the two a frame and the other the next, so every pixel
+//     traces each every other frame;
 //   - one point light, the one ReSTIR chose for this pixel (restir.wgsl),
 //     with one shadow ray, its light scaled by the reservoir's weight.
 // It writes the point light as irradiance (rgb) and the key light's visibility
-// (a), and the sky's visibility on its own (-1 where the ray was not traced):
-// the temporal pass keeps the sky's history apart and turns it into light.
+// (a, -1 where its ray was not traced), and the sky's visibility on its own (-1
+// likewise): the temporal pass keeps their histories as averages of the samples
+// they had, and turns the sky's into light.
 // The representative's depth and hit go alongside, for the denoiser.
 #include "traverse.wgsl"
 #include "camera.wgsl"
@@ -115,7 +117,9 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   // groups skip the ray together. Its samples step through their sequence once per turn.
   let wantKey = dot(n, frame.keyDir) > 0.0 && luminance(frame.keyColour) > 0.0;
   let skyTurn = (((g.y >> 2u) + frame.frame) & 1u) == 0u;
-  let keyDir = coneDir(frame.keyDir, cos(frame.keyCone), noise(g.xy, 0u), noise(g.xy, 1u));
+  // The key's ray on the other turn; its samples, as the sky's, step through their sequence once a turn.
+  let keyTurn = !skyTurn;
+  let keyDir = coneDir(frame.keyDir, cos(frame.keyCone), noiseAt(g.xy, 0u, frame.frame >> 1u), noiseAt(g.xy, 1u, frame.frame >> 1u));
   let skyDir = cosineDir(n, noiseAt(g.xy, 2u, frame.frame >> 1u), noiseAt(g.xy, 3u, frame.frame >> 1u));
   let pick = chosenLight(g.xy, at, n);
   // One call site for all three: inlined three times, the traversal crowds the
@@ -130,7 +134,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
     if (k == 0u) {
       d = keyDir;
       len = 1e7;
-      want = wantKey && dot(keyDir, n) > 0.0;
+      want = keyTurn && wantKey && dot(keyDir, n) > 0.0;
     } else if (k == 2u) {
       d = pick.dir;
       len = pick.len;
@@ -141,6 +145,6 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
       open[k] = 1.0;
     }
   }
-  textureStore(lNoisy, g.xy, vec4f(pick.light * open.z, open.x));
+  textureStore(lNoisy, g.xy, vec4f(pick.light * open.z, select(-1.0, open.x, keyTurn)));
   textureStore(lSky, g.xy, vec4f(select(-1.0, open.y, skyTurn)));
 }
