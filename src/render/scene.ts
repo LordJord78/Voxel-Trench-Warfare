@@ -61,7 +61,7 @@ export interface SceneResources {
  * (black) sky LUTs a scene needs before any light or atmosphere is set.
  */
 export function sceneExtras(device: GPUDevice): { lights: GPUBuffer; noise: GPUTexture; sky: SkyLuts } {
-  const lights = device.createBuffer({ label: 'lights', size: MAX_LIGHTS * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const lights = device.createBuffer({ label: 'lights', size: MAX_LIGHTS * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
   const noise = device.createTexture({ label: 'blue noise', size: [64, 64], format: 'r16uint', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
   device.queue.writeTexture({ texture: noise }, blueNoise(64), { bytesPerRow: 128 }, [64, 64]);
   const empty = (layers = 1) =>

@@ -49,8 +49,8 @@ function scene(name: Scene): { map: BrickMap; pose: CameraPose; lights: SceneLig
   return { map, pose, lights };
 }
 
-/** The light from one unshadowed point light on a +y face, as lighting.wgsl computes it. */
-function analytic(l: SceneLight, at: [number, number, number]): number[] {
+/** The light from one unshadowed point light on a +y face, as light.wgsl computes it. */
+export function analytic(l: SceneLight, at: [number, number, number]): number[] {
   const d = [l.position[0] - at[0], l.position[1] - at[1], l.position[2] - at[2]];
   const dist = Math.hypot(d[0], d[1], d[2]);
   if (dist >= l.radius) return [0, 0, 0];
@@ -82,9 +82,23 @@ export const cases = {
     let keyMin = 1;
     let skySum = 0;
     let skyTraced = 0;
+    // Every lighting pixel's point light, summed over every frame; whether all were numbers; and
+    // which lights the reservoirs held.
+    const image = [0, 0, 0];
+    let finite = true;
+    const chosen = new Set<number>();
     for (let f = 0; f < args.frames; f++) {
       renderer.render(pose, 0, f * 16);
       const px = new Uint16Array(await readTexture(renderer.texture('lNoisy')));
+      for (let k = 0; k < lw * lh; k++) {
+        for (let c = 0; c < 3; c++) {
+          const v = halfToFloat(px[k * 4 + c]);
+          if (!Number.isFinite(v)) finite = false;
+          image[c] += v;
+        }
+      }
+      const held = new Uint32Array(await readBuffer(renderer.reservoirs(), renderer.lightStride * lh * 16));
+      for (let y = 0; y < lh; y++) for (let x = 0; x < lw; x++) chosen.add(held[(y * renderer.lightStride + x) * 4] | 0);
       const i = (qy * lw + qx) * 4;
       const v = [halfToFloat(px[i]), halfToFloat(px[i + 1]), halfToFloat(px[i + 2]), halfToFloat(px[i + 3])];
       for (let k = 0; k < 4; k++) sum[k] += v[k];
@@ -105,7 +119,8 @@ export const cases = {
     const skyUp = [0, 1, 2].map((c) => sky.sunLight[c] * irradiance[3 * 4 + c] + sky.moonLight[c] * irradiance[9 * 4 + c]);
     const lit = lights.map((l) => analytic(l, floor));
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
-    return { mean, keyMin, skyMean: skySum / skyTraced, skyTraced, history, skyUp, lit, errors: [...g.errors] };
+    const imageMean = image.map((v) => v / (args.frames * lw * lh));
+    return { mean, keyMin, skyMean: skySum / skyTraced, skyTraced, history, skyUp, lit, imageMean, finite, chosen: [...chosen].sort((a, b) => a - b), errors: [...g.errors] };
   },
 
   /**

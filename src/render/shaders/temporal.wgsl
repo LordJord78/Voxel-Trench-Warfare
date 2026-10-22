@@ -19,6 +19,7 @@
 #include "camera.wgsl"
 #include "sky.wgsl"
 #include "lightgrid.wgsl"
+#include "history.wgsl"
 
 @group(1) @binding(0) var noisy: texture_2d<f32>;
 @group(1) @binding(1) var depthNow: texture_2d<f32>;
@@ -33,21 +34,6 @@
 @group(1) @binding(9) var depthBefore: texture_2d<f32>;
 // This frame's sky sample per lighting pixel: its visibility, or -1 where it was not traced.
 @group(1) @binding(10) var skyNoisy: texture_2d<f32>;
-
-// Whether last frame's lighting pixel t saw this pixel's surface point: the
-// same face of the same plane, and its own traced point within `reach`.
-fn sameSpot(t: vec2i, face: u32, plane: i32, at: vec3f, reach: f32) -> bool {
-  let h = textureLoad(hitBefore, t, 0).xy;
-  if (hitFace(h) != face || hitPlane(h) != plane) {
-    return false;
-  }
-  let o = select(BAYER4[(frame.frame - 1u) & 15u], BAYER2[(frame.frame - 1u) & 3u], frame.lightScale == 2u);
-  let p = min(vec2u(t) * frame.lightScale + o, frame.prevRes - 1u);
-  // The previous camera carries the jitter its frame applied (zero if it had none).
-  let rd = cameraRay(frame.prev, vec2f(p) + 0.5 + frame.prev.jitter, vec2f(frame.prevRes));
-  let there = frame.prev.origin + rd * textureLoad(depthBefore, t, 0).r;
-  return distance(there, at) <= reach;
-}
 
 // What this pixel's coplanar neighbours traced this frame, in its column and the next either
 // side, four rows up and down (so a band that did not trace the sky reaches the two beside it):
@@ -115,24 +101,16 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let rd = cameraRay(frame.cam, vec2f(p) + 0.5 + frameJitter(), res);
   let depth = textureLoad(depthNow, q, 0).r;
   let at = frame.cam.origin + rd * depth;
-  // A lighting pixel's width at this depth, and a little more: last frame traced a
-  // different pixel of the block, so the same spot can be that far off.
-  let reach = max(1.5, 2.5 * depth * frame.cam.tanHalf * 2.0 / res.x * f32(frame.lightScale));
+  let reach = spotReach(depth);
 
   var before = vec4f(0.0);
   var moments = vec4f(0.0);
   if ((frame.flags & FLAG_HISTORY_RESET) == 0u) {
-    // Where this lighting pixel was last frame: moved by the surface point's motion, not by
-    // its representative's place in the block, which changes every frame and would smear
-    // the history sideways even with the camera still.
-    // In the last frame's lighting grid, which dynamic resolution may have sized differently.
-    let motion = project(frame.prev, at, res) - project(frame.cam, at, res);
-    let scale = f32(frame.lightScale);
-    let grid = ((vec2f(q) + 0.5) * scale + motion) * (vec2f(frame.prevRes) / res) / scale - 0.5;
+    let grid = lastGrid(g.xy, at);
     let base = vec2i(floor(grid));
     let f = grid - floor(grid);
     var total = 0.0;
-    let size = vec2i((frame.prevRes + frame.lightScale - 1u) / frame.lightScale);
+    let size = lastGridSize();
     for (var k = 0; k < 4; k++) {
       let o = vec2i(k & 1, k >> 1);
       let t = base + o;

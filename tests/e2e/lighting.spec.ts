@@ -12,6 +12,10 @@ interface Result {
   history: number[];
   skyUp: number[];
   lit: number[][];
+  /** Every lighting pixel's point light, over every frame, averaged; whether all were numbers; the lights the reservoirs held (-1 none). */
+  imageMean: number[];
+  finite: boolean;
+  chosen: number[];
   errors: string[];
 }
 
@@ -63,13 +67,15 @@ test('light picks follow the weights and the estimate is unbiased', async ({ pag
   }
 });
 
-test('a light with no finite weight is never picked, and the rest are lit as if it were not there', async ({ page }) => {
+test('a light with no finite weight is never chosen, and the rest are lit as if it were not there', async ({ page }) => {
   const broken = await run(page, { scene: 'broken', frames: 64 });
   const alone = await run(page, { scene: 'single', frames: 64 });
-  for (let c = 0; c < 4; c++) {
-    expect(Number.isFinite(broken.mean[c])).toBe(true);
-    expect(broken.mean[c]).toBe(alone.mean[c]);
-  }
+  expect(broken.finite).toBe(true);
+  // Light 1 is the one with no finite weight; light 0 is the single scene's.
+  expect(broken.chosen).not.toContain(1);
+  expect(broken.chosen).toContain(0);
+  for (let c = 0; c < 3; c++) expect(Math.abs(broken.imageMean[c] / alone.imageMean[c] - 1)).toBeLessThanOrEqual(0.03);
+  expect(broken.mean[3]).toBe(alone.mean[3]);
 });
 
 test('a frame takes as many as 1,024 lights, and the last of them lights as it would alone', async ({ page }) => {

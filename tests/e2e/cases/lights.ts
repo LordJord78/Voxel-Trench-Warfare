@@ -1,10 +1,19 @@
 import { Rng } from '../../../src/core/rng';
 import { loadTunables } from '../../../src/core/tunables';
+import { jitter, rayDir, type CameraPose } from '../../../src/render/camera';
+import { PROBE_DUSK } from '../../../src/render/frame-uniforms';
+import { GpuWorld } from '../../../src/render/gpu-world';
 import { cellGrid, CELL_LIGHTS, CELL_METRES, LightCells } from '../../../src/render/light-cells';
 import { lightBuffer, MAX_LIGHTS, type SceneLight } from '../../../src/render/lights';
+import { Renderer } from '../../../src/render/renderer';
+import { BrickMap } from '../../../src/world/bricks';
+import { HeapMirror } from '../../../src/world/encode';
 import { genParams } from '../../../src/world/generation/params';
+import { P } from '../../../src/world/materials';
 import { cellLists } from '../../support/light-cells-ref';
-import { gpu, readBuffer } from '../support/gpu';
+import { gpu, readBuffer, readTexture } from '../support/gpu';
+import { halfToFloat } from '../support/half';
+import { analytic } from './lighting';
 
 const lamp = (position: [number, number, number], radius: number): SceneLight => ({ position, radius, colour: [1, 1, 1], intensity: 1, kind: 'lantern', phase: 0 });
 
@@ -27,7 +36,187 @@ function testLights(seed: number, voxel: number, crowdAt: [number, number]): Sce
   return lights;
 }
 
+/**
+ * An open floor 4 m down, 12.8 m square, the camera 5.6 m over its middle looking straight down
+ * (as the lighting cases have it), lit by `lights` at dusk with the key and sky dark: the renderer,
+ * and the point light at the middle lighting pixel each frame.
+ */
+async function floor(lights: SceneLight[]) {
+  const g = await gpu();
+  const map = new BrickMap({ x: 128, y: 128, z: 128 });
+  map.fillBox(0, 0, 0, 128, 40, 128, P.SOD);
+  const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
+  const renderer = await Renderer.create(g, null, world, null, { size: [64, 64] });
+  renderer.sky = { ...PROBE_DUSK, keyColour: [0, 0, 0], sunLight: [0, 0, 0], moonLight: [0, 0, 0] };
+  renderer.setLights(lights, 1);
+  const pose: CameraPose = { position: [6.4, 9.6, 6.4], yaw: 0, pitch: -89.9 };
+  const [lw, lh] = renderer.lightResolution;
+  const middle = ((lh >> 1) * lw + (lw >> 1)) * 4;
+  let frame = 0;
+  if (lw !== 32 || lh !== 32) throw new Error(`the floor's lighting grid is ${lw} × ${lh}, not 32 × 32 at scale 2`);
+  return {
+    g,
+    renderer,
+    world,
+    /** The floor's top face under the middle pixel, in metres. */
+    at: [pose.position[0], 4.0, pose.position[2]] as [number, number, number],
+    /** Render a frame; the middle lighting pixel's point light (rgb). */
+    async render(): Promise<number[]> {
+      renderer.render(pose, 0, frame++ * 16);
+      const px = new Uint16Array(await readTexture(renderer.texture('lNoisy')));
+      return [0, 1, 2].map((c) => halfToFloat(px[middle + c]));
+    },
+    /**
+     * Render a frame; every lighting pixel's point light (rgb), and the point of the floor it lit
+     * (metres): its representative pixel this frame (lightgrid.wgsl, a 2 × 2 block's), through the
+     * frame's jitter, down to the floor, just off it as the lighting pass weighs it.
+     */
+    async renderAll(): Promise<{ light: number[][]; at: [number, number, number][] }> {
+      const f = frame;
+      renderer.render(pose, 0, frame++ * 16);
+      const px = new Uint16Array(await readTexture(renderer.texture('lNoisy')));
+      const [res, scale] = [[64, 64] as [number, number], 2];
+      const o = [[0, 0], [1, 1], [1, 0], [0, 1]][f & 3];
+      const j = jitter(f);
+      const light: number[][] = [];
+      const at: [number, number, number][] = [];
+      for (let qy = 0; qy < lh; qy++) {
+        for (let qx = 0; qx < lw; qx++) {
+          const i = (qy * lw + qx) * 4;
+          light.push([0, 1, 2].map((c) => halfToFloat(px[i + c])));
+          const d = rayDir(pose, res, qx * scale + o[0] + 0.5 + j[0], qy * scale + o[1] + 0.5 + j[1]);
+          const t = (4.0 - pose.position[1]) / d[1];
+          at.push([pose.position[0] + d[0] * t, 4.002, pose.position[2] + d[2] * t]);
+        }
+      }
+      return { light, at };
+    },
+    destroy() {
+      for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
+    },
+  };
+}
+
+const bulb = (position: [number, number, number], intensity: number, colour: [number, number, number] = [1, 1, 1], radius = 30): SceneLight => ({
+  position, radius, colour, intensity, kind: 'lantern', phase: 0,
+});
+
 export const cases = {
+  /**
+   * Six lights round the floor's middle, of several colours: every lighting pixel's point light
+   * over `frames` frames, its mean (rgb) against the mean of the lights' unshadowed light summed at
+   * the points they lit. (One pixel's history spans some 20 frames, so a pixel alone is far from
+   * that many samples: the whole floor's pixels, each with its own history, are.)
+   */
+  async restirMean(args: { frames: number }) {
+    const lights = [
+      bulb([5.0, 6.0, 6.4], 3, [1, 0.6, 0.3]),
+      bulb([8.0, 5.0, 7.0], 1),
+      bulb([6.4, 8.0, 3.0], 5, [0.4, 0.7, 1]),
+      bulb([9.5, 4.5, 9.5], 2),
+      bulb([3.0, 7.0, 9.0], 4, [1, 0.3, 0.2]),
+      bulb([6.0, 4.6, 5.8], 0.5),
+    ];
+    const s = await floor(lights);
+    const sum = [0, 0, 0];
+    const want = [0, 1, 2].map(() => 0);
+    let n = 0;
+    for (let f = 0; f < args.frames; f++) {
+      const { light, at } = await s.renderAll();
+      light.forEach((v, i) => {
+        for (let c = 0; c < 3; c++) {
+          sum[c] += v[c];
+          want[c] += lights.reduce((t, l) => t + analytic(l, at[i])[c], 0);
+        }
+        n++;
+      });
+    }
+    s.destroy();
+    return { mean: sum.map((v) => v / n), want: want.map((v) => v / n), errors: [...s.g.errors] };
+  },
+
+  /**
+   * One light, lit for 32 frames; then moved, and the very next frame's point light at the
+   * middle against a floor lit from the start by the light where it is now, on the same frame
+   * (so at the same point of the middle's block); then moved out of the floor's reach, and the
+   * next frame's.
+   */
+  async restirMoved() {
+    const moved = bulb([7.5, 5.5, 6.0], 3);
+    const s = await floor([bulb([6.0, 6.5, 6.4], 3)]);
+    const fresh = await floor([moved]);
+    for (let f = 0; f < 32; f++) {
+      await s.render();
+      await fresh.render();
+    }
+    s.renderer.setLights([moved], 1);
+    const there = await s.render();
+    const want = await fresh.render();
+    s.renderer.setLights([bulb([6.0, 6.5, 6.4], 3, [1, 1, 1], 1)], 1);
+    const gone = await s.render();
+    s.destroy();
+    fresh.destroy();
+    return { there, want, gone, errors: [...s.g.errors] };
+  },
+
+  /**
+   * Two lights, the second out of the floor's reach for 32 frames and then brought within it: the
+   * floor's mean point light (rgb) the frame it arrives, against a floor lit by both from the start
+   * on the same frame. Its history never had the newcomer, so this frame's candidates alone can have
+   * drawn it.
+   */
+  async restirArrived() {
+    const stay = bulb([5.0, 6.0, 6.4], 3);
+    const come = bulb([8.0, 5.5, 7.0], 3, [0.4, 0.7, 1]);
+    const away = bulb([8.0, 5.5, 7.0], 3, [0.4, 0.7, 1], 1);
+    const s = await floor([stay, away]);
+    const fresh = await floor([stay, come]);
+    for (let f = 0; f < 32; f++) {
+      await s.render();
+      await fresh.render();
+    }
+    s.renderer.setLights([stay, come], 1);
+    const mean = async (x: Awaited<ReturnType<typeof floor>>) => {
+      const { light } = await x.renderAll();
+      return [0, 1, 2].map((c) => light.reduce((t, v) => t + v[c], 0) / light.length);
+    };
+    const arrived = await mean(s);
+    const want = await mean(fresh);
+    s.destroy();
+    fresh.destroy();
+    return { arrived, want, errors: [...s.g.errors] };
+  },
+
+  /**
+   * The middle lighting pixel's reservoir (light, W, M) after each of `frames` frames, the
+   * history started afresh before frame `reset`; and whether every lighting pixel's reservoir
+   * holds one of the frame's lights (or none) with a weight that is a number, not negative.
+   */
+  async restirReservoirs(args: { frames: number; reset: number }) {
+    const s = await floor([bulb([5.0, 6.0, 6.4], 3), bulb([8.0, 5.0, 7.0], 1), bulb([6.4, 8.0, 3.0], 5)]);
+    const [lw, lh] = s.renderer.lightResolution;
+    const middle = (lh >> 1) * s.renderer.lightStride + (lw >> 1);
+    const seen: { light: number; weight: number; count: number }[] = [];
+    let sound = true;
+    for (let f = 0; f < args.frames; f++) {
+      if (f === args.reset) s.renderer.resetHistory();
+      await s.render();
+      const data = await readBuffer(s.renderer.reservoirs(), s.renderer.lightStride * lh * 16);
+      const u = new Uint32Array(data);
+      const v = new Float32Array(data);
+      seen.push({ light: u[middle * 4] | 0, weight: v[middle * 4 + 1], count: v[middle * 4 + 2] });
+      for (let y = 0; y < lh; y++) {
+        for (let x = 0; x < lw; x++) {
+          const i = (y * s.renderer.lightStride + x) * 4;
+          const light = u[i] | 0;
+          if (!(light === -1 || (light >= 0 && light < 3)) || !(v[i + 1] >= 0) || !Number.isFinite(v[i + 1])) sound = false;
+        }
+      }
+    }
+    s.destroy();
+    return { seen, sound, errors: [...s.g.errors] };
+  },
+
   /**
    * The light cells built on the GPU for `testLights`, after a build in which 200 lights reached
    * every cell (so a cell left empty must have been emptied): the cells whose list differs from the

@@ -8,8 +8,13 @@
  *              give (exposure.wgsl);
  *   beam     — per 8 × 8 tile, how far its rays can go before meeting anything;
  *   primary  — one jittered ray per pixel into the G-buffer, from its tile's beam;
+ *   cells    — the frame's point lights gridded over the map, the nearest 32 a
+ *              cell (light-cells.ts);
+ *   restir   — the point light each lighting pixel shades by, resampled from
+ *              its cell's and carried from frame to frame (restir.ts);
  *   lighting — the light reaching one pixel of each 2 × 2 block (the sky's
- *              ray in half of them, by turns, each frame);
+ *              ray in half of them, by turns, each frame), with one shadow ray
+ *              to its chosen point light;
  *   temporal — that light blended into its reprojected history;
  *   atrous   — three edge-stopping filter passes over it, for display (the
  *              history keeps the plain average, so converged edges stay put);
@@ -47,7 +52,9 @@ import { FarFieldGpu } from './farfield-gpu';
 import { FLAGS, FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
+import { cellGrid, LightCells } from './light-cells';
 import { lightBuffer, type SceneLight } from './lights';
+import { Restir, type RestirPipelines } from './restir';
 import { LIGHT_SCALE, scaledSize, type Preset, type RenderSettings } from './quality';
 import { sceneExtras, sceneGroup, sceneLayout, type SkyLuts } from './scene';
 import { moduleSource } from './shaders';
@@ -63,7 +70,7 @@ import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['sky', 'beam', 'primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'bloom', 'expose', 'present'] as const;
+const PASSES = ['sky', 'beam', 'primary', 'cells', 'restir', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'bloom', 'expose', 'present'] as const;
 type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas' | 'exposure';
 type Timed = (typeof PASSES)[number];
 
@@ -147,6 +154,8 @@ export interface CompiledFrame {
   atmosphere: AtmospherePipelines;
   bloom: BloomPipelines;
   autoExposure: AutoExposurePipelines;
+  cells: GPUComputePipeline;
+  restir: RestirPipelines;
   lights: GPUBuffer;
   noise: GPUTexture;
   /** Empty sky LUTs, for scenes built without an atmosphere. */
@@ -167,6 +176,8 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
       entries: [
         sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), storageTexture(3, 'r32float'), storageTexture(4, 'rg32uint'),
         storageTexture(5, 'r32float'),
+        // This frame's reservoirs (restir.ts).
+        { binding: 6, visibility: STAGE(), buffer: { type: 'read-only-storage' } },
       ],
     }),
     temporal: device.createBindGroupLayout({
@@ -213,7 +224,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure] = await Promise.all([
+  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
@@ -233,8 +244,10 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     Atmosphere.compile(device),
     Bloom.compile(device),
     AutoExposure.compile(device),
+    LightCells.compile(device),
+    Restir.compile(device),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -263,6 +276,9 @@ export class Renderer {
   readonly atmosphere: Atmosphere;
   private readonly bloom: Bloom;
   private readonly autoExposure: AutoExposure;
+  /** The frame's lights gridded over the map, and each lighting pixel's light drawn from them. */
+  private readonly cells: LightCells;
+  private readonly restir: Restir;
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
   /** Bind groups by frame parity: histories ping-pong between two sets of textures. */
@@ -321,6 +337,8 @@ export class Renderer {
     this.far = options.far ?? FarFieldGpu.empty(device);
     this.atmosphere = Atmosphere.create(device, compiled.atmosphere, options.atmosphere ?? atmosphereModel(loadTunables()));
     this.bloom = Bloom.create(device, compiled.bloom);
+    this.cells = LightCells.create(device, compiled.cells, compiled.lights, cellGrid(world.map.dims, this.voxelSize()), this.voxelSize());
+    this.restir = Restir.create(device, compiled.restir, this.frameBuffer, compiled.lights, this.cells);
     this.preset = options.preset ?? 'high';
     this.lightScale = LIGHT_SCALE[this.preset];
     this.budgetMs = options.budgetMs ?? 14;
@@ -426,6 +444,7 @@ export class Renderer {
     make('filteredB', 'rgba16float', light);
     make('denoised', 'rgba16float', light);
     const view = (name: string) => this.textures[name].createView();
+    this.restir.resize(light, { gDepth: view('gDepth'), gHit: view('gHit'), hDepth: [view('hDepth0'), view('hDepth1')], hHit: [view('hHit0'), view('hHit1')] });
     const group = (pass: ComputePass | 'present', resources: GPUBindingResource[]) =>
       this.device.createBindGroup({ label: pass, layout: this.compiled.layouts[pass], entries: resources.map((resource, binding) => ({ binding, resource })) });
     this.groups = [0, 1].map((cur) => {
@@ -433,7 +452,7 @@ export class Renderer {
       return {
         beam: group('beam', [view('beam')]),
         primary: group('primary', [view('gDepth'), view('gHit'), view('gMotion'), view('beam')]),
-        lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view('lSky')]),
+        lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view('lSky'), { buffer: this.restir.written(cur) }]),
         temporal: group('temporal', [
           view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view(`hHit${prev}`), view(`hColour${prev}`), view(`hMoments${prev}`),
           view(`hColour${cur}`), view(`hMoments${cur}`), view('variance'), view(`hDepth${prev}`), view('lSky'),
@@ -467,6 +486,16 @@ export class Renderer {
   sceneBindGroup(): GPUBindGroup {
     if (!this.sceneGroup) throw new Error('no frame rendered yet');
     return this.sceneGroup;
+  }
+
+  /** The reservoirs the last frame wrote (restir.ts), in rows of `lightStride`. */
+  reservoirs(): GPUBuffer {
+    return this.restir.written((this.frameIndex + 1) & 1);
+  }
+
+  /** The reservoirs' row stride, in reservoirs. */
+  get lightStride(): number {
+    return this.restir.rowStride;
   }
 
   /** A texture by name; a history (hDepth, hHit, hColour, hMoments, taa) is the one the last frame wrote. */
@@ -570,6 +599,8 @@ export class Renderer {
     const light = this.lightResolution;
     pass('beam', 'beam', [Math.ceil(this.res[0] / 8), Math.ceil(this.res[1] / 8)]);
     pass('primary', 'primary', this.res);
+    this.cells.encode(encoder, this.lightCount, this.timer.writes('cells'));
+    this.restir.encode(encoder, this.frameIndex & 1, light, this.timer.writes('restir'));
     pass('lighting', 'lighting', light);
     pass('temporal', 'temporal', light);
     pass('atrous1', 'atrous', light);
@@ -610,6 +641,7 @@ export class Renderer {
       p.draw(3);
       p.end();
     }
+    this.restir.keep(encoder, this.compiled.lights);
     this.timer.resolve(encoder);
     device.queue.submit([encoder.finish()]);
     this.timer.collect();

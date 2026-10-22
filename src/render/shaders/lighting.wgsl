@@ -6,8 +6,8 @@
 //   - the sky: one cosine-weighted ray, a few metres long, traced by half the
 //     pixels each frame — bands of four rows, which take turns — so every
 //     pixel traces it every other frame;
-//   - one point light, picked by how much it would add if nothing were in
-//     the way, with one shadow ray, weighted back by how likely the pick was.
+//   - one point light, the one ReSTIR chose for this pixel (restir.wgsl),
+//     with one shadow ray, its light scaled by the reservoir's weight.
 // It writes the point light as irradiance (rgb) and the key light's visibility
 // (a), and the sky's visibility on its own (-1 where the ray was not traced):
 // the temporal pass keeps the sky's history apart and turns it into light.
@@ -15,6 +15,7 @@
 #include "traverse.wgsl"
 #include "camera.wgsl"
 #include "lightgrid.wgsl"
+#include "reservoir.wgsl"
 
 @group(1) @binding(0) var gDepth: texture_2d<f32>;
 @group(1) @binding(1) var gHit: texture_2d<u32>;
@@ -22,8 +23,10 @@
 @group(1) @binding(3) var hDepth: texture_storage_2d<r32float, write>;
 @group(1) @binding(4) var hHit: texture_storage_2d<rg32uint, write>;
 @group(1) @binding(5) var lSky: texture_storage_2d<r32float, write>;
+// This frame's reservoirs: each lighting pixel's light.
+@group(1) @binding(6) var<storage, read> reservoirs: array<Reservoir>;
 
-const NOISE_OFFSETS = array(vec2u(0u, 0u), vec2u(17u, 39u), vec2u(41u, 7u), vec2u(29u, 53u), vec2u(5u, 23u));
+const NOISE_OFFSETS = array(vec2u(0u, 0u), vec2u(17u, 39u), vec2u(41u, 7u), vec2u(29u, 53u));
 
 // The k-th random number of lighting pixel q at its `step`-th sample: blue
 // noise in space, stepped through time by the golden ratio, in integers so it
@@ -58,8 +61,8 @@ fn cosineDir(n: vec3f, u1: f32, u2: f32) -> vec3f {
   return normalize(basis(n) * vec3f(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1))));
 }
 
-// Pick one light by its unshadowed contribution; its weighted contribution
-// and the direction and length of its shadow ray, or zero if none reaches.
+// This pixel's point light: its reservoir's light, as if nothing were in the way, scaled by the
+// reservoir's weight; and the direction and length of its shadow ray. Nothing if it chose none.
 struct Pick {
   light: vec3f,
   dir: vec3f,
@@ -70,43 +73,17 @@ struct Pick {
 // lantern's own glass, a voxel behind its flame) casts it no shadow.
 const LIGHT_FITTING: f32 = 1.5;
 
-// One pass over the lights, as a weighted reservoir: light i replaces the pick
-// with probability w_i over the weight seen so far, which leaves each light
-// picked in proportion to its weight. The one random number is rescaled at
-// each step to serve the next, so no light is weighed twice. A weight that is
-// not positive (NaN included) never enters, and the pick is weighted back by
-// the weight it was chosen with, not one recomputed (which may round to 0).
-fn pickLight(p: vec3f, n: vec3f, u0: f32) -> Pick {
+fn chosenLight(q: vec2u, p: vec3f, n: vec3f) -> Pick {
   var out = Pick(vec3f(0.0), vec3f(0.0, 1.0, 0.0), 0.0);
-  let count = min(frame.lightCount, MAX_LIGHTS);
-  var total = 0.0;
-  var picked = -1;
-  var pickedW = 0.0;
-  var u = u0;
-  for (var i = 0u; i < count; i++) {
-    let w = luminance(unshadowed(lights[i], p, n));
-    if (!(w > 0.0)) {
-      continue;
-    }
-    total += w;
-    let keep = w / total;
-    if (u < keep) {
-      picked = i32(i);
-      pickedW = w;
-      u = u / keep;
-    } else {
-      u = (u - keep) / (1.0 - keep);
-    }
-  }
-  if (picked < 0) {
+  let r = reservoirs[reservoirAt(q)];
+  if (r.light >= min(frame.lightCount, MAX_LIGHTS)) {
     return out;
   }
-  let l = lights[picked];
-  let c = unshadowed(l, p, n);
+  let l = lights[r.light];
   let d = l.pos - p;
   let dist = length(d);
-  out.light = c * (total / pickedW);
-  out.dir = d / dist;
+  out.light = unshadowed(l, p, n) * r.weight;
+  out.dir = d / max(dist, 1e-6);
   // The shadow ray ends LIGHT_FITTING short of the light, so its own fitting (a lantern's glass, a
   // voxel behind its flame) does not shadow it. A point that near has nothing in the way (len <= 0).
   out.len = dist - LIGHT_FITTING;
@@ -133,14 +110,14 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let n = faceNormal(face);
   let at = frame.cam.origin + rd * depth + n * 0.02;
 
-  // The three rays this pixel traces: the key light's, the sky's and the picked light's. The sky's
+  // The three rays this pixel traces: the key light's, the sky's and the chosen light's. The sky's
   // only on its band's turn: a band of four rows is one SIMD group of 32 here (8 wide), so whole
   // groups skip the ray together. Its samples step through their sequence once per turn.
   let wantKey = dot(n, frame.keyDir) > 0.0 && luminance(frame.keyColour) > 0.0;
   let skyTurn = (((g.y >> 2u) + frame.frame) & 1u) == 0u;
   let keyDir = coneDir(frame.keyDir, cos(frame.keyCone), noise(g.xy, 0u), noise(g.xy, 1u));
   let skyDir = cosineDir(n, noiseAt(g.xy, 2u, frame.frame >> 1u), noiseAt(g.xy, 3u, frame.frame >> 1u));
-  let pick = pickLight(at, n, noise(g.xy, 4u));
+  let pick = chosenLight(g.xy, at, n);
   // One call site for all three: inlined three times, the traversal crowds the
   // GPU's registers and fewer pixels run at once. The count comes from the
   // frame so the compiler cannot unroll the loop back into three.
