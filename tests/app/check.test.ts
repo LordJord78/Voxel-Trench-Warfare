@@ -1,3 +1,4 @@
+import { CLOCK_KEYS } from '../../src/core/sky-clock';
 import { describe, expect, it } from 'vitest';
 import { runCheck, type CheckGame, type CheckReport } from '../../src/app/check';
 import { VIEW_NAMES } from '../../src/app/views';
@@ -11,7 +12,7 @@ function game(over: Partial<CheckGame> = {}): CheckGame {
     timings: { fill: 1500 },
     setQuality: () => {},
     view: () => {},
-    viewTime: (name) => (name === 'nml-night' ? 1 : 0),
+    viewHours: (name) => (name === 'nml-night' ? CLOCK_KEYS.night : CLOCK_KEYS.dusk),
     waitFrames: async () => {},
     waitConverged: async () => {},
     stats: () => stats,

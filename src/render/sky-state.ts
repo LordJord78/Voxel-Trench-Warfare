@@ -13,10 +13,13 @@
  * blue-violet (`sky.moon_tint`).
  *
  * The key light, the one that casts shadows, is whichever of the two is
- * brighter where its light reaches the ground, crossfaded over the 2° of the
- * sun's elevation round where the sun's falls to the moon's: its colour mixes
- * the two, and its direction turns from one to the other, so neither moves
- * with a jump.
+ * brighter where its light reaches the ground, handed over through darkness
+ * where the sun's falls to the moon's: over the 2° of the sun's elevation
+ * above, the sun's fades out; over the 2° below, the moon's fades in; and the
+ * key turns from one to the other while it is dark, so it neither jumps in
+ * brightness nor swings across the sky. The sun's fade is no steeper than its
+ * own light's fall as its disc sets; the moon's shadows come in as the
+ * twilight goes, as they would.
  */
 
 import { CLOCK_KEYS, celestial } from '../core/sky-clock';
@@ -45,10 +48,11 @@ export interface SkyState {
   moonColour: Vec3;
   keyDir: Vec3;
   keyColour: Vec3;
-  /** The sun's share of the key light, 0 to 1. */
+  /** The sun's share of the key light, 0 to 1 (the moon's is the key's when it is 0). */
   keyWeight: number;
   /** Per metre, at the ground. */
   fogDensity: number;
+  /** The exposure's bias for the hour (see exposure.wgsl). */
   exposure: number;
   /** How brightly the static flares burn, 0 to 1. */
   flares: number;
@@ -60,8 +64,8 @@ const EYE_KM = 0.0016;
 const DISC_DEG = 0.265;
 /** The moon's sky is built while it is above this: lower, its light on the air is too faint to see. */
 const MOON_SKY_DEG = -10;
-/** The key's crossfade, in degrees of the sun's elevation either side of the crossing. */
-const CROSSFADE_DEG = 1;
+/** The key's fades, in degrees of the sun's elevation either side of the crossing. */
+const CROSSFADE_DEG = 2;
 /** A magnitude-0 star's light against the full moon's: 2.1e-6 lux against 0.25. */
 const MAG0_PER_FULL_MOON = 8.4e-6;
 
@@ -77,8 +81,12 @@ function triple(tun: Tunables, key: string): Vec3 {
   return [v[0], v[1], v[2]];
 }
 
-/** A value keyed to the clock's four hours (dawn, noon, dusk, night), linear between them by the hour, round the clock. */
-function keyed(tun: Tunables, key: string, hours: number): number {
+/**
+ * A value keyed to the clock's four hours (dawn, noon, dusk, night), between them by the hour round
+ * the clock: linearly, or for a scale (`geometric`) evenly in its log, so a change of eight times
+ * between keys never runs fast at the small end.
+ */
+function keyed(tun: Tunables, key: string, hours: number, geometric = false): number {
   const values = tun.get(`sky.${key}`);
   if (!Array.isArray(values) || values.length !== KEYS.length) throw new TypeError(`sky.${key} needs ${KEYS.length} keys`);
   const h = ((hours % 24) + 24) % 24;
@@ -86,7 +94,9 @@ function keyed(tun: Tunables, key: string, hours: number): number {
     const from = KEYS[k];
     const to = k + 1 < KEYS.length ? KEYS[k + 1] : KEYS[0] + 24;
     const at = h < from ? h + 24 : h;
-    if (at >= from && at <= to) return values[k] + ((values[(k + 1) % KEYS.length] - values[k]) * (at - from)) / (to - from);
+    const f = (at - from) / (to - from);
+    const [a, b] = [values[k], values[(k + 1) % KEYS.length]];
+    if (at >= from && at <= to) return geometric ? a * Math.pow(b / a, f) : a + (b - a) * f;
   }
   return values[0];
 }
@@ -106,24 +116,6 @@ function throughAir(m: AtmosphereModel, light: readonly number[], elevationDeg: 
 /** A Lambertian sphere's brightness at phase angle alpha (radians), against full. */
 function lambertPhase(alpha: number): number {
   return (Math.sin(alpha) + (Math.PI - alpha) * Math.cos(alpha)) / Math.PI;
-}
-
-function slerp(a: readonly number[], b: readonly number[], t: number): Vec3 {
-  const cos = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
-  const theta = Math.acos(cos);
-  if (theta < 1e-6) return [a[0], a[1], a[2]];
-  // Opposite lights (within a hair): turn over the top of the sky.
-  const s = Math.sin(theta);
-  if (s < 1e-6) {
-    const up = t < 0.5 ? scale(a, Math.cos(Math.PI * t)) : scale(b, -Math.cos(Math.PI * t));
-    const lift = Math.sin(Math.PI * t);
-    const v: Vec3 = [up[0], up[1] + lift, up[2]];
-    const l = Math.hypot(...v);
-    return [v[0] / l, v[1] / l, v[2] / l];
-  }
-  const wa = Math.sin((1 - t) * theta) / s;
-  const wb = Math.sin(t * theta) / s;
-  return [a[0] * wa + b[0] * wb, a[1] * wa + b[1] * wb, a[2] * wa + b[2] * wb];
 }
 
 /** The sun's elevation, in degrees, at which its light at the ground falls to `target` luminance. */
@@ -154,9 +146,11 @@ export function skyState(tun: Tunables, hours: number): SkyState {
   const sunColour = throughAir(m, sunLight, c.sun.elevationDeg);
   const moonColour = throughAir(m, moonLight, c.moon.elevationDeg);
   const cross = crossing(m, sunLight, luminance(moonColour));
-  const w = smoothstep(cross - CROSSFADE_DEG, cross + CROSSFADE_DEG, c.sun.elevationDeg);
-  const keyColour: Vec3 = [0, 1, 2].map((k) => sunColour[k] * w + moonColour[k] * (1 - w)) as Vec3;
-  const keyDir = w >= 1 ? c.sun.dir : w <= 0 ? c.moon.dir : slerp(c.moon.dir, c.sun.dir, w);
+  const sunShare = smoothstep(cross, cross + CROSSFADE_DEG, c.sun.elevationDeg);
+  const moonShare = 1 - smoothstep(cross - CROSSFADE_DEG, cross, c.sun.elevationDeg);
+  const keyColour = sunShare > 0 ? scale(sunColour, sunShare) : scale(moonColour, moonShare);
+  const keyDir = sunShare > 0 ? c.sun.dir : c.moon.dir;
+  const w = sunShare;
   return {
     hours,
     sunDir: c.sun.dir,
@@ -173,7 +167,7 @@ export function skyState(tun: Tunables, hours: number): SkyState {
     keyColour,
     keyWeight: w,
     fogDensity: keyed(tun, 'fog_density', hours),
-    exposure: keyed(tun, 'exposure', hours),
+    exposure: keyed(tun, 'exposure', hours, true),
     flares: keyed(tun, 'flares', hours),
   };
 }
@@ -194,9 +188,17 @@ export function frameSky(sky: SkyState, tun: Tunables): FrameSky {
     moonFull: sky.moonFull,
     stars: sky.stars,
     starBrightness: sky.starBrightness,
+    exposureLight: tun.f('sky.exposure_light'),
+    exposureFloor: tun.f('sky.exposure_floor'),
     fogDensity: sky.fogDensity,
     fogHeight: tun.f('render.fog_height_m'),
     fogBase: tun.f('world.ground_level_m'),
+    hazeKey: tun.f('sky.haze_key'),
+    hazeForward: tun.f('sky.haze_forward'),
+    hazeSky: tun.f('sky.haze_sky'),
+    frontGlow: scale(triple(tun, 'sky.front_glow'), sky.flares),
+    smokeDensity: tun.f('sky.smoke_density'),
+    smokeHeight: tun.f('sky.smoke_height_m'),
     skyRay: tun.f('render.sky_ray_m') / voxel,
   };
 }

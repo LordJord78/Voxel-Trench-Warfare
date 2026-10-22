@@ -48,9 +48,18 @@ const SKY_UNIT = [
   [0.01, 0.012, 0.02],
 ].map((layer) => layer.map((v) => halfToFloat(floatToHalf(v * LUT_SCALE)) / LUT_SCALE));
 
-/** What fog glows with, and the sky in any direction, before the moon's disc. */
+/** The sky in any direction, before the moon's disc. */
 function skyLight(sky: FrameSky): number[] {
   return [0, 1, 2].map((c) => sky.sunLight[c] * SKY_UNIT[0][c] + sky.moonLight[c] * SKY_UNIT[1][c]);
+}
+
+/**
+ * What the haze (the fog and the smoke) glows with looking along rd: the key's light all round and
+ * more toward it, and the front's; this case's sky puts no light on faces, so none from above.
+ */
+function hazeRef(sky: FrameSky, rd: readonly number[]): number[] {
+  const c = Math.max(dot(rd, sky.keyDir), 0);
+  return [0, 1, 2].map((k) => sky.keyColour[k] * (sky.hazeKey + sky.hazeForward * c ** 4) + sky.frontGlow[k]);
 }
 
 function skyRef(sky: FrameSky, rd: readonly number[]): number[] {
@@ -103,12 +112,16 @@ export function shadeRef(r: Region, pose: CameraPose, px: number, py: number, sk
       colour = [0, 1, 2].map((c) => albedo[c] * lit[c] * 0.6 + fresnel * reflected[c]);
     }
   }
-  const start = Math.exp(-(pose.position[1] - sky.fogBase) / sky.fogHeight);
-  const x = (rd[1] * metres) / sky.fogHeight;
-  const shape = Math.abs(x) < 1e-3 ? 1 - 0.5 * x : (1 - Math.exp(-x)) / x;
-  const t = Math.exp(-Math.max(sky.fogDensity * start * metres * shape, 0));
-  const fogColour = skyLight(sky);
-  return [0, 1, 2].map((c) => colour[c] * t + fogColour[c] * (1 - t));
+  // Each haze's depth between the eye and the point: the ground fog, and the smoke over it.
+  const depth = (density: number, height: number) => {
+    const start = Math.exp(-(pose.position[1] - sky.fogBase) / height);
+    const x = (rd[1] * metres) / height;
+    const shape = Math.abs(x) < 1e-3 ? 1 - 0.5 * x : (1 - Math.exp(-x)) / x;
+    return density * start * metres * shape;
+  };
+  const t = Math.exp(-Math.max(depth(sky.fogDensity, sky.fogHeight) + depth(sky.smokeDensity, sky.smokeHeight), 0));
+  const haze = hazeRef(sky, rd);
+  return [0, 1, 2].map((c) => colour[c] * t + haze[c] * (1 - t));
 }
 
 export const cases = {
@@ -187,8 +200,7 @@ export const cases = {
       const i = (y * 16 + x) * 4;
       // The reference sees the light as the texture stored it: in half floats.
       const stored: Region = { ...r, light: r.light.map((v) => halfToFloat(floatToHalf(v))) as Region['light'] };
-      const rd = rayDir(args.pose, RES, x + 0.5, y + 0.5);
-      const fog = skyLight(sky);
+      const fog = hazeRef(sky, rayDir(args.pose, RES, x + 0.5, y + 0.5));
       return { got: [px[i], px[i + 1], px[i + 2]], want: shadeRef(stored, args.pose, x, y, sky), fog };
     });
     for (const t of [gDepth, gHit, out, light, lightHit]) t.destroy();

@@ -149,7 +149,8 @@ export const cases = {
     const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
     const renderer = await Renderer.create(g, null, world, null, { size: [128, 128] });
     renderer.sky = { ...PROBE_DUSK, keyColour: [0, 0, 0], sunLight: [0, 0, 0], moonLight: [0, 0, 0] };
-    const light: SceneLight = { position: lanternLight(glass, 0.1), radius: 7, colour: [1, 1, 1], intensity: 2.5, kind: 'lantern' };
+    // The room is toward -z: the lantern faces it.
+    const light: SceneLight = { position: lanternLight(glass, [0, 0, -1], 0.1), radius: 7, colour: [1, 1, 1], intensity: 2.5, kind: 'lantern' };
     renderer.setLights([light], 1);
     const pose: CameraPose = { position: [6.45, 6.05, 8.0], yaw: 0, pitch: 0 };
     const [lw, lh] = [64, 64];

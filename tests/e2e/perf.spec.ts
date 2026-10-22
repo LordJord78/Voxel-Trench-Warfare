@@ -6,15 +6,16 @@ import { hooks, openGame } from './support/app';
 test.use({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
 
 const VIEWS = ['bay', 'step', 'nml-night', 'overview', 'dugout', 'hamlet'];
-const TIMES: Record<string, number> = { dusk: 0, night: 1 };
+// The clock's hours: each view at dusk and at night, as before, and at noon, the sky's brightest.
+const TIMES: Record<string, number> = { dusk: 17 + 35 / 60, night: 21, noon: 12 };
 const BUDGET_MS = 14;
 // Frames for the histories and the GPU's clocks to settle at a view, then frames whose GPU times
 // are read: one frame's time wanders by a millisecond or two, their median does not.
 const SETTLE = 90;
 const SAMPLES = 31;
 
-test('every standard view renders within the GPU budget at 1.5 MP, at dusk and at night', async ({ page }) => {
-  test.setTimeout(240_000);
+test('every standard view renders within the GPU budget at 1.5 MP, at dusk, at night and at noon', async ({ page }) => {
+  test.setTimeout(300_000);
   const errors = await openGame(page);
   // Measured at the high preset's full 1.5 MP: dynamic resolution would hide a slow view.
   await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
@@ -47,7 +48,7 @@ test('every standard view renders within the GPU budget at 1.5 MP, at dusk and a
       medians[name][time] = times[times.length >> 1];
     }
   }
-  console.log(`GPU ms per view, median of ${SAMPLES} frames (dusk/night): ${VIEWS.map((v) => `${v} ${medians[v].dusk.toFixed(2)}/${medians[v].night.toFixed(2)}`).join(', ')}`);
+  console.log(`GPU ms per view, median of ${SAMPLES} frames (dusk/night/noon): ${VIEWS.map((v) => `${v} ${medians[v].dusk.toFixed(2)}/${medians[v].night.toFixed(2)}/${medians[v].noon.toFixed(2)}`).join(', ')}`);
   expect(errors).toEqual([]);
   for (const name of VIEWS) for (const time of Object.keys(TIMES)) expect(medians[name][time], `${name} at ${time}`).toBeLessThanOrEqual(BUDGET_MS);
 });

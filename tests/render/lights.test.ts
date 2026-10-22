@@ -14,13 +14,20 @@ describe('the scene\'s lights', () => {
   const lights = sceneLights(plan, tun);
   const lanterns = lights.filter((l) => l.kind === 'lantern');
   const flares = lights.filter((l) => l.kind === 'flare');
-  it('hang one lantern in each dugout, in the middle of its glass', () => {
+  it('hang one lantern in each dugout, its flame a voxel into the chamber from its glass, 15 cm off the wall', () => {
     const dugouts = plan.lines.flatMap((l) => l.dugouts);
     expect(lanterns).toHaveLength(dugouts.length);
+    const inside = (d: (typeof dugouts)[number], c: number[]) => c[0] >= d.lo[0] && c[0] < d.hi[0] && c[2] >= d.lo[2] && c[2] < d.hi[2];
     dugouts.forEach((d, i) => {
-      const at = lanterns[i].position.map((m) => m / v - 0.5);
       const glass = lanternVoxel(d, p);
-      for (let k = 0; k < 3; k++) expect(at[k]).toBeCloseTo(glass[k], 9);
+      // The voxel the flame stands in the middle of, and the step to it from the glass.
+      const flame = lanterns[i].position.map((m) => m / v - 0.5);
+      const step = flame.map((c, k) => c - glass[k]);
+      expect(Math.abs(step[0]) + Math.abs(step[2])).toBeCloseTo(1, 9);
+      expect(step[1]).toBeCloseTo(0, 9);
+      // In the chamber's air; behind the glass, the wall it hangs on.
+      expect(inside(d, flame.map(Math.round))).toBe(true);
+      expect(inside(d, glass.map((c, k) => c - Math.round(step[k])))).toBe(false);
     });
   });
   it('hangs the same flares over no man\'s land for the same seed', () => {

@@ -6,8 +6,13 @@ export interface Hooks {
   error?: string;
   ms: number;
   view(name: string): void;
+  /** The clock, in hours. */
   setTimeOfDay(t: number): void;
   timeOfDay(): number;
+  /** The exposure the last frame was presented at. */
+  exposure(): Promise<number>;
+  /** The sun's elevation the last frame was lit at, in degrees. */
+  sunElevation(): number;
   frames(): number;
   waitFrames(n: number): Promise<void>;
   stats(): {
@@ -35,7 +40,7 @@ export interface Hooks {
   waitConverged(): Promise<void>;
   promptMs?: number;
   phases: string[];
-  views: Record<string, { position: [number, number, number]; yaw: number; pitch: number; time: number }>;
+  views: Record<string, { position: [number, number, number]; yaw: number; pitch: number; hours: number }>;
   world: { spawn: { position: [number, number, number] } };
 }
 

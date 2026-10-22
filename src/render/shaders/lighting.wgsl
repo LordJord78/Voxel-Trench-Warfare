@@ -80,6 +80,10 @@ struct Pick {
   len: f32,
 }
 
+// Voxels short of a point light its shadow rays end: whatever lies within this of the light (a
+// lantern's own glass, a voxel behind its flame) casts it no shadow.
+const LIGHT_FITTING: f32 = 1.5;
+
 // One pass over the lights, as a weighted reservoir: light i replaces the pick
 // with probability w_i over the weight seen so far, which leaves each light
 // picked in proportion to its weight. The one random number is rescaled at
@@ -117,15 +121,9 @@ fn pickLight(p: vec3f, n: vec3f, u0: f32) -> Pick {
   let dist = length(d);
   out.light = c * (total / pickedW);
   out.dir = d / dist;
-  // The shadow ray stops where it reaches the light's own voxel, so a lantern's glass does not
-  // shadow its own light. A point already touching that voxel has nothing in the way (len <= 0).
-  let lo = floor(l.pos);
-  let moving = out.dir != vec3f(0.0);
-  let inv = select(vec3f(1e30), vec3f(1.0) / out.dir, moving);
-  let t0 = (lo - p) * inv;
-  let t1 = (lo + 1.0 - p) * inv;
-  let tNear = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), min(t0.z, t1.z));
-  out.len = min(tNear, dist) - 0.01;
+  // The shadow ray ends LIGHT_FITTING short of the light, so its own fitting (a lantern's glass, a
+  // voxel behind its flame) does not shadow it. A point that near has nothing in the way (len <= 0).
+  out.len = dist - LIGHT_FITTING;
   return out;
 }
 

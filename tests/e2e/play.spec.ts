@@ -111,9 +111,21 @@ test('Esc pauses, and the menu changes the game', async ({ page }) => {
   await page.locator('#fov').fill('70');
   await hooks(page, (h) => h.waitFrames(2));
   expect(await hooks(page, (h) => h.camera().fov)).toBeCloseTo(70, 6);
-  await page.locator('#time').fill('1');
+  await page.locator('#time').fill('21');
   await hooks(page, (h) => h.waitFrames(2));
-  expect(await hooks(page, (h) => h.timeOfDay())).toBe(1);
+  expect(await hooks(page, (h) => h.timeOfDay())).toBe(21);
+  await expect(page.locator('#time-value')).toHaveText('21:00');
+  // Time passing, ten minutes a second: the clock runs on behind the menu.
+  await page.locator('input[name="lapse"][value="10"]').check();
+  await hooks(page, (h) => h.waitFrames(60));
+  const later = await hooks(page, (h) => h.timeOfDay());
+  expect(later).toBeGreaterThan(21.05);
+  expect(later).toBeLessThan(21.6);
+  await page.locator('input[name="lapse"][value="0"]').check();
+  await hooks(page, (h) => h.waitFrames(2));
+  const held = await hooks(page, (h) => h.timeOfDay());
+  await hooks(page, (h) => h.waitFrames(30));
+  expect(await hooks(page, (h) => h.timeOfDay())).toBe(held);
   await page.locator('input[name="preset"][value="low"]').check();
   await hooks(page, (h) => h.waitFrames(2));
   expect(await hooks(page, (h) => h.stats().preset)).toBe('low');
@@ -192,7 +204,7 @@ test('the developer keys work only with the F3 overlay open', async ({ page }) =
   await page.keyboard.press('Digit4');
   await page.keyboard.press('KeyT');
   await hooks(page, (h) => h.waitFrames(3));
-  expect(await hooks(page, (h) => [h.mode(), h.timeOfDay()])).toEqual(['playing', 0]);
+  expect(await hooks(page, (h) => [h.mode(), h.timeOfDay()])).toEqual(['playing', 17 + 35 / 60]);
   await page.keyboard.press('F3');
   await page.keyboard.press('Digit4');
   await hooks(page, (h) => h.waitFrames(3));

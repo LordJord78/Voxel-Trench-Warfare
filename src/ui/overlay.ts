@@ -4,6 +4,7 @@
  * the numbers, so it can be tested without a page.
  */
 
+import { clockText } from '../core/sky-clock';
 import type { GpuWorldStats } from '../render/gpu-world';
 import type { Preset } from '../render/quality';
 import { bayIndex, type BayLookup, type WorldPlan } from '../world/generation/plan';
@@ -22,6 +23,7 @@ export interface OverlayInfo {
   position: [number, number, number];
   yaw: number;
   pitch: number;
+  /** The clock, in hours. */
   timeOfDay: number;
   place: string;
 }
@@ -39,7 +41,7 @@ export function overlayText(i: OverlayInfo): string {
     `world ${w.denseBricks.toLocaleString('en-US')} dense bricks  heap ${(w.heapUsedBytes / MB).toFixed(1)} / ${(w.heapCapacityBytes / MB).toFixed(1)} MB  ` +
       `table ${(w.tableBytes / MB).toFixed(1)} MB  ${w.pending} upload${w.pending === 1 ? '' : 's'} pending`,
   );
-  lines.push(`at ${i.position.map((v) => v.toFixed(1)).join(', ')} m  yaw ${Math.round(i.yaw)}° pitch ${Math.round(i.pitch)}°  time ${i.timeOfDay.toFixed(2)}`);
+  lines.push(`at ${i.position.map((v) => v.toFixed(1)).join(', ')} m  yaw ${Math.round(i.yaw)}° pitch ${Math.round(i.pitch)}°  ${clockText(i.timeOfDay)}`);
   lines.push(i.place);
   return lines.join('\n');
 }

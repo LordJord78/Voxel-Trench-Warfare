@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { CLOCK_KEYS, celestial } from '../../src/core/sky-clock';
 import { loadTunables } from '../../src/core/tunables';
-import { skyState } from '../../src/render/sky-state';
+import { PROBE_DUSK } from '../../src/render/frame-uniforms';
+import { frameSky, skyState } from '../../src/render/sky-state';
 
 const tun = loadTunables();
 const dir = (az: number, el: number) => {
@@ -42,27 +43,62 @@ describe('the sky by the clock', () => {
     expect(lum(newMoon.moonLight)).toBeLessThan(0.001);
   });
 
-  it("hands the key light from the sun to the moon without a jump, crossfaded over 2° of the sun's elevation", () => {
-    // Every 10 s of the clock from 17:00 to 22:00, across sunset (about 17:50 on the day).
+  it("hands the key light from the sun to the moon through darkness, over the 2° of the sun's elevation either side of where they cross", () => {
+    // Every 10 s of the clock from 17:00 to 22:00, across sunset (about 18:05 on the day).
     const states = Array.from({ length: 5 * 360 + 1 }, (_, i) => skyState(tun, 17 + i / 360));
     const scale = lum(skyState(tun, CLOCK_KEYS.dusk).keyColour);
-    for (let i = 6; i < states.length; i += 6) {
-      const [a, b] = [states[i - 6], states[i]];
-      // A minute's change is never more than 5% of the dusk key's brightness, nor a swing of 30°.
-      expect(Math.abs(lum(b.keyColour) - lum(a.keyColour))).toBeLessThan(0.05 * scale);
-      expect(angle(a.keyDir, b.keyDir)).toBeLessThan(30);
-    }
-    // Where the sun's light falls to the moon's: the key is the sun's 1° of the sun's elevation
-    // above it, and the moon's 1° below, crossfaded between.
+    // No minute steps the key more than the sun's own light steps as its disc sets: the hand-over
+    // adds no step of its own. (That steepest minute is some 6% of the dusk key's brightness.)
+    const steepest = (f: (s: (typeof states)[number]) => number) => {
+      let worst = 0;
+      for (let i = 6; i < states.length; i++) worst = Math.max(worst, Math.abs(f(states[i]) - f(states[i - 6])));
+      return worst;
+    };
+    const sunset = steepest((s) => lum(s.sunColour));
+    expect(sunset).toBeLessThan(0.07 * scale);
+    expect(steepest((s) => lum(s.keyColour))).toBeLessThan(sunset);
+    // Where the sun's light falls to the moon's: 2° of the sun's elevation above it the key is the
+    // sun's alone, 2° below the moon's alone; between, the sun's fades out and the moon's in.
     const cross = states.find((s) => lum(s.sunColour) < lum(s.moonColour))!;
     const crossing = cross.sunElevationDeg;
     for (const s of states) {
-      if (s.sunElevationDeg > crossing + 1.01) expect(s.keyWeight).toBe(1);
-      if (s.sunElevationDeg < crossing - 1.01) expect(s.keyWeight).toBe(0);
-      if (s.keyWeight === 1) expect(s.keyDir).toEqual(s.sunDir);
-      if (s.keyWeight === 0) expect(s.keyDir).toEqual(s.moonDir);
+      if (s.sunElevationDeg > crossing + 2.01) expect(s.keyColour).toEqual(s.sunColour);
+      if (s.sunElevationDeg < crossing - 2.01) expect(s.keyColour).toEqual(s.moonColour);
+      // The key stands where one of them does, never between.
+      expect(s.keyDir === s.sunDir || s.keyDir === s.moonDir).toBe(true);
     }
-    expect(states.some((s) => s.keyWeight > 0.1 && s.keyWeight < 0.9)).toBe(true);
+    // It turns from the sun to the moon once, while it is dark.
+    let turns = 0;
+    for (let i = 1; i < states.length; i++) {
+      if (states[i - 1].keyDir === states[i - 1].sunDir && states[i].keyDir === states[i].moonDir) {
+        turns++;
+        expect(lum(states[i - 1].keyColour)).toBeLessThan(0.01 * scale);
+        expect(lum(states[i].keyColour)).toBeLessThan(0.01 * scale);
+      }
+    }
+    expect(turns).toBe(1);
+  });
+
+  it("frames the haze the fog and smoke are: the front's glow as brightly as the flares burn, the rest as tuned", () => {
+    // Dusk (no flares), night (all of them), and 01:55, halfway between night's and dawn's.
+    for (const hours of [CLOCK_KEYS.dusk, CLOCK_KEYS.night, 1 + 55 / 60]) {
+      const s = skyState(tun, hours);
+      const f = frameSky(s, tun);
+      expect(f.frontGlow).toEqual(keyed('front_glow').map((v) => v * s.flares));
+      expect([f.hazeKey, f.hazeForward, f.hazeSky]).toEqual([tun.f('sky.haze_key'), tun.f('sky.haze_forward'), tun.f('sky.haze_sky')]);
+      expect([f.smokeDensity, f.smokeHeight]).toEqual([tun.f('sky.smoke_density'), tun.f('sky.smoke_height_m')]);
+    }
+    expect(skyState(tun, 1 + 55 / 60).flares).toBeCloseTo(0.6, 12);
+  });
+
+  it('keeps the probe\'s dusk, which frames are lit by until the app sets a sky, to dusk as the tunables light it', () => {
+    const dusk = frameSky(skyState(tun, CLOCK_KEYS.dusk), tun) as unknown as Record<string, unknown>;
+    // All but its stars, which stand in for the sidereal clock's.
+    for (const [field, value] of Object.entries(PROBE_DUSK)) {
+      if (field === 'stars') continue;
+      const [got, want] = [[value].flat() as number[], [dusk[field]].flat() as number[]];
+      want.forEach((w, i) => expect(Math.abs(got[i] - w), `${field}[${i}]: ${got[i]} for ${w}`).toBeLessThanOrEqual(0.03 * Math.abs(w) + 1e-4));
+    }
   });
 
   it('keeps the fog, the flares and the exposure on their keys, linear between them, round the clock', () => {

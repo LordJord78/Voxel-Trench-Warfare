@@ -56,10 +56,22 @@ test('fog thickens with distance and thins with height', async ({ page }) => {
   for (const r of [...low, ...high]) close(r.got, r.want);
 });
 
+test('the smoke over the lines veils the sky well above where the ground fog thins', async ({ page }) => {
+  // Sixteen regions of open sky, looking 50° up: from some 15° above the horizon, where the ground
+  // fog leaves half the sky showing, to near the zenith.
+  const sky = Array.from({ length: 16 }, () => region(P.SOD, 7, 1e9, [0, 0, 0, 0]));
+  const pose = { ...POSE, pitch: 50 };
+  const smoky = await shade(page, sky, pose);
+  const clear = await shade(page, sky, pose, { smokeDensity: 0 });
+  for (const r of [...smoky, ...clear]) close(r.got, r.want);
+  // Every region is drawn a tenth or more of the way further toward the haze than the fog alone draws it.
+  smoky.forEach((r, k) => expect(dist(r.got, r.fog)).toBeLessThan(0.9 * dist(clear[k].got, clear[k].fog)));
+});
+
 test('water reflects more sky at grazing angles', async ({ page }) => {
   // The top row of regions looks out near the horizon, the bottom row steeply down.
   const water = region(P.WATER, 3, 50, [0.05, 0.05, 0.06, 1], [64, 125, 64]);
-  const results = await shade(page, Array(16).fill(water), { ...POSE, pitch: -40 }, { fogDensity: 0 });
+  const results = await shade(page, Array(16).fill(water), { ...POSE, pitch: -40 }, { fogDensity: 0, smokeDensity: 0 });
   const top = results[0].got;
   const bottom = results[12].got;
   expect(top[2]).toBeGreaterThan(bottom[2]);
@@ -68,7 +80,7 @@ test('water reflects more sky at grazing angles', async ({ page }) => {
 
 test('emission shows in the dark', async ({ page }) => {
   const glass = region(P.LANTERN_GLOW, 4, 25, [0, 0, 0, 0], [8, 130, 8]);
-  const results = await shade(page, Array(16).fill(glass), POSE, { keyColour: [0, 0, 0], fogDensity: 0, moonColour: [0, 0, 0] });
+  const results = await shade(page, Array(16).fill(glass), POSE, { keyColour: [0, 0, 0], fogDensity: 0, smokeDensity: 0, moonColour: [0, 0, 0] });
   for (const r of results) {
     close(r.got, r.want);
     expect(r.got[0]).toBeGreaterThan(1);

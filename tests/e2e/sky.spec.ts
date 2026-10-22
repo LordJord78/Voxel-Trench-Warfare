@@ -209,33 +209,40 @@ test('no LUT texel and no sample of the sky is NaN', () => {
   expect(r.radiance.flat(2).every((v) => Number.isFinite(v) && v >= 0)).toBe(true);
 });
 
-test("fog scatters each light by the angle a view makes with it: looking down, the low sun's glow fades", async ({ page }) => {
-  // Dusk: the sun 4.5° up. Views in its azimuth, from just under the horizon to steeply down, and
-  // half round from it.
-  const sun = direction(SUN_AZIMUTH, 4.5);
-  const elevations = [-1, -10, -30, -60, -85];
-  const dirs = [...elevations.map((e) => direction(SUN_AZIMUTH, e)), ...elevations.map((e) => direction(SUN_AZIMUTH + 90, e))];
+// Sub-project 1's fog glowed with its hand-keyed horizon colour × 0.9, and 0.08 of the key light
+// toward the sun by cos⁴ of the angle: at dusk and night, the colours the haze is to keep.
+const APPROVED_FOG = { dusk: [0.855, 0.414, 0.216], night: [0.027, 0.0225, 0.036] };
+
+test('the haze glows as approved: warm all round at dusk and brighter toward the sun, violet at night', async ({ page }) => {
   await openHarness(page);
-  const f = await runCase<{ compileErrors: string[]; values: number[][]; errors: string[] }>(page, 'skyFog', { dirs, sun });
-  expect(f.compileErrors).toEqual([]);
-  expect(f.errors).toEqual([]);
-  // Toward the sun the red glow fades as the view turns from it; no column of it lies under the sun.
-  for (let k = 1; k < elevations.length; k++) expect(f.values[k][0]).toBeLessThan(f.values[k - 1][0]);
-  expect(f.values[3][0]).toBeLessThan(0.5 * f.values[0][0]);
-  // Each is the sky just over the horizon at the same angle from the sun as the view.
-  const m = r.model;
-  const { table, psi } = reference(m);
-  dirs.forEach((d, i) => {
-    const cos = d[0] * sun[0] + d[1] * sun[1] + d[2] * sun[2];
-    const flat = Math.hypot(sun[0], sun[2]);
-    const along = [sun[0] / flat, sun[2] / flat];
-    const c = Math.max(-1, Math.min(1, (cos - Math.sin((0.5 * Math.PI) / 180) * sun[1]) / (Math.cos((0.5 * Math.PI) / 180) * flat)));
-    const s = Math.sqrt(1 - c * c);
-    const h = [c * along[0] - s * along[1], c * along[1] + s * along[0]];
-    const e = (0.5 * Math.PI) / 180;
-    const want = skyRadiance(m, table, psi, sun, [h[0] * Math.cos(e), Math.sin(e), h[1] * Math.cos(e)], 0.002);
-    for (let ch = 0; ch < 3; ch++) expect(Math.abs(f.values[i][ch] - want[ch])).toBeLessThanOrEqual(Math.max(0.03 * want[ch], 1e-6));
-  });
+  // Level views these many degrees round from the key light, then views under it.
+  const round = [4, 30, 90, 135, 180];
+  const down = [10, 30, 60];
+  for (const [time, hours] of [['dusk', 17 + 35 / 60], ['night', 21]] as const) {
+    const f = await runCase<{ compileErrors: string[]; values: number[][]; dirs: V3[]; keyDir: V3; keyColour: V3; errors: string[] }>(page, 'skyHaze', { hours, round, down });
+    expect(f.compileErrors).toEqual([]);
+    expect(f.errors).toEqual([]);
+    console.log(`haze at ${time}: ${f.values.map((v) => `[${v.map((c) => c.toFixed(4)).join(' ')}]`).join(' ')}`);
+    const want = APPROVED_FOG[time];
+    // Away from the key, the approved fog's colour, within a tenth in each channel.
+    for (const i of [2, 3, 4]) {
+      for (let c = 0; c < 3; c++) expect(Math.abs(f.values[i][c] / want[c] - 1), `${time}, ${round[i]}° round, channel ${c}`).toBeLessThan(0.1);
+    }
+    const lobe = (i: number) => f.values[i][0] - f.values[4][0];
+    if (time === 'dusk') {
+      // Toward the sun, its glow on top, as approved.
+      for (const i of [0, 1]) {
+        const cos = Math.max(0, f.dirs[i][0] * f.keyDir[0] + f.dirs[i][1] * f.keyDir[1] + f.dirs[i][2] * f.keyDir[2]);
+        for (let c = 0; c < 3; c++) expect(Math.abs(f.values[i][c] / (want[c] + 0.08 * f.keyColour[c] * cos ** 4) - 1), `dusk, ${round[i]}° round, channel ${c}`).toBeLessThan(0.1);
+      }
+      // Looking down under the sun the glow fades with the angle from it: no column of it under the sun.
+      for (let k = 6; k < 8; k++) expect(lobe(k)).toBeLessThan(lobe(k - 1));
+      expect(lobe(7)).toBeLessThan(0.1 * lobe(0));
+    } else {
+      // A halo round the moon.
+      expect(lobe(0)).toBeGreaterThan(0);
+    }
+  }
 });
 
 /** Directions on a square grid `n` across, `halfDeg` either side of `centre`. */

@@ -164,16 +164,19 @@ async function start(): Promise<void> {
   let mode: Mode = 'loading';
   /** The mode a pause returns to. */
   let resumeTo: 'playing' | 'fly' = 'playing';
-  let timeOfDay = 0;
+  /** The clock, in hours; it opens at dusk. */
+  let timeOfDay: number = CLOCK_KEYS.dusk;
+  /** How fast the clock runs, in game minutes a second: held (0), or time-lapse. */
+  let lapse = 0;
 
-  // The light follows the time of day; the flares burn as it says.
+  // The light follows the clock; the flares burn as it says.
   const lights = sceneLights(world.plan, tun);
   let litFor = Number.NaN;
+  let sky = skyState(tun, timeOfDay);
   const light = () => {
     if (timeOfDay === litFor) return;
     litFor = timeOfDay;
-    // The time of day runs from dusk (0) to night (1) on the clock.
-    const sky = skyState(tun, CLOCK_KEYS.dusk + timeOfDay * (CLOCK_KEYS.night - CLOCK_KEYS.dusk));
+    sky = skyState(tun, timeOfDay);
     renderer.sky = frameSky(sky, tun);
     renderer.setLights(lights, sky.flares);
   };
@@ -189,6 +192,7 @@ async function start(): Promise<void> {
     resume: () => resume(),
     change: changeSettings,
     time: (value) => (timeOfDay = value),
+    lapse: (speed) => (lapse = speed),
   });
 
   const play = (lock: boolean) => {
@@ -205,7 +209,7 @@ async function start(): Promise<void> {
     held.clear();
     // The menu needs the cursor; an Esc the browser did not act on can leave the lock held.
     if (document.pointerLockElement) document.exitPointerLock();
-    pauseMenu.open(settings, timeOfDay);
+    pauseMenu.open(settings, timeOfDay, lapse);
   };
   const resume = () => {
     if (stopped || mode !== 'paused') return;
@@ -221,7 +225,7 @@ async function start(): Promise<void> {
   };
   const goTo = (name: ViewName) => {
     enterFly(views[name]);
-    timeOfDay = views[name].time;
+    timeOfDay = views[name].hours;
   };
 
   const act = (a: KeyAction) => {
@@ -347,6 +351,7 @@ async function start(): Promise<void> {
     const dt = Math.min(0.1, Math.max(0, ms) / 1000);
     last = now;
     followCanvas(now);
+    if (lapse > 0 && mode !== 'loading') timeOfDay = (timeOfDay + (lapse * dt) / 60) % 24;
     let pose: CameraPose;
     if (mode === 'fly') {
       fly.sensitivity = settings.sensitivity;
@@ -487,6 +492,8 @@ async function start(): Promise<void> {
       timeOfDay = value;
     },
     timeOfDay: () => timeOfDay,
+    exposure: () => renderer.exposure(),
+    sunElevation: () => sky.sunElevationDeg,
     frames: () => frames,
     waitFrames,
     waitConverged: () => waitFrames(render.denoise.historyMax + 8),
@@ -516,7 +523,7 @@ async function start(): Promise<void> {
         timings: world.timings,
         setQuality: (q) => renderer.setQuality(q),
         view: goTo,
-        viewTime: (name) => views[name].time,
+        viewHours: (name) => views[name].hours,
         waitFrames,
         waitConverged: () => waitFrames(render.denoise.historyMax + 8),
         stats: () => renderer.stats,

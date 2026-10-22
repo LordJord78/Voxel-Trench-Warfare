@@ -99,6 +99,7 @@ export const FRAME: StructDef = {
     ['keyDir', 'vec3f'],
     ['keyCone', 'f32'],
     ['keyColour', 'vec3f'],
+    // The hour's exposure bias: the frame is exposed by it over the light it shows (see exposure.wgsl).
     ['exposure', 'f32'],
     ['sunDir', 'vec3f'],
     ['fogDensity', 'f32'],
@@ -115,14 +116,23 @@ export const FRAME: StructDef = {
     ['starBrightness', 'f32'],
     // The moon's light at full, which its disc's face is drawn in, lit by the sun from where it stands.
     ['moonFull', 'vec3f'],
-    ['pad5', 'f32'],
+    // The light exposure 1 shows as approved (dusk's), and the least light the exposure counts.
+    ['exposureLight', 'f32'],
     // The celestial sphere's axes in the world, turned by the sidereal clock (see sky-clock.ts).
     ['starX', 'vec3f'],
-    ['pad6', 'f32'],
+    ['exposureFloor', 'f32'],
+    // The haze the fog and smoke are (see sky.wgsl's fogColour): the share of the key light it glows
+    // with looking any way, and more toward the key by cos⁴ of the angle; the front's glow on it, and
+    // the share of the sky's light from above.
     ['starY', 'vec3f'],
-    ['pad7', 'f32'],
+    ['hazeKey', 'f32'],
     ['starZ', 'vec3f'],
-    ['pad8', 'f32'],
+    ['hazeForward', 'f32'],
+    ['frontGlow', 'vec3f'],
+    ['hazeSky', 'f32'],
+    // Smoke and dust over the lines, a second height fog: per metre at the ground, and the metres it thins by e over.
+    ['smokeDensity', 'f32'],
+    ['smokeHeight', 'f32'],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
     // The atmosphere as this frame's sky view was built.
@@ -145,9 +155,17 @@ export interface FrameSky {
   /** The celestial sphere's axes in the world. */
   stars: readonly (readonly number[])[];
   starBrightness: number;
+  exposureLight: number;
+  exposureFloor: number;
   fogDensity: number;
   fogHeight: number;
   fogBase: number;
+  hazeKey: number;
+  hazeForward: number;
+  hazeSky: number;
+  frontGlow: readonly number[];
+  smokeDensity: number;
+  smokeHeight: number;
   skyRay: number;
 }
 
@@ -186,9 +204,17 @@ export function writeSky(w: StructWriter, sky: FrameSky): void {
   w.set('starY', sky.stars[1]);
   w.set('starZ', sky.stars[2]);
   w.set('starBrightness', sky.starBrightness);
+  w.set('exposureLight', sky.exposureLight);
+  w.set('exposureFloor', sky.exposureFloor);
   w.set('fogDensity', sky.fogDensity);
   w.set('fogHeight', sky.fogHeight);
   w.set('fogBase', sky.fogBase);
+  w.set('hazeKey', sky.hazeKey);
+  w.set('hazeForward', sky.hazeForward);
+  w.set('hazeSky', sky.hazeSky);
+  w.set('frontGlow', sky.frontGlow);
+  w.set('smokeDensity', sky.smokeDensity);
+  w.set('smokeHeight', sky.smokeHeight);
   w.set('skyRay', sky.skyRay);
 }
 
@@ -209,7 +235,7 @@ export const PROBE_DUSK: FrameSky = {
   exposure: 1.0,
   sunDir: dir(18, 4.5),
   moonDir: dir(204, 2.2),
-  moonColour: [0.019, 0.0088, 0.0016],
+  moonColour: [0.0197, 0.0088, 0.00162],
   sunLight: [6.55, 6.55, 6.55],
   moonLight: [0.056, 0.09, 0.195],
   moonFull: [0.0565, 0.0912, 0.197],
@@ -218,9 +244,17 @@ export const PROBE_DUSK: FrameSky = {
     [0, 0.766, 0.643],
     [0, -0.643, 0.766],
   ],
-  starBrightness: 7.7e-7,
+  starBrightness: 1.23e-5,
+  exposureLight: 0.545,
+  exposureFloor: 0.002,
   fogDensity: 0.012,
   fogHeight: 14,
   fogBase: 16,
+  hazeKey: 0.215,
+  hazeForward: 0.08,
+  hazeSky: 1.66,
+  frontGlow: [0, 0, 0],
+  smokeDensity: 0.00053,
+  smokeHeight: 300,
   skyRay: 40,
 };

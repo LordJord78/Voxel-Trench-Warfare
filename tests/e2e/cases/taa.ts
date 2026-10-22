@@ -74,7 +74,7 @@ export const cases = {
     const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
     const res: [number, number] = [128, 96];
     const r = await Renderer.create(g, null, world, null, { size: res });
-    const night: FrameSky = { ...PROBE_DUSK, keyColour: [0, 0, 0], sunLight: [0, 0, 0], moonLight: [0, 0, 0], fogDensity: 0 };
+    const night: FrameSky = { ...PROBE_DUSK, keyColour: [0, 0, 0], sunLight: [0, 0, 0], moonLight: [0, 0, 0], fogDensity: 0, smokeDensity: 0 };
     r.sky = night;
     r.setLights([], 0);
     const d = 6.4;

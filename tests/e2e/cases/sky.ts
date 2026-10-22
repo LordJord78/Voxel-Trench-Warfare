@@ -27,7 +27,7 @@ async function lutValues(texture: GPUTexture): Promise<number[]> {
 const bad = (values: number[], logs = false) => values.filter((v) => !Number.isFinite(v) || (!logs && v < 0)).length;
 
 /** Run sky-test.wgsl's `entry` over `dirs` with the frame's sky lit by `sky`'s lights, the sky views built for them. */
-async function sample(entry: 'main' | 'fog' | 'bodies', dirs: number[][], sky: Partial<FrameSky> & { sunDir: number[]; moonDir: number[] }, heightM: number) {
+async function sample(entry: 'main' | 'fog' | 'bodies', dirs: number[][], sky: Partial<FrameSky> & { sunDir: readonly number[]; moonDir: readonly number[] }, heightM: number) {
   const g = await gpu();
   const device = g.device;
   const atmosphere = Atmosphere.create(device, await Atmosphere.compile(device), atmosphereModel(loadTunables()));
@@ -148,9 +148,18 @@ export const cases = {
     return { model, radiance, irradiance, transmittance, scattering, bad: nonFinite, errors: [...g.errors] };
   },
 
-  /** fogColour along each of `dirs`, under the sun alone (unit light) at `sun`, from 2 m. */
-  async skyFog(args: { dirs: number[][]; sun: number[] }) {
-    return sample('fog', args.dirs, { sunDir: args.sun, moonDir: [0, -1, 0], sunLight: [1, 1, 1], moonLight: [0, 0, 0] }, 2);
+  /**
+   * The colour the height fog glows with at the clock's `hours`, under the frame's sky as the app sets
+   * it: looking level `round` degrees round from the key light, then `down` degrees under it.
+   */
+  async skyHaze(args: { hours: number; round: number[]; down: number[] }) {
+    const tun = loadTunables();
+    const sky = frameSky(skyState(tun, args.hours), tun);
+    const key = Math.atan2(sky.keyDir[0], sky.keyDir[2]);
+    const at = (azimuth: number, elevation: number) => [Math.sin(azimuth) * Math.cos(elevation), Math.sin(elevation), Math.cos(azimuth) * Math.cos(elevation)];
+    const rad = Math.PI / 180;
+    const dirs = [...args.round.map((d) => at(key + d * rad, 0)), ...args.down.map((d) => at(key, -d * rad))];
+    return { ...(await sample('fog', dirs, sky, 2)), dirs, keyDir: [...sky.keyDir], keyColour: [...sky.keyColour] };
   },
 
   /** The sky with its discs and stars along each of `dirs`, lit as `sky` says (unit lights unless set), from 2 m. */
@@ -196,7 +205,9 @@ export const cases = {
       return out.sort((a, b) => b[2] - a[2]).slice(0, limit);
     };
     const run = async (hours: number) => {
-      renderer.sky = frameSky(skyState(tun, hours), tun);
+      // The haze stands on this scene's ground, 2 m up, as the game's stands on its own: the eye
+      // looks out through it from 1.6 m over the ground, as the player's does.
+      renderer.sky = { ...frameSky(skyState(tun, hours), tun), fogBase: 2 };
       renderer.resetHistory();
       let middle: [number, number, number][] = [];
       let px: number[] = [];

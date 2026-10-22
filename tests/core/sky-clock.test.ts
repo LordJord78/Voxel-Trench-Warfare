@@ -36,4 +36,13 @@ describe('the sky clock', () => {
       expect(angle(celestial(tun, h).sun.dir, celestial(tun, h + 1 / 60).sun.dir)).toBeLessThan(1);
     }
   });
+  it('runs the night on unbroken through midnight: the day turns at noon', () => {
+    const angle = (a: number[], b: number[]) => (Math.acos(Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])) * 180) / Math.PI;
+    const before = celestial(tun, 24 - 1 / 60);
+    const after = celestial(tun, 1 / 60);
+    // Two minutes of the moon's and the stars' turning, not a day's.
+    expect(angle(before.moon.dir, after.moon.dir)).toBeLessThan(1);
+    expect(angle(before.stars[2], after.stars[2])).toBeLessThan(0.1);
+    expect(angle(before.stars[0], after.stars[0])).toBeLessThan(1);
+  });
 });

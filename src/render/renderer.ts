@@ -2,8 +2,10 @@
  * The frame: every pass, its textures and bind groups, in order.
  *
  * Compute passes render the internal image:
- *   sky      — the atmosphere's sky view for this frame's sun and camera height
- *              (see atmosphere.ts);
+ *   sky      — the atmosphere's sky views for this frame's sun, moon and camera
+ *              height, and the faces' irradiance from them (see atmosphere.ts);
+ *              then the exposure, from the light they and the key light give
+ *              (exposure.wgsl);
  *   beam     — per 8 × 8 tile, how far its rays can go before meeting anything;
  *   primary  — one jittered ray per pixel into the G-buffer, from its tile's beam;
  *   lighting — the light reaching one pixel of each 2 × 2 block (the sky's
@@ -47,6 +49,7 @@ import { moduleSource } from './shaders';
 import atrousSrc from './shaders/atrous.wgsl';
 import beamSrc from './shaders/beam.wgsl';
 import casSrc from './shaders/cas.wgsl';
+import exposureSrc from './shaders/exposure.wgsl';
 import lightingSrc from './shaders/lighting.wgsl';
 import presentSrc from './shaders/present.wgsl';
 import primarySrc from './shaders/primary.wgsl';
@@ -56,7 +59,7 @@ import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
 const PASSES = ['sky', 'beam', 'primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'present'] as const;
-type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas';
+type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas' | 'exposure';
 type Timed = (typeof PASSES)[number];
 
 /** A gap between frames longer than this (a hidden tab, a debugger) leaves histories too stale to blend. */
@@ -186,6 +189,11 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
       label: 'cas',
       entries: [sampled(0, 'float'), storageTexture(1, 'rgba16float')],
     }),
+    // The present pass's uniform, which the exposure is written into.
+    exposure: device.createBindGroupLayout({
+      label: 'exposure',
+      entries: [{ binding: 0, visibility: STAGE(), buffer: { type: 'storage' } }],
+    }),
     present: device.createBindGroupLayout({
       label: 'present',
       entries: [
@@ -197,7 +205,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, present, atmosphere] = await Promise.all([
+  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
@@ -206,6 +214,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     compute(device, 'shade', shadeSrc, [scene, layouts.shade]),
     compute(device, 'taa', taaSrc, [scene, layouts.taa]),
     compute(device, 'cas', casSrc, [scene, layouts.cas]),
+    compute(device, 'exposure', exposureSrc, [scene, layouts.exposure]),
     device.createRenderPipelineAsync({
       label: 'present',
       layout: device.createPipelineLayout({ bindGroupLayouts: [layouts.present] }),
@@ -215,7 +224,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
     Atmosphere.compile(device),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, present }, atmosphere, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -236,6 +245,7 @@ export class Renderer {
   private readonly writer = new StructWriter(FRAME);
   private readonly frameBuffer: GPUBuffer;
   private readonly presentBuffer: GPUBuffer;
+  private readonly exposureGroup: GPUBindGroup;
   private readonly compiled: CompiledFrame;
   private readonly sampler: GPUSampler;
   private readonly far: FarFieldGpu;
@@ -287,7 +297,12 @@ export class Renderer {
     this.format = navigator.gpu.getPreferredCanvasFormat();
     this.timer = new GpuTimer(device, gpu.timestamps, PASSES);
     this.frameBuffer = device.createBuffer({ label: 'frame', size: this.writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.presentBuffer = device.createBuffer({ label: 'present', size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.presentBuffer = device.createBuffer({
+      label: 'present',
+      size: 32,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    this.exposureGroup = device.createBindGroup({ label: 'exposure', layout: compiled.layouts.exposure, entries: [{ binding: 0, resource: { buffer: this.presentBuffer } }] });
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     this.far = options.far ?? FarFieldGpu.empty(device);
     this.atmosphere = Atmosphere.create(device, compiled.atmosphere, options.atmosphere ?? atmosphereModel(loadTunables()));
@@ -515,6 +530,13 @@ export class Renderer {
     this.atmosphere.update(encoder, { sunDir: this.sky.sunDir, moonDir }, pose.position[1] - this.sky.fogBase, this.timer.writes('sky'));
     this.atmosphere.writeTo(w, 'atmosphere');
     device.queue.writeBuffer(this.frameBuffer, 0, w.buffer);
+    // The exposure, from the light the sky views and the key give: into the present pass's uniform.
+    const exposure = encoder.beginComputePass({ label: 'exposure' });
+    exposure.setPipeline(this.compiled.pipelines.exposure);
+    exposure.setBindGroup(0, this.sceneGroup!);
+    exposure.setBindGroup(1, this.exposureGroup);
+    exposure.dispatchWorkgroups(1);
+    exposure.end();
 
     const groups = this.groups[this.frameIndex & 1];
     const pass = (name: Timed & keyof typeof groups, pipeline: ComputePass, size: readonly [number, number]) => {
@@ -569,6 +591,18 @@ export class Renderer {
       reset: reset || (this.flags & FLAGS.HISTORY_RESET) !== 0,
       frame: this.frameIndex,
     };
+  }
+
+  /** The exposure the last frame was presented at, read back from the GPU. */
+  async exposure(): Promise<number> {
+    const staging = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const encoder = this.device.createCommandEncoder();
+    encoder.copyBufferToBuffer(this.presentBuffer, 0, staging, 0, 32);
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const value = new Float32Array(staging.getMappedRange())[6];
+    staging.destroy();
+    return value;
   }
 
   private voxelSize(): number {

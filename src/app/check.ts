@@ -10,6 +10,7 @@
  * otherwise from how long each frame's submitted work takes to finish.
  */
 
+import { CLOCK_KEYS, clockText } from '../core/sky-clock';
 import type { RenderStats } from '../render/renderer';
 import { VIEW_NAMES, type ViewName } from './views';
 
@@ -19,7 +20,8 @@ export interface CheckGame {
   timings: Record<string, number>;
   setQuality(q: { preset: 'high'; dynres: false }): void;
   view(name: ViewName): void;
-  viewTime(name: ViewName): number;
+  /** The clock's hour a view is seen at. */
+  viewHours(name: ViewName): number;
   waitFrames(n: number): Promise<void>;
   waitConverged(): Promise<void>;
   stats(): RenderStats;
@@ -32,7 +34,7 @@ export interface CheckGame {
 
 export interface CheckView {
   name: ViewName;
-  time: number;
+  hours: number;
   gpuMs: number;
   res: [number, number];
   shot: string;
@@ -51,6 +53,12 @@ export interface CheckReport {
 }
 
 export type Post = (file: string, body: Blob | string) => Promise<void>;
+
+/** A shot's name for an hour: the clock key it is (dusk, night, dawn, noon), or its time, as 1840. */
+export function clockName(hours: number): string {
+  const key = (Object.entries(CLOCK_KEYS) as [string, number][]).find(([, h]) => Math.abs(h - hours) < 1e-9);
+  return key ? key[0] : clockText(hours).replace(':', '');
+}
 
 /** Post to the dev server's report endpoint for `run`. */
 export function reporter(run: string): Post {
@@ -89,10 +97,10 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
       await game.waitFrames(30);
       const gpuMs = game.timestamps ? (game.stats().gpuMs ?? 0) : median(await game.submittedWork(30));
       const { png, spread } = await game.shot();
-      const time = game.viewTime(name);
-      const shot = `${name}-${time >= 0.5 ? 'night' : 'dusk'}.png`;
+      const hours = game.viewHours(name);
+      const shot = `${name}-${clockName(hours)}.png`;
       await post(shot, png);
-      report.views.push({ name, time, gpuMs, res: game.stats().res, shot, spread });
+      report.views.push({ name, hours, gpuMs, res: game.stats().res, shot, spread });
     }
     await progress('done');
   } catch (e) {

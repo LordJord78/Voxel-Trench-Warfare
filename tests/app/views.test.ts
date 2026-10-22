@@ -1,3 +1,4 @@
+import { CLOCK_KEYS } from '../../src/core/sky-clock';
 import { describe, expect, it } from 'vitest';
 import { loadTunables } from '../../src/core/tunables';
 import { standardViews, VIEW_NAMES } from '../../src/app/views';
@@ -33,7 +34,7 @@ describe('the standard views', () => {
   it('looks out from the step, puts the overview above the world, and keeps no man\'s land for the night', () => {
     expect(views.step.yaw).toBe(bay.facing > 0 ? 0 : 180);
     expect(views.overview.position[1]).toBeGreaterThan(p.dims.y * v);
-    expect(views['nml-night'].time).toBe(1);
-    for (const name of VIEW_NAMES) if (name !== 'nml-night') expect(views[name].time).toBe(0);
+    expect(views['nml-night'].hours).toBe(CLOCK_KEYS.night);
+    for (const name of VIEW_NAMES) if (name !== 'nml-night') expect(views[name].hours).toBe(CLOCK_KEYS.dusk);
   });
 });

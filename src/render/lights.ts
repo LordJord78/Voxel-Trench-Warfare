@@ -8,7 +8,7 @@
 
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
-import { lanternVoxel } from '../world/generation/furniture';
+import { lanternFacing, lanternVoxel } from '../world/generation/furniture';
 import type { WorldPlan } from '../world/generation/plan';
 import { P, paletteData } from '../world/materials';
 
@@ -26,12 +26,13 @@ export interface SceneLight {
 }
 
 /**
- * Where a lantern's light goes (metres): the middle of its glass voxel. Shadow rays toward a light
- * stop at its own voxel (lighting.wgsl), so the glass does not shadow its own light; a light in
- * front of the glass would cast the glass's shadow, three voxels square, round it on the wall.
+ * Where a lantern's light goes (metres): its flame, a voxel out from the middle of its glass the way
+ * it faces, 15 cm off the wall it hangs on, so the wall round it catches the light as approved.
+ * Shadow rays toward a light end short of it (lighting.wgsl), so the glass behind the flame does not
+ * cast its shadow, three voxels square, round itself on the wall.
  */
-export function lanternLight(glass: readonly [number, number, number], voxel: number): [number, number, number] {
-  return [(glass[0] + 0.5) * voxel, (glass[1] + 0.5) * voxel, (glass[2] + 0.5) * voxel];
+export function lanternLight(glass: readonly [number, number, number], facing: readonly [number, number, number], voxel: number): [number, number, number] {
+  return [(glass[0] + 0.5 + facing[0]) * voxel, (glass[1] + 0.5 + facing[1]) * voxel, (glass[2] + 0.5 + facing[2]) * voxel];
 }
 
 export function sceneLights(plan: WorldPlan, tun: Tunables): SceneLight[] {
@@ -43,7 +44,7 @@ export function sceneLights(plan: WorldPlan, tun: Tunables): SceneLight[] {
   for (const line of plan.lines) {
     for (const d of line.dugouts) {
       lights.push({
-        position: lanternLight(lanternVoxel(d, p), v),
+        position: lanternLight(lanternVoxel(d, p), lanternFacing(d), v),
         radius: tun.f('render.lantern_radius_m'),
         colour: lanternColour,
         intensity: tun.f('render.lantern_intensity'),

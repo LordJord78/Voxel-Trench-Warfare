@@ -131,8 +131,17 @@
         </div>
         <div class="setting">
           <label for="time">Time of day</label>
-          <input id="time" type="range" min="0" max="1" step="0.01" />
-          <div class="ends" aria-hidden="true"><span>Dusk</span><span>Night</span></div>
+          <output for="time" id="time-value"></output>
+          <input id="time" type="range" min="0" max="24" step="0.25" />
+          <div class="ends" aria-hidden="true"><span>Midnight</span><span>Noon</span><span>Midnight</span></div>
+        </div>
+        <div class="setting">
+          <span class="name" id="lapse-name">Time passing</span>
+          <div class="choice" role="radiogroup" aria-labelledby="lapse-name">
+            <label><input type="radio" name="lapse" value="0" /> Held</label>
+            <label><input type="radio" name="lapse" value="1" /> A minute a second</label>
+            <label><input type="radio" name="lapse" value="10" /> Ten a second</label>
+          </div>
         </div>
         <button id="resume" type="button">Resume</button>
       </form>

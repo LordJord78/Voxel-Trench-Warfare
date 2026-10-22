@@ -118,3 +118,9 @@ export function lanternVoxel(d: DugoutPlan, p: GenParams): [number, number, numb
   if (d.longAxis === 0) return [(cx0 + cx1) >> 1, y, d.away < 0 ? cz0 : cz1 - 1];
   return [cx0, y, (cz0 + cz1) >> 1];
 }
+
+/** The way a dugout's lantern faces: off the back wall it hangs on, into the chamber. */
+export function lanternFacing(d: DugoutPlan): [number, number, number] {
+  if (d.longAxis === 0) return [0, 0, d.away < 0 ? 1 : -1];
+  return [1, 0, 0];
+}

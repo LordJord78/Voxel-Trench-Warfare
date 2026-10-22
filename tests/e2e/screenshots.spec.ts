@@ -1,18 +1,20 @@
 import { test } from '@playwright/test';
 import { hooks, openGame } from './support/app';
 
-// The six standard views at dusk and at night, for review by eye: grain, seams,
-// the horizon, and the look against the probe frames. Written to artifacts/m4
-// (git-ignored); the test fails only on errors.
+// The six standard views at dusk, night, dawn and noon, for review by eye: grain,
+// seams, the horizon, and the look against the approved frames (artifacts/approved).
+// Written to artifacts/m4 (git-ignored); the test fails only on errors.
 test.use({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
 
 const VIEWS = ['bay', 'step', 'nml-night', 'overview', 'dugout', 'hamlet'];
+const DUSK = 17 + 35 / 60;
 
-test('the standard views, at dusk and at night', async ({ page }) => {
+test('the standard views, at dusk, night, dawn and noon', async ({ page }) => {
+  test.setTimeout(300_000);
   const errors = await openGame(page);
   await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
   for (const name of VIEWS) {
-    for (const [label, time] of [['dusk', 0], ['night', 1]] as const) {
+    for (const [label, time] of [['dusk', DUSK], ['night', 21], ['dawn', 6 + 50 / 60], ['noon', 12]] as const) {
       await hooks(page, (h, a) => {
         const [n, t] = a as [string, number];
         h.view(n);
@@ -37,7 +39,7 @@ test('walking the bay at dusk and strafing it at night, the firing step, the per
       h.teleport({ position: [p[0], p[1], p[2]], yaw: h.views.bay.yaw, pitch: 0 });
       h.setTimeOfDay(t as number);
     }, time);
-  await spawn(0);
+  await spawn(DUSK);
   await hooks(page, (h) => h.waitConverged());
   await page.keyboard.down('KeyW');
   for (let k = 0; k < 4; k++) {
@@ -45,7 +47,7 @@ test('walking the bay at dusk and strafing it at night, the firing step, the per
     await page.screenshot({ path: `artifacts/m5/walk-${k}.png` });
   }
   await page.keyboard.up('KeyW');
-  await spawn(1);
+  await spawn(21);
   await hooks(page, (h) => h.waitConverged());
   await page.keyboard.down('KeyD');
   for (let k = 0; k < 2; k++) {
@@ -56,7 +58,7 @@ test('walking the bay at dusk and strafing it at night, the firing step, the per
   await hooks(page, (h) => {
     const v = h.views.step;
     h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: 0 });
-    h.setTimeOfDay(0);
+    h.setTimeOfDay(17 + 35 / 60);
   });
   await hooks(page, (h) => h.waitConverged());
   await page.screenshot({ path: 'artifacts/m5/step.png' });

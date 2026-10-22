@@ -1,15 +1,20 @@
 /**
- * The pause menu: quality, mouse sensitivity, field of view and time of day,
- * each applied as it changes, so the world behind the menu shows the effect.
+ * The pause menu: quality, mouse sensitivity, field of view, the clock and how
+ * fast it runs, each applied as it changes, so the world behind the menu shows
+ * the effect.
  */
 
+import { clockText } from '../core/sky-clock';
 import type { Settings } from './settings';
 
 export interface PauseHandlers {
   resume(): void;
   /** A preference changed; the menu passes the whole set. */
   change(settings: Settings): void;
-  time(t: number): void;
+  /** The clock, in hours. */
+  time(hours: number): void;
+  /** How fast the clock runs, in game minutes a second (0: held). */
+  lapse(speed: number): void;
 }
 
 export class PauseMenu {
@@ -18,6 +23,7 @@ export class PauseMenu {
   private readonly sensitivity: HTMLInputElement;
   private readonly fov: HTMLInputElement;
   private readonly time: HTMLInputElement;
+  private readonly timeValue: HTMLOutputElement;
   private readonly sensitivityValue: HTMLOutputElement;
   private readonly fovValue: HTMLOutputElement;
   private readonly resumeButton: HTMLButtonElement;
@@ -28,6 +34,7 @@ export class PauseMenu {
     this.sensitivity = doc.getElementById('sensitivity') as HTMLInputElement;
     this.fov = doc.getElementById('fov') as HTMLInputElement;
     this.time = doc.getElementById('time') as HTMLInputElement;
+    this.timeValue = doc.getElementById('time-value') as HTMLOutputElement;
     this.sensitivityValue = doc.getElementById('sensitivity-value') as HTMLOutputElement;
     this.fovValue = doc.getElementById('fov-value') as HTMLOutputElement;
     this.resumeButton = doc.getElementById('resume') as HTMLButtonElement;
@@ -35,7 +42,12 @@ export class PauseMenu {
     this.form.addEventListener('submit', (e) => e.preventDefault());
     this.form.addEventListener('input', (e) => {
       if (e.target === this.time) {
+        this.label();
         handlers.time(Number(this.time.value));
+        return;
+      }
+      if (e.target instanceof HTMLInputElement && e.target.name === 'lapse') {
+        handlers.lapse(Number(e.target.value));
         return;
       }
       this.label();
@@ -47,12 +59,14 @@ export class PauseMenu {
     return !this.root.hidden;
   }
 
-  open(settings: Settings, timeOfDay: number): void {
+  open(settings: Settings, hours: number, lapse: number): void {
     const preset = this.form.querySelector<HTMLInputElement>(`input[name="preset"][value="${settings.preset}"]`);
     if (preset) preset.checked = true;
     this.sensitivity.value = String(settings.sensitivity);
     this.fov.value = String(settings.fov);
-    this.time.value = String(timeOfDay);
+    this.time.value = String(hours);
+    const speed = this.form.querySelector<HTMLInputElement>(`input[name="lapse"][value="${lapse}"]`);
+    if (speed) speed.checked = true;
     this.label();
     this.root.hidden = false;
     this.resumeButton.focus();
@@ -70,5 +84,6 @@ export class PauseMenu {
   private label(): void {
     this.sensitivityValue.value = Number(this.sensitivity.value).toFixed(2);
     this.fovValue.value = `${this.fov.value}°`;
+    this.timeValue.value = clockText(Number(this.time.value));
   }
 }

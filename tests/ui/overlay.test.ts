@@ -18,7 +18,7 @@ const info: OverlayInfo = {
   position: [123.45, 5.6, 78.9],
   yaw: 90,
   pitch: -8,
-  timeOfDay: 0.5,
+  timeOfDay: 19.25,
   place: 'front bay 12',
 };
 
@@ -46,7 +46,7 @@ describe('the F3 overlay', () => {
     const t = overlayText(info);
     expect(t).toContain('123.5, 5.6, 78.9 m');
     expect(t).toContain('yaw 90° pitch -8°');
-    expect(t).toContain('time 0.50');
+    expect(t).toContain('19:15');
     expect(t).toContain('front bay 12');
   });
   it('says so when the GPU is not timed', () => {
