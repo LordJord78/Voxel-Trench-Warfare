@@ -6,7 +6,7 @@ import type { RenderStats } from '../../src/render/renderer';
 
 /** A game for the check; `seen` gathers where it is sent, a view and then its hour. */
 function game(over: Partial<CheckGame> = {}, seen: string[] = []): CheckGame {
-  const stats = { gpuMs: 9.5, res: [1549, 968] } as unknown as RenderStats;
+  const stats = { gpuMs: 9.5, res: [1549, 968], canvas: [1600, 1000], passes: { primary: 4.5, lighting: 1.5 } } as unknown as RenderStats;
   return {
     timestamps: true,
     promptMs: 3500,
@@ -46,6 +46,13 @@ describe('the check', () => {
       '00:00', '02:00', '04:00', '06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00', '06:40', '07:10', '17:50', '17:55',
     ]);
     expect(report.day.every((d) => d.gpuMs === 9.5)).toBe(true);
+  });
+  it("carries each view's and hour's passes, with timestamps, and the canvas each view was drawn to", async () => {
+    const { report } = await run(game());
+    for (const x of [...report.views, ...report.day]) expect(x.passes).toEqual({ primary: 4.5, lighting: 1.5 });
+    expect(report.views.every((v) => v.canvas[0] === 1600 && v.canvas[1] === 1000)).toBe(true);
+    const { report: untimed } = await run(game({ timestamps: false }));
+    for (const x of [...untimed.views, ...untimed.day]) expect(x.passes).toEqual({});
   });
   it('sends the game to each view and then sets its hour, the view setting its own first', async () => {
     const seen: string[] = [];

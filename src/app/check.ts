@@ -37,7 +37,11 @@ export interface CheckView {
   name: ViewName;
   hours: number;
   gpuMs: number;
+  /** Each pass's GPU time (ms), by timestamps; none by submitted work. */
+  passes: Record<string, number>;
   res: [number, number];
+  /** The canvas the internal image is presented to, in pixels. */
+  canvas: [number, number];
   shot: string;
   spread: number;
 }
@@ -46,6 +50,7 @@ export interface CheckView {
 export interface CheckHour {
   hours: number;
   gpuMs: number;
+  passes: Record<string, number>;
 }
 
 export interface CheckReport {
@@ -59,6 +64,12 @@ export interface CheckReport {
   day: CheckHour[];
   errors: string[];
 }
+
+/**
+ * The check's canvas in pixels, whatever the window and its pixel density: the e2e runs' (1600 × 1000
+ * at a density of 1), so every browser frames each view alike and presents the same image.
+ */
+export const CHECK_CANVAS: readonly [number, number] = [1600, 1000];
 
 /** The clock's keys each view is seen at, in turn. */
 export const CHECK_KEYS = ['dusk', 'night', 'noon', 'dawn'] as const;
@@ -104,13 +115,15 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
   };
   // Where the check has got to, so a run that stalls says where.
   const progress = (stage: string) => post('progress.json', JSON.stringify({ stage }));
-  // A view at an hour, settled: its GPU time.
+  // A view at an hour, settled: its GPU time, and its passes' if timestamps give them.
   const measure = async (name: ViewName, hours: number) => {
     game.view(name);
     game.setTimeOfDay(hours);
     await game.waitConverged();
     await game.waitFrames(30);
-    return game.timestamps ? (game.stats().gpuMs ?? 0) : median(await game.submittedWork(30));
+    if (!game.timestamps) return { gpuMs: median(await game.submittedWork(30)), passes: {} };
+    const s = game.stats();
+    return { gpuMs: s.gpuMs ?? 0, passes: { ...s.passes } };
   };
   try {
     await progress('fingerprint');
@@ -120,16 +133,17 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
       for (const key of CHECK_KEYS) {
         await progress(`view ${name} at ${key}`);
         const hours = CLOCK_KEYS[key];
-        const gpuMs = await measure(name, hours);
+        const { gpuMs, passes } = await measure(name, hours);
         const { png, spread } = await game.shot();
         const shot = `${name}-${clockName(hours)}.png`;
         await post(shot, png);
-        report.views.push({ name, hours, gpuMs, res: game.stats().res, shot, spread });
+        const { res, canvas } = game.stats();
+        report.views.push({ name, hours, gpuMs, passes, res, canvas, shot, spread });
       }
     }
     for (const hours of DAY_HOURS) {
       await progress(`the overview at ${clockText(hours)}`);
-      report.day.push({ hours, gpuMs: await measure('overview', hours) });
+      report.day.push({ hours, ...(await measure('overview', hours)) });
     }
     await progress('done');
   } catch (e) {

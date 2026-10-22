@@ -10,7 +10,7 @@ interface Report {
   timer: 'timestamps' | 'submitted-work';
   promptMs: number;
   fingerprint: string;
-  views: { name: string; hours: number; gpuMs: number; res: [number, number]; shot: string; spread: number }[];
+  views: { name: string; hours: number; gpuMs: number; res: [number, number]; canvas: [number, number]; shot: string; spread: number }[];
   day: { hours: number; gpuMs: number }[];
   errors: string[];
 }
@@ -35,6 +35,11 @@ test('the check reports the world, its timings, every view at the four keys and 
   await page.waitForFunction(() => (window as unknown as { __trenchline?: { checkReport?: unknown } }).__trenchline?.checkReport !== undefined, null, { timeout: REPORT_MS });
   const report = JSON.parse(readFileSync('artifacts/chrome-e2e/report.json', 'utf8')) as Report;
   expect(report.errors).toEqual([]);
+  // Reported, the page draws no more frames: a browser left open on it does not hold the GPU.
+  const frames = () => page.evaluate(() => (window as unknown as { __trenchline: { frames(): number } }).__trenchline.frames());
+  const done = await frames();
+  await page.waitForTimeout(500);
+  expect(await frames()).toBe(done);
   const golden = JSON.parse(readFileSync('tests/fixtures/golden.json', 'utf8')) as { fingerprint: string };
   expect(report.fingerprint).toBe(golden.fingerprint);
   expect(report.timer).toBe('timestamps');
@@ -52,19 +57,28 @@ test('the check reports the world, its timings, every view at the four keys and 
   }
 });
 
-test('without timestamps, the check times every view and hour by its submitted work', async ({ page }) => {
-  test.setTimeout(REPORT_MS + 30_000);
-  rmSync('artifacts/chrome-submitted', { recursive: true, force: true });
-  await page.goto('/?check=chrome-submitted&timer=submitted-work');
-  await page.waitForFunction(() => (window as unknown as { __trenchline?: { checkReport?: unknown } }).__trenchline?.checkReport !== undefined, null, { timeout: REPORT_MS });
-  const report = JSON.parse(readFileSync('artifacts/chrome-submitted/report.json', 'utf8')) as Report;
-  console.log(`submitted-work ms: ${JSON.stringify(report.views.map((v) => [v.shot, +v.gpuMs.toFixed(2)]))}; the day: ${JSON.stringify(report.day.map((d) => [hhmm(d.hours), +d.gpuMs.toFixed(2)]))}`);
-  expect(report.errors).toEqual([]);
-  expect(report.timer).toBe('submitted-work');
-  expect(report.views.length).toBe(VIEWS.length * KEYS.length);
-  expect(report.day.length).toBe(DAY.length);
-  for (const v of [...report.views.map((x) => ({ at: x.shot, gpuMs: x.gpuMs })), ...report.day.map((x) => ({ at: hhmm(x.hours), gpuMs: x.gpuMs }))]) {
-    expect(v.gpuMs, v.at).toBeGreaterThan(1);
-    expect(v.gpuMs, v.at).toBeLessThan(50);
-  }
+// In a window of another shape, as Safari's may be: the check's canvas is still 1600 × 1000, so its
+// views are framed and presented as here.
+test.describe('in a window of another shape', () => {
+  test.use({ viewport: { width: 1200, height: 900 } });
+  test('without timestamps, the check times every view and hour by its submitted work', async ({ page }) => {
+    test.setTimeout(REPORT_MS + 30_000);
+    rmSync('artifacts/chrome-submitted', { recursive: true, force: true });
+    await page.goto('/?check=chrome-submitted&timer=submitted-work');
+    await page.waitForFunction(() => (window as unknown as { __trenchline?: { checkReport?: unknown } }).__trenchline?.checkReport !== undefined, null, { timeout: REPORT_MS });
+    const report = JSON.parse(readFileSync('artifacts/chrome-submitted/report.json', 'utf8')) as Report;
+    console.log(`submitted-work ms: ${JSON.stringify(report.views.map((v) => [v.shot, +v.gpuMs.toFixed(2)]))}; the day: ${JSON.stringify(report.day.map((d) => [hhmm(d.hours), +d.gpuMs.toFixed(2)]))}`);
+    expect(report.errors).toEqual([]);
+    expect(report.timer).toBe('submitted-work');
+    expect(report.views.length).toBe(VIEWS.length * KEYS.length);
+    expect(report.day.length).toBe(DAY.length);
+    for (const v of [...report.views.map((x) => ({ at: x.shot, gpuMs: x.gpuMs })), ...report.day.map((x) => ({ at: hhmm(x.hours), gpuMs: x.gpuMs }))]) {
+      expect(v.gpuMs, v.at).toBeGreaterThan(1);
+      expect(v.gpuMs, v.at).toBeLessThan(50);
+    }
+    for (const v of report.views) {
+      expect(v.canvas, v.shot).toEqual([1600, 1000]);
+      expect(v.res, v.shot).toEqual([1549, 968]);
+    }
+  });
 });

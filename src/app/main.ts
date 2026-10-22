@@ -33,7 +33,7 @@ import { PeriscopeFrame } from '../ui/periscope';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from '../ui/settings';
 import { fingerprint } from '../world/fingerprint';
 import { CameraRig, rigTunables } from './camera-rig';
-import { reporter, runCheck } from './check';
+import { CHECK_CANVAS, reporter, runCheck } from './check';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
@@ -84,8 +84,9 @@ function fail(error: unknown): void {
   );
 }
 
-/** The canvas in device pixels: its CSS size at up to twice the CSS pixel density. */
+/** The canvas in device pixels: its CSS size at up to twice the CSS pixel density (a check's, CHECK_CANVAS). */
 function canvasTarget(): [number, number] {
+  if (checkRun) return [CHECK_CANVAS[0], CHECK_CANVAS[1]];
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   return [Math.max(1, Math.floor(canvas.clientWidth * dpr)), Math.max(1, Math.floor(canvas.clientHeight * dpr))];
 }
@@ -577,6 +578,8 @@ async function start(): Promise<void> {
       },
       reporter(checkRun),
     );
+    // Reported: no more frames, so a browser left open on the page does not hold the GPU.
+    stopped = true;
   }
 }
 

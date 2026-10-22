@@ -15,6 +15,14 @@ const GPU_BUDGET_MS = 14;
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 const golden = JSON.parse(readFileSync('tests/fixtures/golden.json', 'utf8')).fingerprint;
+/** A measurement's passes, by timestamps: their sum (the frame's span less its gaps), and the four longest. */
+const passSum = (passes) => Object.values(passes ?? {}).reduce((a, b) => a + b, 0);
+const longest = (passes) =>
+  Object.entries(passes ?? {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([name, ms]) => `${name} ${ms.toFixed(2)}`)
+    .join(', ');
 /** An hour of the clock as HH:MM. */
 const hhmm = (hours) => {
   const m = Math.round(hours * 60);
@@ -54,18 +62,24 @@ try {
   if (report.errors.length === 0) {
     check(report.promptMs <= PROMPT_BUDGET_MS, `click to play at ${report.promptMs} ms (budget ${PROMPT_BUDGET_MS})`);
     check(report.fingerprint === golden, `world bytes ${report.fingerprint.slice(0, 12)}… ${report.fingerprint === golden ? 'match' : 'differ from'} Chrome's golden`);
-    console.log(`GPU time by ${report.timer}${report.timer === 'submitted-work' ? ' (an overestimate: it includes submitting and completing)' : ''}`);
+    console.log(`GPU time by ${report.timer}${report.timer === 'submitted-work' ? ' (an overestimate: it includes submitting and completing)' : ''}; the canvas ${report.views[0]?.canvas?.join('×')}`);
+    // With timestamps, each line's passes: their sum, and the longest where the line fails.
+    const passes = (x, ok) => (report.timer === 'timestamps' ? ` (passes ${passSum(x.passes).toFixed(2)}${ok ? '' : `: ${longest(x.passes)}`})` : '');
     for (const v of report.views) {
       const mp = (v.res[0] * v.res[1]) / 1e6;
-      check(v.gpuMs <= GPU_BUDGET_MS && mp >= 1.48 && v.spread > 4 / 255, `${v.shot.replace('.png', '').padEnd(16)} ${v.gpuMs.toFixed(2)} ms at ${v.res.join('×')} (${mp.toFixed(2)} MP), spread ${v.spread.toFixed(3)}`);
+      const ok = v.gpuMs <= GPU_BUDGET_MS && mp >= 1.48 && v.spread > 4 / 255;
+      check(ok, `${v.shot.replace('.png', '').padEnd(16)} ${v.gpuMs.toFixed(2)} ms at ${v.res.join('×')} (${mp.toFixed(2)} MP), spread ${v.spread.toFixed(3)}${passes(v, ok)}`);
     }
     check(report.views.length === 24 && report.day.length === 16, `${report.views.length} views (six at four keys) and ${report.day.length} hours of the day`);
-    for (const d of report.day) check(d.gpuMs <= GPU_BUDGET_MS, `overview at ${hhmm(d.hours)}  ${d.gpuMs.toFixed(2)} ms`);
+    for (const d of report.day) check(d.gpuMs <= GPU_BUDGET_MS, `overview at ${hhmm(d.hours)}  ${d.gpuMs.toFixed(2)} ms${passes(d, d.gpuMs <= GPU_BUDGET_MS)}`);
   }
 } catch (e) {
   console.error(e instanceof Error ? e.message : String(e));
   failed = true;
 } finally {
   await server.close();
+  // The run's tab: the page has stopped drawing, but runs should not pile tabs up.
+  const tab = `localhost:${PORT}/?check=${RUN}`;
+  await new Promise((resolve) => execFile('osascript', ['-e', `tell application "Safari" to close (every tab of every window whose URL contains "${tab}")`], () => resolve()));
 }
 process.exitCode = failed ? 1 : 0;
