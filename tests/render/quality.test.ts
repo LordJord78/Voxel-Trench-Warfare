@@ -20,6 +20,12 @@ describe('quality', () => {
       budgetMs: 14,
       denoise: { historyMax: 32, sigmaLuma: 4, sigmaPlane: 1 },
       sharpness: 0.4,
+      bloomWeight: 0.04,
+      // The exposure's adaptation: the approved views' norm and zone, and the eye's rates.
+      exposureTarget: -2.92,
+      exposureZone: 1.88,
+      adaptToDarker: 1,
+      adaptToBrighter: 3,
       // Earth's atmosphere as Hillaire (2020) gives it, with a ground albedo of 0.3.
       atmosphere: {
         bottom: 6360,
