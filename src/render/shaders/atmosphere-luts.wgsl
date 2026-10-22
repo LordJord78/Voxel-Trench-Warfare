@@ -137,13 +137,14 @@ fn scatteringLut(@builtin(workgroup_id) texel: vec3u, @builtin(local_invocation_
 
 @compute @workgroup_size(8, 8)
 fn skyViewLut(@builtin(global_invocation_id) g: vec3u) {
-  if (any(vec2f(g.xy) >= SKY_VIEW_SIZE)) {
+  let size = vec2f(textureDimensions(skyViewOut).xy);
+  if (any(vec2f(g.xy) >= size)) {
     return;
   }
   let h = max(atm.viewHeight, 0.0);
   let r = atm.bottom + h;
   let c = heightC(atm, h);
-  let angles = skyViewParams(atm, h, unitOf(g.xy, SKY_VIEW_SIZE));
+  let angles = skyViewParams(atm, h, unitOf(g.xy, size));
   let sinZ = sqrt(max(0.0, 1.0 - angles.y * angles.y));
   let sinA = sqrt(max(0.0, 1.0 - angles.x * angles.x));
   let view = vec3f(sinZ * angles.x, angles.y, sinZ * sinA);
@@ -203,15 +204,16 @@ fn irradianceLut(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_ind
   let along = select(vec2f(1.0, 0.0), flat / lf, lf > 1e-6);
   let across = vec2f(-along.y, along.x);
   let beta = horizonDip(atm, max(atm.viewHeight, 0.0));
-  let size = vec2u(SKY_VIEW_SIZE);
+  let size = textureDimensions(skyViewIn).xy;
+  let sizeF = vec2f(size);
   let texels = size.x * size.y;
   let per = (texels + IRRADIANCE_CHUNKS - 1u) / IRRADIANCE_CHUNKS;
   // Half a texel, in unit coordinates (whose texel centres run 0 to 1).
-  let half = 0.5 / (SKY_VIEW_SIZE - 1.0);
+  let half = 0.5 / (sizeF - 1.0);
   var sums: array<vec3f, 6>;
   for (var k = chunk * per + lane; k < min((chunk + 1u) * per, texels); k += 64u) {
     let t = vec2u(k % size.x, k / size.x);
-    let unit = vec2f(t) / (SKY_VIEW_SIZE - 1.0);
+    let unit = vec2f(t) / (sizeF - 1.0);
     let lo = max(unit - half, vec2f(0.0));
     let hi = min(unit + half, vec2f(1.0));
     let solid = (cos(zenithOf(beta, lo.y)) - cos(zenithOf(beta, hi.y))) * (azimuthOf(hi.x) - azimuthOf(lo.x));

@@ -41,10 +41,10 @@ const SHAFTS_FROM: f32 = 0.0523;
 @group(3) @binding(4) var glowNow: texture_3d<f32>;
 @group(3) @binding(5) var hazeOut: texture_storage_3d<rgba16float, write>;
 
-// The ray through the middle of froxel column `column`.
-fn columnRay(column: vec2u) -> vec3f {
+// The ray through the middle of froxel column `column`, of `columns` across and down the view.
+fn columnRay(column: vec2u, columns: vec2u) -> vec3f {
   let res = vec2f(frame.res);
-  return cameraRay(frame.cam, (vec2f(column) + 0.5) / vec2f(FROXELS.xy) * res, res);
+  return cameraRay(frame.cam, (vec2f(column) + 0.5) / vec2f(columns) * res, res);
 }
 
 // Where in its slice a froxel of `column` finds its glow this frame, 0 to 1: blue noise across the
@@ -81,40 +81,42 @@ fn pointGlow(x: vec3f, rd: vec3f, seed: vec3u) -> vec3f {
 
 @compute @workgroup_size(8, 8, 1)
 fn inject(@builtin(global_invocation_id) g: vec3u) {
-  if (any(g >= FROXELS)) {
+  let grid = textureDimensions(glowOut);
+  if (any(g >= grid)) {
     return;
   }
-  let rd = columnRay(g.xy);
+  let rd = columnRay(g.xy, grid.xy);
   let k = f32(g.z);
   let metres = sliceMetres(k + sliceJitter(g.xy));
   let x = frame.cam.origin + rd * (metres / frame.voxel);
-  let sample = vec4f(pointGlow(x, rd, vec3u(g.xy, g.z + frame.frame * FROXELS.z)), keyLit(x));
+  let sample = vec4f(pointGlow(x, rd, vec3u(g.xy, g.z + frame.frame * FROXEL_SLICES)), keyLit(x));
   // Last frame's glow for the same place: the froxel's middle, where last frame's camera saw it.
   let middle = frame.cam.origin + rd * (sliceMetres(k + 0.5) / frame.voxel);
   let res = vec2f(frame.res);
   let uv = project(frame.prev, middle, res) / res;
   let s = froxelSlice(length(middle - frame.prev.origin) * frame.voxel);
-  let seen = (frame.flags & FLAG_HISTORY_RESET) == 0u && all(uv >= vec2f(0.0)) && all(uv <= vec2f(1.0)) && s <= f32(FROXELS.z);
+  let seen = (frame.flags & FLAG_HISTORY_RESET) == 0u && all(uv >= vec2f(0.0)) && all(uv <= vec2f(1.0)) && s <= f32(FROXEL_SLICES);
   var out = sample;
   if (seen) {
-    out = mix(textureSampleLevel(glowBefore, hazeSampler, vec3f(uv, s / f32(FROXELS.z)), 0.0), sample, FROXEL_BLEND);
+    out = mix(textureSampleLevel(glowBefore, hazeSampler, vec3f(uv, s / f32(FROXEL_SLICES)), 0.0), sample, FROXEL_BLEND);
   }
   textureStore(glowOut, g, out);
 }
 
 @compute @workgroup_size(8, 8, 1)
 fn integrate(@builtin(global_invocation_id) g: vec3u) {
-  if (any(g.xy >= FROXELS.xy)) {
+  let grid = textureDimensions(hazeOut);
+  if (any(g.xy >= grid.xy)) {
     return;
   }
-  let rd = columnRay(g.xy);
+  let rd = columnRay(g.xy, grid.xy);
   let eyeY = frame.cam.origin.y * frame.voxel;
   // The share of the key's glow the haze keeps in shadow, all of it with the key near the horizon.
   let shadow = mix(1.0, frame.hazeShadow, smoothstep(0.0, SHAFTS_FROM, frame.keyDir.y));
   var light = vec3f(0.0);
   // The haze's optical depth to the slice's near side.
   var depth = 0.0;
-  for (var k = 0u; k < FROXELS.z; k++) {
+  for (var k = 0u; k < FROXEL_SLICES; k++) {
     let far = sliceMetres(f32(k + 1u));
     let to = max(hazeDepth(eyeY, rd, far), depth);
     // The slice's glow, lit by this frame's key as far as it reaches, over what of it the haze

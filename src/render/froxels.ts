@@ -1,5 +1,5 @@
 /**
- * The froxels (froxels.wgsl): the haze over the view in 160 × 90 × 64 froxels out to 120 m
+ * The froxels (froxels.wgsl): the haze over the view in 160 × 90 × 64 froxels (80 × 45 × 64 on low) out to 120 m
  * (haze.wgsl's grid), each glowing with what reaches it: the key light as far as its height map
  * lets it (key-shadow.ts), the sky's and the front's light, and its light cell's point lights
  * (light-cells.ts). Each frame, `inject` samples how much of the key light reaches each froxel and
@@ -13,8 +13,8 @@ import type { LightCells } from './light-cells';
 import { moduleSource } from './shaders';
 import froxelsSrc from './shaders/froxels.wgsl';
 
-/** The froxels across the view, down it, and out from the eye (haze.wgsl's FROXELS). */
-export const FROXELS: readonly [number, number, number] = [160, 90, 64];
+/** The slices of each froxel column, out from the eye (haze.wgsl's FROXEL_SLICES); the columns are the preset's (quality.ts). */
+export const FROXEL_SLICES = 64;
 
 export interface FroxelLayouts {
   /** Group 3 of a pass that reads the haze (hazeAt): the haze, and its sampler. */
@@ -54,18 +54,21 @@ export interface FroxelPipelines {
 }
 
 export class Froxels {
-  /** The haze from the eye to each slice's far side: the light it scatters toward the eye (rgb), and what shows through it (a). */
-  readonly haze: GPUTexture;
-  /** Group 3 for a pass that reads the haze; and an empty group, for its groups between. */
-  readonly group: GPUBindGroup;
+  /** The haze from the eye to each slice's far side: the light it scatters toward the eye (rgb), and what shows through it (a). A new texture on resize. */
+  haze!: GPUTexture;
+  /** Group 3 for a pass that reads the haze (a new one on resize); and an empty group, for its groups between. */
+  group!: GPUBindGroup;
   readonly none: GPUBindGroup;
+  private readonly device: GPUDevice;
   private readonly pipelines: FroxelPipelines;
+  private readonly sampler: GPUSampler;
   /** Each froxel's samples, blended over frames (the point lights' glow, and how much of the key reaches it): frame k writes [k & 1] from the other. */
-  private readonly glow: GPUTexture[];
+  private glow: GPUTexture[] = [];
   private readonly cells: GPUBindGroup;
   private readonly keyShadow: KeyShadow;
-  private readonly injectGroups: GPUBindGroup[];
-  private readonly integrateGroups: GPUBindGroup[];
+  private injectGroups: GPUBindGroup[] = [];
+  private integrateGroups: GPUBindGroup[] = [];
+  private columns: [number, number] = [0, 0];
 
   /** Over the scene's group 0 (`scene`, scene.ts), asking keyLit through the height map's group (`key`). */
   static async compile(device: GPUDevice, scene: GPUBindGroupLayout, key: KeyShadowLayouts, layouts: FroxelLayouts = froxelLayouts(device)): Promise<FroxelPipelines> {
@@ -82,34 +85,17 @@ export class Froxels {
     return { layouts, inject, integrate };
   }
 
-  /** Lit by the frame's point lights through `cells`, and the key light through `keyShadow`'s map. */
-  static create(device: GPUDevice, pipelines: FroxelPipelines, cells: LightCells, keyShadow: KeyShadow): Froxels {
-    return new Froxels(device, pipelines, cells, keyShadow);
+  /** `columns` across and down the view (quality.ts's FROXEL_COLUMNS), lit by the frame's point lights through `cells` and the key light through `keyShadow`'s map. */
+  static create(device: GPUDevice, pipelines: FroxelPipelines, cells: LightCells, keyShadow: KeyShadow, columns: readonly [number, number]): Froxels {
+    return new Froxels(device, pipelines, cells, keyShadow, columns);
   }
 
-  private constructor(device: GPUDevice, pipelines: FroxelPipelines, cells: LightCells, keyShadow: KeyShadow) {
+  private constructor(device: GPUDevice, pipelines: FroxelPipelines, cells: LightCells, keyShadow: KeyShadow, columns: readonly [number, number]) {
+    this.device = device;
     this.pipelines = pipelines;
     this.keyShadow = keyShadow;
-    const volume = (label: string) =>
-      device.createTexture({
-        label,
-        size: [...FROXELS],
-        dimension: '3d',
-        format: 'rgba16float',
-        usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
-      });
-    this.haze = volume('haze');
-    this.glow = [volume('froxel glow 0'), volume('froxel glow 1')];
-    const sampler = device.createSampler({ label: 'haze', magFilter: 'linear', minFilter: 'linear' });
+    this.sampler = device.createSampler({ label: 'haze', magFilter: 'linear', minFilter: 'linear' });
     const { layouts } = pipelines;
-    this.group = device.createBindGroup({
-      label: 'haze',
-      layout: layouts.haze,
-      entries: [
-        { binding: 0, resource: this.haze.createView() },
-        { binding: 1, resource: sampler },
-      ],
-    });
     this.cells = device.createBindGroup({
       label: 'froxel cells',
       layout: layouts.cells,
@@ -119,12 +105,43 @@ export class Froxels {
       ],
     });
     this.none = device.createBindGroup({ label: 'froxels none', layout: layouts.none, entries: [] });
+    this.resize(columns);
+  }
+
+  /**
+   * The grid at `columns` across and down the view: new volumes and groups (the haze's `group`
+   * included, which its readers take again); the samples' history starts afresh with the frame's.
+   */
+  resize(columns: readonly [number, number]): void {
+    if (columns[0] === this.columns[0] && columns[1] === this.columns[1]) return;
+    this.destroy();
+    this.columns = [columns[0], columns[1]];
+    const device = this.device;
+    const volume = (label: string) =>
+      device.createTexture({
+        label,
+        size: [columns[0], columns[1], FROXEL_SLICES],
+        dimension: '3d',
+        format: 'rgba16float',
+        usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+      });
+    this.haze = volume('haze');
+    this.glow = [volume('froxel glow 0'), volume('froxel glow 1')];
+    const { layouts } = this.pipelines;
+    this.group = device.createBindGroup({
+      label: 'haze',
+      layout: layouts.haze,
+      entries: [
+        { binding: 0, resource: this.haze.createView() },
+        { binding: 1, resource: this.sampler },
+      ],
+    });
     this.injectGroups = [0, 1].map((k) =>
       device.createBindGroup({
         label: `froxel inject ${k}`,
         layout: layouts.inject,
         entries: [
-          { binding: 1, resource: sampler },
+          { binding: 1, resource: this.sampler },
           { binding: 2, resource: this.glow[1 - k].createView() },
           { binding: 3, resource: this.glow[k].createView() },
         ],
@@ -151,17 +168,17 @@ export class Froxels {
     pass.setBindGroup(2, this.keyShadow.group);
     pass.setBindGroup(3, this.injectGroups[parity]);
     // Workgroups of 8 × 8 froxels, a slice deep.
-    pass.dispatchWorkgroups(Math.ceil(FROXELS[0] / 8), Math.ceil(FROXELS[1] / 8), FROXELS[2]);
+    pass.dispatchWorkgroups(Math.ceil(this.columns[0] / 8), Math.ceil(this.columns[1] / 8), FROXEL_SLICES);
     pass.setPipeline(this.pipelines.integrate);
     pass.setBindGroup(1, this.none);
     pass.setBindGroup(2, this.none);
     pass.setBindGroup(3, this.integrateGroups[parity]);
-    pass.dispatchWorkgroups(Math.ceil(FROXELS[0] / 8), Math.ceil(FROXELS[1] / 8));
+    pass.dispatchWorkgroups(Math.ceil(this.columns[0] / 8), Math.ceil(this.columns[1] / 8));
     pass.end();
   }
 
   destroy(): void {
-    this.haze.destroy();
+    this.haze?.destroy();
     for (const t of this.glow) t.destroy();
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadTunables } from '../../src/core/tunables';
-import { LIGHT_SCALE, rendererTunables, scaledSize } from '../../src/render/quality';
+import { FROXEL_COLUMNS, LIGHT_SCALE, rendererTunables, scaledSize, SKY_VIEW_SIZE } from '../../src/render/quality';
 
 describe('quality', () => {
   it('lights a quarter of the pixels on high and a sixteenth on low', () => {
@@ -43,5 +43,12 @@ describe('quality', () => {
         albedo: 0.3,
       },
     });
+  });
+});
+
+describe('the presets beyond the lighting scale', () => {
+  it('give the low preset half the froxel grid across and down, and a sky view of 96 × 54', () => {
+    expect(FROXEL_COLUMNS).toEqual({ high: [160, 90], low: [80, 45] });
+    expect(SKY_VIEW_SIZE).toEqual({ high: [192, 108], low: [96, 54] });
   });
 });

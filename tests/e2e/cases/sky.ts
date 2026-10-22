@@ -83,11 +83,13 @@ export const cases = {
    * transmittance and multiple-scattering LUTs as built; and how many texels of each LUT are not
    * finite or negative, over every build.
    */
-  async skyModel(args: { dirs: number[][]; suns: number[][]; moon: number[]; heightsM: number[] }) {
+  async skyModel(args: { dirs: number[][]; suns: number[][]; moon: number[]; heightsM: number[]; skyView?: [number, number] }) {
     const g = await gpu();
     const device = g.device;
     const model = atmosphereModel(loadTunables());
     const atmosphere = Atmosphere.create(device, await Atmosphere.compile(device), model);
+    // The low preset's smaller sky view, if asked.
+    if (args.skyView) atmosphere.resizeSkyView(args.skyView);
     const map = syntheticWorld(1);
     const world = GpuWorld.create(device, { map, mirror: HeapMirror.fromMap(map) });
     const far = FarFieldGpu.empty(device);

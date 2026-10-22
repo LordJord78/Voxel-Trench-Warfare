@@ -3,7 +3,8 @@
  * and the renderer settings the tunables hold.
  *
  *   high — the internal image at 1.5 MP, lit at one pixel in four;
- *   low  — the same image, lit at one pixel in sixteen.
+ *   low  — the same image, lit at one pixel in sixteen, with half the froxel grid across and down,
+ *          no spatial reuse in ReSTIR, and a sky view a quarter the size.
  */
 
 import type { Tunables } from '../core/tunables';
@@ -13,6 +14,12 @@ export type Preset = 'high' | 'low';
 
 /** The lighting grid's block size per preset: each L × L block is lit by one of its pixels. */
 export const LIGHT_SCALE: Record<Preset, number> = { high: 2, low: 4 };
+
+/** The froxel grid's columns across and down the view per preset (froxels.ts); each has 64 slices. */
+export const FROXEL_COLUMNS: Record<Preset, [number, number]> = { high: [160, 90], low: [80, 45] };
+
+/** The sky view's texels per preset (atmosphere.ts). */
+export const SKY_VIEW_SIZE: Record<Preset, [number, number]> = { high: [192, 108], low: [96, 54] };
 
 /** The internal image at `scale` per axis of the size its textures hold, never below a pixel. */
 export function scaledSize(alloc: readonly [number, number], scale: number): [number, number] {

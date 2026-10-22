@@ -16,13 +16,11 @@ const BUDGET_MS = 14;
 const SETTLE = 90;
 const SAMPLES = 31;
 
-test('every standard view renders within the GPU budget at 1.5 MP, at dusk, at night, at noon and at dawn', async ({ page }) => {
-  test.setTimeout(400_000);
-  const errors = await openGame(page);
-  // Measured at the high preset's full 1.5 MP: dynamic resolution would hide a slow view.
-  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+/** Each standard view's median GPU time of SAMPLES frames at each key, at `preset` (1.5 MP, dynamic resolution off); null without timestamp queries. */
+async function standardViews(page: import('@playwright/test').Page, preset: 'high' | 'low'): Promise<Record<string, Record<string, number>> | null> {
+  await hooks(page, (h, p) => h.setQuality({ preset: p as 'high' | 'low', dynres: false }), preset);
   const first = await hooks(page, (h) => h.stats());
-  test.skip(first.gpuMs === null && (await hooks(page, async (h) => (await h.waitFrames(30), h.stats().gpuMs))) === null, 'no timestamp queries on this GPU');
+  if (first.gpuMs === null && (await hooks(page, async (h) => (await h.waitFrames(30), h.stats().gpuMs))) === null) return null;
   const medians: Record<string, Record<string, number>> = {};
   for (const name of VIEWS) {
     medians[name] = {};
@@ -45,14 +43,34 @@ test('every standard view renders within the GPU budget at 1.5 MP, at dusk, at n
       );
       const s = await hooks(page, (h) => h.stats());
       expect(s.res[0] * s.res[1]).toBeGreaterThan(1.48e6);
+      expect(s.preset).toBe(preset);
       expect(times.length).toBeGreaterThan(SAMPLES / 2);
       times.sort((a, b) => a - b);
       medians[name][time] = times[times.length >> 1];
     }
   }
-  console.log(`GPU ms per view, median of ${SAMPLES} frames (dusk/night/noon/dawn): ${VIEWS.map((v) => `${v} ${Object.keys(TIMES).map((t) => medians[v][t].toFixed(2)).join('/')}`).join(', ')}`);
+  return medians;
+}
+
+test('every standard view renders within the GPU budget at 1.5 MP, at dusk, at night, at noon and at dawn', async ({ page }) => {
+  test.setTimeout(400_000);
+  const errors = await openGame(page);
+  // Measured at the high preset's full 1.5 MP: dynamic resolution would hide a slow view.
+  const medians = await standardViews(page, 'high');
+  test.skip(medians === null, 'no timestamp queries on this GPU');
+  console.log(`GPU ms per view, median of ${SAMPLES} frames (dusk/night/noon/dawn): ${VIEWS.map((v) => `${v} ${Object.keys(TIMES).map((t) => medians![v][t].toFixed(2)).join('/')}`).join(', ')}`);
   expect(errors).toEqual([]);
-  for (const name of VIEWS) for (const time of Object.keys(TIMES)) expect(medians[name][time], `${name} at ${time}`).toBeLessThanOrEqual(BUDGET_MS);
+  for (const name of VIEWS) for (const time of Object.keys(TIMES)) expect(medians![name][time], `${name} at ${time}`).toBeLessThanOrEqual(BUDGET_MS);
+});
+
+test('every standard view renders within the GPU budget on the low preset, at the four keys', async ({ page }) => {
+  test.setTimeout(400_000);
+  const errors = await openGame(page);
+  const medians = await standardViews(page, 'low');
+  test.skip(medians === null, 'no timestamp queries on this GPU');
+  console.log(`GPU ms per view on low, median of ${SAMPLES} frames (dusk/night/noon/dawn): ${VIEWS.map((v) => `${v} ${Object.keys(TIMES).map((t) => medians![v][t].toFixed(2)).join('/')}`).join(', ')}`);
+  expect(errors).toEqual([]);
+  for (const name of VIEWS) for (const time of Object.keys(TIMES)) expect(medians![name][time], `${name} at ${time}`).toBeLessThanOrEqual(BUDGET_MS);
 });
 
 test('a thousand lights at night, 256 of them moving, render within the GPU budget from the overview and in no man\'s land', async ({ page }) => {

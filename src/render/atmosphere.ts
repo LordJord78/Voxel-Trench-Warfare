@@ -9,7 +9,7 @@
  *   scattering    (64 × 32)     — ln Ψms, every order of scattering past the
  *                                 first, by the sun's angle and height; built
  *                                 once, in full floats;
- *   sky view      (192 × 108 × 2) — the sky's radiance as the camera sees it,
+ *   sky view      (192 × 108 × 2; 96 × 54 on low) — the sky's radiance as the camera sees it,
  *                                 by angle from the light and from the zenith:
  *                                 one layer lit by the sun and one by the moon,
  *                                 built for each frame's sun, moon and camera
@@ -64,7 +64,9 @@ export interface AtmospherePipelines {
   irradianceSum: GPUComputePipeline;
 }
 
-const SIZES = { transmittance: [256, 64], scattering: [64, 32], skyView: [192, 108] } as const;
+const SIZES = { transmittance: [256, 64], scattering: [64, 32] } as const;
+/** The sky view's size until resizeSkyView sets another (the high preset's). */
+const SKY_VIEW: [number, number] = [192, 108];
 /** The irradiance build's chunks of each layer's texels (IRRADIANCE_CHUNKS in the shader). */
 const IRRADIANCE_CHUNKS = 16;
 
@@ -146,8 +148,8 @@ export class Atmosphere {
   readonly model: AtmosphereModel;
   readonly transmittance: GPUTexture;
   readonly scattering: GPUTexture;
-  /** Two layers: lit by the sun, and by the moon. */
-  readonly skyView: GPUTexture;
+  /** Two layers: lit by the sun, and by the moon. A new texture on resizeSkyView. */
+  skyView: GPUTexture;
   /** Twelve vec4s: the six faces' irradiance (faceNormal's order) from the sun's layer, then the moon's. */
   readonly irradiance: GPUBuffer;
   readonly sampler: GPUSampler;
@@ -155,8 +157,9 @@ export class Atmosphere {
   private readonly pipelines: AtmospherePipelines;
   private readonly uniform: GPUBuffer;
   private readonly writer = new StructWriter(ATMOSPHERE);
-  private readonly skyViewGroup: GPUBindGroup;
-  private readonly irradianceGroup: GPUBindGroup;
+  private skyViewSize: [number, number] = SKY_VIEW;
+  private skyViewGroup: GPUBindGroup;
+  private irradianceGroup: GPUBindGroup;
   private readonly irradianceSumGroup: GPUBindGroup;
   private readonly irradianceParts: GPUBuffer;
   private sunDir: readonly number[] = [0, 1, 0];
@@ -198,34 +201,19 @@ export class Atmosphere {
       });
     this.transmittance = lut('transmittance', SIZES.transmittance, 'rgba16float');
     this.scattering = lut('multiple scattering', SIZES.scattering, 'rgba32float');
-    this.skyView = lut('sky view', [...SIZES.skyView, 2], 'rgba16float');
+    this.skyView = lut('sky view', [...SKY_VIEW, 2], 'rgba16float');
     this.irradiance = device.createBuffer({ label: 'sky irradiance', size: 12 * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     this.irradianceParts = device.createBuffer({ label: 'sky irradiance parts', size: 2 * IRRADIANCE_CHUNKS * 6 * 16, usage: GPUBufferUsage.STORAGE });
     this.sampler = device.createSampler({ label: 'atmosphere', magFilter: 'linear', minFilter: 'linear' });
     this.uniform = device.createBuffer({ label: 'atmosphere', size: this.writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    // Each build's own (automatic) layout, with the atmosphere's uniform at 0 unless it reads none.
-    const group = (pipeline: GPUComputePipeline, entries: [number, GPUBindingResource][], uniform = true) =>
-      device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [...(uniform ? [[0, { buffer: this.uniform }] as [number, GPUBindingResource]] : []), ...entries].map(([binding, resource]) => ({ binding, resource })),
-      });
-    const layers = (dimension: GPUTextureViewDimension) => this.skyView.createView({ dimension });
+    const group = (pipeline: GPUComputePipeline, entries: [number, GPUBindingResource][], uniform = true) => this.group(pipeline, entries, uniform);
     const transmittanceGroup = group(pipelines.transmittance, [[4, this.transmittance.createView()]]);
     const scatteringGroup = group(pipelines.scattering, [
       [1, this.transmittance.createView()],
       [3, this.sampler],
       [5, this.scattering.createView()],
     ]);
-    this.skyViewGroup = group(pipelines.skyView, [
-      [1, this.transmittance.createView()],
-      [2, this.scattering.createView()],
-      [3, this.sampler],
-      [6, layers('2d-array')],
-    ]);
-    this.irradianceGroup = group(pipelines.irradiance, [
-      [7, layers('2d-array')],
-      [9, { buffer: this.irradianceParts }],
-    ]);
+    [this.skyViewGroup, this.irradianceGroup] = this.skyViewGroups();
     this.irradianceSumGroup = group(
       pipelines.irradianceSum,
       [
@@ -264,7 +252,7 @@ export class Atmosphere {
     const pass = encoder.beginComputePass({ label: 'sky view', timestampWrites });
     pass.setPipeline(this.pipelines.skyView);
     pass.setBindGroup(0, this.skyViewGroup);
-    pass.dispatchWorkgroups(SIZES.skyView[0] / 8, Math.ceil(SIZES.skyView[1] / 8), layers);
+    pass.dispatchWorkgroups(Math.ceil(this.skyViewSize[0] / 8), Math.ceil(this.skyViewSize[1] / 8), layers);
     pass.setPipeline(this.pipelines.irradiance);
     pass.setBindGroup(0, this.irradianceGroup);
     pass.dispatchWorkgroups(IRRADIANCE_CHUNKS, layers);
@@ -272,6 +260,48 @@ export class Atmosphere {
     pass.setBindGroup(0, this.irradianceSumGroup);
     pass.dispatchWorkgroups(layers);
     pass.end();
+  }
+
+  /**
+   * The sky view at `size` (the presets', quality.ts), a new texture: built by the next update, and
+   * read through views() after it, so whoever binds them must take them again.
+   */
+  resizeSkyView(size: readonly [number, number]): void {
+    if (size[0] === this.skyViewSize[0] && size[1] === this.skyViewSize[1]) return;
+    this.skyView.destroy();
+    this.skyViewSize = [size[0], size[1]];
+    this.skyView = this.device.createTexture({
+      label: 'sky view',
+      size: [...size, 2],
+      format: 'rgba16float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC,
+    });
+    [this.skyViewGroup, this.irradianceGroup] = this.skyViewGroups();
+  }
+
+  /** Each build's own (automatic) layout's group, with the atmosphere's uniform at 0 unless it reads none. */
+  private group(pipeline: GPUComputePipeline, entries: [number, GPUBindingResource][], uniform = true): GPUBindGroup {
+    return this.device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [...(uniform ? [[0, { buffer: this.uniform }] as [number, GPUBindingResource]] : []), ...entries].map(([binding, resource]) => ({ binding, resource })),
+    });
+  }
+
+  /** The sky view's build's group, and the irradiance build's that reads it. */
+  private skyViewGroups(): [GPUBindGroup, GPUBindGroup] {
+    const layers = this.skyView.createView({ dimension: '2d-array' });
+    return [
+      this.group(this.pipelines.skyView, [
+        [1, this.transmittance.createView()],
+        [2, this.scattering.createView()],
+        [3, this.sampler],
+        [6, layers],
+      ]),
+      this.group(this.pipelines.irradiance, [
+        [7, layers],
+        [9, { buffer: this.irradianceParts }],
+      ]),
+    ];
   }
 
   /** The atmosphere as the sky views were last built, into a frame struct's field (laid out as ATMOSPHERE). */

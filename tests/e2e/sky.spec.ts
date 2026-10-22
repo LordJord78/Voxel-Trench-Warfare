@@ -51,7 +51,8 @@ test.beforeAll(async ({ browser }) => {
   await page.close();
 });
 
-test('the sky matches the reference model', () => {
+/** The sky against the reference model: each view within `within` of it (3%), but the views of the ground. */
+function checkSky(r: Result, label: string, within = 0.03) {
   expect(r.compileErrors ?? []).toEqual([]);
   expect(r.errors).toEqual([]);
   const { table, psi } = reference(r.model);
@@ -72,7 +73,7 @@ test('the sky matches the reference model', () => {
         for (let c = 0; c < 3; c++) {
           const err = Math.abs(got[i][c] - want[c]);
           if (want[c] > 1e-6) worstRel = Math.max(worstRel, err / want[c]);
-          if (!(err <= Math.max(0.03 * want[c], 1e-6))) {
+          if (!(err <= Math.max(within * want[c], 1e-6))) {
             const v = VIEW_ELEVATIONS[Math.floor(i / VIEW_AZIMUTHS.length)];
             const a = VIEW_AZIMUTHS[i % VIEW_AZIMUTHS.length];
             wrong.push(`sun ${elevation}° at ${heightM} m, view ${v}° up ${a}° round, channel ${c}: gpu ${got[i][c].toExponential(3)} ref ${want[c].toExponential(3)}`);
@@ -82,10 +83,20 @@ test('the sky matches the reference model', () => {
     });
     worst.push(`sun ${elevation}°: worst ${(worstRel * 100).toFixed(2)}%`);
   });
-  console.log(`sky against the reference — ${worst.join('; ')}`);
+  console.log(`${label}sky against the reference — ${worst.join('; ')}`);
   expect(wrong.slice(0, 20)).toEqual([]);
   // Left out: the 24 views below the horizon from 2 m, at each sun, whose ground the world covers.
   expect(unseen).toBe(24 * ELEVATIONS.length);
+}
+
+test('the sky matches the reference model', () => {
+  checkSky(r, '');
+});
+
+// Half the sky view each way: twilight's blue low toward the sun, which changes fastest, is some 8% off (1.4% on high).
+test("on the low preset's 96 × 54 sky view, the sky matches the reference model within 8%", async ({ page }) => {
+  await openHarness(page);
+  checkSky(await runCase<Result>(page, 'skyModel', { dirs: DIRS, suns: SUNS, moon: MOON, heightsM: HEIGHTS_M, skyView: [96, 54] }), 'on low, ', 0.08);
 });
 
 let tables: { table: TransmittanceTable; psi: ScatteringTable } | null = null;

@@ -8,7 +8,8 @@ import { FLAGS, FRAME, PROBE_DUSK, writeWorldInfo, type FrameSky } from '../../.
 import { GpuWorld } from '../../../src/render/gpu-world';
 import { FLARE_MAP_SIZE, FlareShadows } from '../../../src/render/flare-shadows';
 import { KEY_MAP_SIZE, KeyShadow, keyShadowInfo, type Key } from '../../../src/render/key-shadow';
-import { StructWriter } from '../../../src/render/layout';
+import { structLayout, StructWriter } from '../../../src/render/layout';
+import type { Preset } from '../../../src/render/quality';
 import type { SceneLight } from '../../../src/render/lights';
 import { Renderer } from '../../../src/render/renderer';
 import { sceneExtras, sceneGroup, sceneLayout } from '../../../src/render/scene';
@@ -78,11 +79,11 @@ interface HazeAnswer {
   shaded: number[];
 }
 
-/** A renderer over `map` for a haze test: lit by `sky`, with `lights`. */
-async function hazeRenderer(map: BrickMap, sky: FrameSky, lights: SceneLight[] = []): Promise<Renderer> {
+/** A renderer over `map` for a haze test: lit by `sky`, with `lights`, at `preset`. */
+async function hazeRenderer(map: BrickMap, sky: FrameSky, lights: SceneLight[] = [], preset: Preset = 'high'): Promise<Renderer> {
   const g = await gpu();
   const gw = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
-  const renderer = await Renderer.create(g, null, gw, null, { size: HAZE_SIZE });
+  const renderer = await Renderer.create(g, null, gw, null, { size: HAZE_SIZE, preset });
   renderer.sky = sky;
   renderer.setLights(lights, 1);
   return renderer;
@@ -632,13 +633,49 @@ export const cases = {
     return { first, partway, after, errors: [...g.errors] };
   },
 
-  /** Nothing to cast a shaft, no point lights: the froxels' haze against the analytic fog over the view, to 120 m. */
-  async hazeOpen() {
+  /**
+   * Nothing to cast a shaft, no point lights: the froxels' haze against the analytic fog over the
+   * view, to 120 m, at `preset`; and the froxel grid's size, and whether the frame asked ReSTIR for
+   * no spatial reuse.
+   */
+  async hazeOpen(args: { preset?: Preset } = {}) {
     const g = await gpu();
-    const renderer = await hazeRenderer(new BrickMap(DIMS), { ...HAZE_SKY, keyDir: KEY });
+    const renderer = await hazeRenderer(new BrickMap(DIMS), { ...HAZE_SKY, keyDir: KEY }, [], args.preset);
     frames(renderer, { position: [6.4, 3, 6.4], yaw: 30, pitch: 5 }, 8, 0);
     const answers = await hazeAt(renderer, grid(16, 9, [0.3, 0.6, 1, 2, 4, 8, 15, 30, 60, 100, 119]));
-    return { answers, errors: [...g.errors] };
+    const t = renderer.texture('froxels');
+    const flags = new Uint32Array(renderer.frameUniform(), structLayout(FRAME).offsets.flags, 1)[0];
+    return { answers, froxels: [t.width, t.height, t.depthOrArrayLayers], spatialOff: (flags & FLAGS.SPATIAL_OFF) !== 0, errors: [...g.errors] };
+  },
+
+  /**
+   * A view with sky, rendered on high, then low, then high again: the shaded sky above the
+   * horizon (the mean of a 5 × 5 patch) before and after, and any GPU error on the way.
+   */
+  async presetSwitch() {
+    const g = await gpu();
+    const renderer = await hazeRenderer(new BrickMap(DIMS), { ...HAZE_SKY, keyDir: KEY });
+    renderer.flags |= FLAGS.JITTER_OFF;
+    const pose: CameraPose = { position: [6.4, 3, 6.4], yaw: 30, pitch: 10 };
+    const sky = async () => {
+      const t = renderer.texture('colour');
+      const px = new Uint16Array(await readTexture(t));
+      let sum = 0;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const k = ((40 + dy) * t.width + 160 + dx) * 4;
+        sum += luma([halfToFloat(px[k]), halfToFloat(px[k + 1]), halfToFloat(px[k + 2])]);
+      }
+      return sum / 25;
+    };
+    let now = frames(renderer, pose, 20, 0);
+    const before = await sky();
+    renderer.setQuality({ preset: 'low' });
+    now = frames(renderer, pose, 20, now);
+    const low = await sky();
+    renderer.setQuality({ preset: 'high' });
+    frames(renderer, pose, 20, now);
+    const after = await sky();
+    return { before, low, after, errors: [...g.errors] };
   },
 
   /** The haze shading sees, over a ramp of depths from 100 m to 140 m, a tenth of a metre apart, along three rays. */

@@ -65,7 +65,7 @@ import { KeyShadow, keyShadowLayouts, type Key, type KeyShadowPipelines } from '
 import { cellGrid, LightCells } from './light-cells';
 import { lightBuffer, type SceneLight } from './lights';
 import { Restir, type RestirPipelines } from './restir';
-import { LIGHT_SCALE, scaledSize, type Preset, type RenderSettings } from './quality';
+import { FROXEL_COLUMNS, LIGHT_SCALE, scaledSize, SKY_VIEW_SIZE, type Preset, type RenderSettings } from './quality';
 import { sceneExtras, sceneGroup, sceneLayout, type SkyLuts } from './scene';
 import { moduleSource } from './shaders';
 import atrousSrc from './shaders/atrous.wgsl';
@@ -357,14 +357,15 @@ export class Renderer {
     this.exposureGroup = device.createBindGroup({ label: 'exposure', layout: compiled.layouts.exposure, entries: [{ binding: 0, resource: { buffer: this.autoExposure.state } }] });
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     this.far = options.far ?? FarFieldGpu.empty(device);
+    this.preset = options.preset ?? 'high';
     this.atmosphere = Atmosphere.create(device, compiled.atmosphere, options.atmosphere ?? atmosphereModel(loadTunables()));
+    this.atmosphere.resizeSkyView(SKY_VIEW_SIZE[this.preset]);
     this.bloom = Bloom.create(device, compiled.bloom);
     this.cells = LightCells.create(device, compiled.cells, compiled.lights, cellGrid(world.map.dims, this.voxelSize()), this.voxelSize());
     this.restir = Restir.create(device, compiled.restir, this.frameBuffer, compiled.lights, this.cells);
     this.flareShadows = FlareShadows.create(device);
     this.keyShadow = KeyShadow.create(device, compiled.keyShadow, world.map.dims, this.voxelSize(), this.flareShadows);
-    this.froxels = Froxels.create(device, compiled.froxels, this.cells, this.keyShadow);
-    this.preset = options.preset ?? 'high';
+    this.froxels = Froxels.create(device, compiled.froxels, this.cells, this.keyShadow, FROXEL_COLUMNS[this.preset]);
     this.lightScale = LIGHT_SCALE[this.preset];
     this.budgetMs = options.budgetMs ?? 14;
     if (options.dynres) this.dynres = new DynamicResolution(frameBudget(this.timer.enabled, this.budgetMs));
@@ -405,6 +406,10 @@ export class Renderer {
     if (q.preset !== undefined && q.preset !== this.preset) {
       this.preset = q.preset;
       this.lightScale = LIGHT_SCALE[q.preset];
+      // The preset's froxel grid and sky view: new textures, so the scene group is built again.
+      this.froxels.resize(FROXEL_COLUMNS[q.preset]);
+      this.atmosphere.resizeSkyView(SKY_VIEW_SIZE[q.preset]);
+      this.sceneGroup = null;
       this.allocate();
     }
   }
@@ -591,7 +596,8 @@ export class Renderer {
     w.set('lightScale', this.lightScale);
     w.set('frame', this.frameIndex);
     // A history from before a resize is in textures that no longer exist.
-    w.set('flags', this.flags | (reset ? FLAGS.HISTORY_RESET : 0));
+    // The low preset drops ReSTIR's spatial reuse.
+    w.set('flags', this.flags | (reset ? FLAGS.HISTORY_RESET : 0) | (this.preset === 'low' ? FLAGS.SPATIAL_OFF : 0));
     this.resetNext = false;
     w.set('lightCount', this.lightCount);
     w.set('voxel', voxel);

@@ -295,3 +295,45 @@ test.describe("the flares' shadow maps", () => {
     expect(r.centre - Math.max(r.left, r.right)).toBeGreaterThanOrEqual(r.share / 3);
   });
 });
+
+test.describe('the low preset', () => {
+  test.setTimeout(120_000);
+  type Open = { answers: { haze: number[]; fog: number[] }[]; froxels: number[]; spatialOff: boolean; errors: string[] };
+  const luma = (c: number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+
+  test('on low the froxels are 80 × 45 across and down, the haze still the analytic fog; on high, 160 × 90', async ({ page }) => {
+    await openHarness(page);
+    const low = await runCase<Open>(page, 'hazeOpen', { preset: 'low' });
+    const high = await runCase<Open>(page, 'hazeOpen', { preset: 'high' });
+    expect([...low.errors, ...high.errors]).toEqual([]);
+    expect(low.froxels).toEqual([80, 45, 64]);
+    expect(high.froxels).toEqual([160, 90, 64]);
+    let worstT = 0;
+    let worstColour = 0;
+    for (const { haze, fog } of low.answers) {
+      worstT = Math.max(worstT, Math.abs(haze[3] - fog[3]) / Math.max(fog[3], 0.1));
+      worstColour = Math.max(worstColour, Math.abs(luma(haze) - luma(fog)) / luma(fog));
+    }
+    console.log(`on low, froxels against the analytic fog: transmittance ${(worstT * 100).toFixed(3)}%, colour ${(worstColour * 100).toFixed(3)}%`);
+    expect(worstT).toBeLessThanOrEqual(0.01);
+    expect(worstColour).toBeLessThanOrEqual(0.02);
+  });
+
+  test('on low the frame asks ReSTIR for no spatial reuse; on high it does not', async ({ page }) => {
+    await openHarness(page);
+    const low = await runCase<Open>(page, 'hazeOpen', { preset: 'low' });
+    const high = await runCase<Open>(page, 'hazeOpen', { preset: 'high' });
+    expect(low.spatialOff).toBe(true);
+    expect(high.spatialOff).toBe(false);
+  });
+
+  test('switching high, low and back while rendering leaves no GPU error, and the sky as it was', async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ before: number; low: number; after: number; errors: string[] }>(page, 'presetSwitch');
+    expect(r.errors).toEqual([]);
+    console.log(`the sky: ${r.before.toFixed(4)} on high, ${r.low.toFixed(4)} on low, ${r.after.toFixed(4)} on high again`);
+    expect(r.before).toBeGreaterThan(0);
+    expect(Math.abs(r.after / r.before - 1)).toBeLessThanOrEqual(0.01);
+    expect(Math.abs(r.low / r.before - 1)).toBeLessThanOrEqual(0.03);
+  });
+});

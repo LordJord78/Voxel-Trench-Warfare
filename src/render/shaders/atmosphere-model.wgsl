@@ -88,7 +88,7 @@ fn uvFromUnit(u: f32, n: f32) -> f32 {
 const TRANSMITTANCE_SIZE: vec2f = vec2f(256.0, 64.0);
 // The sun's cosine across, height up.
 const SCATTERING_SIZE: vec2f = vec2f(64.0, 32.0);
-const SKY_VIEW_SIZE: vec2f = vec2f(192.0, 108.0);
+// The sky view's size is its texture's, by preset (quality.ts's SKY_VIEW_SIZE).
 
 // Bruneton's parametrisation of the transmittance LUT: (distance to the top along the ray, height),
 // for a point (r, c) looking along cosine mu from its zenith.
@@ -215,6 +215,7 @@ fn skyViewSample(lut: texture_2d_array<f32>, s: sampler, a: Atmosphere, rd: vec3
   let ll = length(flatLight);
   let cosAzimuth = select(1.0, dot(flatView, flatLight) / (lv * ll), lv > 1e-6 && ll > 1e-6);
   let unit = skyViewUnit(a, max(a.viewHeight, 0.0), cosAzimuth, rd.y);
-  let uv = vec2f(uvFromUnit(unit.x, SKY_VIEW_SIZE.x), uvFromUnit(unit.y, SKY_VIEW_SIZE.y));
+  let size = vec2f(textureDimensions(lut).xy);
+  let uv = vec2f(uvFromUnit(unit.x, size.x), uvFromUnit(unit.y, size.y));
   return textureSampleLevel(lut, s, uv, layer, 0.0).rgb / LUT_SCALE;
 }
