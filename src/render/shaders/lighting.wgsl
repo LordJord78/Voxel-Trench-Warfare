@@ -72,31 +72,40 @@ struct Pick {
   len: f32,
 }
 
-fn pickLight(p: vec3f, n: vec3f, u: f32) -> Pick {
+// One pass over the lights, as a weighted reservoir: light i replaces the pick
+// with probability w_i over the weight seen so far, which leaves each light
+// picked in proportion to its weight. The one random number is rescaled at
+// each step to serve the next, so no light is weighed twice.
+fn pickLight(p: vec3f, n: vec3f, u0: f32) -> Pick {
   var out = Pick(vec3f(0.0), vec3f(0.0, 1.0, 0.0), 0.0);
   let count = min(frame.lightCount, 64u);
   var total = 0.0;
+  var picked = -1;
+  var u = u0;
   for (var i = 0u; i < count; i++) {
-    total += luminance(unshadowed(lights[i], p, n));
-  }
-  if (total <= 0.0) {
-    return out;
-  }
-  let goal = u * total;
-  var acc = 0.0;
-  for (var i = 0u; i < count; i++) {
-    let c = unshadowed(lights[i], p, n);
-    let w = luminance(c);
-    acc += w;
-    if (w > 0.0 && goal < acc) {
-      let d = lights[i].pos - p;
-      let dist = length(d);
-      out.light = c * (total / w);
-      out.dir = d / dist;
-      out.len = dist - 1.0;
-      break;
+    let w = luminance(unshadowed(lights[i], p, n));
+    if (w <= 0.0) {
+      continue;
+    }
+    total += w;
+    let keep = w / total;
+    if (u < keep) {
+      picked = i32(i);
+      u = u / keep;
+    } else {
+      u = (u - keep) / (1.0 - keep);
     }
   }
+  if (picked < 0) {
+    return out;
+  }
+  let l = lights[picked];
+  let c = unshadowed(l, p, n);
+  let d = l.pos - p;
+  let dist = length(d);
+  out.light = c * (total / luminance(c));
+  out.dir = d / dist;
+  out.len = dist - 1.0;
   return out;
 }
 
