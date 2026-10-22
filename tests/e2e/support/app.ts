@@ -11,6 +11,8 @@ export interface Hooks {
   timeOfDay(): number;
   /** The exposure the last frame was presented at. */
   exposure(): Promise<number>;
+  /** The exposure's adaptation after the last frame: the base reckoned from the light, the correction and its want, the metered mean (stops). */
+  exposureState(): Promise<{ base: number; correction: number; want: number; metered: number }>;
   /** The sun's elevation the last frame was lit at, in degrees. */
   sunElevation(): number;
   frames(): number;

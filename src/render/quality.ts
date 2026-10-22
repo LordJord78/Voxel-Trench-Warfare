@@ -32,6 +32,11 @@ export interface RenderSettings {
   sharpness: number;
   /** How much of the image's light its bloom spreads, 0 to 1. */
   bloomWeight: number;
+  /** The exposure's adaptation: the norm the approved views meter round and the zone round it left alone (stops), and its rates toward a darker scene and a brighter (stops a second). */
+  exposureTarget: number;
+  exposureZone: number;
+  adaptToDarker: number;
+  adaptToBrighter: number;
   /** The air the sky is made of. */
   atmosphere: AtmosphereModel;
 }
@@ -44,6 +49,10 @@ export function rendererTunables(tun: Tunables): RenderSettings {
     denoise: { historyMax: tun.i('render.history_max'), sigmaLuma: tun.f('render.atrous_sigma_luma'), sigmaPlane: tun.f('render.atrous_sigma_plane') },
     sharpness: tun.f('render.cas_sharpness'),
     bloomWeight: tun.f('render.bloom_weight'),
+    exposureTarget: tun.f('sky.exposure_target'),
+    exposureZone: tun.f('sky.exposure_zone'),
+    adaptToDarker: tun.f('sky.adapt_to_darker'),
+    adaptToBrighter: tun.f('sky.adapt_to_brighter'),
     atmosphere: atmosphereModel(tun),
   };
 }

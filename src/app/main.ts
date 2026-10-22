@@ -493,6 +493,7 @@ async function start(): Promise<void> {
     },
     timeOfDay: () => timeOfDay,
     exposure: () => renderer.exposure(),
+    exposureState: () => renderer.exposureState(),
     sunElevation: () => sky.sunElevationDeg,
     frames: () => frames,
     waitFrames,

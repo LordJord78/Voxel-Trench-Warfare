@@ -533,6 +533,15 @@ flares              = [0.2, 0.0, 0.0, 1.0]         # how brightly the static fla
 exposure            = [["04:30", 0.175], ["06:20", 0.07], ["12:00", 1.2], ["17:35", 1.0], ["19:00", 0.12], ["21:00", 0.175]]
 exposure_light      = 0.545    # the light (on the six faces, on average) that exposure 1 shows as approved: dusk's
 exposure_floor      = 0.002    # the least light counted: a moonless night's
+# The frame metered under that exposure (auto-exposure.ts): a view whose mean lies beyond a zone
+# round the norm the approved views sit in is corrected by the excess, at the eye's rates.
+# The six standard views at their hours meter (stops): bay -4.55, dugout -3.60, hamlet -1.67,
+# overview -1.40, step -1.39, nml-night -1.29. The norm is their middle; the zone half their spread
+# and a quarter stop more, so every approved view is left alone.
+exposure_target     = -2.92    # the norm, in stops of log2 luminance under the reckoned exposure
+exposure_zone       = 1.88     # stops either side of it left alone
+adapt_to_darker     = 1.0      # stops a second the exposure rises, into a darker scene
+adapt_to_brighter   = 3.0      # stops a second it falls, into a brighter one
 # The haze the height fog and the smoke are, far denser than the air (sky.wgsl's fogColour): it
 # glows with the key light it scatters, the sky's light from above and, at night, the front's. Set
 # so dusk's and night's fog glow as approved (within 8% in each channel of the approved colours).

@@ -4,8 +4,8 @@
  * Compute passes render the internal image:
  *   sky      — the atmosphere's sky views for this frame's sun, moon and camera
  *              height, and the faces' irradiance from them (see atmosphere.ts);
- *              then the exposure, from the light they and the key light give
- *              (exposure.wgsl);
+ *              then the exposure reckoned from the light they and the key light
+ *              give (exposure.wgsl);
  *   beam     — per 8 × 8 tile, how far its rays can go before meeting anything;
  *   primary  — one jittered ray per pixel into the G-buffer, from its tile's beam;
  *   lighting — the light reaching one pixel of each 2 × 2 block (the sky's
@@ -18,7 +18,9 @@
  *   taa      — blended into its own reprojected history, which smooths the
  *              jitter into anti-aliased edges;
  *   cas      — sharpened back;
- *   bloom    — a pyramid of six levels over that, their mean (bloom.ts).
+ *   bloom    — a pyramid of six levels over that, their mean (bloom.ts);
+ *   expose   — the frame metered under the reckoned exposure, which is corrected
+ *              where the view leaves the norm (auto-exposure.ts).
  * A render pass presents it to the canvas: upscaled, its bloom mixed in, tonemapped, dithered. Pipelines compile in parallel and
  * need only the device (see compileFrame), so they can compile while the
  * world generates.
@@ -36,6 +38,7 @@
 import { loadTunables } from '../core/tunables';
 import type { WorldPlan } from '../world/generation/plan';
 import { Atmosphere, atmosphereModel, type AtmospherePipelines } from './atmosphere';
+import { AutoExposure, type AutoExposurePipelines, type ExposureState } from './auto-exposure';
 import { Bloom, type BloomPipelines } from './bloom';
 import { jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
@@ -60,7 +63,7 @@ import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['sky', 'beam', 'primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'bloom', 'present'] as const;
+const PASSES = ['sky', 'beam', 'primary', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'bloom', 'expose', 'present'] as const;
 type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas' | 'exposure';
 type Timed = (typeof PASSES)[number];
 
@@ -143,6 +146,7 @@ export interface CompiledFrame {
   pipelines: Record<ComputePass, GPUComputePipeline> & { present: GPURenderPipeline };
   atmosphere: AtmospherePipelines;
   bloom: BloomPipelines;
+  autoExposure: AutoExposurePipelines;
   lights: GPUBuffer;
   noise: GPUTexture;
   /** Empty sky LUTs, for scenes built without an atmosphere. */
@@ -192,7 +196,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
       label: 'cas',
       entries: [sampled(0, 'float'), storageTexture(1, 'rgba16float')],
     }),
-    // The present pass's uniform, which the exposure is written into.
+    // The adaptation's state, which the reckoned exposure is written into.
     exposure: device.createBindGroupLayout({
       label: 'exposure',
       entries: [{ binding: 0, visibility: STAGE(), buffer: { type: 'storage' } }],
@@ -209,7 +213,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom] = await Promise.all([
+  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
@@ -228,8 +232,9 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
     Atmosphere.compile(device),
     Bloom.compile(device),
+    AutoExposure.compile(device),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -257,6 +262,7 @@ export class Renderer {
   /** The sky's LUTs and the faces' irradiance, built each frame for the frame's sky. */
   readonly atmosphere: Atmosphere;
   private readonly bloom: Bloom;
+  private readonly autoExposure: AutoExposure;
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
   /** Bind groups by frame parity: histories ping-pong between two sets of textures. */
@@ -309,7 +315,8 @@ export class Renderer {
       size: 48,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
-    this.exposureGroup = device.createBindGroup({ label: 'exposure', layout: compiled.layouts.exposure, entries: [{ binding: 0, resource: { buffer: this.presentBuffer } }] });
+    this.autoExposure = AutoExposure.create(device, compiled.autoExposure, this.presentBuffer);
+    this.exposureGroup = device.createBindGroup({ label: 'exposure', layout: compiled.layouts.exposure, entries: [{ binding: 0, resource: { buffer: this.autoExposure.state } }] });
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     this.far = options.far ?? FarFieldGpu.empty(device);
     this.atmosphere = Atmosphere.create(device, compiled.atmosphere, options.atmosphere ?? atmosphereModel(loadTunables()));
@@ -403,6 +410,7 @@ export class Renderer {
     make('taa1', 'rgba16float', this.alloc);
     make('sharp', 'rgba16float', this.alloc);
     this.bloom.resize(this.alloc, this.textures.sharp.createView());
+    this.autoExposure.bind(this.textures.sharp.createView());
     const light = this.lightSize(this.alloc);
     make('lNoisy', 'rgba16float', light);
     make('lSky', 'r32float', light);
@@ -476,6 +484,8 @@ export class Renderer {
   render(pose: CameraPose, timeOfDay: number, now: number): void {
     const device = this.device;
     const gap = this.lastNow !== null && now - this.lastNow > GAP_MS;
+    // Real seconds since the last frame, for the exposure's adaptation (a stall counts as a tenth).
+    const dt = this.lastNow === null ? 1 / 60 : Math.min(0.1, Math.max(0, (now - this.lastNow) / 1000));
     if (this.dynres) {
       // Each frame the GPU timed, once; without timestamps, the interval since the last frame.
       this.dynres.budget = frameBudget(this.timer.enabled, this.budgetMs);
@@ -570,6 +580,21 @@ export class Renderer {
     pass('taa', 'taa', this.res);
     pass('cas', 'cas', this.res);
     this.bloom.encode(encoder, this.res, this.timer.writes('bloom'));
+    // Without settings (tests), the zone is wide enough that nothing is ever corrected.
+    this.autoExposure.encode(
+      encoder,
+      this.res,
+      {
+        dt,
+        bias: this.sky.exposure,
+        target: this.options.exposureTarget ?? 0,
+        zone: this.options.exposureZone ?? 1e9,
+        rise: this.options.adaptToDarker ?? 1,
+        fall: this.options.adaptToBrighter ?? 3,
+        reset,
+      },
+      this.timer.writes('expose'),
+    );
     if (this.context) {
       const bloomWeight = this.options.bloomWeight ?? 0.04;
       const present = new Float32Array([this.res[0], this.res[1], this.alloc[0], this.alloc[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, bloomWeight, 0, 0, 0, 0]);
@@ -604,6 +629,11 @@ export class Renderer {
       reset: reset || (this.flags & FLAGS.HISTORY_RESET) !== 0,
       frame: this.frameIndex,
     };
+  }
+
+  /** The exposure's adaptation after the last frame: the base reckoned from the light, the correction and its want, the metered mean (stops). */
+  exposureState(): Promise<ExposureState> {
+    return this.autoExposure.read();
   }
 
   /** The exposure the last frame was presented at, read back from the GPU. */

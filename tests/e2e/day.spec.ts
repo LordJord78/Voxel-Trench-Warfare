@@ -21,6 +21,37 @@ test('dusk and night keep the exposures they were approved at', async ({ page })
   expect(errors).toEqual([]);
 });
 
+const VIEWS = ['bay', 'step', 'nml-night', 'overview', 'dugout', 'hamlet'];
+
+test('every standard view keeps the exposure it was approved at: the meter leaves it alone', async ({ page }) => {
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  for (const name of VIEWS) {
+    // A view at its own hour; going there starts the image afresh, so the correction lands at once.
+    await hooks(page, (h, n) => h.view(n as string), name);
+    await hooks(page, (h) => h.waitFrames(30));
+    const s = await hooks(page, (h) => h.exposureState());
+    console.log(`${name}: metered ${s.metered.toFixed(3)} stops, correction ${s.correction.toFixed(3)}`);
+    expect(Math.abs(s.correction), name).toBeLessThan(0.1);
+  }
+  expect(errors).toEqual([]);
+});
+
+test('the lantern-lit dugout is brought down at night and in twilight', async ({ page }) => {
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  for (const hours of [21, 18.5]) {
+    await hooks(page, (h) => h.view('dugout'));
+    await hooks(page, (h, t) => h.setTimeOfDay(t as number), hours);
+    // Four seconds: the exposure falls three stops a second toward a brighter scene.
+    await hooks(page, (h) => h.waitFrames(240));
+    const s = await hooks(page, (h) => h.exposureState());
+    console.log(`dugout at ${hours}: metered ${s.metered.toFixed(3)} stops, correction ${s.correction.toFixed(3)}`);
+    expect(s.correction, `${hours} h`).toBeLessThanOrEqual(-1);
+  }
+  expect(errors).toEqual([]);
+});
+
 // Row 4 of the done table: the whole day plays without a jump, each frame's brightness changing by
 // under 2% a game minute. The exposure is reckoned from the light (exposure.wgsl), and the haze that
 // fills a level view glows with the key light, so the two follow each other through sunset and sunrise.

@@ -1,9 +1,108 @@
+import { AutoExposure, type ExposureParams } from '../../../src/render/auto-exposure';
 import { Bloom } from '../../../src/render/bloom';
 import { bloom as bloomRef, level } from '../../support/bloom-ref';
-import { gpu, readTexture } from '../support/gpu';
+import { adapt, binOf, centre, histogram, meteredMean, zoneCorrection } from '../../support/exposure-ref';
+import { gpu, readBuffer, readTexture } from '../support/gpu';
 import { floatToHalf, halfToFloat } from '../support/half';
 
+/** The meter and its adaptation, alone, with a present uniform to write into. */
+async function meter(device: GPUDevice) {
+  const present = device.createBuffer({ size: 48, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_SRC });
+  const auto = AutoExposure.create(device, await AutoExposure.compile(device), present);
+  return { auto, present };
+}
+
+/** A `w` × `h` image whose texels are grey at each of `lums` (their bits, in half floats). */
+function greyTexture(device: GPUDevice, w: number, h: number, halves: ArrayLike<number>): GPUTexture {
+  const texels = new Uint16Array(w * h * 4);
+  for (let i = 0; i < w * h; i++) texels.set([halves[i], halves[i], halves[i], 0x3c00], i * 4);
+  const t = device.createTexture({ size: [w, h], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  device.queue.writeTexture({ texture: t }, texels, { bytesPerRow: w * 8 }, [w, h]);
+  return t;
+}
+
+const NAN_HALF = 0x7e00;
+
 export const cases = {
+  /**
+   * The meter's counts over a `w` × `h` image of greys at bins' middles from below the range to past
+   * it, with NaN, infinite, zero and negative texels among them, and bright texels beyond the
+   * rendered part `res`: the GPU's counts, and the CPU's of the rendered part.
+   */
+  async histogram(args: { w: number; h: number; res?: [number, number]; base: number }) {
+    const g = await gpu();
+    const device = g.device;
+    const { w, h } = args;
+    const [rw, rh] = args.res ?? [w, h];
+    const halves = new Uint16Array(w * h);
+    const lums: number[] = [];
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        const k = j * w + i;
+        let half: number;
+        if (i >= rw || j >= rh) half = floatToHalf(1000);
+        else if (k % 97 === 0) half = NAN_HALF;
+        else if (k % 89 === 0) half = 0x7c00;
+        else if (k % 83 === 0) half = 0;
+        else if (k % 79 === 0) half = floatToHalf(-1);
+        // A bin's middle, from 4 bins below the range to 4 above it, under the base.
+        else half = floatToHalf(2 ** centre(((k * 37) % 136) - 4) / args.base);
+        halves[k] = half;
+        if (i < rw && j < rh) lums.push(halfToFloat(half));
+      }
+    }
+    const image = greyTexture(device, w, h, halves);
+    const { auto, present } = await meter(device);
+    device.queue.writeBuffer(auto.state, 0, new Float32Array([args.base, 0, 0, 0, 0, 0, 0, 0]));
+    auto.bind(image.createView());
+    const encoder = device.createCommandEncoder();
+    auto.encode(encoder, [rw, rh], { dt: 1 / 60, bias: 1, target: 0, zone: 1, rise: 1, fall: 3, reset: true });
+    device.queue.submit([encoder.finish()]);
+    const counts = await auto.counts();
+    image.destroy();
+    auto.destroy();
+    present.destroy();
+    return { counts, ref: histogram(lums, args.base), errors: [...g.errors] };
+  },
+
+  /**
+   * The adaptation over flat images: for each step, `frames` frames of a grey `stops` stops from 1
+   * (the first frame a reset if `reset`), a sixtieth of a second apart, the base exposure 1: each
+   * frame's correction and want, and the presented exposure, with the reference's trajectory.
+   */
+  async adaptation(args: { steps: { stops: number; frames: number; reset?: boolean }[]; target: number; zone: number; rise: number; fall: number; bias: number }) {
+    const g = await gpu();
+    const device = g.device;
+    const { auto, present } = await meter(device);
+    device.queue.writeBuffer(auto.state, 0, new Float32Array([1, 0, 0, 0, 0, 0, 0, 0]));
+    const got: { correction: number; want: number; exposure: number }[] = [];
+    const ref: { correction: number; want: number }[] = [];
+    let c = 0;
+    for (const step of args.steps) {
+      const lum = 2 ** step.stops;
+      const image = greyTexture(device, 64, 64, new Uint16Array(64 * 64).fill(floatToHalf(lum)));
+      auto.bind(image.createView());
+      const metered = meteredMean(histogram(new Array(64 * 64).fill(halfToFloat(floatToHalf(lum))), 1), args.target);
+      const want = zoneCorrection(args.target, metered, args.zone);
+      for (let f = 0; f < step.frames; f++) {
+        const reset = f === 0 && step.reset === true;
+        const params: ExposureParams = { dt: 1 / 60, bias: args.bias, target: args.target, zone: args.zone, rise: args.rise, fall: args.fall, reset };
+        const encoder = device.createCommandEncoder();
+        auto.encode(encoder, [64, 64], params);
+        device.queue.submit([encoder.finish()]);
+        const s = await auto.read();
+        const exposure = new Float32Array(await readBuffer(present, 48))[6];
+        got.push({ correction: s.correction, want: s.want, exposure });
+        c = reset ? want : adapt(c, want, 1 / 60, args.rise, args.fall);
+        ref.push({ correction: c, want });
+      }
+      image.destroy();
+    }
+    auto.destroy();
+    present.destroy();
+    return { got, ref, errors: [...g.errors] };
+  },
+
   /**
    * The bloom pyramid over a `w` × `h` image whose rendered part (`res`, all of it unless given) is
    * noise below `noise` with one texel of `point` at its middle, and `outside` beyond it: the GPU's
