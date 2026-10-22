@@ -90,13 +90,23 @@ export const cases = {
     device.queue.writeTexture({ texture: image }, data, { bytesPerRow: 32 * 8 }, size);
     const format = navigator.gpu.getPreferredCanvasFormat();
     const target = device.createTexture({ size, format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
-    const uniform = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    // The image is 16 × 16 of a 32 × 32 texture, shown on a 32 × 32 canvas.
-    device.queue.writeBuffer(uniform, 0, new Float32Array([16, 16, 32, 32, 32, 32, 1, 0]));
+    // Its bloom, half the size: the flat image's own light over its rendered 8 × 8, stale beyond.
+    const bloom = device.createTexture({ size: [16, 16], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    const glow = new Uint16Array(16 * 16 * 4);
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        const v = floatToHalf(x < 8 && y < 8 ? args.c : args.stale);
+        glow.set([v, v, v, floatToHalf(1)], (y * 16 + x) * 4);
+      }
+    }
+    device.queue.writeTexture({ texture: bloom }, glow, { bytesPerRow: 16 * 8 }, [16, 16]);
+    const uniform = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    // The image is 16 × 16 of a 32 × 32 texture, shown on a 32 × 32 canvas; a quarter of its light from the bloom, so a stale texel read there would show.
+    device.queue.writeBuffer(uniform, 0, new Float32Array([16, 16, 32, 32, 32, 32, 1, 0.25, 0, 0, 0, 0]));
     const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const group = device.createBindGroup({
       layout: compiled.layouts.present,
-      entries: [image.createView(), sampler, { buffer: uniform }, compiled.noise.createView()].map((resource, binding) => ({ binding, resource })),
+      entries: [image.createView(), sampler, { buffer: uniform }, compiled.noise.createView(), bloom.createView()].map((resource, binding) => ({ binding, resource })),
     });
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({ colorAttachments: [{ view: target.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
@@ -112,6 +122,7 @@ export const cases = {
     let worst = 0;
     for (let i = 0; i < 32 * 32; i++) worst = Math.max(worst, Math.abs(bytes[i * 4 + 1] - expected));
     image.destroy();
+    bloom.destroy();
     target.destroy();
     return { worst, errors: [...g.errors] };
   },
