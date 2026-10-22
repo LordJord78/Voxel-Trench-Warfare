@@ -21,6 +21,9 @@
  *   temporal — that light blended into its reprojected history;
  *   atrous   — three edge-stopping filter passes over it, for display (the
  *              history keeps the plain average, so converged edges stay put);
+ *   froxels  — the haze over the view out to 120 m, lit by the key light as far
+ *              as its height map lets it and by the point lights, then added up
+ *              front to back (froxels.ts);
  *   shade    — the image: upsampled light, materials, water, far field,
  *              sky and height fog;
  *   taa      — blended into its own reprojected history, which smooths the
@@ -52,6 +55,7 @@ import { jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
 import { FarFieldGpu } from './farfield-gpu';
+import { Froxels, type FroxelPipelines } from './froxels';
 import { FLAGS, FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
@@ -74,7 +78,7 @@ import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['sky', 'beam', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'shade', 'taa', 'cas', 'bloom', 'expose', 'present'] as const;
+const PASSES = ['sky', 'beam', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'froxels', 'shade', 'taa', 'cas', 'bloom', 'expose', 'present'] as const;
 type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas' | 'exposure';
 type Timed = (typeof PASSES)[number];
 
@@ -161,6 +165,7 @@ export interface CompiledFrame {
   cells: GPUComputePipeline;
   restir: RestirPipelines;
   keyShadow: KeyShadowPipelines;
+  froxels: FroxelPipelines;
   lights: GPUBuffer;
   noise: GPUTexture;
   /** Empty sky LUTs, for scenes built without an atmosphere. */
@@ -230,7 +235,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow] = await Promise.all([
+  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
     compute(device, 'primary', primarySrc, [scene, layouts.primary, keyLayouts.write]),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
@@ -253,8 +258,9 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     LightCells.compile(device),
     Restir.compile(device),
     KeyShadow.compile(device, scene, keyLayouts),
+    Froxels.compile(device, scene, keyLayouts),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -286,8 +292,9 @@ export class Renderer {
   /** The frame's lights gridded over the map, and each lighting pixel's light drawn from them. */
   private readonly cells: LightCells;
   private readonly restir: Restir;
-  /** Where the key light is blocked, seen from its side. */
+  /** Where the key light is blocked, seen from its side; and the haze it shines through. */
   private readonly keyShadow: KeyShadow;
+  private readonly froxels: Froxels;
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
   /** Bind groups by frame parity: histories ping-pong between two sets of textures. */
@@ -349,6 +356,7 @@ export class Renderer {
     this.cells = LightCells.create(device, compiled.cells, compiled.lights, cellGrid(world.map.dims, this.voxelSize()), this.voxelSize());
     this.restir = Restir.create(device, compiled.restir, this.frameBuffer, compiled.lights, this.cells);
     this.keyShadow = KeyShadow.create(device, compiled.keyShadow, world.map.dims, this.voxelSize());
+    this.froxels = Froxels.create(device, compiled.froxels, this.cells, this.keyShadow);
     this.preset = options.preset ?? 'high';
     this.lightScale = LIGHT_SCALE[this.preset];
     this.budgetMs = options.budgetMs ?? 14;
@@ -510,9 +518,10 @@ export class Renderer {
 
   /** A texture by name; a history (hDepth, hHit, hColour, hMoments, taa) is the one the last frame wrote. */
   texture(name: string): GPUTexture {
-    // The bloom's top, half the image's size; the key light's height map.
+    // The bloom's top, half the image's size; the key light's height map; the haze, a 3D texture.
     if (name === 'bloom0') return this.bloom.output;
     if (name === 'keyShadow') return this.keyShadow.map;
+    if (name === 'froxels') return this.froxels.haze;
     const last = (this.frameIndex + 1) & 1;
     const t = this.textures[name] ?? this.textures[`${name}${last}`];
     if (!t) throw new Error(`no texture '${name}'`);
@@ -628,6 +637,7 @@ export class Renderer {
     pass('atrous1', 'atrous', light);
     pass('atrous2', 'atrous', light);
     pass('atrous3', 'atrous', light);
+    this.froxels.encode(encoder, this.sceneGroup!, this.frameIndex & 1, this.timer.writes('froxels'));
     pass('shade', 'shade', this.res);
     pass('taa', 'taa', this.res);
     pass('cas', 'cas', this.res);

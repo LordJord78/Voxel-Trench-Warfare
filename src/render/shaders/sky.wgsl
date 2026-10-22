@@ -16,9 +16,20 @@ fn skyColour(rd: vec3f) -> vec3f {
 // any way, more toward the key), the sky's light from above, and the front's fires and flares at
 // night (frame.frontGlow). So a low sun warms it all round, as the approved fog was warm.
 fn fogColour(rd: vec3f) -> vec3f {
-  let c = max(dot(rd, frame.keyDir), 0.0);
+  return hazeGlow(rd, 1.0);
+}
+
+// The approved haze's phase: a share of the light it scatters looking any way, and more as the eye
+// looks along the light (c, the cosine between the eye's ray and the way to the light), by c⁴.
+fn hazePhase(c: f32) -> f32 {
+  let k = max(c, 0.0);
+  return frame.hazeKey + frame.hazeForward * (k * k) * (k * k);
+}
+
+// fogColour where only `lit` (0 to 1) of the key light reaches the haze.
+fn hazeGlow(rd: vec3f, lit: f32) -> vec3f {
   let above = frame.sunLight * skyLight[3].rgb + frame.moonLight * skyLight[9].rgb;
-  return frame.keyColour * (frame.hazeKey + frame.hazeForward * (c * c) * (c * c)) + frame.hazeSky / PI_ATM * above + frame.frontGlow;
+  return frame.keyColour * (hazePhase(dot(rd, frame.keyDir)) * lit) + frame.hazeSky / PI_ATM * above + frame.frontGlow;
 }
 
 // Light from the sky arriving on a face with normal n, before occlusion: the six faces' irradiance,

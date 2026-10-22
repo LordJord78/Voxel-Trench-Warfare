@@ -62,14 +62,6 @@ const WHOLE: u32 = 0x80000000u;
 // The shared reservoirs the lighting pass shades by, which `spatial` writes.
 @group(2) @binding(6) var<storage, read_write> chosen: array<Reservoir>;
 
-// A lighting pixel's random numbers this frame: PCG (O'Neill 2014), seeded from the pixel and frame.
-fn random(state: ptr<function, u32>) -> f32 {
-  *state = *state * 747796405u + 2891336453u;
-  let s = *state;
-  let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
-  return f32(((w >> 22u) ^ w) >> 8u) * (1.0 / 16777216.0);
-}
-
 fn targetOf(l: Light, at: vec3f, n: vec3f) -> f32 {
   return luminance(unshadowed(l, at, n));
 }

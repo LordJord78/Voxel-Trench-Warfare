@@ -131,7 +131,7 @@ export class KeyShadow {
     const build = await device.createComputePipelineAsync({
       label: 'key shadow',
       layout: device.createPipelineLayout({ bindGroupLayouts: [scene, layouts.none, layouts.write] }),
-      compute: { module, entryPoint: 'build' },
+      compute: { module, entryPoint: 'buildMap' },
     });
     return { ...layouts, build };
   }

@@ -2,7 +2,7 @@
 // through the map's middle: for each texel, how far along the light a ray from past the map runs
 // before the voxel world blocks it (from the plane, in voxels), or KEY_OPEN if nothing does.
 // keyLit asks it whether the key light reaches a point; keyShare (in another pass's dispatch) or
-// `build` (in a pass of its own) traces its texels.
+// buildMap (in a pass of its own) traces its texels.
 #include "traverse.wgsl"
 
 const KEY_MAP_SIZE: u32 = 1024u;
@@ -102,6 +102,6 @@ fn keyShare(group: vec3u, local: u32) -> bool {
 }
 
 @compute @workgroup_size(64)
-fn build(@builtin(global_invocation_id) g: vec3u) {
+fn buildMap(@builtin(global_invocation_id) g: vec3u) {
   keyTrace(g.x);
 }

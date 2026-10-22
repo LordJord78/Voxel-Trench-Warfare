@@ -95,3 +95,63 @@ test("the frame traces the key light's height map, a sixteenth a frame", async (
   expect(f.partway.maxError).toBeGreaterThan(2);
   exact(f.after);
 });
+
+test.describe('the froxels', () => {
+  test.setTimeout(120_000);
+
+  test('with nothing to cast a shaft and no point lights, the haze to 120 m is the analytic fog: transmittance within 1%, colour within 2%', async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ answers: { haze: number[]; fog: number[] }[]; errors: string[] }>(page, 'hazeOpen');
+    expect(r.errors).toEqual([]);
+    const luma = (c: number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let worstT = 0;
+    let worstColour = 0;
+    for (const { haze, fog } of r.answers) {
+      // Within 1% of itself, or of a tenth where it is less: rays that run into the fog below its
+      // base, through no ground, see it fall to 5e-5, which half floats hold to some 3e-5.
+      worstT = Math.max(worstT, Math.abs(haze[3] - fog[3]) / Math.max(fog[3], 0.1));
+      worstColour = Math.max(worstColour, Math.abs(luma(haze) - luma(fog)) / luma(fog));
+    }
+    console.log(`froxels against the analytic fog, worst of ${r.answers.length}: transmittance ${(worstT * 100).toFixed(3)}%, colour ${(worstColour * 100).toFixed(3)}%`);
+    expect(worstT).toBeLessThanOrEqual(0.01);
+    expect(worstColour).toBeLessThanOrEqual(0.02);
+  });
+
+  test("behind a wall with a slit, lit at 30°, the slit's shaft is brighter than the haze each side of it by a third of the key's share", async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ left: number; centre: number; right: number; keyShare: number; errors: string[] }>(page, 'hazeSlit');
+    expect(r.errors).toEqual([]);
+    console.log(`the haze at 5 m: left ${r.left.toFixed(4)}, through the slit ${r.centre.toFixed(4)}, right ${r.right.toFixed(4)}; the key's share ${r.keyShare.toFixed(4)}`);
+    expect(r.centre - Math.max(r.left, r.right)).toBeGreaterThanOrEqual(r.keyShare / 3);
+  });
+
+  test("a camera turned 20° shows froxels within 3% of a fresh camera's after 4 frames, with no shaft left where the slit was", async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ turned: number[]; fresh: number[]; errors: string[] }>(page, 'hazeTurn');
+    expect(r.errors).toEqual([]);
+    const n = r.turned.length - 2;
+    let diff = 0;
+    let sum = 0;
+    for (let k = 0; k < n; k++) {
+      diff += Math.abs(r.turned[k] - r.fresh[k]);
+      sum += r.fresh[k];
+    }
+    console.log(`turned against fresh: ${((diff / sum) * 100).toFixed(2)}% over the view; where the slit was ${r.turned.slice(n).map((v) => v.toFixed(4))} against ${r.fresh.slice(n).map((v) => v.toFixed(4))}`);
+    expect(diff / sum).toBeLessThanOrEqual(0.03);
+    for (let k = n; k < r.turned.length; k++) expect(Math.abs(r.turned[k] - r.fresh[k])).toBeLessThanOrEqual(0.03 * r.fresh[k]);
+  });
+
+  test('a lantern in clear air adds its haze within 10% of the analytic sum over the lights', async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ froxels: number[]; reference: number[]; errors: string[] }>(page, 'hazeLantern');
+    expect(r.errors).toEqual([]);
+    const most = Math.max(...r.reference);
+    let worst = 0;
+    r.reference.forEach((ref, k) => {
+      if (ref >= 0.1 * most) worst = Math.max(worst, Math.abs(r.froxels[k] - ref) / ref);
+    });
+    console.log(`the lantern's haze: worst ${(worst * 100).toFixed(2)}% where it is a tenth of its most (${most.toFixed(4)}) or more`);
+    expect(most).toBeGreaterThan(0);
+    expect(worst).toBeLessThanOrEqual(0.1);
+  });
+});

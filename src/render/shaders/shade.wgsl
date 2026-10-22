@@ -14,7 +14,7 @@
 #include "traverse.wgsl"
 #include "farfield.wgsl"
 #include "camera.wgsl"
-#include "sky.wgsl"
+#include "fog.wgsl"
 #include "palette.wgsl"
 #include "lightgrid.wgsl"
 
@@ -77,29 +77,6 @@ fn upsampled(p: vec2u, face: u32, plane: i32, n: vec3f) -> vec4f {
     }
   }
   return pick;
-}
-
-// The optical depth of a height fog between the eye and a point `metres` along rd: `density` per
-// metre at the ground, falling off exponentially over `height` metres above it.
-fn fogDepth(density: f32, height: f32, eyeY: f32, rd: vec3f, metres: f32) -> f32 {
-  // The eye's height over the fog's base, and how far the ray climbs, both in fog heights.
-  let a = (eyeY - frame.fogBase) / height;
-  let x = rd.y * metres / height;
-  // Density × length × e^-a × (1 - e^-x)/x, with the exponents combined as (e^-a - e^-(a+x))/x:
-  // apart, a high eye looking far down underflows one and overflows the other (0 × ∞). Each
-  // exponent is clamped only at the end, where f32 runs out.
-  let eyeFog = exp(-clamp(a, -80.0, 80.0));
-  if (abs(x) < 1e-3) {
-    return density * metres * eyeFog * (1.0 - 0.5 * x);
-  }
-  return density * metres * (eyeFog - exp(-clamp(a + x, -80.0, 80.0))) / x;
-}
-
-// The haze between the eye and a point `metres` along rd, the ground fog and the smoke over it:
-// transmittance, and the colour it glows.
-fn fog(eyeY: f32, rd: vec3f, metres: f32) -> vec4f {
-  let depth = fogDepth(frame.fogDensity, frame.fogHeight, eyeY, rd, metres) + fogDepth(frame.smokeDensity, frame.smokeHeight, eyeY, rd, metres);
-  return vec4f(fogColour(rd), exp(-max(depth, 0.0)));
 }
 
 // Whether the key light reaches a far-field point, by a coarse march over mip level 2.
