@@ -6,7 +6,7 @@ import { PROBE_DUSK, type FrameSky } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
 import { lanternLight, type SceneLight } from '../../../src/render/lights';
 import { Renderer } from '../../../src/render/renderer';
-import { gpu, readTexture } from '../support/gpu';
+import { gpu, readBuffer, readTexture } from '../support/gpu';
 import { halfToFloat } from '../support/half';
 
 const DIMS = { x: 128, y: 128, z: 128 };
@@ -67,7 +67,7 @@ export const cases = {
     const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
     const renderer = await Renderer.create(g, null, world, null, { size: [64, 64] });
     const el = ((args.keyElevation ?? 45) * Math.PI) / 180;
-    const sky: FrameSky = { ...PROBE_DUSK, keyDir: [0, Math.sin(el), Math.cos(el)], keyColour: [1, 1, 1], ambient: 1 };
+    const sky: FrameSky = { ...PROBE_DUSK, keyDir: [0, Math.sin(el), Math.cos(el)], keyColour: [1, 1, 1] };
     renderer.sky = sky;
     renderer.setLights(lights, 1);
     const [lw, lh] = renderer.lightResolution;
@@ -95,7 +95,9 @@ export const cases = {
     const history = [0, 1, 2, 3].map((k) => halfToFloat(h[(qy * lw + qx) * 4 + k]));
     // The floor's top face under the middle pixel, in metres.
     const floor: [number, number, number] = [pose.position[0], 4.0, pose.position[2]];
-    const skyUp = [0, 1, 2].map((c) => (sky.horizon[c] * 0.55 + (sky.zenith[c] - sky.horizon[c] * 0.55) * 1) * sky.ambient);
+    // The sky's light on an upward face (face 3): the atmosphere's irradiance from the sun's sky and the moon's.
+    const irradiance = new Float32Array(await readBuffer(renderer.atmosphere.irradiance, 12 * 16));
+    const skyUp = [0, 1, 2].map((c) => sky.sunLight[c] * irradiance[3 * 4 + c] + sky.moonLight[c] * irradiance[9 * 4 + c]);
     const lit = lights.map((l) => analytic(l, floor));
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
     return { mean, keyMin, skyMean: skySum / skyTraced, skyTraced, history, skyUp, lit, errors: [...g.errors] };
@@ -146,7 +148,7 @@ export const cases = {
     map.set(...glass, P.LANTERN_GLOW);
     const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
     const renderer = await Renderer.create(g, null, world, null, { size: [128, 128] });
-    renderer.sky = { ...PROBE_DUSK, keyColour: [0, 0, 0], ambient: 0, zenith: [0, 0, 0], horizon: [0, 0, 0] };
+    renderer.sky = { ...PROBE_DUSK, keyColour: [0, 0, 0], sunLight: [0, 0, 0], moonLight: [0, 0, 0] };
     const light: SceneLight = { position: lanternLight(glass, 0.1), radius: 7, colour: [1, 1, 1], intensity: 2.5, kind: 'lantern' };
     renderer.setLights([light], 1);
     const pose: CameraPose = { position: [6.45, 6.05, 8.0], yaw: 0, pitch: 0 };

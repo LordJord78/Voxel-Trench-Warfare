@@ -239,7 +239,8 @@ export class Renderer {
   private readonly compiled: CompiledFrame;
   private readonly sampler: GPUSampler;
   private readonly far: FarFieldGpu;
-  private readonly atmosphere: Atmosphere;
+  /** The sky's LUTs and the faces' irradiance, built each frame for the frame's sky. */
+  readonly atmosphere: Atmosphere;
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
   /** Bind groups by frame parity: histories ping-pong between two sets of textures. */
@@ -508,8 +509,10 @@ export class Renderer {
     writeSky(w, this.sky);
     w.set('far', this.far.info);
     const encoder = device.createCommandEncoder({ label: `frame ${this.frameIndex}` });
-    // The sky view for this frame's sun, from the camera's height over the ground (none in a trench).
-    this.atmosphere.update(encoder, this.sky.sunDir, pose.position[1] - this.sky.fogBase, this.timer.writes('sky'));
+    // The sky views for this frame's sun and moon (the moon's while its light counts), from the
+    // camera's height over the ground (none in a trench).
+    const moonDir = this.sky.moonLight.some((c) => c > 0) ? this.sky.moonDir : null;
+    this.atmosphere.update(encoder, { sunDir: this.sky.sunDir, moonDir }, pose.position[1] - this.sky.fogBase, this.timer.writes('sky'));
     this.atmosphere.writeTo(w, 'atmosphere');
     device.queue.writeBuffer(this.frameBuffer, 0, w.buffer);
 

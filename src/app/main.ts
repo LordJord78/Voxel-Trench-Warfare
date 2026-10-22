@@ -13,6 +13,7 @@
  * hooks the tests use.
  */
 
+import { CLOCK_KEYS } from '../core/sky-clock';
 import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import type { CameraPose } from '../render/camera';
@@ -171,7 +172,8 @@ async function start(): Promise<void> {
   const light = () => {
     if (timeOfDay === litFor) return;
     litFor = timeOfDay;
-    const sky = skyState(tun, timeOfDay);
+    // The time of day runs from dusk (0) to night (1) on the clock.
+    const sky = skyState(tun, CLOCK_KEYS.dusk + timeOfDay * (CLOCK_KEYS.night - CLOCK_KEYS.dusk));
     renderer.sky = frameSky(sky, tun);
     renderer.setLights(lights, sky.flares);
   };

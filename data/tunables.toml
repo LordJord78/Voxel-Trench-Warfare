@@ -499,14 +499,12 @@ ozone_half_width_km   = 15.0
 ground_albedo         = 0.3
 
 # ---------------------------------------------------------------------------
-# TIME OF DAY
+# THE SKY AND THE DAY
 #
-# One number runs the light from dusk (0) through twilight (0.5) to night (1).
-# Each list holds the value at those three keys; between keys it is linear.
-# The dusk and night keys are the probe's look, which the user signed off.
-# Azimuth turns from +z (toward the enemy) toward +x; elevation is above the
-# horizon. Colours are linear RGB with their intensity in them. The key light
-# is whichever of the sun and moon is brighter.
+# The day runs on a 24-hour clock at a real site and date (sky-clock.ts): the
+# sun and moon stand where the ephemeris puts them, and their light comes
+# through the atmosphere above. Azimuths turn from +z (toward the enemy)
+# toward +x. Colours are linear RGB with their intensity in them.
 # ---------------------------------------------------------------------------
 
 [sky]
@@ -518,18 +516,11 @@ longitude_deg       = 2.7      # east
 date                = [1916, 10, 10]
 utc_offset_h        = 1.0
 map_bearing_deg     = 236.0    # compass bearing of +z (toward the enemy): it puts the dusk sun 18° right of ahead
+sun_illuminance     = 6.55     # the sun's light above the air: it makes dusk's key light the approved one (its red 3.4)
+moon_illuminance    = 0.0912   # the full moon's: the approved night's key, not the physical 1/400,000 of the sun's (sky-state.ts)
+moon_tint           = [0.62, 1.0, 2.16]   # moonlight as it reads to the eye at night: blue-violet, as approved
+# Keyed to the clock: dawn 06:50, noon 12:00, dusk 17:35, night 21:00; linear between them by the hour.
+fog_density         = [0.02, 0.006, 0.012, 0.02]   # per metre, at the ground
+flares              = [0.2, 0.0, 0.0, 1.0]         # how brightly the static flares burn
+exposure            = [12.0, 0.35, 1.0, 3.2]
 
-[time_of_day]
-default             = 0.0
-sun_azimuth_deg     = [18.0, 23.0, 28.0]
-sun_elevation_deg   = [4.5, -3.0, -16.0]
-sun_colour          = [[3.4, 1.45, 0.6], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
-moon_azimuth_deg    = [215.0, 215.0, 215.0]
-moon_elevation_deg  = [14.0, 24.0, 32.0]
-moon_colour         = [[0.0, 0.0, 0.0], [0.012, 0.016, 0.028], [0.05, 0.07, 0.12]]
-sky_zenith          = [[0.10, 0.13, 0.27], [0.035, 0.04, 0.085], [0.004, 0.006, 0.016]]
-sky_horizon         = [[0.95, 0.46, 0.24], [0.32, 0.17, 0.13], [0.03, 0.025, 0.04]]
-ambient             = [0.55, 0.75, 1.0]
-fog_density         = [0.012, 0.016, 0.02]   # per metre, at the ground
-exposure            = [1.0, 2.0, 3.2]
-flares              = [0.0, 0.2, 1.0]        # how brightly the static flares burn

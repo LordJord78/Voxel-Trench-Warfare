@@ -168,22 +168,26 @@ fn horizonDip(a: Atmosphere, h: f32) -> f32 {
   return acos(clamp(sqrt(heightC(a, h)) / (a.bottom + h), -1.0, 1.0));
 }
 
-// Hillaire's sky-view mapping for a viewer at height h: (cosine of the angle from the sun's
-// azimuth, cosine of the zenith angle) for a unit position, with the horizon given half the texels.
-fn skyViewParams(a: Atmosphere, h: f32, unit: vec2f) -> vec2f {
-  let beta = horizonDip(a, h);
+// Hillaire's sky-view mapping, for a viewer whose horizon dips `beta` below the horizontal (so it
+// stands at zenith angle pi - beta): the zenith angle a unit row holds, with the horizon given half
+// the rows, and the angle from the light's azimuth a unit column holds, crowded toward the light.
+fn zenithOf(beta: f32, v: f32) -> f32 {
   let zenithHorizon = PI_ATM - beta;
-  var cosZenith: f32;
-  if (unit.y < 0.5) {
-    var c = 1.0 - 2.0 * unit.y;
-    c = 1.0 - c * c;
-    cosZenith = cos(zenithHorizon * c);
-  } else {
-    let c = 2.0 * unit.y - 1.0;
-    cosZenith = cos(zenithHorizon + beta * c * c);
+  if (v < 0.5) {
+    let c = 1.0 - 2.0 * v;
+    return zenithHorizon * (1.0 - c * c);
   }
-  let x = unit.x * unit.x;
-  return vec2f(-(2.0 * x - 1.0), cosZenith);
+  let c = 2.0 * v - 1.0;
+  return zenithHorizon + beta * c * c;
+}
+
+fn azimuthOf(u: f32) -> f32 {
+  return acos(clamp(1.0 - 2.0 * u * u, -1.0, 1.0));
+}
+
+// (cosine of the angle from the light's azimuth, cosine of the zenith angle) for a unit position.
+fn skyViewParams(a: Atmosphere, h: f32, unit: vec2f) -> vec2f {
+  return vec2f(cos(azimuthOf(unit.x)), cos(zenithOf(horizonDip(a, h), unit.y)));
 }
 
 fn skyViewUnit(a: Atmosphere, h: f32, cosAzimuth: f32, cosZenith: f32) -> vec2f {
@@ -202,15 +206,15 @@ fn skyViewUnit(a: Atmosphere, h: f32, cosAzimuth: f32, cosZenith: f32) -> vec2f 
   return vec2f(u, v);
 }
 
-// The sky's radiance along unit rd (y up), per unit sun illuminance, from the sky-view LUT built
-// for this viewer height and sun.
-fn skyViewSample(lut: texture_2d<f32>, s: sampler, a: Atmosphere, rd: vec3f) -> vec3f {
+// The sky's radiance along unit rd (y up), per unit of the light's illuminance, from the sky-view
+// layer built for this viewer's height and lit from `light`.
+fn skyViewSample(lut: texture_2d_array<f32>, s: sampler, a: Atmosphere, rd: vec3f, light: vec3f, layer: i32) -> vec3f {
   let flatView = vec2f(rd.x, rd.z);
-  let flatSun = vec2f(a.sunDir.x, a.sunDir.z);
+  let flatLight = vec2f(light.x, light.z);
   let lv = length(flatView);
-  let ls = length(flatSun);
-  let cosAzimuth = select(1.0, dot(flatView, flatSun) / (lv * ls), lv > 1e-6 && ls > 1e-6);
+  let ll = length(flatLight);
+  let cosAzimuth = select(1.0, dot(flatView, flatLight) / (lv * ll), lv > 1e-6 && ll > 1e-6);
   let unit = skyViewUnit(a, max(a.viewHeight, 0.0), cosAzimuth, rd.y);
   let uv = vec2f(uvFromUnit(unit.x, SKY_VIEW_SIZE.x), uvFromUnit(unit.y, SKY_VIEW_SIZE.y));
-  return textureSampleLevel(lut, s, uv, 0.0).rgb / LUT_SCALE;
+  return textureSampleLevel(lut, s, uv, layer, 0.0).rgb / LUT_SCALE;
 }

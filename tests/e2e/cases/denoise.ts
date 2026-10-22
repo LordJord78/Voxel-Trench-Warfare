@@ -34,7 +34,7 @@ async function setup(g: Awaited<ReturnType<typeof gpu>>) {
   const w = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
   const r = await Renderer.create(g, null, w, null, { size: [96, 96] });
   const el = Math.PI / 4;
-  r.sky = { ...PROBE_DUSK, keyDir: [-Math.cos(el), Math.sin(el), 0], keyColour: [1, 1, 1], ambient: 1 };
+  r.sky = { ...PROBE_DUSK, keyDir: [-Math.cos(el), Math.sin(el), 0], keyColour: [1, 1, 1] };
   r.setLights([], 0);
   return { r, w };
 }

@@ -102,7 +102,7 @@ fn fog(eyeY: f32, rd: vec3f, metres: f32) -> vec4f {
   } else {
     depth = frame.fogDensity * metres * (eyeFog - exp(-clamp(a + x, -80.0, 80.0))) / x;
   }
-  let colour = frame.horizon * 0.9 + frame.keyColour * 0.08 * pow(max(dot(rd, frame.sunDir), 0.0), 4.0);
+  let colour = fogColour(rd);
   return vec4f(colour, exp(-max(depth, 0.0)));
 }
 

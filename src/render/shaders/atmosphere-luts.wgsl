@@ -4,7 +4,12 @@
 //                      isotropic approximation: one workgroup per texel, one
 //                      ring of directions per invocation;
 //   skyViewLut       — the sky's radiance from the viewer's height, by the
-//                      angle from the sun's azimuth and the zenith angle.
+//                      angle from the light's azimuth and the zenith angle:
+//                      layer 0 lit by the sun, layer 1 by the moon;
+//   irradianceLut    — the light each layer's sky puts on the six face
+//                      directions: a workgroup per chunk of the layer's
+//                      texels, all six faces at once, then irradianceSum
+//                      adds the chunks.
 // Each pipeline takes its own (automatic) layout, so no texture is written and
 // read in one dispatch. Radiance is per unit sun illuminance.
 #include "atmosphere-model.wgsl"
@@ -15,7 +20,16 @@
 @group(0) @binding(3) var lutSampler: sampler;
 @group(0) @binding(4) var transmittanceOut: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(5) var scatteringOut: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(6) var skyViewOut: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(6) var skyViewOut: texture_storage_2d_array<rgba16float, write>;
+@group(0) @binding(7) var skyViewIn: texture_2d_array<f32>;
+@group(0) @binding(8) var<storage, read_write> irradianceOut: array<vec4f, 12>;
+// Each chunk's six faces, per layer: IRRADIANCE_CHUNKS × 6 vec4s a layer.
+@group(0) @binding(9) var<storage, read_write> irradianceParts: array<vec4f, 192>;
+
+// The light a sky-view layer is lit by.
+fn layerLight(layer: u32) -> vec3f {
+  return select(atm.sunDir, atm.moonDir, layer == 1u);
+}
 
 fn unitOf(g: vec2u, size: vec2f) -> vec2f {
   let uv = (vec2f(g) + 0.5) / size;
@@ -133,8 +147,9 @@ fn skyViewLut(@builtin(global_invocation_id) g: vec3u) {
   let sinZ = sqrt(max(0.0, 1.0 - angles.y * angles.y));
   let sinA = sqrt(max(0.0, 1.0 - angles.x * angles.x));
   let view = vec3f(sinZ * angles.x, angles.y, sinZ * sinA);
-  // In this frame the sun stands at azimuth 0, at its elevation as seen.
-  let sun = vec3f(sqrt(max(0.0, 1.0 - atm.sunDir.y * atm.sunDir.y)), atm.sunDir.y, 0.0);
+  // In this frame the light stands at azimuth 0, at its elevation as seen.
+  let light = layerLight(g.z);
+  let sun = vec3f(sqrt(max(0.0, 1.0 - light.y * light.y)), light.y, 0.0);
   let b = r * view.y;
   let bSun = r * sun.y;
   let ground = groundHit(b, c);
@@ -164,5 +179,81 @@ fn skyViewLut(@builtin(global_invocation_id) g: vec3u) {
   if (ground >= 0.0) {
     radiance += throughput * groundLight(atm, normalize(vec3f(0.0, r, 0.0) + view * ground), sun) / PI_ATM;
   }
-  textureStore(skyViewOut, g.xy, vec4f(radiance * LUT_SCALE, 1.0));
+  textureStore(skyViewOut, g.xy, g.z, vec4f(radiance * LUT_SCALE, 1.0));
+}
+
+// The faces' irradiance from one layer's sky, summed over the layer's texels: each stands for a
+// band of sky (and its mirror image across the light's vertical plane) whose solid angle comes from
+// the mapping, and counts by its radiance and the cosine to each face's normal. Exact for what the
+// layer holds, so its sharpest band, the glow over the horizon toward a low sun, counts in full.
+// Below the horizon the layer holds the lit ground, so a downward face gets the ground's light.
+// Each workgroup takes one of IRRADIANCE_CHUNKS chunks of the texels, every face at once.
+const IRRADIANCE_CHUNKS: u32 = 16u;
+
+var<workgroup> faceSums: array<array<vec4f, 64>, 6>;
+
+@compute @workgroup_size(64)
+fn irradianceLut(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) lane: u32) {
+  let chunk = wg.x;
+  let layer = wg.y;
+  // The light's way across the ground, and square to it: the layer's azimuths turn from the first.
+  let light = layerLight(layer);
+  let flat = vec2f(light.x, light.z);
+  let lf = length(flat);
+  let along = select(vec2f(1.0, 0.0), flat / lf, lf > 1e-6);
+  let across = vec2f(-along.y, along.x);
+  let beta = horizonDip(atm, max(atm.viewHeight, 0.0));
+  let size = vec2u(SKY_VIEW_SIZE);
+  let texels = size.x * size.y;
+  let per = (texels + IRRADIANCE_CHUNKS - 1u) / IRRADIANCE_CHUNKS;
+  // Half a texel, in unit coordinates (whose texel centres run 0 to 1).
+  let half = 0.5 / (SKY_VIEW_SIZE - 1.0);
+  var sums: array<vec3f, 6>;
+  for (var k = chunk * per + lane; k < min((chunk + 1u) * per, texels); k += 64u) {
+    let t = vec2u(k % size.x, k / size.x);
+    let unit = vec2f(t) / (SKY_VIEW_SIZE - 1.0);
+    let lo = max(unit - half, vec2f(0.0));
+    let hi = min(unit + half, vec2f(1.0));
+    let solid = (cos(zenithOf(beta, lo.y)) - cos(zenithOf(beta, hi.y))) * (azimuthOf(hi.x) - azimuthOf(lo.x));
+    let zenith = zenithOf(beta, unit.y);
+    let azimuth = azimuthOf(unit.x);
+    let radiance = textureLoad(skyViewIn, t, i32(layer), 0).rgb * (solid / LUT_SCALE);
+    for (var side = -1.0; side <= 1.0; side += 2.0) {
+      let h = sin(zenith) * (cos(azimuth) * along + side * sin(azimuth) * across);
+      let d = vec3f(h.x, cos(zenith), h.y);
+      // faceNormal's order: -x, +x, -y, +y, -z, +z.
+      sums[0] += radiance * max(-d.x, 0.0);
+      sums[1] += radiance * max(d.x, 0.0);
+      sums[2] += radiance * max(-d.y, 0.0);
+      sums[3] += radiance * max(d.y, 0.0);
+      sums[4] += radiance * max(-d.z, 0.0);
+      sums[5] += radiance * max(d.z, 0.0);
+    }
+  }
+  for (var f = 0u; f < 6u; f++) {
+    faceSums[f][lane] = vec4f(sums[f], 0.0);
+  }
+  workgroupBarrier();
+  for (var half = 32u; half > 0u; half >>= 1u) {
+    if (lane < half) {
+      for (var f = 0u; f < 6u; f++) {
+        faceSums[f][lane] += faceSums[f][lane + half];
+      }
+    }
+    workgroupBarrier();
+  }
+  if (lane < 6u) {
+    irradianceParts[(layer * IRRADIANCE_CHUNKS + chunk) * 6u + lane] = faceSums[lane][0];
+  }
+}
+
+// The chunks added: one invocation per face, a workgroup per layer.
+@compute @workgroup_size(6)
+fn irradianceSum(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) face: u32) {
+  let layer = wg.x;
+  var sum = vec4f(0.0);
+  for (var chunk = 0u; chunk < IRRADIANCE_CHUNKS; chunk++) {
+    sum += irradianceParts[(layer * IRRADIANCE_CHUNKS + chunk) * 6u + face];
+  }
+  irradianceOut[layer * 6u + face] = vec4f(sum.rgb, 0.0);
 }

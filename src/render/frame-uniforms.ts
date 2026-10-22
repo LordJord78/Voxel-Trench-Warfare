@@ -44,7 +44,7 @@ export const CAMERA: StructDef = {
 /**
  * The atmosphere (see atmosphere.ts) in kilometres: Rayleigh scattering and its scale height, ozone's
  * absorption round its peak, Mie scattering and extinction, the radii of the ground and the top,
- * and the viewer the sky view is built for: the sun (y up) and the camera's height.
+ * and what the sky views are built for: the sun and moon (y up) and the camera's height.
  */
 export const ATMOSPHERE: StructDef = {
   name: 'Atmosphere',
@@ -63,6 +63,8 @@ export const ATMOSPHERE: StructDef = {
     ['top', 'f32'],
     ['sunDir', 'vec3f'],
     ['viewHeight', 'f32'],
+    ['moonDir', 'vec3f'],
+    ['pad0', 'f32'],
   ],
 };
 
@@ -93,21 +95,24 @@ export const FRAME: StructDef = {
     ['sigmaPlane', 'f32'],
     // Contrast-adaptive sharpening after TAA, 0 to 1 (render.cas_sharpness).
     ['casSharpness', 'f32'],
-    // The key light (sun or moon) and the sky, in linear RGB with intensity.
+    // The key light (sun or moon, crossfaded), in linear RGB with its intensity.
     ['keyDir', 'vec3f'],
     ['keyCone', 'f32'],
     ['keyColour', 'vec3f'],
     ['exposure', 'f32'],
     ['sunDir', 'vec3f'],
-    ['ambient', 'f32'],
-    ['moonDir', 'vec3f'],
     ['fogDensity', 'f32'],
-    ['moonColour', 'vec3f'],
+    ['moonDir', 'vec3f'],
     ['fogHeight', 'f32'],
-    ['zenith', 'vec3f'],
+    // The moon's light where it reaches the ground, for its disc.
+    ['moonColour', 'vec3f'],
     ['fogBase', 'f32'],
-    ['horizon', 'vec3f'],
+    // The sun's light and the moon's above the air (the moon's in its phase): the sky views and the
+    // faces' irradiance are per unit of them.
+    ['sunLight', 'vec3f'],
     ['skyRay', 'f32'],
+    ['moonLight', 'vec3f'],
+    ['pad4', 'f32'],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
     // The atmosphere as this frame's sky view was built.
@@ -115,18 +120,17 @@ export const FRAME: StructDef = {
   ],
 };
 
-/** The sky and key light a frame is lit by; Task 6 derives it from the time of day. */
+/** The sky and key light a frame is lit by (see sky-state.ts). */
 export interface FrameSky {
   keyDir: readonly number[];
   keyCone: number;
   keyColour: readonly number[];
   exposure: number;
   sunDir: readonly number[];
-  ambient: number;
   moonDir: readonly number[];
   moonColour: readonly number[];
-  zenith: readonly number[];
-  horizon: readonly number[];
+  sunLight: readonly number[];
+  moonLight: readonly number[];
   fogDensity: number;
   fogHeight: number;
   fogBase: number;
@@ -159,11 +163,10 @@ export function writeSky(w: StructWriter, sky: FrameSky): void {
   w.set('keyColour', sky.keyColour);
   w.set('exposure', sky.exposure);
   w.set('sunDir', sky.sunDir);
-  w.set('ambient', sky.ambient);
   w.set('moonDir', sky.moonDir);
   w.set('moonColour', sky.moonColour);
-  w.set('zenith', sky.zenith);
-  w.set('horizon', sky.horizon);
+  w.set('sunLight', sky.sunLight);
+  w.set('moonLight', sky.moonLight);
   w.set('fogDensity', sky.fogDensity);
   w.set('fogHeight', sky.fogHeight);
   w.set('fogBase', sky.fogBase);
@@ -176,18 +179,20 @@ const dir = (azimuth: number, elevation: number) => {
   return [Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e)];
 };
 
-/** The probe's approved dusk, in voxel units: what frames are lit by until the time of day is wired in. */
+/**
+ * Dusk by the clock (17:35, the sun 4.5° up), as sky-state.ts lights it from the tunables, in voxel
+ * units: what frames are lit by until the app sets the sky.
+ */
 export const PROBE_DUSK: FrameSky = {
   keyDir: dir(18, 4.5),
   keyCone: (0.6 * Math.PI) / 180,
-  keyColour: [3.4, 1.45, 0.6],
+  keyColour: [3.4, 1.47, 0.34],
   exposure: 1.0,
   sunDir: dir(18, 4.5),
-  ambient: 0.55,
-  moonDir: dir(215, 32),
-  moonColour: [0, 0, 0],
-  zenith: [0.1, 0.13, 0.27],
-  horizon: [0.95, 0.46, 0.24],
+  moonDir: dir(204, 2.2),
+  moonColour: [0.019, 0.0088, 0.0016],
+  sunLight: [6.55, 6.55, 6.55],
+  moonLight: [0.056, 0.09, 0.195],
   fogDensity: 0.012,
   fogHeight: 14,
   fogBase: 16,

@@ -28,18 +28,22 @@ export function sceneLayout(device: GPUDevice): GPUBindGroupLayout {
       { binding: 10, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'uint' } },
       { binding: 11, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float' } },
       { binding: 12, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
-      { binding: 13, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float' } },
+      { binding: 13, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
       { binding: 14, visibility: GPUShaderStage.COMPUTE, sampler: { type: 'filtering' } },
+      storage(15),
     ],
   });
 }
 
-/** The atmosphere's LUTs as shading reads them (see atmosphere.ts), and their sampler. */
+/** The atmosphere's LUTs as shading reads them (see atmosphere.ts), their sampler, and the faces' irradiance. */
 export interface SkyLuts {
   transmittance: GPUTextureView;
   scattering: GPUTextureView;
+  /** Two layers, as a 2D array: lit by the sun, and by the moon. */
   skyView: GPUTextureView;
   sampler: GPUSampler;
+  /** Twelve vec4s: six faces from the sun, six from the moon. */
+  irradiance: GPUBuffer;
 }
 
 export interface SceneResources {
@@ -59,8 +63,15 @@ export function sceneExtras(device: GPUDevice): { lights: GPUBuffer; noise: GPUT
   const lights = device.createBuffer({ label: 'lights', size: 64 * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   const noise = device.createTexture({ label: 'blue noise', size: [64, 64], format: 'r16uint', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
   device.queue.writeTexture({ texture: noise }, blueNoise(64), { bytesPerRow: 128 }, [64, 64]);
-  const empty = () => device.createTexture({ label: 'empty sky', size: [1, 1], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING }).createView();
-  const sky = { transmittance: empty(), scattering: empty(), skyView: empty(), sampler: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }) };
+  const empty = (layers = 1) =>
+    device.createTexture({ label: 'empty sky', size: [1, 1, layers], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING }).createView(layers > 1 ? { dimension: '2d-array' } : {});
+  const sky = {
+    transmittance: empty(),
+    scattering: empty(),
+    skyView: empty(2),
+    sampler: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }),
+    irradiance: device.createBuffer({ label: 'empty sky irradiance', size: 12 * 16, usage: GPUBufferUsage.STORAGE }),
+  };
   return { lights, noise, sky };
 }
 
@@ -85,6 +96,7 @@ export function sceneGroup(device: GPUDevice, layout: GPUBindGroupLayout, r: Sce
       { binding: 12, resource: r.sky.scattering },
       { binding: 13, resource: r.sky.skyView },
       { binding: 14, resource: r.sky.sampler },
+      { binding: 15, resource: { buffer: r.sky.irradiance } },
     ],
   });
 }

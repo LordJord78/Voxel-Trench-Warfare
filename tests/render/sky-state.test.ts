@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CLOCK_KEYS, celestial } from '../../src/core/sky-clock';
 import { loadTunables } from '../../src/core/tunables';
 import { skyState } from '../../src/render/sky-state';
 
@@ -8,46 +9,74 @@ const dir = (az: number, el: number) => {
   const e = (el * Math.PI) / 180;
   return [Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e)];
 };
-const near = (a: readonly number[], b: readonly number[], eps = 1e-9) => a.every((v, i) => Math.abs(v - b[i]) <= eps);
+const angle = (a: readonly number[], b: readonly number[]) => (Math.acos(Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])) * 180) / Math.PI;
 const lum = (c: readonly number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+const keyed = (key: string) => tun.get(`sky.${key}`) as number[];
 
-describe('the time of day', () => {
-  it('is the probe\'s dusk at 0', () => {
-    const s = skyState(tun, 0);
-    expect(near(s.sunDir, dir(18, 4.5))).toBe(true);
-    expect(near(s.keyDir, s.sunDir)).toBe(true);
-    expect(s.keyColour).toEqual([3.4, 1.45, 0.6]);
-    expect(s.zenith).toEqual([0.1, 0.13, 0.27]);
-    expect(s.horizon).toEqual([0.95, 0.46, 0.24]);
-    expect([s.ambient, s.fogDensity, s.exposure, s.flares]).toEqual([0.55, 0.012, 1.0, 0]);
+describe('the sky by the clock', () => {
+  it("puts the dusk key light within 3° of sub-project 1's dusk, and lights it as approved: warm, its red 3.4", () => {
+    const s = skyState(tun, CLOCK_KEYS.dusk);
+    expect(s.keyDir).toEqual(s.sunDir);
+    expect(angle(s.keyDir, dir(18, 4.5))).toBeLessThan(3);
+    expect(Math.abs(s.keyColour[0] - 3.4)).toBeLessThan(0.1);
+    expect(s.keyColour[0]).toBeGreaterThan(s.keyColour[1]);
+    expect(s.keyColour[1]).toBeGreaterThan(s.keyColour[2]);
   });
-  it('is lit by the moon at night', () => {
-    const s = skyState(tun, 1);
-    expect(near(s.keyDir, dir(215, 32))).toBe(true);
-    expect(s.keyColour).toEqual([0.05, 0.07, 0.12]);
-    expect(s.exposure).toBe(3.2);
-    expect(s.flares).toBe(1);
+
+  it("lights the night by the moon, as approved: the night key's brightness, and blue", () => {
+    const s = skyState(tun, CLOCK_KEYS.night);
+    expect(s.keyDir).toEqual(s.moonDir);
+    expect(Math.abs(lum(s.keyColour) / lum([0.05, 0.07, 0.12]) - 1)).toBeLessThan(0.05);
+    expect(s.keyColour[2]).toBeGreaterThan(s.keyColour[1]);
+    expect(s.keyColour[1]).toBeGreaterThan(s.keyColour[0]);
   });
-  it('runs linearly between keys and clamps outside them', () => {
-    const s = skyState(tun, 0.25);
-    expect(s.ambient).toBeCloseTo(0.65, 12);
-    expect(s.exposure).toBeCloseTo(1.5, 12);
-    expect(s.fogDensity).toBeCloseTo(0.014, 12);
-    expect(skyState(tun, -1)).toEqual(skyState(tun, 0));
-    expect(skyState(tun, 2)).toEqual(skyState(tun, 1));
+
+  it('lights the moon by its phase: dark when new, full when full', () => {
+    // 1916-10-10 is a day before the full moon; the new moon was some fifteen days before.
+    const full = skyState(tun, CLOCK_KEYS.night);
+    expect(celestial(tun, CLOCK_KEYS.night).moon.illuminated).toBeGreaterThan(0.99);
+    expect(lum(full.moonLight)).toBeGreaterThan(0.08);
+    const raw = tun.raw();
+    (raw.sky as Record<string, unknown>).date = [1916, 9, 26];
+    const newMoon = skyState(new (tun.constructor as new (r: Record<string, unknown>) => typeof tun)(raw), 13);
+    expect(lum(newMoon.moonLight)).toBeLessThan(0.001);
   });
-  it('hands the key light from the sun to the moon while both are dim', () => {
-    let previous = skyState(tun, 0);
-    let switched = 0;
-    for (let i = 1; i <= 1000; i++) {
-      const s = skyState(tun, i / 1000);
-      if (near(previous.keyDir, previous.sunDir) && near(s.keyDir, s.moonDir)) {
-        switched++;
-        expect(lum(previous.keyColour)).toBeLessThan(0.03);
-        expect(lum(s.keyColour)).toBeLessThan(0.03);
-      }
-      previous = s;
+
+  it("hands the key light from the sun to the moon without a jump, crossfaded over 2° of the sun's elevation", () => {
+    // Every 10 s of the clock from 17:00 to 22:00, across sunset (about 17:50 on the day).
+    const states = Array.from({ length: 5 * 360 + 1 }, (_, i) => skyState(tun, 17 + i / 360));
+    const scale = lum(skyState(tun, CLOCK_KEYS.dusk).keyColour);
+    for (let i = 6; i < states.length; i += 6) {
+      const [a, b] = [states[i - 6], states[i]];
+      // A minute's change is never more than 5% of the dusk key's brightness, nor a swing of 30°.
+      expect(Math.abs(lum(b.keyColour) - lum(a.keyColour))).toBeLessThan(0.05 * scale);
+      expect(angle(a.keyDir, b.keyDir)).toBeLessThan(30);
     }
-    expect(switched).toBe(1);
+    // Where the sun's light falls to the moon's: the key is the sun's 1° of the sun's elevation
+    // above it, and the moon's 1° below, crossfaded between.
+    const cross = states.find((s) => lum(s.sunColour) < lum(s.moonColour))!;
+    const crossing = cross.sunElevationDeg;
+    for (const s of states) {
+      if (s.sunElevationDeg > crossing + 1.01) expect(s.keyWeight).toBe(1);
+      if (s.sunElevationDeg < crossing - 1.01) expect(s.keyWeight).toBe(0);
+      if (s.keyWeight === 1) expect(s.keyDir).toEqual(s.sunDir);
+      if (s.keyWeight === 0) expect(s.keyDir).toEqual(s.moonDir);
+    }
+    expect(states.some((s) => s.keyWeight > 0.1 && s.keyWeight < 0.9)).toBe(true);
+  });
+
+  it('keeps the fog, the flares and the exposure on their keys, linear between them, round the clock', () => {
+    const keys = [CLOCK_KEYS.dawn, CLOCK_KEYS.noon, CLOCK_KEYS.dusk, CLOCK_KEYS.night];
+    keys.forEach((hours, k) => {
+      const s = skyState(tun, hours);
+      expect(s.fogDensity).toBeCloseTo(keyed('fog_density')[k], 12);
+      expect(s.flares).toBeCloseTo(keyed('flares')[k], 12);
+      expect(s.exposure).toBeCloseTo(keyed('exposure')[k], 12);
+    });
+    const mid = skyState(tun, (CLOCK_KEYS.dusk + CLOCK_KEYS.night) / 2);
+    expect(mid.fogDensity).toBeCloseTo((keyed('fog_density')[2] + keyed('fog_density')[3]) / 2, 12);
+    // From night round to the next dawn: 1:55 is halfway.
+    const small = skyState(tun, (CLOCK_KEYS.night + 24 + CLOCK_KEYS.dawn) / 2 - 24);
+    expect(small.flares).toBeCloseTo((keyed('flares')[3] + keyed('flares')[0]) / 2, 12);
   });
 });

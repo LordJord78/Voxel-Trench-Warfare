@@ -1,13 +1,15 @@
 import { BrickMap } from '../../../src/world/bricks';
 import { HeapMirror } from '../../../src/world/encode';
 import { K, P, kindOf, paletteData } from '../../../src/world/materials';
+import { loadTunables } from '../../../src/core/tunables';
+import { atmosphereModel, writeAtmosphere } from '../../../src/render/atmosphere';
 import { rayDir, type CameraPose } from '../../../src/render/camera';
 import { FarFieldGpu } from '../../../src/render/farfield-gpu';
 import { FLAGS, FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
 import { StructWriter } from '../../../src/render/layout';
 import { compileFrame } from '../../../src/render/renderer';
-import { sceneGroup } from '../../../src/render/scene';
+import { sceneGroup, type SkyLuts } from '../../../src/render/scene';
 import { gpu, readTexture } from '../support/gpu';
 import { floatToHalf, halfToFloat } from '../support/half';
 
@@ -38,14 +40,41 @@ const smooth = (e0: number, e1: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
+// The sky the case binds: the same radiance in every direction, per unit of each light (sun, moon),
+// as its one-texel sky-view layers hold it (times LUT_SCALE, in half floats).
+const LUT_SCALE = 16384;
+const SKY_UNIT = [
+  [0.02, 0.03, 0.05],
+  [0.01, 0.012, 0.02],
+].map((layer) => layer.map((v) => halfToFloat(floatToHalf(v * LUT_SCALE)) / LUT_SCALE));
+
+/** What fog glows with, and the sky in any direction, before the moon's disc. */
+function skyLight(sky: FrameSky): number[] {
+  return [0, 1, 2].map((c) => sky.sunLight[c] * SKY_UNIT[0][c] + sky.moonLight[c] * SKY_UNIT[1][c]);
+}
+
 function skyRef(sky: FrameSky, rd: readonly number[]): number[] {
-  const up = Math.max(rd[1], 0);
-  const m = up ** 0.45;
-  const sd = Math.max(dot(rd, sky.sunDir), 0);
-  const glow = (sd ** 6 * 0.18 + sd ** 900 * 6) * (sky.sunDir[1] + 0.1 >= 0 ? 1 : 0);
-  const below = rd[1] < -0.02 ? 0.25 : 1;
   const moon = smooth(Math.cos((0.55 * Math.PI) / 180), Math.cos((0.45 * Math.PI) / 180), dot(rd, sky.moonDir));
-  return [0, 1, 2].map((c) => (sky.horizon[c] + (sky.zenith[c] - sky.horizon[c]) * m + sky.keyColour[c] * glow) * below + sky.moonColour[c] * 40 * moon);
+  const light = skyLight(sky);
+  return [0, 1, 2].map((c) => light[c] + sky.moonColour[c] * 40 * moon);
+}
+
+/** One-texel sky views holding SKY_UNIT, and no light on faces from them. */
+function constantSky(device: GPUDevice): SkyLuts {
+  const usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST;
+  const skyView = device.createTexture({ size: [1, 1, 2], format: 'rgba16float', usage });
+  SKY_UNIT.forEach((layer, k) => {
+    const texel = new Uint16Array([...layer.map((v) => floatToHalf(v * LUT_SCALE)), floatToHalf(1)]);
+    device.queue.writeTexture({ texture: skyView, origin: [0, 0, k] }, texel, { bytesPerRow: 8 }, [1, 1, 1]);
+  });
+  const flat = () => device.createTexture({ size: [1, 1], format: 'rgba16float', usage }).createView();
+  return {
+    transmittance: flat(),
+    scattering: flat(),
+    skyView: skyView.createView({ dimension: '2d-array' }),
+    sampler: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }),
+    irradiance: device.createBuffer({ size: 12 * 16, usage: GPUBufferUsage.STORAGE }),
+  };
 }
 
 export function shadeRef(r: Region, pose: CameraPose, px: number, py: number, sky: FrameSky, voxel = 0.1): number[] {
@@ -78,7 +107,7 @@ export function shadeRef(r: Region, pose: CameraPose, px: number, py: number, sk
   const x = (rd[1] * metres) / sky.fogHeight;
   const shape = Math.abs(x) < 1e-3 ? 1 - 0.5 * x : (1 - Math.exp(-x)) / x;
   const t = Math.exp(-Math.max(sky.fogDensity * start * metres * shape, 0));
-  const fogColour = [0, 1, 2].map((c) => sky.horizon[c] * 0.9 + sky.keyColour[c] * 0.08 * Math.max(dot(rd, sky.sunDir), 0) ** 4);
+  const fogColour = skyLight(sky);
   return [0, 1, 2].map((c) => colour[c] * t + fogColour[c] * (1 - t));
 }
 
@@ -135,6 +164,7 @@ export const cases = {
     writer.set('flags', FLAGS.JITTER_OFF);
     writer.set('voxel', 0.1);
     writeSky(writer, sky);
+    writeAtmosphere(writer, 'atmosphere', atmosphereModel(loadTunables()), sky.sunDir, sky.moonDir, 0.002);
     writer.set('far', far.info);
     const frame = device.createBuffer({ size: writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(frame, 0, writer.buffer);
@@ -145,7 +175,7 @@ export const cases = {
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
     pass.setPipeline(compiled.pipelines.shade);
-    pass.setBindGroup(0, sceneGroup(device, compiled.scene, { frame, world, far, lights: compiled.lights, noise: compiled.noise, sky: compiled.sky }));
+    pass.setBindGroup(0, sceneGroup(device, compiled.scene, { frame, world, far, lights: compiled.lights, noise: compiled.noise, sky: constantSky(device) }));
     pass.setBindGroup(1, group);
     pass.dispatchWorkgroups(2, 2);
     pass.end();
@@ -158,7 +188,7 @@ export const cases = {
       // The reference sees the light as the texture stored it: in half floats.
       const stored: Region = { ...r, light: r.light.map((v) => halfToFloat(floatToHalf(v))) as Region['light'] };
       const rd = rayDir(args.pose, RES, x + 0.5, y + 0.5);
-      const fog = [0, 1, 2].map((c) => sky.horizon[c] * 0.9 + sky.keyColour[c] * 0.08 * Math.max(dot(rd, sky.sunDir), 0) ** 4);
+      const fog = skyLight(sky);
       return { got: [px[i], px[i + 1], px[i + 2]], want: shadeRef(stored, args.pose, x, y, sky), fog };
     });
     for (const t of [gDepth, gHit, out, light, lightHit]) t.destroy();
