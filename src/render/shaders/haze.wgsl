@@ -2,8 +2,8 @@
 // into 64 slices out from the eye to 120 m, each deeper than the last by the same ratio (and the
 // first from the eye itself). Each slice's texel holds the haze from the eye to the slice's far
 // side: the light it scatters toward the eye (rgb) and what of the scene behind it shows through
-// (a). hazeAt reads it at a point of the view.
-#include "scene.wgsl"
+// (a). hazeAt reads it at a point of the view; hazeTo carries it on past 120 m with the analytic fog.
+#include "fog.wgsl"
 
 const FROXELS: vec3u = vec3u(160u, 90u, 64u);
 // Slice 1 begins FROXEL_NEAR metres out and the last ends FROXEL_FAR metres out.
@@ -43,4 +43,18 @@ fn hazeAt(uv: vec2f, metres: f32) -> vec4f {
     return mix(vec4f(0.0, 0.0, 0.0, 1.0), far, s);
   }
   return far;
+}
+
+// The haze between the eye and a point `metres` along rd, through `uv` of the view: the light it
+// scatters toward the eye and what shows through it. The froxels' nearer than 120 m, with the
+// shafts and the point lights in it; from there, the analytic fog's, over what the froxels let
+// through. The sky, 2 km off, is seen through the whole volume and the fog past it.
+fn hazeTo(uv: vec2f, eyeY: f32, rd: vec3f, metres: f32) -> vec4f {
+  let near = hazeAt(uv, metres);
+  if (metres <= FROXEL_FAR) {
+    return near;
+  }
+  // What the fog from 120 m on lets through.
+  let past = exp(-max(hazeDepth(eyeY, rd, metres) - hazeDepth(eyeY, rd, FROXEL_FAR), 0.0));
+  return vec4f(near.rgb + near.a * (1.0 - past) * fogColour(rd), near.a * past);
 }

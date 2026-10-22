@@ -3,9 +3,9 @@
 // is packed as x | z << 12 | face << 24 and y | palette << 16 (face 6 is the
 // far field, 7 the sky); motion is where the hit point was last frame minus
 // where it is now, both without jitter, in pixels, with the ray's traversal
-// steps in its third channel for performance work. In front of the pixels, the
-// dispatch's first rows trace this frame's texels of the key light's height map
-// (key-shadow.wgsl's keyShare).
+// steps in its third channel for performance work. On a frame that traces texels
+// of the key light's height map, `keyed` takes main's place: its dispatch's first
+// rows trace them (key-shadow.wgsl's keyShare), in front of the pixels.
 #include "key-shadow.wgsl"
 #include "farfield.wgsl"
 #include "camera.wgsl"
@@ -49,7 +49,15 @@ fn farPalette(m: u32) -> u32 {
 @group(1) @binding(3) var beam: texture_2d<f32>;
 
 @compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) id: vec3u, @builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) local: u32) {
+fn main(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= frame.res.x || id.y >= frame.res.y) {
+    return;
+  }
+  primaryPixel(id.xy);
+}
+
+@compute @workgroup_size(8, 8)
+fn keyed(@builtin(global_invocation_id) id: vec3u, @builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) local: u32) {
   if (keyShare(group, local)) {
     return;
   }
@@ -57,6 +65,11 @@ fn main(@builtin(global_invocation_id) id: vec3u, @builtin(workgroup_id) group: 
   if (g.x >= frame.res.x || g.y >= frame.res.y) {
     return;
   }
+  primaryPixel(g);
+}
+
+// Pixel g's ray, into the G-buffer.
+fn primaryPixel(g: vec2u) {
   let res = vec2f(frame.res);
   let rd = cameraRay(frame.cam, vec2f(g) + 0.5 + frameJitter(), res);
   let start = textureLoad(beam, vec2i(g >> vec2u(3u)), 0).r / dot(rd, frame.cam.forward);

@@ -10,7 +10,7 @@ import type { StructDef, StructWriter } from './layout';
 import type { PyramidLevel } from './pyramid';
 
 /** Bits of `Frame.flags`. */
-export const FLAGS = { JITTER_OFF: 1, PYRAMID_OFF: 2, HISTORY_RESET: 4, DEBUG_SHADE: 8, BEAM_OFF: 16, SPATIAL_OFF: 32, RESERVOIR_HISTORY_OFF: 64 } as const;
+export const FLAGS = { JITTER_OFF: 1, PYRAMID_OFF: 2, HISTORY_RESET: 4, DEBUG_SHADE: 8, BEAM_OFF: 16, SPATIAL_OFF: 32, RESERVOIR_HISTORY_OFF: 64, FROXELS_OFF: 128 } as const;
 
 export const PYRAMID_LEVELS_MAX = 12;
 
@@ -130,6 +130,10 @@ export const FRAME: StructDef = {
     ['hazeForward', 'f32'],
     ['frontGlow', 'vec3f'],
     ['hazeSky', 'f32'],
+    // In the froxels: the share of the key's glow the haze keeps where the key light does not reach
+    // it (what the lit haze round it scatters in), and how bright point lights glow in it.
+    ['hazeShadow', 'f32'],
+    ['hazeLights', 'f32'],
     // Smoke and dust over the lines, a second height fog: per metre at the ground, and the metres it thins by e over.
     ['smokeDensity', 'f32'],
     ['smokeHeight', 'f32'],
@@ -165,6 +169,8 @@ export interface FrameSky {
   hazeKey: number;
   hazeForward: number;
   hazeSky: number;
+  hazeShadow: number;
+  hazeLights: number;
   frontGlow: readonly number[];
   smokeDensity: number;
   smokeHeight: number;
@@ -217,6 +223,8 @@ export function writeSky(w: StructWriter, sky: FrameSky): void {
   w.set('hazeKey', sky.hazeKey);
   w.set('hazeForward', sky.hazeForward);
   w.set('hazeSky', sky.hazeSky);
+  w.set('hazeShadow', sky.hazeShadow);
+  w.set('hazeLights', sky.hazeLights);
   w.set('frontGlow', sky.frontGlow);
   w.set('smokeDensity', sky.smokeDensity);
   w.set('smokeHeight', sky.smokeHeight);
@@ -259,6 +267,8 @@ export const PROBE_DUSK: FrameSky = {
   hazeKey: 0.215,
   hazeForward: 0.08,
   hazeSky: 1.66,
+  hazeShadow: 0.7,
+  hazeLights: 0.1,
   frontGlow: [0, 0, 0],
   smokeDensity: 0.00053,
   smokeHeight: 300,

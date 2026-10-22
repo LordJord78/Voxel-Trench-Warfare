@@ -559,6 +559,14 @@ haze_key            = 0.215    # the share of the key light it glows with, looki
 haze_forward        = 0.08     # and more toward the key, by cos⁴ of the angle: the approved glow
 haze_sky            = 1.66     # the share of the sky's light from above (an up face's irradiance over π)
 front_glow          = [0.0153, 0.0045, 0.0]   # the front's fires and flares on the haze, as the flares burn: night's violet
+# Shafts (froxels.wgsl): the haze glows with the key light where the light reaches it. Where it does
+# not, the lit haze round it still scatters some in: this share of the key's glow. The least that
+# leaves every approved view's exposure uncorrected (the bay's, at dusk, lies nearest the edge of the
+# meter's zone, and 0.63 tips it over), so the approved look holds; the shafts read at the rest.
+haze_shadow         = 0.7
+# And the point lights' glow on the haze (lanterns, flares), over the key's by the same phase: a
+# tenth, so the approved night keeps its exposure (at a quarter, the meter corrects it).
+haze_lights         = 0.1
 # Smoke and dust over the lines: a second haze, thinner and taller than the ground fog, that veils
 # the lower sky as the approved sky's horizon colour did.
 smoke_density       = 0.00053  # per metre, at the ground

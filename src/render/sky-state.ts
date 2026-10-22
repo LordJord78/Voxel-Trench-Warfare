@@ -224,6 +224,8 @@ export function frameSky(sky: SkyState, tun: Tunables): FrameSky {
     hazeKey: tun.f('sky.haze_key'),
     hazeForward: tun.f('sky.haze_forward'),
     hazeSky: tun.f('sky.haze_sky'),
+    hazeShadow: tun.f('sky.haze_shadow'),
+    hazeLights: tun.f('sky.haze_lights'),
     frontGlow: scale(triple(tun, 'sky.front_glow'), sky.flares),
     smokeDensity: tun.f('sky.smoke_density'),
     smokeHeight: tun.f('sky.smoke_height_m'),

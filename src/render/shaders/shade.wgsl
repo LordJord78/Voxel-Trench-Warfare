@@ -8,13 +8,15 @@
 //     being lit like mud.
 //   - The far field is lit analytically, with a coarse march toward the key
 //     light over its mips for the shadows of distant hills.
-//   - Everything, sky included, is seen through exponential height fog that
-//     thins with altitude, glowing toward the sun.
+//   - Everything, sky included, is seen through the haze: exponential height
+//     fog that thins with altitude, glowing toward the sun, and the smoke over
+//     the lines. Nearer than 120 m it is the froxels' (haze.wgsl), shafts and
+//     point lights in it; past that the analytic fog's (fog.wgsl).
 // With FLAG_DEBUG_SHADE, a plain fixed light instead: for looking at geometry.
 #include "traverse.wgsl"
 #include "farfield.wgsl"
 #include "camera.wgsl"
-#include "fog.wgsl"
+#include "haze.wgsl"
 #include "palette.wgsl"
 #include "lightgrid.wgsl"
 
@@ -139,6 +141,12 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
       }
     }
   }
-  let f = fog(eyeY, rd, metres);
-  textureStore(outColour, g.xy, vec4f(colour * f.a + f.rgb * (1.0 - f.a), 1.0));
+  var haze: vec4f;
+  if ((frame.flags & FLAG_FROXELS_OFF) != 0u) {
+    let f = fog(eyeY, rd, metres);
+    haze = vec4f(f.rgb * (1.0 - f.a), f.a);
+  } else {
+    haze = hazeTo((vec2f(g.xy) + 0.5 + frameJitter()) / vec2f(frame.res), eyeY, rd, metres);
+  }
+  textureStore(outColour, g.xy, vec4f(colour * haze.a + haze.rgb, 1.0));
 }

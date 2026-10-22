@@ -174,7 +174,9 @@ export const cases = {
     writer.set('alloc', RES);
     writer.set('lightRes', [8, 8]);
     writer.set('lightScale', 2);
-    writer.set('flags', FLAGS.JITTER_OFF);
+    // The shading formula with the analytic fog nearer than 120 m too: the froxels' haze is the
+    // shafts spec's to test.
+    writer.set('flags', FLAGS.JITTER_OFF | FLAGS.FROXELS_OFF);
     writer.set('voxel', 0.1);
     writeSky(writer, sky);
     writeAtmosphere(writer, 'atmosphere', atmosphereModel(loadTunables()), sky.sunDir, sky.moonDir, 0.002);
@@ -190,6 +192,16 @@ export const cases = {
     pass.setPipeline(compiled.pipelines.shade);
     pass.setBindGroup(0, sceneGroup(device, compiled.scene, { frame, world, far, lights: compiled.lights, noise: compiled.noise, sky: constantSky(device) }));
     pass.setBindGroup(1, group);
+    // The haze (unread under FROXELS_OFF), and the empty group before it.
+    const haze = device.createTexture({ size: [1, 1, 1], dimension: '3d', format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING });
+    pass.setBindGroup(2, device.createBindGroup({ layout: compiled.froxels.layouts.none, entries: [] }));
+    pass.setBindGroup(3, device.createBindGroup({
+      layout: compiled.froxels.layouts.haze,
+      entries: [
+        { binding: 0, resource: haze.createView() },
+        { binding: 1, resource: device.createSampler() },
+      ],
+    }));
     pass.dispatchWorkgroups(2, 2);
     pass.end();
     device.queue.submit([encoder.finish()]);

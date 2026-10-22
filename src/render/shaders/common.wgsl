@@ -9,6 +9,8 @@ const FLAG_BEAM_OFF: u32 = 16u;
 // frame (for tests: with both, plain resampling of each pixel's candidates).
 const FLAG_SPATIAL_OFF: u32 = 32u;
 const FLAG_RESERVOIR_HISTORY_OFF: u32 = 64u;
+// Shading sees the analytic fog nearer than 120 m too, as before the froxels (for tests).
+const FLAG_FROXELS_OFF: u32 = 128u;
 
 // The next of a sequence of random numbers in [0, 1): PCG (O'Neill 2014), from a state a pass seeds
 // (from its pixel and the frame, say) and carries.

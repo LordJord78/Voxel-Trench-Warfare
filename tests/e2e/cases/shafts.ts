@@ -4,7 +4,7 @@ import { HeapMirror } from '../../../src/world/encode';
 import { P } from '../../../src/world/materials';
 import { rayDir, type CameraPose } from '../../../src/render/camera';
 import { FarFieldGpu } from '../../../src/render/farfield-gpu';
-import { FRAME, PROBE_DUSK, writeWorldInfo, type FrameSky } from '../../../src/render/frame-uniforms';
+import { FLAGS, FRAME, PROBE_DUSK, writeWorldInfo, type FrameSky } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
 import { KEY_MAP_SIZE, KeyShadow, keyShadowInfo, type Key } from '../../../src/render/key-shadow';
 import { StructWriter } from '../../../src/render/layout';
@@ -13,6 +13,7 @@ import { Renderer } from '../../../src/render/renderer';
 import { sceneExtras, sceneGroup, sceneLayout } from '../../../src/render/scene';
 import { moduleSource } from '../../../src/render/shaders';
 import { gpu, readBuffer, readTexture } from '../support/gpu';
+import { halfToFloat } from '../support/half';
 import { litRef, mapCoords, OPEN, texelDepth } from '../../support/key-shadow-ref';
 import type { Vec3 } from '../../support/trace-ref';
 import hazeTest from '../shaders/haze-test.wgsl';
@@ -50,8 +51,11 @@ function slitWorld(): BrickMap {
   return map;
 }
 
-/** The fog based at 2 m: the haze tests' cameras stand a metre or two above it. */
-const HAZE_SKY: FrameSky = { ...PROBE_DUSK, fogBase: 2 };
+/**
+ * The fog based at 2 m: the haze tests' cameras stand a metre or two above it. The froxels' physics
+ * alone: none of the key's glow kept in shadow, the point lights' glow at full.
+ */
+const HAZE_SKY: FrameSky = { ...PROBE_DUSK, fogBase: 2, hazeShadow: 0, hazeLights: 1 };
 /** Behind the slit's wall, 5.6 m from it, looking at the slit; and turned 20°. */
 const SLIT_POSE: CameraPose = { position: [6.4, 4, 12], yaw: 180, pitch: 0 };
 const TURNED_POSE: CameraPose = { ...SLIT_POSE, yaw: 200 };
@@ -62,6 +66,7 @@ const HAZE_SIZE: [number, number] = [320, 180];
 interface HazeAnswer {
   haze: number[];
   fog: number[];
+  shaded: number[];
 }
 
 /** A renderer over `map` for a haze test: lit by `sky`, with `lights`. */
@@ -107,7 +112,7 @@ async function hazeAt(renderer: Renderer, queries: readonly (readonly [number, n
   const data = new Float32Array(queries.length * 4);
   queries.forEach((q, n) => data.set(q, n * 4));
   const input = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-  const output = device.createBuffer({ size: queries.length * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const output = device.createBuffer({ size: queries.length * 48, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
   device.queue.writeBuffer(input, 0, data);
   const encoder = device.createCommandEncoder();
   const pass = encoder.beginComputePass();
@@ -125,10 +130,11 @@ async function hazeAt(renderer: Renderer, queries: readonly (readonly [number, n
   pass.dispatchWorkgroups(Math.ceil(queries.length / 64));
   pass.end();
   device.queue.submit([encoder.finish()]);
-  const out = new Float32Array(await readBuffer(output, queries.length * 32));
+  const out = new Float32Array(await readBuffer(output, queries.length * 48));
   input.destroy();
   output.destroy();
-  return queries.map((_, n) => ({ haze: Array.from(out.subarray(n * 8, n * 8 + 4)), fog: Array.from(out.subarray(n * 8 + 4, n * 8 + 8)) }));
+  const at = (n: number, k: number) => Array.from(out.subarray(n * 12 + k * 4, n * 12 + k * 4 + 4));
+  return queries.map((_, n) => ({ haze: at(n, 0), fog: at(n, 1), shaded: at(n, 2) }));
 }
 
 const luma = (c: readonly number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
@@ -226,6 +232,7 @@ export const cases = {
     const edit = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, p: number) => {
       map.fillBox(x0, y0, z0, x1, y1, z1, p);
       gw.flush(1 << 30, [64, 64, 64]);
+      shadow.worldChanged();
       // A grown heap is a new buffer.
       scene = sceneGroup(device, layout, { frame: frameBuffer, world: gw, far, ...extras });
     };
@@ -384,6 +391,32 @@ export const cases = {
   },
 
   /**
+   * How many rows of texels the map asks a host pass for each frame (KeyShadow.share, 8 workgroups
+   * across): the first frame; three frames more under the same key; after the world changes, 17;
+   * and after the key turns a tenth of a degree, 17.
+   */
+  async keyShadowStill() {
+    const { device, errors } = await gpu();
+    let pipelines;
+    try {
+      pipelines = await KeyShadow.compile(device, sceneLayout(device));
+    } catch (e) {
+      return { compileErrors: [String(e)] };
+    }
+    const shadow = KeyShadow.create(device, pipelines, DIMS, VOXEL);
+    const rows: number[] = [];
+    const frame = (keyDir: Vec3) => rows.push(shadow.share(keyDir, 'sun', 8));
+    frame(KEY);
+    for (let k = 0; k < 3; k++) frame(KEY);
+    shadow.worldChanged();
+    for (let k = 0; k < 17; k++) frame(KEY);
+    const turned = dir(160.1, 30);
+    for (let k = 0; k < 17; k++) frame(turned);
+    shadow.destroy();
+    return { rows, errors: [...errors] };
+  },
+
+  /**
    * The renderer's own build: the map after the first frame (all of it), then with the floor raised,
    * after 15 frames more and after 16 (a sixteenth a frame).
    */
@@ -417,10 +450,63 @@ export const cases = {
     return { answers, errors: [...g.errors] };
   },
 
-  /** Behind a wall with a slit, lit through it at 30°: the haze at 5 m looking at the slit, and each side of it. */
-  async hazeSlit() {
+  /** The haze shading sees, over a ramp of depths from 100 m to 140 m, a tenth of a metre apart, along three rays. */
+  async hazeRamp() {
+    const g = await gpu();
+    const renderer = await hazeRenderer(new BrickMap(DIMS), { ...HAZE_SKY, keyDir: KEY });
+    frames(renderer, { position: [6.4, 3, 6.4], yaw: 30, pitch: 5 }, 8, 0);
+    const queries: [number, number, number][] = [];
+    for (const [u, v] of [[0.5, 0.5], [0.2, 0.3], [0.8, 0.45]]) for (let k = 0; k <= 400; k++) queries.push([u, v, 100 + k / 10]);
+    const answers = await hazeAt(renderer, queries);
+    return { shaded: answers.map((x) => x.shaded), errors: [...g.errors] };
+  },
+
+  /**
+   * The slit's view shaded, after 30 frames: through the slit and on the wall's back each side of
+   * it, with the froxels' haze and (a frame later) with the analytic fog in its place.
+   */
+  async hazeShaded() {
     const g = await gpu();
     const sky = { ...HAZE_SKY, keyDir: SLIT_KEY };
+    const renderer = await hazeRenderer(slitWorld(), sky);
+    renderer.flags |= FLAGS.JITTER_OFF;
+    const now = frames(renderer, SLIT_POSE, 30, 0);
+    const side = Math.atan2(2.4, 5.6);
+    const pixels = [0.5 - Math.tan(side) / 2, 0.5, 0.5 + Math.tan(side) / 2].map((u) => [Math.floor(u * HAZE_SIZE[0]), HAZE_SIZE[1] / 2]);
+    // Each pixel's luminance, as the shade pass left it: the mean of the 3 × 3 round it.
+    const read = async () => {
+      const t = renderer.texture('colour');
+      const px = new Uint16Array(await readTexture(t));
+      return pixels.map(([x, y]) => {
+        let sum = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const k = ((y + dy) * t.width + x + dx) * 4;
+          sum += luma([halfToFloat(px[k]), halfToFloat(px[k + 1]), halfToFloat(px[k + 2])]);
+        }
+        return sum / 9;
+      });
+    };
+    const froxels = await read();
+    renderer.flags |= FLAGS.FROXELS_OFF;
+    frames(renderer, SLIT_POSE, 1, now);
+    const analytic = await read();
+    // The key's share of the haze in front of the wall's back, 6 m off.
+    const rd = rayDir(SLIT_POSE, HAZE_SIZE, pixels[0][0] + 0.5, pixels[0][1] + 0.5);
+    const c = Math.max(rd[0] * SLIT_KEY[0] + rd[1] * SLIT_KEY[1] + rd[2] * SLIT_KEY[2], 0);
+    const [wall] = await hazeAt(renderer, [[pixels[0][0] / HAZE_SIZE[0], 0.5, 6]]);
+    const keyShare = luma(sky.keyColour) * (sky.hazeKey + sky.hazeForward * c ** 4) * (1 - wall.fog[3]);
+    return { froxels, analytic, keyShare, errors: [...g.errors] };
+  },
+
+  /**
+   * Behind a wall with a slit, lit through it at 30° (or `elevation`°), the haze keeping
+   * `hazeShadow` of the key's glow in shadow (none unless given): the haze at 5 m looking at the
+   * slit, and each side of it.
+   */
+  async hazeSlit(args: { elevation?: number; hazeShadow?: number } = {}) {
+    const g = await gpu();
+    const key = dir(180, args.elevation ?? 30);
+    const sky = { ...HAZE_SKY, keyDir: key, hazeShadow: args.hazeShadow ?? 0 };
     const renderer = await hazeRenderer(slitWorld(), sky);
     frames(renderer, SLIT_POSE, 30, 0);
     // At the wall, 2.4 m each side of the slit: in its shadow.
@@ -428,7 +514,7 @@ export const cases = {
     const [left, centre, right] = await hazeAt(renderer, [[0.5 - Math.tan(side) / 2, 0.5, 5], [0.5, 0.5, 5], [0.5 + Math.tan(side) / 2, 0.5, 5]]);
     // The key's share of the haze at the slit: its term of the haze's glow, over what the haze hides.
     const rd = rayDir(SLIT_POSE, HAZE_SIZE, HAZE_SIZE[0] / 2, HAZE_SIZE[1] / 2);
-    const c = Math.max(rd[0] * SLIT_KEY[0] + rd[1] * SLIT_KEY[1] + rd[2] * SLIT_KEY[2], 0);
+    const c = Math.max(rd[0] * key[0] + rd[1] * key[1] + rd[2] * key[2], 0);
     const keyShare = luma(sky.keyColour) * (sky.hazeKey + sky.hazeForward * c ** 4) * (1 - centre.fog[3]);
     return { left: luma(left.haze), centre: luma(centre.haze), right: luma(right.haze), keyShare, errors: [...g.errors] };
   },

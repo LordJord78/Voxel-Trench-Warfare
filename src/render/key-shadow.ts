@@ -9,7 +9,9 @@
  * sixteenth of them is traced a frame, in tiles of 8 × 8 (neighbouring rays read the same bricks),
  * a tile of every 4 × 4 block of tiles in turn, each under the key as it then was; all of them at
  * once when the key changes between sun and moon, or has turned more than a degree since a texel
- * was traced (the clock was set).
+ * was traced (the clock was set). While the key stands still (the clock held) and the world is
+ * unchanged, nothing is traced: each sixteenth is traced again only once the key has moved or the
+ * world has changed since it was.
  *
  * Few of a frame's rays reach the world, and each waits on memory at every step: in a pass of its
  * own the longest would take the time. So the frame traces them in front of its primary rays, in
@@ -118,8 +120,10 @@ export class KeyShadow {
   private readonly params: GPUBuffer;
   private readonly none: GPUBindGroup;
   private key: Key | null = null;
-  /** The key each frame's texels were last traced under. */
+  /** The key each sixteenth was last traced under, and the world as it then was (worldChanged's count). */
   private readonly traced: Vec3[] = [];
+  private readonly tracedWorld: number[] = [];
+  private world = 0;
   private count = 0;
 
   /** The build's own pipeline, over the scene's group 0 (`scene`, scene.ts), with the map's groups' layouts. */
@@ -175,15 +179,22 @@ export class KeyShadow {
     this.none = device.createBindGroup({ label: 'key shadow none', layout: pipelines.none, entries: [] });
   }
 
+  /** The world changed (an edit was uploaded): every sixteenth is to be traced again. */
+  worldChanged(): void {
+    this.world++;
+  }
+
   /**
    * Trace this frame's sixteenth of the map for a key toward `keyDir`, through the world in the
    * scene's group 0 (`scene`), in a pass of its own; or all of it, on a change between sun and moon
-   * or a turn over a degree. It writes the map's plane for this key, which keyLit reads: submit
-   * before the next update.
+   * or a turn over a degree; or none, if the key and the world are as they were when each was
+   * traced. It writes the map's plane for this key, which keyLit reads: submit before the next
+   * update. The texels it traced.
    */
-  update(encoder: GPUCommandEncoder, scene: GPUBindGroup, keyDir: Vec3, key: Key, timestampWrites?: GPUComputePassTimestampWrites): void {
+  update(encoder: GPUCommandEncoder, scene: GPUBindGroup, keyDir: Vec3, key: Key, timestampWrites?: GPUComputePassTimestampWrites): number {
     const texels = this.next(keyDir, key);
     this.place(texels, 0, 0);
+    if (!texels.count) return 0;
     const pass = encoder.beginComputePass({ label: 'key shadow', timestampWrites });
     pass.setPipeline(this.pipelines.build);
     pass.setBindGroup(0, scene);
@@ -191,12 +202,14 @@ export class KeyShadow {
     pass.setBindGroup(2, this.buildGroup);
     pass.dispatchWorkgroups(texels.count / 64);
     pass.end();
+    return texels.count;
   }
 
   /**
    * As update, but for another pass to trace in front of its own work: one whose dispatch is
-   * `width` workgroups of 64 across, with the rows this returns put first; which binds buildGroup
-   * as its group 2 and asks keyShare (key-shadow.wgsl) at each workgroup, as primary.wgsl does.
+   * `width` workgroups of 64 across, with the rows this returns put first (none, if nothing is to
+   * be traced); which binds buildGroup as its group 2 and asks keyShare (key-shadow.wgsl) at each
+   * workgroup, as primary.wgsl's `keyed` does.
    */
   share(keyDir: Vec3, key: Key, width: number): number {
     const texels = this.next(keyDir, key);
@@ -205,7 +218,7 @@ export class KeyShadow {
     return rows;
   }
 
-  /** This frame's texels for a key toward `keyDir`, and the map's plane for it written. */
+  /** This frame's texels for a key toward `keyDir` (none, if none is stale), and the map's plane for it written. */
   private next(keyDir: Vec3, key: Key): Texels {
     const info = keyShadowInfo(this.dims, this.voxel, keyDir);
     const toward: Vec3 = [-info.along[0], -info.along[1], -info.along[2]];
@@ -215,11 +228,24 @@ export class KeyShadow {
     if (outright) {
       this.key = key;
       this.traced.length = 0;
-      for (let k = 0; k < KEY_SLOTS; k++) this.traced.push(toward);
+      this.tracedWorld.length = 0;
+      for (let k = 0; k < KEY_SLOTS; k++) {
+        this.traced.push(toward);
+        this.tracedWorld.push(this.world);
+      }
     } else {
-      const k = this.count++ % KEY_SLOTS;
-      texels = { step: 4, offset: keySlot(k), count: (KEY_MAP_SIZE * KEY_MAP_SIZE) / KEY_SLOTS };
-      this.traced[k] = toward;
+      // The next sixteenth in turn traced under another key, or before the world last changed.
+      const stale = (k: number) => this.traced[k].some((c, i) => c !== toward[i]) || this.tracedWorld[k] !== this.world;
+      let k = -1;
+      for (let i = 0; i < KEY_SLOTS && k < 0; i++) if (stale((this.count + i) % KEY_SLOTS)) k = (this.count + i) % KEY_SLOTS;
+      if (k < 0) {
+        texels = { step: 4, offset: [0, 0], count: 0 };
+      } else {
+        this.count = k + 1;
+        texels = { step: 4, offset: keySlot(k), count: (KEY_MAP_SIZE * KEY_MAP_SIZE) / KEY_SLOTS };
+        this.traced[k] = toward;
+        this.tracedWorld[k] = this.world;
+      }
     }
     const data = new Float32Array(16);
     data.set(info.u, 0);

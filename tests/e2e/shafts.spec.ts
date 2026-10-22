@@ -86,6 +86,17 @@ test.describe("the key light's height map", () => {
   });
 });
 
+test('with the key and the world still, the map is not traced again; a change of either traces it a sixteenth a frame', async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ compileErrors?: string[]; rows: number[]; errors: string[] }>(page, 'keyShadowStill');
+  expect(r.compileErrors ?? []).toEqual([]);
+  expect(r.errors).toEqual([]);
+  // A million texels at first, 64 to a workgroup, 8 workgroups a row; a sixteenth of them after.
+  const all = 1024 * 1024 / 64 / 8;
+  const sixteenth = all / 16;
+  expect(r.rows).toEqual([all, 0, 0, 0, ...Array(16).fill(sixteenth), 0, ...Array(16).fill(sixteenth), 0]);
+});
+
 test("the frame traces the key light's height map, a sixteenth a frame", async ({ page }) => {
   await openHarness(page);
   const f = await runCase<{ first: Compared; partway: Compared; after: Compared; errors: string[] }>(page, 'keyShadowFrames');
@@ -141,6 +152,36 @@ test.describe('the froxels', () => {
     for (let k = n; k < r.turned.length; k++) expect(Math.abs(r.turned[k] - r.fresh[k])).toBeLessThanOrEqual(0.03 * r.fresh[k]);
   });
 
+  test("where the key light does not reach, the haze keeps haze_shadow of its glow: half of it halves the shaft's lead", async ({ page }) => {
+    await openHarness(page);
+    type Slit = { left: number; centre: number; right: number; errors: string[] };
+    const none = await runCase<Slit>(page, 'hazeSlit', { hazeShadow: 0 });
+    const half = await runCase<Slit>(page, 'hazeSlit', { hazeShadow: 0.5 });
+    expect([...none.errors, ...half.errors]).toEqual([]);
+    const lead = (r: Slit) => r.centre - Math.max(r.left, r.right);
+    console.log(`the shaft's lead: ${lead(none).toFixed(4)} with none of the key's glow kept in shadow, ${lead(half).toFixed(4)} with half`);
+    expect(Math.abs(lead(half) / lead(none) - 0.5)).toBeLessThan(0.05);
+  });
+
+  test('a key just over the horizon casts next to no shafts: they come in over its first 3°', async ({ page }) => {
+    await openHarness(page);
+    type Slit = { left: number; centre: number; right: number; keyShare: number; errors: string[] };
+    // The shaft's lead from the shadow alone: less what it leads by with the haze keeping all of the
+    // key's glow in shadow (the forward lobe's, the slit straight ahead and the sides not).
+    const shadowLead = async (elevation: number) => {
+      const shafts = await runCase<Slit>(page, 'hazeSlit', { elevation, hazeShadow: 0 });
+      const none = await runCase<Slit>(page, 'hazeSlit', { elevation, hazeShadow: 1 });
+      expect([...shafts.errors, ...none.errors]).toEqual([]);
+      const lead = (r: Slit) => r.centre - Math.max(r.left, r.right);
+      return (lead(shafts) - lead(none)) / shafts.keyShare;
+    };
+    const low = await shadowLead(0.5);
+    const up = await shadowLead(3.5);
+    console.log(`the shadow's lead over the key's share: ${low.toFixed(3)} with the key 0.5° up, ${up.toFixed(3)} at 3.5°`);
+    expect(low).toBeLessThan(0.1);
+    expect(up).toBeGreaterThan(1 / 3);
+  });
+
   test('a lantern in clear air adds its haze within 10% of the analytic sum over the lights', async ({ page }) => {
     await openHarness(page);
     const r = await runCase<{ froxels: number[]; reference: number[]; errors: string[] }>(page, 'hazeLantern');
@@ -153,5 +194,37 @@ test.describe('the froxels', () => {
     console.log(`the lantern's haze: worst ${(worst * 100).toFixed(2)}% where it is a tenth of its most (${most.toFixed(4)}) or more`);
     expect(most).toBeGreaterThan(0);
     expect(worst).toBeLessThanOrEqual(0.1);
+  });
+});
+
+test.describe('shading through the froxels', () => {
+  test.setTimeout(120_000);
+
+  test('the haze shading sees is continuous across 120 m, where the froxels end: no step over 1%', async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ shaded: number[][]; errors: string[] }>(page, 'hazeRamp');
+    expect(r.errors).toEqual([]);
+    const luma = (c: number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let worstLight = 0;
+    let worstT = 0;
+    for (let ray = 0; ray < 3; ray++) {
+      for (let k = 1; k <= 400; k++) {
+        const [a, b] = [r.shaded[ray * 401 + k - 1], r.shaded[ray * 401 + k]];
+        worstLight = Math.max(worstLight, Math.abs(luma(b) - luma(a)) / luma(a));
+        worstT = Math.max(worstT, Math.abs(b[3] - a[3]) / Math.max(a[3], 0.1));
+      }
+    }
+    console.log(`from 100 m to 140 m, a tenth of a metre at a time: the light steps at most ${(worstLight * 100).toFixed(3)}%, the transmittance ${(worstT * 100).toFixed(3)}%`);
+    expect(worstLight).toBeLessThanOrEqual(0.01);
+    expect(worstT).toBeLessThanOrEqual(0.01);
+  });
+
+  test("the slit scene shows its shaft in the shaded image: the haze in the wall's shadow is darker than the analytic fog, the shaft's not", async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ froxels: number[]; analytic: number[]; keyShare: number; errors: string[] }>(page, 'hazeShaded');
+    expect(r.errors).toEqual([]);
+    const [left, centre, right] = r.froxels.map((v, k) => v - r.analytic[k]);
+    console.log(`froxels less analytic fog: left ${left.toFixed(4)}, through the slit ${centre.toFixed(4)}, right ${right.toFixed(4)}; the key's share ${r.keyShare.toFixed(4)}`);
+    expect(centre - Math.max(left, right)).toBeGreaterThanOrEqual(r.keyShare / 3);
   });
 });

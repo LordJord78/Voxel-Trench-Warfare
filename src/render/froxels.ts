@@ -2,9 +2,10 @@
  * The froxels (froxels.wgsl): the haze over the view in 160 × 90 × 64 froxels out to 120 m
  * (haze.wgsl's grid), each glowing with what reaches it: the key light as far as its height map
  * lets it (key-shadow.ts), the sky's and the front's light, and its light cell's point lights
- * (light-cells.ts). Each frame, `inject` finds each froxel's glow and blends it into last frame's
- * for the same place, and `integrate` adds the froxels up, front to back, into the haze that
- * shading reads (hazeAt). The glow ping-pongs between two volumes by frame parity.
+ * (light-cells.ts). Each frame, `inject` samples how much of the key light reaches each froxel and
+ * the point lights' glow there, blended into last frame's for the same place, and `integrate`
+ * lights the froxels by this frame's key and sky and adds them up, front to back, into the haze
+ * that shading reads (hazeAt). The samples ping-pong between two volumes by frame parity.
  */
 
 import type { KeyShadow, KeyShadowLayouts } from './key-shadow';
@@ -55,14 +56,14 @@ export interface FroxelPipelines {
 export class Froxels {
   /** The haze from the eye to each slice's far side: the light it scatters toward the eye (rgb), and what shows through it (a). */
   readonly haze: GPUTexture;
-  /** Group 3 for a pass that reads the haze. */
+  /** Group 3 for a pass that reads the haze; and an empty group, for its groups between. */
   readonly group: GPUBindGroup;
+  readonly none: GPUBindGroup;
   private readonly pipelines: FroxelPipelines;
-  /** Each froxel's glow, blended over frames: frame k writes [k & 1] from the other. */
+  /** Each froxel's samples, blended over frames (the point lights' glow, and how much of the key reaches it): frame k writes [k & 1] from the other. */
   private readonly glow: GPUTexture[];
   private readonly cells: GPUBindGroup;
   private readonly keyShadow: KeyShadow;
-  private readonly none: GPUBindGroup;
   private readonly injectGroups: GPUBindGroup[];
   private readonly integrateGroups: GPUBindGroup[];
 

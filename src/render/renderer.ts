@@ -8,8 +8,9 @@
  *              give (exposure.wgsl);
  *   beam     — per 8 × 8 tile, how far its rays can go before meeting anything;
  *   primary  — one jittered ray per pixel into the G-buffer, from its tile's beam;
- *              and in front of them, the same dispatch traces a sixteenth of the
- *              key light's height map, seen from the light (key-shadow.ts);
+ *              and in front of them, on a frame whose key or world has moved, the
+ *              same dispatch traces a sixteenth of the key light's height map,
+ *              seen from the light (key-shadow.ts);
  *   cells    — the frame's point lights gridded over the map, the nearest 32 a
  *              cell (light-cells.ts);
  *   restir   — the point light each lighting pixel shades by, resampled from
@@ -25,7 +26,7 @@
  *              as its height map lets it and by the point lights, then added up
  *              front to back (froxels.ts);
  *   shade    — the image: upsampled light, materials, water, far field,
- *              sky and height fog;
+ *              sky, seen through the froxels' haze and the height fog past it;
  *   taa      — blended into its own reprojected history, which smooths the
  *              jitter into anti-aliased edges;
  *   cas      — sharpened back;
@@ -55,7 +56,7 @@ import { jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
 import { FarFieldGpu } from './farfield-gpu';
-import { Froxels, type FroxelPipelines } from './froxels';
+import { froxelLayouts, Froxels, type FroxelPipelines } from './froxels';
 import { FLAGS, FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
@@ -128,7 +129,7 @@ export function internalSize(width: number, height: number, megapixels: number):
   return [w, Math.round(w / aspect)];
 }
 
-async function compute(device: GPUDevice, label: string, source: string, layouts: GPUBindGroupLayout[]): Promise<GPUComputePipeline> {
+async function compute(device: GPUDevice, label: string, source: string, layouts: GPUBindGroupLayout[], entryPoint = 'main'): Promise<GPUComputePipeline> {
   const module = device.createShaderModule({ label, code: moduleSource(source) });
   const info = await module.getCompilationInfo();
   const errors = info.messages.filter((m) => m.type === 'error');
@@ -136,7 +137,7 @@ async function compute(device: GPUDevice, label: string, source: string, layouts
   return device.createComputePipelineAsync({
     label,
     layout: device.createPipelineLayout({ bindGroupLayouts: layouts }),
-    compute: { module, entryPoint: 'main' },
+    compute: { module, entryPoint },
   });
 }
 
@@ -158,7 +159,8 @@ function uniform(binding: number): GPUBindGroupLayoutEntry {
 export interface CompiledFrame {
   scene: GPUBindGroupLayout;
   layouts: Record<ComputePass | 'present', GPUBindGroupLayout>;
-  pipelines: Record<ComputePass, GPUComputePipeline> & { present: GPURenderPipeline };
+  /** And primary's `keyed`, for frames that trace texels of the key light's height map in front of the pixels. */
+  pipelines: Record<ComputePass, GPUComputePipeline> & { present: GPURenderPipeline; primaryKeyed: GPUComputePipeline };
   atmosphere: AtmospherePipelines;
   bloom: BloomPipelines;
   autoExposure: AutoExposurePipelines;
@@ -176,6 +178,7 @@ export interface CompiledFrame {
 export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
   const scene = sceneLayout(device);
   const keyLayouts = keyShadowLayouts(device);
+  const froxelLayout = froxelLayouts(device);
   const layouts = {
     beam: device.createBindGroupLayout({ label: 'beam', entries: [storageTexture(0, 'r32float')] }),
     primary: device.createBindGroupLayout({
@@ -235,13 +238,14 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels] = await Promise.all([
+  const [beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
-    compute(device, 'primary', primarySrc, [scene, layouts.primary, keyLayouts.write]),
+    compute(device, 'primary', primarySrc, [scene, layouts.primary]),
+    compute(device, 'primary keyed', primarySrc, [scene, layouts.primary, keyLayouts.write], 'keyed'),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
     compute(device, 'temporal', temporalSrc, [scene, layouts.temporal]),
     compute(device, 'atrous', atrousSrc, [scene, layouts.atrous]),
-    compute(device, 'shade', shadeSrc, [scene, layouts.shade]),
+    compute(device, 'shade', shadeSrc, [scene, layouts.shade, froxelLayout.none, froxelLayout.haze]),
     compute(device, 'taa', taaSrc, [scene, layouts.taa]),
     compute(device, 'cas', casSrc, [scene, layouts.cas]),
     compute(device, 'exposure', exposureSrc, [scene, layouts.exposure]),
@@ -258,9 +262,9 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     LightCells.compile(device),
     Restir.compile(device),
     KeyShadow.compile(device, scene, keyLayouts),
-    Froxels.compile(device, scene, keyLayouts),
+    Froxels.compile(device, scene, keyLayouts, froxelLayout),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -552,7 +556,8 @@ export class Renderer {
     const reset = this.resetNext || gap;
     const voxel = this.voxelSize();
     const eye: [number, number, number] = [pose.position[0] / voxel, pose.position[1] / voxel, pose.position[2] / voxel];
-    this.world.flush(this.options.uploadBudget ?? 1 << 20, eye);
+    // An edit uploaded changes what the key light's height map saw.
+    if (this.world.flush(this.options.uploadBudget ?? 1 << 20, eye) > 0) this.keyShadow.worldChanged();
     // A grown heap is a new buffer: the scene group follows it.
     if (this.world.generation !== this.sceneGeneration || !this.sceneGroup) {
       this.sceneGroup = sceneGroup(device, this.compiled.scene, {
@@ -608,28 +613,34 @@ export class Renderer {
     exposure.end();
 
     const groups = this.groups[this.frameIndex & 1];
-    const pass = (name: Timed & keyof typeof groups, pipeline: ComputePass, size: readonly [number, number]) => {
+    const pass = (name: Timed & keyof typeof groups, pipeline: ComputePass, size: readonly [number, number], more: GPUBindGroup[] = []) => {
       const p = encoder.beginComputePass({ label: name, timestampWrites: this.timer.writes(name) });
       p.setPipeline(this.compiled.pipelines[pipeline]);
       p.setBindGroup(0, this.sceneGroup!);
       p.setBindGroup(1, groups[name]!);
+      more.forEach((g, k) => p.setBindGroup(2 + k, g));
       p.dispatchWorkgroups(Math.ceil(size[0] / 8), Math.ceil(size[1] / 8));
       p.end();
     };
     const light = this.lightResolution;
     pass('beam', 'beam', [Math.ceil(this.res[0] / 8), Math.ceil(this.res[1] / 8)]);
-    // The pixels' rays, with this frame's texels of the key light's height map in front of them.
-    // The key is the sun while it gives the light (sky-state.ts), and the moon after.
+    // The pixels' rays, with this frame's texels of the key light's height map in front of them
+    // (if any: none while the key and the world stand still). The key is the sun while it gives the
+    // light (sky-state.ts), and the moon after.
     const key: Key = this.sky.keyDir.every((c, k) => c === this.sky.sunDir[k]) ? 'sun' : 'moon';
     const across = Math.ceil(this.res[0] / 8);
     const keyRows = this.keyShadow.share([this.sky.keyDir[0], this.sky.keyDir[1], this.sky.keyDir[2]], key, across);
-    const primary = encoder.beginComputePass({ label: 'primary', timestampWrites: this.timer.writes('primary') });
-    primary.setPipeline(this.compiled.pipelines.primary);
-    primary.setBindGroup(0, this.sceneGroup!);
-    primary.setBindGroup(1, groups.primary!);
-    primary.setBindGroup(2, this.keyShadow.buildGroup);
-    primary.dispatchWorkgroups(across, Math.ceil(this.res[1] / 8) + keyRows);
-    primary.end();
+    if (keyRows > 0) {
+      const primary = encoder.beginComputePass({ label: 'primary', timestampWrites: this.timer.writes('primary') });
+      primary.setPipeline(this.compiled.pipelines.primaryKeyed);
+      primary.setBindGroup(0, this.sceneGroup!);
+      primary.setBindGroup(1, groups.primary!);
+      primary.setBindGroup(2, this.keyShadow.buildGroup);
+      primary.dispatchWorkgroups(across, Math.ceil(this.res[1] / 8) + keyRows);
+      primary.end();
+    } else {
+      pass('primary', 'primary', this.res);
+    }
     this.cells.encode(encoder, this.lightCount, this.timer.writes('cells'));
     this.restir.encode(encoder, this.frameIndex & 1, light, { candidates: this.timer.writes('restir'), spatial: this.timer.writes('spatial') });
     pass('lighting', 'lighting', light);
@@ -638,7 +649,7 @@ export class Renderer {
     pass('atrous2', 'atrous', light);
     pass('atrous3', 'atrous', light);
     this.froxels.encode(encoder, this.sceneGroup!, this.frameIndex & 1, this.timer.writes('froxels'));
-    pass('shade', 'shade', this.res);
+    pass('shade', 'shade', this.res, [this.froxels.none, this.froxels.group]);
     pass('taa', 'taa', this.res);
     pass('cas', 'cas', this.res);
     this.bloom.encode(encoder, this.res, this.options.bloomMax ?? 999, this.timer.writes('bloom'));

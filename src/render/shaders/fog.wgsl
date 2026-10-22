@@ -19,9 +19,13 @@ fn fogDepth(density: f32, height: f32, eyeY: f32, rd: vec3f, metres: f32) -> f32
   return density * metres * (eyeFog - exp(-clamp(a + x, -80.0, 80.0))) / x;
 }
 
-// The haze between the eye and a point `metres` along rd, the ground fog and the smoke over it:
-// transmittance, and the colour it glows.
+// The optical depth of the haze, the ground fog and the smoke over it, between the eye and a point
+// `metres` along rd.
+fn hazeDepth(eyeY: f32, rd: vec3f, metres: f32) -> f32 {
+  return max(fogDepth(frame.fogDensity, frame.fogHeight, eyeY, rd, metres) + fogDepth(frame.smokeDensity, frame.smokeHeight, eyeY, rd, metres), 0.0);
+}
+
+// The haze between the eye and a point `metres` along rd: the colour it glows, and transmittance.
 fn fog(eyeY: f32, rd: vec3f, metres: f32) -> vec4f {
-  let depth = fogDepth(frame.fogDensity, frame.fogHeight, eyeY, rd, metres) + fogDepth(frame.smokeDensity, frame.smokeHeight, eyeY, rd, metres);
-  return vec4f(fogColour(rd), exp(-max(depth, 0.0)));
+  return vec4f(fogColour(rd), exp(-hazeDepth(eyeY, rd, metres)));
 }
