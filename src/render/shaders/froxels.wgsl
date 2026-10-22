@@ -25,6 +25,8 @@
 const FROXEL_LIGHTS: u32 = 4u;
 // How much of each frame's samples a froxel keeps: the rest is last frame's for the same place.
 const FROXEL_BLEND: f32 = 0.1;
+// The most glow a froxel's sample holds: under half floats' largest, so its history stays finite.
+const GLOW_MAX: f32 = 60000.0;
 // The sine of the key's elevation (3°) by which its shafts have come in. Lower, whatever it skims
 // shades nearly all the haze near the ground, and that shade comes and goes faster than the
 // exposure, reckoned from the light, can follow: so the haze keeps the key's whole glow there.
@@ -69,10 +71,10 @@ fn pointGlow(x: vec3f, rd: vec3f, seed: vec3u) -> vec3f {
     let d = l.pos - x;
     let toward = d / max(length(d), 1e-6);
     let add = unshadowed(l, x, toward) * (frame.hazeLights * hazePhase(dot(rd, toward)) * f32(size));
-    // A light that is not a number adds nothing.
-    glow += select(vec3f(0.0), add, all(add >= vec3f(0.0)));
+    // A light that is not a number, or not finite, adds nothing: in the history it would stay so.
+    glow += select(vec3f(0.0), add, all(add >= vec3f(0.0)) && all(add <= vec3f(GLOW_MAX)));
   }
-  return glow;
+  return min(glow, vec3f(GLOW_MAX));
 }
 
 @compute @workgroup_size(8, 8, 1)

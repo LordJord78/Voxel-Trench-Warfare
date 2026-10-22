@@ -163,6 +163,15 @@ test.describe('the froxels', () => {
     expect(Math.abs(lead(half) / lead(none) - 0.5)).toBeLessThan(0.05);
   });
 
+  test("as the tunables set the haze (the approved look's), the shaft leads the haze beside it by a quarter of the key's share", async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ left: number; centre: number; right: number; keyShare: number; errors: string[] }>(page, 'hazeSlit', { shipped: true });
+    expect(r.errors).toEqual([]);
+    const lead = (r.centre - Math.max(r.left, r.right)) / r.keyShare;
+    console.log(`as shipped, the shaft leads by ${lead.toFixed(3)} of the key's share`);
+    expect(lead).toBeGreaterThanOrEqual(0.25);
+  });
+
   test('a key just over the horizon casts next to no shafts: they come in over its first 3°', async ({ page }) => {
     await openHarness(page);
     type Slit = { left: number; centre: number; right: number; keyShare: number; errors: string[] };
@@ -180,6 +189,15 @@ test.describe('the froxels', () => {
     console.log(`the shadow's lead over the key's share: ${low.toFixed(3)} with the key 0.5° up, ${up.toFixed(3)} at 3.5°`);
     expect(low).toBeLessThan(0.1);
     expect(up).toBeGreaterThan(1 / 3);
+  });
+
+  test('a light whose intensity is not finite adds nothing to the haze, and leaves the rest of it whole', async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ froxels: number[]; transmittance: number[]; reference: number[]; errors: string[] }>(page, 'hazeBroken');
+    expect(r.errors).toEqual([]);
+    expect([...r.froxels, ...r.transmittance].every(Number.isFinite)).toBe(true);
+    // The haze is the sound lantern's alone.
+    r.reference.forEach((ref, k) => expect(Math.abs(r.froxels[k] - ref)).toBeLessThanOrEqual(0.1 * ref));
   });
 
   test('a lantern in clear air adds its haze within 10% of the analytic sum over the lights', async ({ page }) => {

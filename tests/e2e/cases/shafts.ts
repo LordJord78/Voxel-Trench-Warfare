@@ -500,13 +500,13 @@ export const cases = {
 
   /**
    * Behind a wall with a slit, lit through it at 30° (or `elevation`°), the haze keeping
-   * `hazeShadow` of the key's glow in shadow (none unless given): the haze at 5 m looking at the
-   * slit, and each side of it.
+   * `hazeShadow` of the key's glow in shadow (none unless given; the tunables' share if `shipped`):
+   * the haze at 5 m looking at the slit, and each side of it.
    */
-  async hazeSlit(args: { elevation?: number; hazeShadow?: number } = {}) {
+  async hazeSlit(args: { elevation?: number; hazeShadow?: number; shipped?: boolean } = {}) {
     const g = await gpu();
     const key = dir(180, args.elevation ?? 30);
-    const sky = { ...HAZE_SKY, keyDir: key, hazeShadow: args.hazeShadow ?? 0 };
+    const sky = { ...HAZE_SKY, keyDir: key, hazeShadow: args.shipped ? PROBE_DUSK.hazeShadow : (args.hazeShadow ?? 0) };
     const renderer = await hazeRenderer(slitWorld(), sky);
     frames(renderer, SLIT_POSE, 30, 0);
     // At the wall, 2.4 m each side of the slit: in its shadow.
@@ -534,6 +534,25 @@ export const cases = {
     const a = await hazeAt(turned, queries);
     const b = await hazeAt(fresh, queries);
     return { turned: a.map((x) => luma(x.haze)), fresh: b.map((x) => luma(x.haze)), errors: [...g.errors] };
+  },
+
+  /**
+   * A lantern in clear air beside a broken one (its intensity not finite, as a bug might leave it):
+   * the haze round them, which the broken light must not poison, from the froxels and by the CPU.
+   */
+  async hazeBroken() {
+    const g = await gpu();
+    const dark = [0, 0, 0];
+    const sky: FrameSky = { ...HAZE_SKY, keyDir: KEY, keyColour: dark, sunLight: dark, moonLight: dark, frontGlow: dark };
+    const lantern: SceneLight = { position: [6.4, 3, 9], radius: 8, colour: [1, 0.7, 0.4], intensity: 3, kind: 'lantern', phase: 0 };
+    const renderer = await hazeRenderer(new BrickMap(DIMS), sky, [lantern, { ...lantern, position: [6.0, 3, 9], intensity: Infinity }]);
+    const pose: CameraPose = { position: [6.4, 3, 4], yaw: 0, pitch: 0 };
+    frames(renderer, pose, 30, 0);
+    const queries: [number, number, number][] = [];
+    for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) for (const m of [4.5, 7]) queries.push([0.45 + 0.05 * i, 0.45 + 0.05 * j, m]);
+    const answers = await hazeAt(renderer, queries);
+    const reference = queries.map(([u, v, m]) => luma(lanternHaze(sky, lantern, pose.position, rayDir(pose, HAZE_SIZE, u * HAZE_SIZE[0], v * HAZE_SIZE[1]), m)));
+    return { froxels: answers.map((x) => luma(x.haze)), transmittance: answers.map((x) => x.haze[3]), reference, errors: [...g.errors] };
   },
 
   /** A lantern in clear air (no other light in the haze): its haze around it, from the froxels and by the CPU. */
