@@ -30,10 +30,14 @@ fn lastGridSize() -> vec2i {
 // lighting pixel spans more than a voxel (far off), each frame's representative
 // lands on a different voxel's face of rough ground, and an exact face and plane
 // would start every history afresh: there, planes within its span count as the
-// same, and where it spans DETAIL_SPAN voxels or more, so do the other faces.
+// same, and where it spans DETAIL_SPAN voxels or more, so do the other faces —
+// of voxels: never the sky or the far field.
 fn sameSpot(t: vec2i, face: u32, plane: i32, at: vec3f, reach: f32) -> bool {
   let h = textureLoad(hitBefore, t, 0).xy;
   let span = reach / 2.5;
+  if (hitFace(h) >= 6u) {
+    return false;
+  }
   if (hitFace(h) == face) {
     if (f32(abs(hitPlane(h) - plane)) > max(0.5, span)) {
       return false;

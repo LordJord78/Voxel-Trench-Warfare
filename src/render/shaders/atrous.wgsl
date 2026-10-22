@@ -1,9 +1,9 @@
 // One pass of the à-trous filter: a 5 × 5 B3 kernel with holes `step` lighting
 // pixels apart (1, 2, then 4), so three passes cover a wide footprint for the
 // price of 75 taps. A neighbour counts only on the same face, less the
-// farther its plane (by a voxel, or far off by the ground it spans: rough
-// ground's planes differ that much between pixels there, and where a pixel
-// spans DETAIL_SPAN voxels its other faces count too), and less the more it differs than this pixel's noise
+// farther its plane (by a voxel; or, where a lighting pixel spans a voxel or
+// more, by the ground between them: rough ground's planes differ that much
+// between pixels there), and less the more it differs than this pixel's noise
 // explains — judged separately for the sky and point light (by their
 // brightness and its tracked variance) and for the key light (by visibility:
 // samples are each 0 or 1, so a mean a over n frames has variance a(1 - a)/n).
@@ -111,12 +111,15 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
         continue;
       }
       let h = textureLoad(hits, t, 0).xy;
-      if (hitFace(h) != face && span < DETAIL_SPAN) {
+      if (hitFace(h) != face) {
         continue;
       }
       let c = textureLoad(colourIn, t, 0);
-      // How far its plane may be: a voxel, or the ground between them where that is more.
-      let apart = max(frame.sigmaPlane, span * f32(max(abs(dx), abs(dy)) * atrous.step));
+      // How far its plane may be: a voxel, or where a pixel spans more, the ground between them.
+      var apart = frame.sigmaPlane;
+      if (span >= 1.0) {
+        apart = max(apart, span * f32(max(abs(dx), abs(dy)) * atrous.step));
+      }
       let near = KERNEL[dx + 2] * KERNEL[dy + 2] * exp(-f32(abs(hitPlane(h) - plane)) / apart);
       let w = near * exp(-abs(luminance(c.rgb) - l) / spread);
       let wk = near * exp(-abs(c.a - centre.a) / spreadKey);

@@ -61,3 +61,25 @@ test('the à-trous filter gives the same image however it reads its tile', async
   expect(r.colourUlps).toBeLessThanOrEqual(1);
   expect(r.varianceRel).toBeLessThan(1e-5);
 });
+
+test('far off, the filter blends a pixel\'s ground with nothing from a wall or the sky beside it, though their planes have the same number', async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ worst: number; errors: string[] }>(page, 'atrousFarFaces');
+  expect(r.errors).toEqual([]);
+  expect(r.worst).toBe(0);
+});
+
+test('the history takes a pixel\'s rough ground far off as one surface, but never the sky or the far field', async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ answers: Record<string, boolean>; errors: string[] }>(page, 'sameSpotFaces');
+  expect(r.errors).toEqual([]);
+  expect(r.answers).toEqual({
+    'same face and plane, near': true,
+    'the next plane, near': false,
+    'two planes off, far': true,
+    'another face, far': true,
+    'another face, near': false,
+    'the far field, far': false,
+    'the sky, far': false,
+  });
+});

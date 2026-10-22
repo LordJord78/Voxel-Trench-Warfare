@@ -341,10 +341,20 @@ async function start(): Promise<void> {
   let shot: ((taken: { png: Blob; spread: number }) => void) | null = null;
   let work: { count: number; left: number; samples: number[]; done: (samples: number[]) => void } | null = null;
 
+  // For tests: a frozen loop draws only the frames it is stepped, a sixtieth of a second apart
+  // whatever time passes between steps (a longer gap would start the histories afresh), so what a
+  // test reads back stays put.
+  let frozen = false;
+  let steps = 0;
   const frame = (time: number) => {
     if (stopped) return;
+    if (frozen && steps === 0) {
+      requestAnimationFrame(frame);
+      return;
+    }
+    if (frozen) steps--;
     try {
-      step(time);
+      step(frozen ? last - skipped + 1000 / 60 : time);
     } catch (e) {
       // A frame that throws would otherwise freeze the last image without a word.
       console.error(e);
@@ -517,6 +527,17 @@ async function start(): Promise<void> {
     sunElevation: () => sky.sunElevationDeg,
     frames: () => frames,
     waitFrames,
+    freeze() {
+      frozen = true;
+      steps = 0;
+    },
+    thaw() {
+      frozen = false;
+    },
+    stepFrames(n: number) {
+      steps += n;
+      return waitFrames(n);
+    },
     waitConverged: () => waitFrames(render.denoise.historyMax + 8),
     stats: () => renderer.stats,
     snapshot: () => new Promise<{ mean: number; std: number }>((resolve) => (snapshot = resolve)),

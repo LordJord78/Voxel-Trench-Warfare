@@ -10,10 +10,11 @@ import { compileFrame, Renderer } from '../../../src/render/renderer';
 import { sceneGroup } from '../../../src/render/scene';
 import { moduleSource } from '../../../src/render/shaders';
 import { Rng } from '../../../src/core/rng';
-import { gpu, readTexture } from '../support/gpu';
+import { gpu, readBuffer, readTexture } from '../support/gpu';
 import { floatToHalf, halfToFloat } from '../support/half';
 import { traceRef } from '../../support/trace-ref';
 import atrousReference from '../shaders/atrous-reference.wgsl';
+import sameSpotTest from '../shaders/same-spot-test.wgsl';
 
 /**
  * A floor with a wall standing on it, lit by a key light from 45° in -x: the
@@ -403,5 +404,199 @@ export const cases = {
     }
     for (const t of [colourIn, varianceIn, hitsIn, depthIn]) t.destroy();
     return { ...worst, errors: [...g.errors] };
+  },
+
+  /**
+   * One à-trous pass at each step, far off (each lighting pixel spanning some 55 voxels), over ground
+   * whose plane has the same number as a wall's beside it (160) and sky above both: run twice with
+   * the wall and sky in different colours. The most any ground pixel's output differs between the
+   * runs, in f16 ulps: none, if nothing of the wall or sky reaches the ground.
+   */
+  async atrousFarFaces() {
+    const g = await gpu();
+    const device = g.device;
+    const compiled = await compileFrame(device);
+    const size: [number, number] = [73, 51];
+    const n = size[0] * size[1];
+    const rng = Rng.root(5).derive('atrous-far');
+    const hits = new Uint32Array(n * 2);
+    const variance = new Float32Array(n * 2);
+    const kinds: string[] = [];
+    for (let y = 0; y < size[1]; y++) {
+      for (let x = 0; x < size[0]; x++) {
+        const i = y * size[0] + x;
+        // Sky across the top rows; then ground (+y faces at y 159, plane 160) on the left and a wall
+        // (+x faces at x 159, plane 160) on the right.
+        const kind = y < 12 ? 'sky' : x < 45 ? 'ground' : 'wall';
+        kinds.push(kind);
+        if (kind === 'sky') hits.set([(7 << 24) >>> 0, 0], i * 2);
+        else if (kind === 'ground') hits.set([(x | (y << 12) | (3 << 24)) >>> 0, 159 | (5 << 16)], i * 2);
+        else hits.set([(159 | (y << 12) | (1 << 24)) >>> 0, x | (5 << 16)], i * 2);
+        variance.set([0.02 + rng.uniform() * 0.02, 32], i * 2);
+      }
+    }
+    const tex = (format: GPUTextureFormat, usage: number) => device.createTexture({ size, format, usage });
+    const inUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST;
+    const outUsage = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC;
+    const varianceIn = tex('rg32float', inUsage);
+    const hitsIn = tex('rg32uint', inUsage);
+    const depthIn = tex('r32float', inUsage);
+    device.queue.writeTexture({ texture: varianceIn }, variance, { bytesPerRow: size[0] * 8 }, size);
+    device.queue.writeTexture({ texture: hitsIn }, hits, { bytesPerRow: size[0] * 8 }, size);
+    device.queue.writeTexture({ texture: depthIn }, new Float32Array(n).fill(2000), { bytesPerRow: size[0] * 4 }, size);
+    const map = new BrickMap({ x: 32, y: 32, z: 32 });
+    const world = GpuWorld.create(device, { map, mirror: HeapMirror.fromMap(map) });
+    const writer = new StructWriter(FRAME);
+    writeWorldInfo(writer, world);
+    writer.set('cam.tanHalf', 1);
+    writer.set('res', [size[0] * 2, size[1] * 2]);
+    writer.set('alloc', [size[0] * 2, size[1] * 2]);
+    writer.set('lightRes', size);
+    writer.set('lightScale', 2);
+    writer.set('sigmaLuma', 4);
+    writer.set('sigmaPlane', 1);
+    const frame = device.createBuffer({ size: writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(frame, 0, writer.buffer);
+    const scene = sceneGroup(device, compiled.scene, { frame, world, far: FarFieldGpu.empty(device), lights: compiled.lights, noise: compiled.noise, sky: compiled.sky });
+    const run = async (step: number, wall: number, sky: number) => {
+      const colour = new Uint16Array(n * 4);
+      kinds.forEach((kind, i) => {
+        const lum = kind === 'ground' ? 0.4 + 0.05 * Math.sin(i) : kind === 'wall' ? wall : sky;
+        colour.set([lum, lum, lum, 1].map(floatToHalf), i * 4);
+      });
+      const colourIn = tex('rgba16float', inUsage);
+      device.queue.writeTexture({ texture: colourIn }, colour, { bytesPerRow: size[0] * 8 }, size);
+      const colourOut = tex('rgba16float', outUsage);
+      const varianceOut = tex('rg32float', outUsage);
+      const stepBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(stepBuffer, 0, new Int32Array([step, 0, 0, 0]));
+      const group = device.createBindGroup({
+        layout: compiled.layouts.atrous,
+        entries: [colourIn.createView(), varianceIn.createView(), hitsIn.createView(), colourOut.createView(), varianceOut.createView(), { buffer: stepBuffer }, depthIn.createView()].map(
+          (resource, binding) => ({ binding, resource }),
+        ),
+      });
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(compiled.pipelines.atrous);
+      pass.setBindGroup(0, scene);
+      pass.setBindGroup(1, group);
+      pass.dispatchWorkgroups(Math.ceil(size[0] / 8), Math.ceil(size[1] / 8));
+      pass.end();
+      device.queue.submit([encoder.finish()]);
+      const c = new Uint16Array(await readTexture(colourOut));
+      for (const t of [colourIn, colourOut, varianceOut]) t.destroy();
+      return c;
+    };
+    let worst = 0;
+    for (const step of [1, 2, 4]) {
+      const a = await run(step, 0.45, 0.05);
+      const b = await run(step, 3.0, 2.0);
+      kinds.forEach((kind, i) => {
+        if (kind !== 'ground') return;
+        for (let c = 0; c < 4; c++) worst = Math.max(worst, Math.abs(a[i * 4 + c] - b[i * 4 + c]));
+      });
+    }
+    for (const t of [varianceIn, hitsIn, depthIn]) t.destroy();
+    return { worst, errors: [...g.errors] };
+  },
+
+  /**
+   * sameSpot on crafted history: last frame's lighting pixel (10, 10) holding each face, plane and
+   * depth in turn, and this frame's surface at the very point it traced, near (a reach of 1.5
+   * voxels: a lighting pixel spans under one) or far (a reach of 25: it spans 10). Whether each
+   * counts as the same spot.
+   */
+  async sameSpotFaces() {
+    const g = await gpu();
+    const device = g.device;
+    const compiled = await compileFrame(device);
+    const map = new BrickMap({ x: 32, y: 32, z: 32 });
+    const world = GpuWorld.create(device, { map, mirror: HeapMirror.fromMap(map) });
+    const writer = new StructWriter(FRAME);
+    writeWorldInfo(writer, world);
+    // Last frame's camera at the origin looking down +z, its jitter none; frame 1, so last frame was
+    // frame 0, whose lighting pixels were each their block's top-left pixel.
+    for (const cam of ['cam', 'prev']) {
+      writer.set(`${cam}.origin`, [0, 0, 0]);
+      writer.set(`${cam}.forward`, [0, 0, 1]);
+      writer.set(`${cam}.right`, [1, 0, 0]);
+      writer.set(`${cam}.up`, [0, 1, 0]);
+      writer.set(`${cam}.tanHalf`, 1);
+    }
+    writer.set('res', [64, 64]);
+    writer.set('prevRes', [64, 64]);
+    writer.set('lightRes', [32, 32]);
+    writer.set('lightScale', 2);
+    writer.set('frame', 1);
+    const frame = device.createBuffer({ size: writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(frame, 0, writer.buffer);
+    const scene = sceneGroup(device, compiled.scene, { frame, world, far: FarFieldGpu.empty(device), lights: compiled.lights, noise: compiled.noise, sky: compiled.sky });
+    // Where last frame's pixel (10, 10) traced, at depth 400: its block's pixel (20, 20), centred.
+    const depth = 400;
+    const x = (2 * 20.5) / 64 - 1;
+    const y = 1 - (2 * 20.5) / 64;
+    const l = Math.hypot(x, y, 1);
+    const at = [(x / l) * depth, (y / l) * depth, depth / l];
+    const hitOf = (face: number, plane: number): [number, number] => {
+      if (face >= 6) return [(face << 24) >>> 0, 0];
+      // A cell whose face lies on `plane` along the face's axis (+ faces: the cell below it).
+      const cell = [20, 20, 20];
+      cell[face >> 1] = plane - (face & 1);
+      return [(cell[0] | (cell[2] << 12) | (face << 24)) >>> 0, cell[1] | (5 << 16)];
+    };
+    const queries: { label: string; history: [number, number]; face: number; plane: number; reach: number }[] = [
+      { label: 'same face and plane, near', history: hitOf(3, 160), face: 3, plane: 160, reach: 1.5 },
+      { label: 'the next plane, near', history: hitOf(3, 161), face: 3, plane: 160, reach: 1.5 },
+      { label: 'two planes off, far', history: hitOf(3, 162), face: 3, plane: 160, reach: 25 },
+      { label: 'another face, far', history: hitOf(1, 160), face: 3, plane: 160, reach: 25 },
+      { label: 'another face, near', history: hitOf(1, 160), face: 3, plane: 160, reach: 1.5 },
+      { label: 'the far field, far', history: hitOf(6, 0), face: 3, plane: 160, reach: 25 },
+      { label: 'the sky, far', history: hitOf(7, 0), face: 3, plane: 160, reach: 25 },
+    ];
+    const answers: Record<string, boolean> = {};
+    const module = device.createShaderModule({ code: moduleSource(sameSpotTest) });
+    const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
+    for (const q of queries) {
+      const hitData = new Uint32Array(32 * 32 * 2);
+      hitData.set(q.history, (10 * 32 + 10) * 2);
+      const hitTex = device.createTexture({ size: [32, 32], format: 'rg32uint', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+      device.queue.writeTexture({ texture: hitTex }, hitData, { bytesPerRow: 32 * 8 }, [32, 32]);
+      const depthTex = device.createTexture({ size: [32, 32], format: 'r32float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+      device.queue.writeTexture({ texture: depthTex }, new Float32Array(32 * 32).fill(depth), { bytesPerRow: 32 * 4 }, [32, 32]);
+      const query = new ArrayBuffer(32);
+      new Int32Array(query, 0, 2).set([10, 10]);
+      new Uint32Array(query, 8, 1)[0] = q.face;
+      new Int32Array(query, 12, 1)[0] = q.plane;
+      new Float32Array(query, 16, 4).set([...at, q.reach]);
+      const queryBuffer = device.createBuffer({ size: 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(queryBuffer, 0, query);
+      const answer = device.createBuffer({ size: 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: frame } }] }));
+      pass.setBindGroup(
+        1,
+        device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(1),
+          entries: [
+            { binding: 0, resource: hitTex.createView() },
+            { binding: 1, resource: depthTex.createView() },
+            { binding: 2, resource: { buffer: queryBuffer } },
+            { binding: 3, resource: { buffer: answer } },
+          ],
+        }),
+      );
+      pass.dispatchWorkgroups(1);
+      pass.end();
+      device.queue.submit([encoder.finish()]);
+      answers[q.label] = new Uint32Array(await readBuffer(answer, 4))[0] === 1;
+      for (const b of [hitTex, depthTex]) b.destroy();
+      queryBuffer.destroy();
+      answer.destroy();
+    }
+    void scene;
+    return { answers, errors: [...g.errors] };
   },
 };

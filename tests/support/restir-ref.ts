@@ -4,7 +4,9 @@
  * one to each of CANDIDATES equal stretches of it (the list runs nearest first, so every frame
  * draws from near and far alike; a list no longer than CANDIDATES has each light drawn once), and
  * resampled to one by their target, each weighed by its target over its chance within its stretch;
- * then last frame's reservoir merged in, weighed by its light's target now (`resample`); then its neighbours' reservoirs shared in, each weighed
+ * then last frame's reservoir merged in, weighed by its light's target now (`resample`). A list no
+ * longer than CANDIDATES is drawn whole, its reservoir exact for its target: it merges no history
+ * and shares in no neighbours (`share`), which could only add their noise; then its neighbours' reservoirs shared in, each weighed
  * by its light's target at this pixel (`share`). The chosen light's contribution weight W is
  * normalised by Z, the candidates of the reservoirs that could have drawn it: in the temporal
  * merge, this frame's if it is in the cell's list and the history's if its light reached the pixel
@@ -19,7 +21,7 @@
 
 export const NONE = -1;
 export const CANDIDATES = 8;
-/** The most candidates a history stands for when it is merged: five frames' worth. */
+/** The most candidates a history stands for when it is merged: 20 frames' worth. */
 export const HISTORY_MAX = 20 * CANDIDATES;
 
 export interface Reservoir {
@@ -71,9 +73,11 @@ export function resample(pixel: Pixel, history: Reservoir | null, random: () => 
   // reservoirs merged is its sum (Σw over its target being its W) times what it stands for.
   const drawn = count > 0 ? CANDIDATES : 0;
   sum *= drawn;
-  let kept = 0;
-  if (history && history.light !== NONE) {
-    kept = Math.min(history.count, HISTORY_MAX);
+  // The history stands for its candidates whether or not they drew a light; a list drawn whole
+  // takes none.
+  const whole = count > 0 && count <= CANDIDATES;
+  const kept = history && !whole ? Math.min(history.count, HISTORY_MAX) : 0;
+  if (history && !whole && history.light !== NONE) {
     const t = pixel.target(history.light);
     const w = t * history.weight * kept;
     const pick = random();
@@ -104,6 +108,8 @@ export interface Neighbour {
  * `random`; each neighbour trusted for at most `confidence` candidates.
  */
 export function share(pixel: Pixel, own: Reservoir, neighbours: readonly Neighbour[], random: () => number, confidence = CANDIDATES): Reservoir {
+  // A list drawn whole: its own reservoir is exact for its target.
+  if (pixel.list.length > 0 && pixel.list.length <= CANDIDATES) return own;
   const all: Neighbour[] = [
     { reservoir: own, target: pixel.target },
     ...neighbours.map((n) => ({ reservoir: { ...n.reservoir, count: Math.min(n.reservoir.count, confidence) }, target: n.target })),

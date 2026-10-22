@@ -93,32 +93,84 @@ async function floor(lights: SceneLight[], block?: { from: [number, number, numb
       }
       return { light, at };
     },
+    /**
+     * Render a frame; every lighting pixel's point light (rgb), the face it lit (6 or more: none),
+     * and the point (metres, just off the face, as the lighting pass weighs it) and normal: its
+     * representative pixel this frame, through the frame's jitter, out to the depth it traced.
+     */
+    async renderSurfaces(): Promise<{ light: number[][]; face: number[]; at: [number, number, number][]; n: [number, number, number][] }> {
+      const f = frame;
+      renderer.render(pose, 0, frame++ * 16);
+      const px = new Uint16Array(await readTexture(renderer.texture('lNoisy')));
+      const depth = new Float32Array(await readTexture(renderer.texture('hDepth')));
+      const hits = new Uint32Array(await readTexture(renderer.texture('hHit')));
+      const [res, scale, voxel] = [[size, size] as [number, number], 2, 0.1];
+      const o = [[0, 0], [1, 1], [1, 0], [0, 1]][f & 3];
+      const j = jitter(f);
+      const out = { light: [] as number[][], face: [] as number[], at: [] as [number, number, number][], n: [] as [number, number, number][] };
+      for (let qy = 0; qy < lh; qy++) {
+        for (let qx = 0; qx < lw; qx++) {
+          const i = qy * lw + qx;
+          const face = (hits[i * 2] >>> 24) & 7;
+          const n: [number, number, number] = [0, 0, 0];
+          if (face < 6) n[face >> 1] = face & 1 ? 1 : -1;
+          const d = rayDir(pose, res, qx * scale + o[0] + 0.5 + j[0], qy * scale + o[1] + 0.5 + j[1]);
+          out.light.push([0, 1, 2].map((c) => halfToFloat(px[i * 4 + c])));
+          out.face.push(face);
+          out.at.push([0, 1, 2].map((k) => pose.position[k] + d[k] * depth[i] * voxel + n[k] * 0.002) as [number, number, number]);
+          out.n.push(n);
+        }
+      }
+      return out;
+    },
     destroy() {
       for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
     },
   };
 }
 
+/** The light from one unshadowed point light on a face with normal `n` at `at`, as light.wgsl computes it. */
+function lit(l: SceneLight, at: readonly number[], n: readonly number[]): number[] {
+  const d = [l.position[0] - at[0], l.position[1] - at[1], l.position[2] - at[2]];
+  const dist = Math.hypot(d[0], d[1], d[2]);
+  if (dist >= l.radius || dist < 1e-4) return [0, 0, 0];
+  const ndl = Math.max((n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / dist, 0);
+  const win = Math.min(1, Math.max(0, 1 - (dist / l.radius) ** 4));
+  return l.colour.map((c) => (c * l.intensity * ndl * win * win) / (dist * dist + 1));
+}
+
 const bulb = (position: [number, number, number], intensity: number, colour: [number, number, number] = [1, 1, 1], radius = 30): SceneLight => ({
   position, radius, colour, intensity, kind: 'lantern', phase: 0,
 });
 
+/**
+ * Twenty-four lights over the floor, 2 to 3 m up, of four strengths: three times the candidates a
+ * pixel draws a frame, so its candidates do not take in every light.
+ */
+function floorCrowd(): SceneLight[] {
+  return Array.from({ length: 24 }, (_, i) => {
+    const a = i * 2.39996;
+    const r = 1.2 + 4.6 * Math.sqrt((i + 0.5) / 24);
+    return bulb([6.4 + r * Math.cos(a), 6.0 + (i % 3) * 0.5, 6.4 + r * Math.sin(a)], 1 + (i % 4));
+  });
+}
+
 export const cases = {
   /**
-   * Six lights round the floor's middle, of several colours: every lighting pixel's point light
-   * over `frames` frames, its mean (rgb) against the mean of the lights' unshadowed light summed at
-   * the points they lit. (One pixel's history spans some 20 frames, so a pixel alone is far from
+   * Six lights round the floor's middle, of several colours, or (`many`) the floor's crowd of 24:
+   * every lighting pixel's point light over `frames` frames, its mean (rgb) against the mean of the
+   * lights' unshadowed light summed at the points they lit. (One pixel's history spans some 20 frames, so a pixel alone is far from
    * that many samples: the whole floor's pixels, each with its own history, are.)
    */
-  async restirMean(args: { frames: number }) {
-    const lights = [
+  async restirMean(args: { frames: number; many?: boolean }) {
+    const lights = args.many ? floorCrowd() : [
       bulb([5.0, 6.0, 6.4], 3, [1, 0.6, 0.3]),
       bulb([8.0, 5.0, 7.0], 1),
       bulb([6.4, 8.0, 3.0], 5, [0.4, 0.7, 1]),
       bulb([9.5, 4.5, 9.5], 2),
       bulb([3.0, 7.0, 9.0], 4, [1, 0.3, 0.2]),
       bulb([6.0, 4.6, 5.8], 0.5),
-    ];
+        ];
     const s = await floor(lights);
     const sum = [0, 0, 0];
     const want = [0, 1, 2].map(() => 0);
@@ -190,36 +242,35 @@ export const cases = {
   },
 
   /**
-   * A block's corner, its -z face lit red from in front and its +x face blue from the side, each
-   * light behind the other face's plane: over `frames` frames, how many lighting pixels lay on
-   * each face, the most blue any pixel on the -z face had and the most red any on the +x face had,
-   * and each face's mean of its own light.
+   * A block's corner seen from off it, its -z and +x faces both lit by three lights standing in
+   * front of the corner, each reaching the two faces with its own strength: over `frames` frames,
+   * each face's lighting pixels' point light, its mean (rgb), against the mean of the lights'
+   * unshadowed light summed at the points they lit with that face's normal; and how many there were.
    */
   async restirCorner(args: { frames: number }) {
-    const red = bulb([5.5, 6.0, 4.5], 3, [1, 0, 0]);
-    const blue = bulb([8.5, 6.0, 7.5], 3, [0, 0, 1]);
+    const lights = [bulb([8.5, 6.0, 4.5], 3), bulb([7.8, 7.2, 3.0], 4, [1, 0.5, 0.3]), bulb([9.5, 5.0, 5.5], 2, [0.3, 0.6, 1])];
     // The block from (4, 4, 6) m to (7, 8, 9) m; the camera off its corner at (7, 6, 6), looking at it.
-    const s = await floor([red, blue], { from: [40, 40, 60], to: [70, 80, 90], pose: { position: [9.5, 6.5, 3.5], yaw: -45, pitch: -8 } });
-    const [lw, lh] = s.renderer.lightResolution;
-    const out = { front: 0, side: 0, blueOnFront: 0, redOnSide: 0, frontRed: 0, sideBlue: 0 };
+    const s = await floor(lights, { from: [40, 40, 60], to: [70, 80, 90], pose: { position: [9.5, 6.5, 3.5], yaw: -45, pitch: -8 } });
+    const faces: Record<number, { n: number; got: number[]; want: number[] }> = { 4: { n: 0, got: [0, 0, 0], want: [0, 0, 0] }, 1: { n: 0, got: [0, 0, 0], want: [0, 0, 0] } };
     for (let f = 0; f < args.frames; f++) {
-      const { light } = await s.renderAll();
-      const hit = new Uint32Array(await readTexture(s.renderer.texture('hHit')));
-      for (let i = 0; i < lw * lh; i++) {
-        const face = (hit[i * 2] >>> 24) & 7;
-        if (face === 4) {
-          out.front++;
-          out.blueOnFront = Math.max(out.blueOnFront, light[i][2]);
-          out.frontRed += light[i][0];
-        } else if (face === 1) {
-          out.side++;
-          out.redOnSide = Math.max(out.redOnSide, light[i][0]);
-          out.sideBlue += light[i][2];
+      const r = await s.renderSurfaces();
+      r.face.forEach((face, i) => {
+        const acc = faces[face];
+        if (!acc) return;
+        acc.n++;
+        for (let c = 0; c < 3; c++) {
+          acc.got[c] += r.light[i][c];
+          acc.want[c] += lights.reduce((t, l) => t + lit(l, r.at[i], r.n[i])[c], 0);
         }
-      }
+      });
     }
     s.destroy();
-    return { ...out, frontRed: out.frontRed / out.front, sideBlue: out.sideBlue / out.side, errors: [...s.g.errors] };
+    const mean = (v: number[], n: number) => v.map((x) => x / n);
+    return {
+      front: { pixels: faces[4].n, got: mean(faces[4].got, faces[4].n), want: mean(faces[4].want, faces[4].n) },
+      side: { pixels: faces[1].n, got: mean(faces[1].got, faces[1].n), want: mean(faces[1].want, faces[1].n) },
+      errors: [...s.g.errors],
+    };
   },
 
   /**
@@ -233,11 +284,7 @@ export const cases = {
     // Six lights, or (`many`) twenty-four: three times what a pixel draws a frame, so its
     // candidates do not take in every light.
     const lights = args.many
-      ? Array.from({ length: 24 }, (_, i) => {
-          const a = i * 2.39996;
-          const r = 1.2 + 4.6 * Math.sqrt((i + 0.5) / 24);
-          return bulb([6.4 + r * Math.cos(a), 6.0 + (i % 3) * 0.5, 6.4 + r * Math.sin(a)], 1 + (i % 4));
-        })
+      ? floorCrowd()
       : [
           bulb([4.0, 6.5, 5.0], 3),
           bulb([8.5, 6.0, 4.5], 3),
@@ -272,7 +319,9 @@ export const cases = {
    * holds one of the frame's lights (or none) with a weight that is a number, not negative.
    */
   async restirReservoirs(args: { frames: number; reset: number }) {
-    const s = await floor([bulb([5.0, 6.0, 6.4], 3), bulb([8.0, 5.0, 7.0], 1), bulb([6.4, 8.0, 3.0], 5)]);
+    // More lights than a pixel draws a frame, so its list is not drawn whole and it keeps a history.
+    const lights = floorCrowd();
+    const s = await floor(lights);
     // The temporal merge's own reservoirs: neighbours do not share, so the shaded ones are those.
     s.renderer.flags |= FLAGS.SPATIAL_OFF;
     const [lw, lh] = s.renderer.lightResolution;
@@ -290,7 +339,7 @@ export const cases = {
         for (let x = 0; x < lw; x++) {
           const i = (y * s.renderer.lightStride + x) * 4;
           const light = u[i] | 0;
-          if (!(light === -1 || (light >= 0 && light < 3)) || !(v[i + 1] >= 0) || !Number.isFinite(v[i + 1])) sound = false;
+          if (!(light === -1 || (light >= 0 && light < lights.length)) || !(v[i + 1] >= 0) || !Number.isFinite(v[i + 1])) sound = false;
         }
       }
     }

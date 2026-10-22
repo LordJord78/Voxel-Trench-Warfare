@@ -25,6 +25,10 @@ export interface Hooks {
   sunElevation(): number;
   frames(): number;
   waitFrames(n: number): Promise<void>;
+  /** Draw frames only when stepped (`stepFrames`), so what a test reads back stays put; `thaw` to run freely again. */
+  freeze(): void;
+  thaw(): void;
+  stepFrames(n: number): Promise<void>;
   stats(): {
     gpuMs: number | null;
     passes: Record<string, number>;

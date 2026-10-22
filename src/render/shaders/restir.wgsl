@@ -9,7 +9,7 @@
 // near it on the same face and plane. The lighting pass traces one shadow ray to the light and
 // scales its light by the reservoir's weight W. In the temporal merge W is normalised by Z, the
 // candidates of the reservoirs that could have drawn the chosen light (this frame's if it is in
-// the cell's list, the history's if the light reached the pixel last frame). The spatial merge
+// the cell's list, the history's if the light reached where the history was drawn, last frame). The spatial merge
 // weighs each reservoir's light by the generalised balance heuristic (Lin et al. 2022): its share
 // of that light among the reservoirs, by their confidence and the light's target at their pixels,
 // so a light far brighter here than where a neighbour drew it does not swamp the rest. A pixel's
@@ -18,6 +18,8 @@
 // reservoir, not the shared one, so a neighbour's light never settles into it. (Shared reservoirs
 // fed back measured three to five times the error of the temporal merge alone where the
 // neighbours' lights differ much, as on a floor seen whole from 5 m with lights 2 m up.)
+// A list no longer than CANDIDATES is drawn whole, every light once: its reservoir is exact for
+// its target, and it merges no history and shares in no neighbours, which could only add noise.
 // tests/support/restir-ref.ts is the same arithmetic on the CPU.
 #include "light-cells.wgsl"
 #include "traverse.wgsl"
@@ -48,6 +50,9 @@ struct Drawn {
 fn surfaceOf(face: u32, plane: i32) -> u32 {
   return face | (u32(plane) << 3u);
 }
+
+// The bit a Drawn's surface carries where its cell's list was drawn whole.
+const WHOLE: u32 = 0x80000000u;
 
 // Last frame's temporal reservoirs, and this frame's: `candidates` writes them, `spatial` shares
 // them between neighbours.
@@ -130,6 +135,7 @@ fn candidates(@builtin(global_invocation_id) g: vec3u) {
     listed = cellCount(cell);
   }
   let draws = min(listed, CANDIDATES);
+  let whole = listed > 0u && listed <= CANDIDATES;
   for (var k = 0u; k < draws; k++) {
     // Stretch k of the list, and a light from it.
     let lo = k * listed / draws;
@@ -157,13 +163,14 @@ fn candidates(@builtin(global_invocation_id) g: vec3u) {
   // Where the history was drawn last frame, and its face's normal.
   var then = vec3f(0.0);
   var nThen = n;
-  if ((frame.flags & (FLAG_HISTORY_RESET | FLAG_RESERVOIR_HISTORY_OFF)) == 0u) {
+  if (!whole && (frame.flags & (FLAG_HISTORY_RESET | FLAG_RESERVOIR_HISTORY_OFF)) == 0u) {
     let past = history(g.xy, face, hitPlane(hit), surface, depth);
     let h = past.reservoir;
     then = past.at;
     nThen = faceNormal(min(past.surface & 7u, 5u));
+    // It stands for its candidates whether or not they drew a light (none if no spot was found).
+    kept = min(h.count, HISTORY_MAX);
     if (h.light < min(frame.lightCount, MAX_LIGHTS)) {
-      kept = min(h.count, HISTORY_MAX);
       // Weighed by its target now, with its light where it is this frame.
       let t = targetOf(lights[h.light], at, n);
       let w = t * h.weight * kept;
@@ -189,8 +196,8 @@ fn candidates(@builtin(global_invocation_id) g: vec3u) {
       z += kept;
     }
   }
-  // The face and plane it lies on, for its neighbours.
-  let lies = surfaceOf(face, hitPlane(hit));
+  // The face and plane it lies on, for its neighbours; and whether its list was drawn whole.
+  let lies = surfaceOf(face, hitPlane(hit)) | select(0u, WHOLE, whole);
   if (!(z > 0.0)) {
     drawn[slot] = Drawn(Reservoir(NO_LIGHT, 0.0, tried + kept, 0.0), at, lies);
     return;
@@ -220,7 +227,7 @@ fn neighbour(q: vec2u, k: u32, surface: u32, here: vec3f) -> Pooled {
     return none;
   }
   let d = fresh[reservoirAt(vec2u(t))];
-  if (d.surface != surface) {
+  if ((d.surface & ~WHOLE) != (surface & ~WHOLE)) {
     return none;
   }
   var r = d.reservoir;
@@ -237,7 +244,7 @@ fn spatial(@builtin(global_invocation_id) g: vec3u) {
   let drew = fresh[slot];
   let own = drew.reservoir;
   let face = drew.surface & 7u;
-  if ((frame.flags & FLAG_SPATIAL_OFF) != 0u || face >= 6u) {
+  if ((frame.flags & FLAG_SPATIAL_OFF) != 0u || face >= 6u || (drew.surface & WHOLE) != 0u) {
     chosen[slot] = own;
     return;
   }

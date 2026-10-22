@@ -36,7 +36,7 @@ fn hitPlane(hit: vec2u) -> i32 {
 
 // A lighting pixel's width at `depth` along its ray (voxels): how much of the world it stands for.
 // Where it is DETAIL_SPAN voxels or more, the faces it covers are the ground's detail, not edges:
-// the denoiser's history and filter treat them as one surface there.
+// the denoiser's history (history.wgsl's sameSpot) treats them as one surface there.
 const DETAIL_SPAN: f32 = 4.0;
 
 fn footprint(depth: f32) -> f32 {
