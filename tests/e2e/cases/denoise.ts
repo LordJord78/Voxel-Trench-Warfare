@@ -115,6 +115,46 @@ export const cases = {
   },
 
   /**
+   * The sky's history, traced every other frame: after `frames` still frames, each whole-block
+   * pixel's sky visibility history (hMoments.w) against the plain average of every sky sample it
+   * traced over `reference` frames. The mean and mean absolute differences.
+   */
+  async skyHistory(args: { frames: number; reference: number }) {
+    const g = await gpu();
+    const { r, w } = await setup(g);
+    const [lw, lh] = r.lightResolution;
+    const sum = new Float64Array(lw * lh);
+    const count = new Float64Array(lw * lh);
+    for (let f = 0; f < args.reference; f++) {
+      r.render(DOWN, 0, f);
+      const sky = new Float32Array(await readTexture(r.texture('lSky')));
+      for (let i = 0; i < lw * lh; i++) {
+        if (sky[i] < 0) continue;
+        sum[i] += sky[i];
+        count[i]++;
+      }
+    }
+    r.flags = FLAGS.HISTORY_RESET;
+    r.render(DOWN, 0, 0);
+    r.flags = 0;
+    for (let f = 0; f < args.frames; f++) r.render(DOWN, 0, f);
+    const moments = await rgba(r, 'hMoments');
+    const whole = await wholeBlocks(r);
+    let bias = 0;
+    let mae = 0;
+    let n = 0;
+    for (let i = 0; i < lw * lh; i++) {
+      if (!whole[i] || count[i] === 0) continue;
+      const d = moments[i * 4 + 3] - sum[i] / count[i];
+      bias += d;
+      mae += Math.abs(d);
+      n++;
+    }
+    for (const b of [w.table, w.sectors, w.heap, w.palette, w.pyramid]) b.destroy();
+    return { compared: n, bias: bias / n, mae: mae / n, errors: [...g.errors] };
+  },
+
+  /**
    * History lengths after the camera slides past the wall's top. Whether each
    * surface point was hidden last frame is decided on the CPU: a ray from the
    * previous camera to the point either reaches it or hits something first.

@@ -6,7 +6,8 @@
  *              (see atmosphere.ts);
  *   beam     — per 8 × 8 tile, how far its rays can go before meeting anything;
  *   primary  — one jittered ray per pixel into the G-buffer, from its tile's beam;
- *   lighting — the light reaching one pixel of each 2 × 2 block;
+ *   lighting — the light reaching one pixel of each 2 × 2 block (the sky's
+ *              ray in half of them, by turns, each frame);
  *   temporal — that light blended into its reprojected history;
  *   atrous   — three edge-stopping filter passes over it, for display (the
  *              history keeps the plain average, so converged edges stay put);
@@ -153,13 +154,17 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
     lighting: device.createBindGroupLayout({
       label: 'lighting',
-      entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), storageTexture(3, 'r32float'), storageTexture(4, 'rg32uint')],
+      entries: [
+        sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), storageTexture(3, 'r32float'), storageTexture(4, 'rg32uint'),
+        storageTexture(5, 'r32float'),
+      ],
     }),
     temporal: device.createBindGroupLayout({
       label: 'temporal',
       entries: [
         sampled(0, 'float'), sampled(1, 'unfilterable-float'), sampled(2, 'uint'), sampled(3, 'uint'), sampled(4, 'float'), sampled(5, 'float'),
         storageTexture(6, 'rgba16float'), storageTexture(7, 'rgba16float'), storageTexture(8, 'rg32float'), sampled(9, 'unfilterable-float'),
+        sampled(10, 'unfilterable-float'),
       ],
     }),
     atrous: device.createBindGroupLayout({
@@ -375,6 +380,7 @@ export class Renderer {
     make('sharp', 'rgba16float', this.alloc);
     const light = this.lightSize(this.alloc);
     make('lNoisy', 'rgba16float', light);
+    make('lSky', 'r32float', light);
     for (const k of [0, 1]) {
       make(`hDepth${k}`, 'r32float', light);
       make(`hHit${k}`, 'rg32uint', light);
@@ -395,10 +401,10 @@ export class Renderer {
       return {
         beam: group('beam', [view('beam')]),
         primary: group('primary', [view('gDepth'), view('gHit'), view('gMotion'), view('beam')]),
-        lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`)]),
+        lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view('lSky')]),
         temporal: group('temporal', [
           view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view(`hHit${prev}`), view(`hColour${prev}`), view(`hMoments${prev}`),
-          view(`hColour${cur}`), view(`hMoments${cur}`), view('variance'), view(`hDepth${prev}`),
+          view(`hColour${cur}`), view(`hMoments${cur}`), view('variance'), view(`hDepth${prev}`), view('lSky'),
         ]),
         atrous1: group('atrous', [view(`hColour${cur}`), view('variance'), view(`hHit${cur}`), view('filteredA'), view('varianceA'), { buffer: this.steps[0] }]),
         atrous2: group('atrous', [view('filteredA'), view('varianceA'), view(`hHit${cur}`), view('filteredB'), view('varianceB'), { buffer: this.steps[1] }]),

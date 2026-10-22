@@ -10,7 +10,7 @@ import { gpu, readTexture } from '../support/gpu';
 import { halfToFloat } from '../support/half';
 
 const DIMS = { x: 128, y: 128, z: 128 };
-type Scene = 'open' | 'roof' | 'box' | 'lantern' | 'pair';
+type Scene = 'open' | 'roof' | 'box' | 'lantern' | 'pair' | 'single' | 'broken';
 
 /** Small worlds for one lighting question each; the camera looks straight down at the middle of the floor. */
 function scene(name: Scene): { map: BrickMap; pose: CameraPose; lights: SceneLight[] } {
@@ -38,6 +38,9 @@ function scene(name: Scene): { map: BrickMap; pose: CameraPose; lights: SceneLig
     lights.push(light(6.4, 5.5, 12.0, 3), light(6.4, 6.5, 6.4, 3));
   }
   if (name === 'pair') lights.push(light(6.0, 6.5, 6.4, 3), light(6.8, 6.5, 6.4, 1));
+  // A light whose weight is NaN, after one the pick has already taken; and that one alone.
+  if (name === 'broken') lights.push(light(6.0, 6.5, 6.4, 3), light(6.8, 6.5, 6.4, NaN));
+  if (name === 'single') lights.push(light(6.0, 6.5, 6.4, 3));
   return { map, pose, lights };
 }
 
@@ -53,7 +56,11 @@ function analytic(l: SceneLight, at: [number, number, number]): number[] {
 }
 
 export const cases = {
-  /** Mean lighting at the middle pixel over `frames` frames: [r, g, b, key visibility], and the analytic expectations. */
+  /**
+   * At the middle lighting pixel over `frames` frames: the mean point light (rgb) and key
+   * visibility (a); the mean of the sky samples it traced, and how many; the history's colour
+   * after the last frame; and the analytic expectations.
+   */
   async lighting(args: { scene: Scene; frames: number; keyElevation?: number }) {
     const g = await gpu();
     const { map, pose, lights } = scene(args.scene);
@@ -68,6 +75,8 @@ export const cases = {
     const qy = lh >> 1;
     const sum = [0, 0, 0, 0];
     let keyMin = 1;
+    let skySum = 0;
+    let skyTraced = 0;
     for (let f = 0; f < args.frames; f++) {
       renderer.render(pose, 0, f * 16);
       const px = new Uint16Array(await readTexture(renderer.texture('lNoisy')));
@@ -75,14 +84,52 @@ export const cases = {
       const v = [halfToFloat(px[i]), halfToFloat(px[i + 1]), halfToFloat(px[i + 2]), halfToFloat(px[i + 3])];
       for (let k = 0; k < 4; k++) sum[k] += v[k];
       keyMin = Math.min(keyMin, v[3]);
+      const sky = new Float32Array(await readTexture(renderer.texture('lSky')))[qy * lw + qx];
+      if (sky >= 0) {
+        skySum += sky;
+        skyTraced++;
+      }
     }
     const mean = sum.map((s) => s / args.frames);
+    const h = new Uint16Array(await readTexture(renderer.texture('hColour')));
+    const history = [0, 1, 2, 3].map((k) => halfToFloat(h[(qy * lw + qx) * 4 + k]));
     // The floor's top face under the middle pixel, in metres.
     const floor: [number, number, number] = [pose.position[0], 4.0, pose.position[2]];
     const skyUp = [0, 1, 2].map((c) => (sky.horizon[c] * 0.55 + (sky.zenith[c] - sky.horizon[c] * 0.55) * 1) * sky.ambient);
     const lit = lights.map((l) => analytic(l, floor));
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
-    return { mean, keyMin, skyUp, lit, errors: [...g.errors] };
+    return { mean, keyMin, skyMean: skySum / skyTraced, skyTraced, history, skyUp, lit, errors: [...g.errors] };
+  },
+
+  /**
+   * Which lighting pixels trace the sky ray, over two frames of open ground: those whose row is in
+   * a band of four (rows 0-3, 4-7, ...) taking its turn, a band's turn every other frame. Pixels
+   * that break the rule, and how many traced in each frame.
+   */
+  async skyBands() {
+    const g = await gpu();
+    const { map, pose } = scene('open');
+    const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
+    const renderer = await Renderer.create(g, null, world, null, { size: [64, 64] });
+    const [lw, lh] = renderer.lightResolution;
+    let broken = 0;
+    const traced: number[] = [];
+    for (let f = 0; f < 2; f++) {
+      renderer.render(pose, 0, f * 16);
+      const sky = new Float32Array(await readTexture(renderer.texture('lSky')));
+      let n = 0;
+      for (let y = 0; y < lh; y++) {
+        for (let x = 0; x < lw; x++) {
+          const turn = ((y >> 2) + f) % 2 === 0;
+          const v = sky[y * lw + x];
+          if (v >= 0) n++;
+          if (turn !== v >= 0 || (v >= 0 && v !== 0 && v !== 1)) broken++;
+        }
+      }
+      traced.push(n);
+    }
+    for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
+    return { broken, traced, pixels: lw * lh, errors: [...g.errors] };
   },
 
   /**

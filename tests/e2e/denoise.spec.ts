@@ -9,6 +9,16 @@ test('a still view converges without bias', async ({ page }) => {
   expect(r.change).toBeLessThan(0.01);
 });
 
+test("the sky's history, traced every other frame, averages its samples without bias", async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ compared: number; bias: number; mae: number; errors: string[] }>(page, 'skyHistory', { frames: 96, reference: 512 });
+  expect(r.errors).toEqual([]);
+  expect(r.compared).toBeGreaterThan(500);
+  expect(Math.abs(r.bias)).toBeLessThan(0.01);
+  // A history of 16 sky samples of a visibility near one half wanders by about 0.09.
+  expect(r.mae).toBeLessThan(0.1);
+});
+
 test('history restarts where the view uncovers', async ({ page }) => {
   await openHarness(page);
   const r = await runCase<{ hidden: number; hiddenFresh: number; seen: number; seenOld: number; errors: string[] }>(page, 'denoiseDisocclusion');
