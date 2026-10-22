@@ -34,26 +34,30 @@ fn farPatchNormal(i: i32, j: i32, fu: f32, fv: f32) -> vec3f {
   return normalize(vec3f(-dx, 1.0, -dz));
 }
 
-// Catmull-Rom weights at t over samples at -1, 0, 1 and 2, and their derivatives.
-fn catmullWeights(t: f32) -> vec4f {
-  return 0.5 * vec4f(t * (-1.0 + t * (2.0 - t)), 2.0 + t * t * (-5.0 + 3.0 * t), t * (1.0 + t * (4.0 - 3.0 * t)), t * t * (t - 1.0));
+// Uniform cubic B-spline weights at t over samples at -1, 0, 1 and 2, and their derivatives.
+fn bsplineWeights(t: f32) -> vec4f {
+  let s = 1.0 - t;
+  return vec4f(s * s * s, 4.0 + t * t * (3.0 * t - 6.0), 1.0 + 3.0 * t * (1.0 + t * (1.0 - t)), t * t * t) / 6.0;
 }
 
-fn catmullSlopes(t: f32) -> vec4f {
-  return 0.5 * vec4f(-1.0 + t * (4.0 - 3.0 * t), t * (-10.0 + 9.0 * t), 1.0 + t * (8.0 - 9.0 * t), t * (3.0 * t - 2.0));
+fn bsplineSlopes(t: f32) -> vec4f {
+  let s = 1.0 - t;
+  return 0.5 * vec4f(-s * s, t * (3.0 * t - 4.0), 1.0 + t * (2.0 - 3.0 * t), t * t);
 }
 
-// The far field's shading normal under a point: the slope of a Catmull-Rom surface through the
-// 4 × 4 samples round it. The march meets the bilinear patches, whose slope jumps at every patch
-// edge, and lit by that slope the ground reads as flat facets; this one is smooth across them.
+// The far field's shading normal under a point: the slope of a uniform cubic B-spline surface over
+// the 4 × 4 samples round it. The march meets the bilinear patches, whose slope jumps at every patch
+// edge, and lit by that slope the ground reads as flat facets; this one is smooth across them, and,
+// not being made to pass through the samples, it never dips before a step (a wood's or a village's
+// edge) the way an interpolating curve does, which banded every such edge light or dark.
 fn farNormalAt(p: vec3f) -> vec3f {
   let s = (p.xz - frame.far.xy) / frame.far.z - 0.5;
   let c = vec2i(floor(s));
   let f = s - floor(s);
-  let wx = catmullWeights(f.x);
-  let wz = catmullWeights(f.y);
-  let dx = catmullSlopes(f.x);
-  let dz = catmullSlopes(f.y);
+  let wx = bsplineWeights(f.x);
+  let wz = bsplineWeights(f.y);
+  let dx = bsplineSlopes(f.x);
+  let dz = bsplineSlopes(f.y);
   var gx = 0.0;
   var gz = 0.0;
   var lowest = 0.0;

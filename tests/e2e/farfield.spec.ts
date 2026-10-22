@@ -46,3 +46,10 @@ test('the far field shades smoothly across its patches', async ({ page }) => {
   // Beside the map's hole, where the stencil reaches samples with no ground, normals stay sane.
   expect(r.edgeBad).toBe(0);
 });
+
+test('beside a step, the far field is not shaded as if the ground fell toward it', async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ reversed: number; errors: string[] }>(page, 'farStep');
+  expect(r.errors).toEqual([]);
+  expect(r.reversed).toBeLessThan(1);
+});
