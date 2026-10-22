@@ -6,6 +6,7 @@ import { rayDir, type CameraPose } from '../../../src/render/camera';
 import { FarFieldGpu } from '../../../src/render/farfield-gpu';
 import { FLAGS, FRAME, PROBE_DUSK, writeWorldInfo, type FrameSky } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
+import { FLARE_MAP_SIZE, FlareShadows } from '../../../src/render/flare-shadows';
 import { KEY_MAP_SIZE, KeyShadow, keyShadowInfo, type Key } from '../../../src/render/key-shadow';
 import { StructWriter } from '../../../src/render/layout';
 import type { SceneLight } from '../../../src/render/lights';
@@ -14,8 +15,10 @@ import { sceneExtras, sceneGroup, sceneLayout } from '../../../src/render/scene'
 import { moduleSource } from '../../../src/render/shaders';
 import { gpu, readBuffer, readTexture } from '../support/gpu';
 import { halfToFloat } from '../support/half';
+import * as flareRef from '../../support/flare-shadow-ref';
 import { litRef, mapCoords, OPEN, texelDepth } from '../../support/key-shadow-ref';
 import type { Vec3 } from '../../support/trace-ref';
+import flareLitTest from '../shaders/flare-lit-test.wgsl';
 import hazeTest from '../shaders/haze-test.wgsl';
 import keyLitTest from '../shaders/key-lit-test.wgsl';
 
@@ -50,6 +53,12 @@ function slitWorld(): BrickMap {
   map.fillBox(60, 16, 60, 68, 110, 64, P.AIR);
   return map;
 }
+
+/**
+ * A flare beyond the slit's wall, 12 m up (over everything, as the scene's hang over the map): its
+ * light falls through the slit. Off the voxels' grid, so its rays do not run along the slit's edges.
+ */
+const SLIT_FLARE: SceneLight = { position: [6.433, 12.07, 2.031], radius: 65, colour: [1, 0.88, 0.7], intensity: 260, kind: 'flare', phase: 0 };
 
 /**
  * The fog based at 2 m: the haze tests' cameras stand a metre or two above it. The froxels' physics
@@ -391,6 +400,188 @@ export const cases = {
   },
 
   /**
+   * The flare's map on the slit's wall (SLIT_FLARE): its texels against the CPU reference; flareLit
+   * against shadow rays toward the flare at 2,000 points in the air; and flareLit for a light the
+   * maps do not hold, at points the flare's would shadow.
+   */
+  async flareShadow() {
+    const { device, errors } = await gpu();
+    const map = slitWorld();
+    const gw = GpuWorld.create(device, { map, mirror: HeapMirror.fromMap(map) });
+    const extras = sceneExtras(device);
+    const frame = new StructWriter(FRAME);
+    writeWorldInfo(frame, gw);
+    const frameBuffer = device.createBuffer({ size: frame.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(frameBuffer, 0, frame.buffer);
+    const layout = sceneLayout(device);
+    const scene = sceneGroup(device, layout, { frame: frameBuffer, world: gw, far: FarFieldGpu.empty(device), ...extras });
+    let pipelines;
+    try {
+      pipelines = await KeyShadow.compile(device, layout);
+    } catch (e) {
+      return { compileErrors: [String(e)] };
+    }
+    const flares = FlareShadows.create(device);
+    const shadow = KeyShadow.create(device, pipelines, DIMS, VOXEL, flares);
+    flares.setFlares([SLIT_FLARE], 1, VOXEL);
+    const encoder = device.createCommandEncoder();
+    shadow.update(encoder, scene, KEY, 'sun', flares.next());
+    device.queue.submit([encoder.finish()]);
+    // The flare's map: the first tile below the key's map in the atlas.
+    const atlas = new Float32Array(await readTexture(shadow.map));
+    const at: Vec3 = [SLIT_FLARE.position[0] / VOXEL, SLIT_FLARE.position[1] / VOXEL, SLIT_FLARE.position[2] / VOXEL];
+    const reach = SLIT_FLARE.radius / VOXEL;
+    let hits = 0;
+    let mismatches = 0;
+    let ties = 0;
+    let maxError = 0;
+    const wrong: string[] = [];
+    // A disagreement two right answers can have: the ray grazing a voxel's edge where it hit (as the
+    // traversal's test allows), within 0.01 of a boundary on two axes.
+    const grazing = (i: number, j: number, t: number) => {
+      const ray = flareRef.texelRay(at, i, j)!;
+      return [0, 1, 2].filter((k) => {
+        const v = ray.o[k] + ray.d[k] * t;
+        return Math.abs(v - Math.round(v)) < 0.01;
+      }).length >= 2;
+    };
+    for (let j = 0; j < FLARE_MAP_SIZE; j++) {
+      for (let i = 0; i < FLARE_MAP_SIZE; i++) {
+        const g = atlas[(KEY_MAP_SIZE + j) * KEY_MAP_SIZE + i];
+        const ref = flareRef.texelDistance(map, at, reach, i, j);
+        if (ref === flareRef.OPEN) {
+          if (!(g >= OPEN_GPU)) {
+            if (grazing(i, j, g)) ties++;
+            else {
+              mismatches++;
+              if (wrong.length < 8) wrong.push(`(${i}, ${j}): gpu ${g}, ref open`);
+            }
+          }
+          continue;
+        }
+        hits++;
+        if (!(g < OPEN_GPU)) {
+          if (grazing(i, j, ref)) ties++;
+          else {
+            mismatches++;
+            if (wrong.length < 8) wrong.push(`(${i}, ${j}): gpu open, ref ${ref.toFixed(3)}`);
+          }
+          continue;
+        }
+        maxError = Math.max(maxError, Math.abs(g - ref));
+      }
+    }
+    // flareLit through the test shader, for points (xyz) of a light (w).
+    const module = device.createShaderModule({ code: moduleSource(flareLitTest) });
+    const info = await module.getCompilationInfo();
+    const messages = info.messages.filter((m) => m.type === 'error').map((m) => `${m.lineNum}:${m.linePos} ${m.message}`);
+    if (messages.length) return { compileErrors: messages };
+    const local = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
+    const litPipeline = await device.createComputePipelineAsync({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [layout, local, pipelines.read] }),
+      compute: { module, entryPoint: 'main' },
+    });
+    const flareLit = async (points: readonly (readonly [number, number, number, number])[]): Promise<Float32Array> => {
+      const data = new Float32Array(points.length * 4);
+      points.forEach((p, n) => data.set(p, n * 4));
+      const input = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      const output = device.createBuffer({ size: points.length * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+      device.queue.writeBuffer(input, 0, data);
+      const e = device.createCommandEncoder();
+      const pass = e.beginComputePass();
+      pass.setPipeline(litPipeline);
+      pass.setBindGroup(0, scene);
+      pass.setBindGroup(1, device.createBindGroup({ layout: local, entries: [{ binding: 0, resource: { buffer: input } }, { binding: 1, resource: { buffer: output } }] }));
+      pass.setBindGroup(2, shadow.group);
+      pass.dispatchWorkgroups(Math.ceil(points.length / 64));
+      pass.end();
+      device.queue.submit([e.finish()]);
+      const out = new Float32Array(await readBuffer(output, points.length * 4));
+      input.destroy();
+      output.destroy();
+      return out;
+    };
+    const rng = Rng.root(6).derive('flare-lit');
+    const points: Vec3[] = [];
+    while (points.length < 2000) {
+      const p = [rng.uniform(0, 128), rng.uniform(16, 118), rng.uniform(0, 128)].map(Math.fround);
+      if (map.get(Math.floor(p[0]), Math.floor(p[1]), Math.floor(p[2])) === P.AIR) points.push([p[0], p[1], p[2]]);
+    }
+    const lit = await flareLit(points.map((p) => [p[0], p[1], p[2], 0] as const));
+    // A texel's width across the flare's light at a point's distance: some 0.9° straight below.
+    const texelAt = (dist: number) => (dist * 4) / FLARE_MAP_SIZE;
+    let agree = 0;
+    let shadowed = 0;
+    let nearEdge = 0;
+    const farFromEdge: string[] = [];
+    points.forEach((p, n) => {
+      const truth = flareRef.litRef(map, at, p);
+      if (!truth) shadowed++;
+      if (lit[n] > 0.5 === truth) {
+        agree++;
+        return;
+      }
+      // Within 2 texels of an edge: a point a texel or two off, along any axis, sees otherwise.
+      const w = texelAt(Math.hypot(p[0] - at[0], p[1] - at[1], p[2] - at[2]));
+      const offsets = [-2, -1, 1, 2].flatMap((a) =>
+        [0, 1, 2].map((axis) => {
+          const q: [number, number, number] = [p[0], p[1], p[2]];
+          q[axis] += a * w;
+          return q;
+        }),
+      );
+      if (offsets.some((q) => flareRef.litRef(map, at, q) !== truth)) nearEdge++;
+      else if (farFromEdge.length < 8) farFromEdge.push(`${p.map((c) => c.toFixed(2))}: flareLit ${lit[n].toFixed(3)}, ray ${truth ? 'lit' : 'shadowed'}`);
+    });
+    // A light the maps do not hold (index 5), at points the flare's map shadows: lit.
+    const dark = points.filter((_, n) => lit[n] === 0).slice(0, 50);
+    const unmapped = await flareLit(dark.map((p) => [p[0], p[1], p[2], 5] as const));
+    shadow.destroy();
+    for (const b of [gw.table, gw.sectors, gw.heap, gw.palette, gw.pyramid, frameBuffer]) b.destroy();
+    return {
+      texels: { hits, mismatches, ties, maxError, wrong },
+      lit: { total: points.length, agree, shadowed, nearEdge, farFromEdge },
+      unmapped: { total: dark.length, lit: Array.from(unmapped).filter((v) => v === 1).length },
+      errors: [...errors],
+    };
+  },
+
+  /**
+   * How many texels the flares' maps ask to be traced each frame (FlareShadows.next): a new flare;
+   * still; moved half a metre, 17 frames; moved 2 m in a frame; out; lit again; the world changed,
+   * 17 frames. And which lights get maps: nine burning flares; one by day (the flares at nothing).
+   */
+  async flareMotion() {
+    const { device, errors } = await gpu();
+    const flares = FlareShadows.create(device);
+    const flare = (y: number, intensity = 260, x = 6.4): SceneLight => ({ ...SLIT_FLARE, position: [x, y, 2], intensity });
+    const counts: number[] = [];
+    const frame = (lights: SceneLight[]) => {
+      flares.setFlares(lights, 1, VOXEL);
+      counts.push(flares.next());
+    };
+    frame([flare(12)]);
+    frame([flare(12)]);
+    for (let k = 0; k < 17; k++) frame([flare(11.5)]);
+    frame([flare(9.5)]);
+    frame([flare(9.5, 0)]);
+    frame([flare(9.5)]);
+    flares.worldChanged();
+    for (let k = 0; k < 17; k++) frame([flare(9.5)]);
+    flares.setFlares(Array.from({ length: 9 }, (_, k) => flare(12, 260, 1 + k)), 1, VOXEL);
+    const mapped = flares.mapped();
+    flares.setFlares([flare(12)], 0, VOXEL);
+    const byDay = flares.mapped();
+    flares.destroy();
+    return { counts, mapped, byDay, errors: [...errors] };
+  },
+
+  /**
    * How many rows of texels the map asks a host pass for each frame (KeyShadow.share, 8 workgroups
    * across): the first frame; three frames more under the same key; after the world changes, 17;
    * and after the key turns a tenth of a degree, 17.
@@ -553,6 +744,23 @@ export const cases = {
     const answers = await hazeAt(renderer, queries);
     const reference = queries.map(([u, v, m]) => luma(lanternHaze(sky, lantern, pose.position, rayDir(pose, HAZE_SIZE, u * HAZE_SIZE[0], v * HAZE_SIZE[1]), m)));
     return { froxels: answers.map((x) => luma(x.haze)), transmittance: answers.map((x) => x.haze[3]), reference, errors: [...g.errors] };
+  },
+
+  /**
+   * Behind the slit's wall, the flare beyond it (SLIT_FLARE), no other light in the haze: the haze at
+   * 5 m looking at the slit and each side of it, and the flare's share there (its haze unshadowed, by
+   * the CPU).
+   */
+  async hazeFlareSlit() {
+    const g = await gpu();
+    const dark = [0, 0, 0];
+    const sky: FrameSky = { ...HAZE_SKY, keyDir: KEY, keyColour: dark, sunLight: dark, moonLight: dark, frontGlow: dark };
+    const renderer = await hazeRenderer(slitWorld(), sky, [SLIT_FLARE]);
+    frames(renderer, SLIT_POSE, 30, 0);
+    const side = Math.atan2(2.4, 5.6);
+    const [left, centre, right] = await hazeAt(renderer, [[0.5 - Math.tan(side) / 2, 0.5, 5], [0.5, 0.5, 5], [0.5 + Math.tan(side) / 2, 0.5, 5]]);
+    const share = luma(lanternHaze(sky, SLIT_FLARE, SLIT_POSE.position, rayDir(SLIT_POSE, HAZE_SIZE, HAZE_SIZE[0] / 2, HAZE_SIZE[1] / 2), 5));
+    return { left: luma(left.haze), centre: luma(centre.haze), right: luma(right.haze), share, errors: [...g.errors] };
   },
 
   /** A lantern in clear air (no other light in the haze): its haze around it, from the froxels and by the CPU. */

@@ -4,7 +4,8 @@
 // haze round it scatters in), and with up to four of the froxel's cell's point lights added (by
 // frame.hazeLights), drawn as ReSTIR draws its candidates: one from each of four stretches of the
 // cell's list, weighed by the stretch's length; a list of four or fewer, whole. Point lights glow
-// through the haze unshadowed, by the approved haze's phase, as the key does.
+// through the haze by the approved haze's phase, as the key does: a flare with a shadow map as far
+// as its map lets it reach the froxel (flareLit), the rest unshadowed.
 //
 // `inject` samples each froxel at a depth within its slice that each frame moves through it by the
 // golden ratio, from a blue-noise start across the view: how much of the key light reaches it, and
@@ -67,10 +68,11 @@ fn pointGlow(x: vec3f, rd: vec3f, seed: vec3u) -> vec3f {
     // Stretch k of the list, a light from it, and its light over the chance it was drawn, 1 / size.
     let lo = k * listed / draws;
     let size = (k + 1u) * listed / draws - lo;
-    let l = lights[cellLight(cell, lo + min(u32(random(&state) * f32(size)), size - 1u))];
+    let index = cellLight(cell, lo + min(u32(random(&state) * f32(size)), size - 1u));
+    let l = lights[index];
     let d = l.pos - x;
     let toward = d / max(length(d), 1e-6);
-    let add = unshadowed(l, x, toward) * (frame.hazeLights * hazePhase(dot(rd, toward)) * f32(size));
+    let add = unshadowed(l, x, toward) * (frame.hazeLights * hazePhase(dot(rd, toward)) * f32(size) * flareLit(index, x));
     // A light that is not a number, or not finite, adds nothing: in the history it would stay so.
     glow += select(vec3f(0.0), add, all(add >= vec3f(0.0)) && all(add <= vec3f(GLOW_MAX)));
   }

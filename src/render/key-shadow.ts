@@ -15,9 +15,12 @@
  *
  * Few of a frame's rays reach the world, and each waits on memory at every step: in a pass of its
  * own the longest would take the time. So the frame traces them in front of its primary rays, in
- * the same dispatch (share); update traces them in a pass of their own.
+ * the same dispatch (share); update traces them in a pass of their own. The map is the top of an
+ * atlas whose rows below hold the flares' maps (flare-shadows.ts), traced with it, through the same
+ * traversal, the key's texels first.
  */
 
+import { FLARE_MAP_SIZE, FLARE_MAPS, FlareShadows } from './flare-shadows';
 import { moduleSource } from './shaders';
 import shadowSrc from './shaders/key-shadow.wgsl';
 
@@ -26,6 +29,8 @@ export type Key = 'sun' | 'moon';
 
 /** Texels each way (key-shadow.wgsl's KEY_MAP_SIZE). */
 export const KEY_MAP_SIZE = 1024;
+/** The atlas: the key's map, and the flares' four to a row below it. */
+const ATLAS: [number, number] = [KEY_MAP_SIZE, KEY_MAP_SIZE + (FLARE_MAPS / 4) * FLARE_MAP_SIZE];
 /** Frames the map is traced over. */
 export const KEY_SLOTS = 16;
 const TEXEL_MIN_M = 0.25;
@@ -70,9 +75,9 @@ export function keySlot(k: number): [number, number] {
 }
 
 export interface KeyShadowLayouts {
-  /** Group 2 of a pass that asks keyLit: the map's plane and texels, and the map. */
+  /** Group 2 of a pass that asks keyLit or flareLit: the map's plane, the atlas, and the flares'. */
   read: GPUBindGroupLayout;
-  /** Group 2 of a pass that traces the map's texels: the plane, the map to write, which texels. */
+  /** Group 2 of a pass that traces the atlas's texels: the plane, the atlas to write, which texels, the flares'. */
   write: GPUBindGroupLayout;
   none: GPUBindGroupLayout;
 }
@@ -82,11 +87,11 @@ export function keyShadowLayouts(device: GPUDevice): KeyShadowLayouts {
   return {
     read: device.createBindGroupLayout({
       label: 'key shadow',
-      entries: [uniform(0), { binding: 1, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } }],
+      entries: [uniform(0), { binding: 1, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } }, uniform(5)],
     }),
     write: device.createBindGroupLayout({
       label: 'key shadow build',
-      entries: [uniform(0), { binding: 2, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'r32float' } }, uniform(3)],
+      entries: [uniform(0), { binding: 2, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'r32float' } }, uniform(3), uniform(5), uniform(7)],
     }),
     none: device.createBindGroupLayout({ label: 'key shadow none', entries: [] }),
   };
@@ -104,7 +109,10 @@ interface Texels {
 }
 
 export class KeyShadow {
-  /** Each texel's depth along the light from the plane through the map's middle (voxels); 1e9 where nothing blocks its ray. */
+  /**
+   * The atlas: in its top 1024² each texel's depth along the light from the plane through the map's
+   * middle (voxels); below, the flares' maps (flare-shadows.ts); 1e9 where nothing stops a ray.
+   */
   readonly map: GPUTexture;
   /** The map's plane and texels as keyLit reads them, written each update. */
   readonly info: GPUBuffer;
@@ -140,19 +148,19 @@ export class KeyShadow {
     return { ...layouts, build };
   }
 
-  /** The map over a world `dims` voxels in size, at `voxel` metres a voxel. */
-  static create(device: GPUDevice, pipelines: KeyShadowPipelines, dims: { x: number; y: number; z: number }, voxel: number): KeyShadow {
-    return new KeyShadow(device, pipelines, dims, voxel);
+  /** The map over a world `dims` voxels in size, at `voxel` metres a voxel, the `flares`' maps below it (none if not given). */
+  static create(device: GPUDevice, pipelines: KeyShadowPipelines, dims: { x: number; y: number; z: number }, voxel: number, flares?: FlareShadows): KeyShadow {
+    return new KeyShadow(device, pipelines, dims, voxel, flares ?? FlareShadows.create(device));
   }
 
-  private constructor(device: GPUDevice, pipelines: KeyShadowPipelines, dims: { x: number; y: number; z: number }, voxel: number) {
+  private constructor(device: GPUDevice, pipelines: KeyShadowPipelines, dims: { x: number; y: number; z: number }, voxel: number, flares: FlareShadows) {
     this.device = device;
     this.pipelines = pipelines;
     this.dims = { x: dims.x, y: dims.y, z: dims.z };
     this.voxel = voxel;
     this.map = device.createTexture({
       label: 'key shadow',
-      size: [KEY_MAP_SIZE, KEY_MAP_SIZE],
+      size: ATLAS,
       format: 'r32float',
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
     });
@@ -165,6 +173,7 @@ export class KeyShadow {
       entries: [
         { binding: 0, resource: { buffer: this.info } },
         { binding: 1, resource: view },
+        { binding: 5, resource: { buffer: flares.info } },
       ],
     });
     this.buildGroup = device.createBindGroup({
@@ -174,6 +183,8 @@ export class KeyShadow {
         { binding: 0, resource: { buffer: this.info } },
         { binding: 2, resource: view },
         { binding: 3, resource: { buffer: this.params } },
+        { binding: 5, resource: { buffer: flares.info } },
+        { binding: 7, resource: { buffer: flares.build } },
       ],
     });
     this.none = device.createBindGroup({ label: 'key shadow none', layout: pipelines.none, entries: [] });
@@ -188,21 +199,22 @@ export class KeyShadow {
    * Trace this frame's sixteenth of the map for a key toward `keyDir`, through the world in the
    * scene's group 0 (`scene`), in a pass of its own; or all of it, on a change between sun and moon
    * or a turn over a degree; or none, if the key and the world are as they were when each was
-   * traced. It writes the map's plane for this key, which keyLit reads: submit before the next
-   * update. The texels it traced.
+   * traced; and after them the flares' `flares` texels (FlareShadows.next). It writes the map's plane
+   * for this key, which keyLit reads: submit before the next update. The texels it traced.
    */
-  update(encoder: GPUCommandEncoder, scene: GPUBindGroup, keyDir: Vec3, key: Key, timestampWrites?: GPUComputePassTimestampWrites): number {
+  update(encoder: GPUCommandEncoder, scene: GPUBindGroup, keyDir: Vec3, key: Key, flares = 0, timestampWrites?: GPUComputePassTimestampWrites): number {
     const texels = this.next(keyDir, key);
     this.place(texels, 0, 0);
-    if (!texels.count) return 0;
+    const all = texels.count + flares;
+    if (!all) return 0;
     const pass = encoder.beginComputePass({ label: 'key shadow', timestampWrites });
     pass.setPipeline(this.pipelines.build);
     pass.setBindGroup(0, scene);
     pass.setBindGroup(1, this.none);
     pass.setBindGroup(2, this.buildGroup);
-    pass.dispatchWorkgroups(texels.count / 64);
+    pass.dispatchWorkgroups(Math.ceil(all / 64));
     pass.end();
-    return texels.count;
+    return all;
   }
 
   /**
@@ -211,9 +223,9 @@ export class KeyShadow {
    * be traced); which binds buildGroup as its group 2 and asks keyShare (key-shadow.wgsl) at each
    * workgroup, as primary.wgsl's `keyed` does.
    */
-  share(keyDir: Vec3, key: Key, width: number): number {
+  share(keyDir: Vec3, key: Key, width: number, flares = 0): number {
     const texels = this.next(keyDir, key);
-    const rows = Math.ceil(texels.count / 64 / width);
+    const rows = Math.ceil((texels.count + flares) / 64 / width);
     this.place(texels, rows, width);
     return rows;
   }

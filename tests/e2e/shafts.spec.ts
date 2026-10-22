@@ -246,3 +246,52 @@ test.describe('shading through the froxels', () => {
     expect(centre - Math.max(left, right)).toBeGreaterThanOrEqual(r.keyShare / 3);
   });
 });
+
+test.describe("the flares' shadow maps", () => {
+  test.setTimeout(120_000);
+
+  test("a flare's map, beyond a wall with a slit, is within a voxel of the reference at every texel, and flareLit agrees with shadow rays", async ({ page }) => {
+    await openHarness(page);
+    type Summary = {
+      compileErrors?: string[];
+      texels: { hits: number; mismatches: number; ties: number; maxError: number; wrong: string[] };
+      lit: { total: number; agree: number; shadowed: number; nearEdge: number; farFromEdge: string[] };
+      unmapped: { total: number; lit: number };
+      errors: string[];
+    };
+    const r = await runCase<Summary>(page, 'flareShadow');
+    expect(r.compileErrors ?? []).toEqual([]);
+    expect(r.errors).toEqual([]);
+    console.log(`the flare's map: ${r.texels.hits} texels meet the world (${r.texels.ties} grazing an edge), worst ${r.texels.maxError.toFixed(4)} voxels; flareLit ${r.lit.agree} of ${r.lit.total} agree (${r.lit.shadowed} shadowed), ${r.lit.nearEdge} near an edge`);
+    expect(r.texels.wrong).toEqual([]);
+    expect(r.texels.mismatches).toBe(0);
+    expect(r.texels.ties).toBeLessThanOrEqual(r.texels.hits / 1000);
+    expect(r.texels.hits).toBeGreaterThan(10_000);
+    expect(r.texels.maxError).toBeLessThanOrEqual(1);
+    expect(r.lit.shadowed).toBeGreaterThan(200);
+    expect(r.lit.agree / r.lit.total).toBeGreaterThanOrEqual(0.99);
+    expect(r.lit.farFromEdge).toEqual([]);
+    // A light the maps do not hold is lit where the flare's map says shadow: it glows unshadowed.
+    expect(r.unmapped.total).toBeGreaterThan(20);
+    expect(r.unmapped.lit).toBe(r.unmapped.total);
+  });
+
+  test("a flare's map follows it: a sixteenth a frame when it moves, all of it when it jumps, nothing when it is out; eight maps for nine flares, none by day", async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ counts: number[]; mapped: number[]; byDay: number[]; errors: string[] }>(page, 'flareMotion');
+    expect(r.errors).toEqual([]);
+    const all = 256 * 256;
+    const sixteenth = all / 16;
+    expect(r.counts).toEqual([all, 0, ...Array(16).fill(sixteenth), 0, all, 0, all, ...Array(16).fill(sixteenth), 0]);
+    expect(r.mapped).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(r.byDay).toEqual([]);
+  });
+
+  test("behind a wall with a slit, the flare beyond it: the slit's shaft is brighter than the haze each side by a third of the flare's share", async ({ page }) => {
+    await openHarness(page);
+    const r = await runCase<{ left: number; centre: number; right: number; share: number; errors: string[] }>(page, 'hazeFlareSlit');
+    expect(r.errors).toEqual([]);
+    console.log(`the flare's haze at 5 m: left ${r.left.toFixed(4)}, through the slit ${r.centre.toFixed(4)}, right ${r.right.toFixed(4)}; its share ${r.share.toFixed(4)}`);
+    expect(r.centre - Math.max(r.left, r.right)).toBeGreaterThanOrEqual(r.share / 3);
+  });
+});

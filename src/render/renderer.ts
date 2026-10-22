@@ -56,6 +56,7 @@ import { jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
 import { FarFieldGpu } from './farfield-gpu';
+import { FlareShadows } from './flare-shadows';
 import { froxelLayouts, Froxels, type FroxelPipelines } from './froxels';
 import { FLAGS, FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
@@ -296,7 +297,8 @@ export class Renderer {
   /** The frame's lights gridded over the map, and each lighting pixel's light drawn from them. */
   private readonly cells: LightCells;
   private readonly restir: Restir;
-  /** Where the key light is blocked, seen from its side; and the haze it shines through. */
+  /** Where the key light is blocked, seen from its side, and the flares' light, seen from theirs; and the haze they shine through. */
+  private readonly flareShadows: FlareShadows;
   private readonly keyShadow: KeyShadow;
   private readonly froxels: Froxels;
   private sceneGroup: GPUBindGroup | null = null;
@@ -359,7 +361,8 @@ export class Renderer {
     this.bloom = Bloom.create(device, compiled.bloom);
     this.cells = LightCells.create(device, compiled.cells, compiled.lights, cellGrid(world.map.dims, this.voxelSize()), this.voxelSize());
     this.restir = Restir.create(device, compiled.restir, this.frameBuffer, compiled.lights, this.cells);
-    this.keyShadow = KeyShadow.create(device, compiled.keyShadow, world.map.dims, this.voxelSize());
+    this.flareShadows = FlareShadows.create(device);
+    this.keyShadow = KeyShadow.create(device, compiled.keyShadow, world.map.dims, this.voxelSize(), this.flareShadows);
     this.froxels = Froxels.create(device, compiled.froxels, this.cells, this.keyShadow);
     this.preset = options.preset ?? 'high';
     this.lightScale = LIGHT_SCALE[this.preset];
@@ -410,6 +413,7 @@ export class Renderer {
   setLights(lights: readonly SceneLight[], flares: number): void {
     this.device.queue.writeBuffer(this.compiled.lights, 0, lightBuffer(lights, flares, this.voxelSize()));
     this.lightCount = lights.length;
+    this.flareShadows.setFlares(lights, flares, this.voxelSize());
   }
 
   /** Size the canvas (device pixels) and reallocate the internal images to match. */
@@ -557,7 +561,10 @@ export class Renderer {
     const voxel = this.voxelSize();
     const eye: [number, number, number] = [pose.position[0] / voxel, pose.position[1] / voxel, pose.position[2] / voxel];
     // An edit uploaded changes what the key light's height map saw.
-    if (this.world.flush(this.options.uploadBudget ?? 1 << 20, eye) > 0) this.keyShadow.worldChanged();
+    if (this.world.flush(this.options.uploadBudget ?? 1 << 20, eye) > 0) {
+      this.keyShadow.worldChanged();
+      this.flareShadows.worldChanged();
+    }
     // A grown heap is a new buffer: the scene group follows it.
     if (this.world.generation !== this.sceneGeneration || !this.sceneGroup) {
       this.sceneGroup = sceneGroup(device, this.compiled.scene, {
@@ -629,7 +636,7 @@ export class Renderer {
     // light (sky-state.ts), and the moon after.
     const key: Key = this.sky.keyDir.every((c, k) => c === this.sky.sunDir[k]) ? 'sun' : 'moon';
     const across = Math.ceil(this.res[0] / 8);
-    const keyRows = this.keyShadow.share([this.sky.keyDir[0], this.sky.keyDir[1], this.sky.keyDir[2]], key, across);
+    const keyRows = this.keyShadow.share([this.sky.keyDir[0], this.sky.keyDir[1], this.sky.keyDir[2]], key, across, this.flareShadows.next());
     if (keyRows > 0) {
       const primary = encoder.beginComputePass({ label: 'primary', timestampWrites: this.timer.writes('primary') });
       primary.setPipeline(this.compiled.pipelines.primaryKeyed);

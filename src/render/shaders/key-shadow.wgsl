@@ -1,8 +1,9 @@
 // The key light's height map (see key-shadow.ts). Seen from the light, on a plane square to it
 // through the map's middle: for each texel, how far along the light a ray from past the map runs
-// before the voxel world blocks it (from the plane, in voxels), or KEY_OPEN if nothing does.
-// keyLit asks it whether the key light reaches a point; keyShare (in another pass's dispatch) or
-// buildMap (in a pass of its own) traces its texels.
+// before the voxel world blocks it (from the plane, in voxels), or KEY_OPEN if nothing does. It is
+// the top of an atlas whose rows below hold the flares' maps (flare-shadow.wgsl). keyLit asks it
+// whether the key light reaches a point; keyShare (in another pass's dispatch) or buildMap (in a
+// pass of its own) traces this frame's texels of both, through one traversal.
 #include "traverse.wgsl"
 
 const KEY_MAP_SIZE: u32 = 1024u;
@@ -31,7 +32,8 @@ struct KeyShadowInfo {
 const KEY_TILE: u32 = 8u;
 
 struct KeyBuild {
-  // The tiles traced: every `step`th each way from `offset`, `count` texels in all, a row of tiles at a time.
+  // The key's tiles traced: every `step`th each way from `offset`, `count` texels in all, a row of
+  // tiles at a time. The flares' texels follow (flare-shadow.wgsl).
   offset: vec2u,
   step: u32,
   count: u32,
@@ -42,12 +44,26 @@ struct KeyBuild {
   pad1: u32,
 }
 
-// For a pass that asks keyLit (key-shadow.ts's `group`).
+// For a pass that asks keyLit or flareLit (key-shadow.ts's `group`): the plane, and the atlas.
 @group(2) @binding(0) var<uniform> keyShadow: KeyShadowInfo;
 @group(2) @binding(1) var keyMap: texture_2d<f32>;
 // The build's own.
 @group(2) @binding(2) var keyMapOut: texture_storage_2d<r32float, write>;
 @group(2) @binding(3) var<uniform> keyBuild: KeyBuild;
+
+// A texel of the atlas to trace: whether there is one, whether its ray runs (a flare's texel off its
+// disc stands for none), where it lies, its ray and reach, and what its distance is stored less.
+struct ShadowRay {
+  live: bool,
+  trace: bool,
+  texel: vec2u,
+  ro: vec3f,
+  rd: vec3f,
+  reach: f32,
+  base: f32,
+}
+
+#include "flare-shadow.wgsl"
 
 // Whether the key light reaches p (voxels), 0 to 1: p's depth along the light against its four
 // nearest texels', weighted by nearness. Off the map's texels, it does.
@@ -73,20 +89,36 @@ fn keyLit(p: vec3f) -> f32 {
   return lit;
 }
 
-// Trace the n-th of the texels this build traces: its ray runs from past the map's farthest corner
-// along the light, for twice as far.
-fn keyTrace(n: u32) {
-  if (n >= keyBuild.count) {
-    return;
-  }
+// The n-th of the key's texels this build traces: its ray runs from past the map's farthest corner
+// along the light, for twice as far, its depth counted from the plane through the map's middle.
+fn keyRay(n: u32) -> ShadowRay {
   let across = KEY_MAP_SIZE / KEY_TILE / keyBuild.step;
   let t = n / 64u;
   let tile = vec2u(t % across, t / across) * keyBuild.step + keyBuild.offset;
   let texel = tile * KEY_TILE + vec2u(n % KEY_TILE, (n / KEY_TILE) % KEY_TILE);
   let at = (vec2f(texel) + 0.5 - f32(KEY_MAP_SIZE) * 0.5) * keyShadow.texel;
   let ro = keyShadow.origin + keyShadow.u * at.x + keyShadow.v * at.y - keyShadow.along * keyShadow.reach;
-  let h = traceWorld(ro, keyShadow.along, 0.0, 2.0 * keyShadow.reach, false);
-  textureStore(keyMapOut, texel, vec4f(select(KEY_OPEN, h.t - keyShadow.reach, h.hit), 0.0, 0.0, 0.0));
+  return ShadowRay(true, true, texel, ro, keyShadow.along, 2.0 * keyShadow.reach, keyShadow.reach);
+}
+
+// Trace the n-th of this build's texels: the key's first, then the flares'. One call site, so a
+// pass that shares the build holds one more traversal, not two.
+fn shadowTrace(n: u32) {
+  var ray: ShadowRay;
+  if (n < keyBuild.count) {
+    ray = keyRay(n);
+  } else {
+    ray = flareRay(n - keyBuild.count);
+  }
+  if (!ray.live) {
+    return;
+  }
+  var t = KEY_OPEN;
+  if (ray.trace) {
+    let h = traceWorld(ray.ro, ray.rd, 0.0, ray.reach, false);
+    t = select(KEY_OPEN, h.t - ray.base, h.hit);
+  }
+  textureStore(keyMapOut, ray.texel, vec4f(t, 0.0, 0.0, 0.0));
 }
 
 // For a pass whose dispatch the build shares (primary.wgsl), in workgroups of 64: whether `group` is
@@ -97,11 +129,11 @@ fn keyShare(group: vec3u, local: u32) -> bool {
   if (group.y >= keyBuild.rows) {
     return false;
   }
-  keyTrace((group.y * keyBuild.width + group.x) * 64u + local);
+  shadowTrace((group.y * keyBuild.width + group.x) * 64u + local);
   return true;
 }
 
 @compute @workgroup_size(64)
 fn buildMap(@builtin(global_invocation_id) g: vec3u) {
-  keyTrace(g.x);
+  shadowTrace(g.x);
 }

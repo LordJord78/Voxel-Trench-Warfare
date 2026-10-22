@@ -90,6 +90,27 @@ test('a thousand lights at night, 256 of them moving, render within the GPU budg
   for (const [name, ms] of Object.entries(medians)) expect(ms, name).toBeLessThanOrEqual(BUDGET_MS);
 });
 
+// Each frame's GPU time and its primary and froxel passes, the medians of SAMPLES frames after
+// SETTLE; the clock stepped a sixth of a game minute each frame from `from` if given, else left be.
+function sample(page: import('@playwright/test').Page, from: number | null) {
+  return hooks(
+    page,
+    async (h, a) => {
+      const [start, settle, n] = a as [number | null, number, number];
+      const out: { gpu: number; primary: number; froxels: number }[] = [];
+      for (let k = 0; k < settle + n; k++) {
+        if (start !== null) h.setTimeOfDay(start + k / 360);
+        await h.waitFrames(1);
+        const s = h.stats();
+        if (k >= settle && s.gpuMs !== null) out.push({ gpu: s.gpuMs, primary: s.passes.primary, froxels: s.passes.froxels });
+      }
+      const median = (key: 'gpu' | 'primary' | 'froxels') => out.map((o) => o[key]).sort((x, y) => x - y)[out.length >> 1];
+      return { gpu: median('gpu'), primary: median('primary'), froxels: median('froxels'), count: out.length };
+    },
+    [from, SETTLE, SAMPLES],
+  );
+}
+
 // The shafts while the light moves. With the clock running (ten game minutes a second), the key
 // light's height map is traced a sixteenth a frame in front of the primary rays (key-shadow.ts),
 // which a held clock never does: the overview at dusk and at dawn, its hardest hours, within the
@@ -99,35 +120,16 @@ test('with the clock running, the overview renders within the budget, the shafts
   test.setTimeout(240_000);
   const errors = await openGame(page);
   await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
-  // Each frame's GPU time and its primary and froxel passes, the medians of SAMPLES frames; the
-  // clock stepped a sixth of a game minute each frame from `from` if given, else held.
-  const sample = (from: number | null) =>
-    hooks(
-      page,
-      async (h, a) => {
-        const [start, settle, n] = a as [number | null, number, number];
-        const out: { gpu: number; primary: number; froxels: number }[] = [];
-        for (let k = 0; k < settle + n; k++) {
-          if (start !== null) h.setTimeOfDay(start + k / 360);
-          await h.waitFrames(1);
-          const s = h.stats();
-          if (k >= settle && s.gpuMs !== null) out.push({ gpu: s.gpuMs, primary: s.passes.primary, froxels: s.passes.froxels });
-        }
-        const median = (key: 'gpu' | 'primary' | 'froxels') => out.map((o) => o[key]).sort((x, y) => x - y)[out.length >> 1];
-        return { gpu: median('gpu'), primary: median('primary'), froxels: median('froxels'), count: out.length };
-      },
-      [from, SETTLE, SAMPLES],
-    );
   const lines: string[] = [];
   for (const [time, t] of [['dusk', TIMES.dusk], ['dawn', TIMES.dawn]] as const) {
     await hooks(page, (h, v) => {
       h.view('overview');
       h.setTimeOfDay(v as number);
     }, t);
-    const still = await sample(null);
+    const still = await sample(page, null);
     test.skip(still.count === 0, 'no timestamp queries on this GPU');
     // Running through the hour: the frames read lie within five game minutes of it either side.
-    const running = await sample(t - (SETTLE + SAMPLES / 2) / 360);
+    const running = await sample(page, t - (SETTLE + SAMPLES / 2) / 360);
     const shafts = running.froxels + running.primary - still.primary;
     lines.push(`${time}: ${running.gpu.toFixed(2)} ms running (${still.gpu.toFixed(2)} still), the shafts ${shafts.toFixed(3)} ms (froxels ${running.froxels.toFixed(3)}, the map ${(running.primary - still.primary).toFixed(3)})`);
     expect(running.gpu, `${time}, running`).toBeLessThanOrEqual(BUDGET_MS);
@@ -135,4 +137,28 @@ test('with the clock running, the overview renders within the budget, the shafts
   }
   console.log(`The overview with the clock running: ${lines.join('; ')}`);
   expect(errors).toEqual([]);
+});
+
+// The flares' shadows: at night the scene's flares burn and sink (the lights' clock running), so
+// their maps are traced every frame in front of the primary rays; held at rest, they are traced
+// once. The overview at night within the budget so, and the shafts all told (the froxels, and what
+// the moving flares' maps add to the primary pass) within 0.6 ms.
+test('at night with the flares sinking, the overview renders within the budget, the shafts within 0.6 ms', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => {
+    h.setQuality({ preset: 'high', dynres: false });
+    h.view('overview');
+    h.setTimeOfDay(21);
+    h.holdLights();
+  });
+  const held = await sample(page, null);
+  test.skip(held.count === 0, 'no timestamp queries on this GPU');
+  await hooks(page, (h) => h.runLights());
+  const running = await sample(page, null);
+  const shafts = running.froxels + running.primary - held.primary;
+  console.log(`The overview at night: ${running.gpu.toFixed(2)} ms, the flares sinking (${held.gpu.toFixed(2)} held), the shafts ${shafts.toFixed(3)} ms (froxels ${running.froxels.toFixed(3)}, the flares' maps ${(running.primary - held.primary).toFixed(3)})`);
+  expect(errors).toEqual([]);
+  expect(running.gpu).toBeLessThanOrEqual(BUDGET_MS);
+  expect(shafts).toBeLessThanOrEqual(0.6);
 });

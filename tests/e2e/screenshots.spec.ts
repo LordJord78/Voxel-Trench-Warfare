@@ -115,14 +115,15 @@ test('the field at night under a thousand lights', async ({ page }) => {
 
 // Row 5, shafts, for review by eye: the hamlet's church at dusk, from its view and walking toward
 // it; and over the parapet from the firing step at night under a flare (one of the scene's, hung
-// 25 m out and 18 m up, held), standing and strafing along the step. Written to artifacts/l5.
+// beyond the dead wood, 45 m out and 16 m up, so its light comes toward the eye through the stumps
+// and wire; held), standing and strafing along the step. Written to artifacts/l6.
 test('row 5: the church at dusk, and over the parapet at night under a flare', async ({ page }) => {
   test.setTimeout(180_000);
   const errors = await openGame(page);
   await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
   await hooks(page, (h) => h.view('hamlet'));
   await hooks(page, (h) => h.waitConverged());
-  await page.screenshot({ path: 'artifacts/l5/church-dusk.png' });
+  await page.screenshot({ path: 'artifacts/l6/church-dusk.png' });
   await hooks(page, (h) => h.play());
   const stand = async (view: 'hamlet' | 'step', time: number) =>
     hooks(page, (h, a) => {
@@ -136,7 +137,7 @@ test('row 5: the church at dusk, and over the parapet at night under a flare', a
   await page.keyboard.down('KeyW');
   for (let k = 0; k < 3; k++) {
     await hooks(page, (h) => h.waitFrames(15));
-    await page.screenshot({ path: `artifacts/l5/church-walk-${k}.png` });
+    await page.screenshot({ path: `artifacts/l6/church-walk-${k}.png` });
   }
   await page.keyboard.up('KeyW');
   await hooks(page, (h) => {
@@ -144,16 +145,16 @@ test('row 5: the church at dusk, and over the parapet at night under a flare', a
     const ahead = v.yaw === 0 ? 1 : -1;
     const flare = h.lights().find((l) => l.kind === 'flare');
     if (!flare) throw new Error('no flare in the scene');
-    h.useLights([...h.lights(), { ...flare, position: [v.position[0] + 4, v.position[1] + 18, v.position[2] + 25 * ahead] }]);
+    h.useLights([...h.lights(), { ...flare, position: [v.position[0] + 4, v.position[1] + 16, v.position[2] + 45 * ahead] }]);
     h.holdLights();
   });
   await stand('step', 21);
   await hooks(page, (h) => h.waitConverged());
-  await page.screenshot({ path: 'artifacts/l5/step-flare-night.png' });
+  await page.screenshot({ path: 'artifacts/l6/step-flare-night.png' });
   await page.keyboard.down('KeyD');
   for (let k = 0; k < 3; k++) {
     await hooks(page, (h) => h.waitFrames(12));
-    await page.screenshot({ path: `artifacts/l5/step-flare-strafe-${k}.png` });
+    await page.screenshot({ path: `artifacts/l6/step-flare-strafe-${k}.png` });
   }
   await page.keyboard.up('KeyD');
   if (errors.length) throw new Error(errors.join('\n'));
