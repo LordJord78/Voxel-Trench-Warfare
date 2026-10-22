@@ -7,8 +7,10 @@
  *
  * At 10 cm the ground is all steps: the body snaps up and down them, and
  * stands or raises the periscope in a tick. The eye eases those jumps out
- * over a few frames; motion the velocity explains (a fall, a jump) it
- * follows exactly, and a teleport it does not ease at all.
+ * over a few frames; motion the velocity explains (a fall, a jump) over the
+ * time the simulation actually ran it follows exactly — none while paused,
+ * and only what the clock let through after a hitch — and a teleport it
+ * does not ease at all.
  */
 
 import type { Tunables } from '../core/tunables';
@@ -49,6 +51,8 @@ export class CameraRig {
   /** Where the eye is drawn relative to where the body puts it, easing to 0. */
   private trail = 0;
   private lastEye: number | null = null;
+  /** The simulation time the last frame showed, interpolated between ticks as the foot is. */
+  private lastSimTime = 0;
 
   constructor(t: RigTunables) {
     this.t = t;
@@ -63,12 +67,15 @@ export class CameraRig {
     const sway = Math.sin(player.bobPhase * 0.5) * this.t.bobAmplitude * 0.6 * speedRatio;
     const dip = (-Math.min(player.landingImpact, 8) / 8) * this.t.landingDip;
     const body = foot.y + eye;
+    const clock = session.clock;
+    const simTime = clock.simTime + clock.alpha * clock.dt;
     if (this.lastEye !== null) {
-      const jump = body - this.lastEye - player.velocity.y * frameDt;
+      const jump = body - this.lastEye - player.velocity.y * (simTime - this.lastSimTime);
       if (Math.abs(jump) > TELEPORT_M) this.trail = 0;
       else if (Math.abs(jump) > JUMP_M) this.trail -= jump;
     }
     this.lastEye = body;
+    this.lastSimTime = simTime;
     this.trail = Math.min(TRAIL_M, Math.max(-TRAIL_M, this.trail * Math.exp(-Math.max(0, frameDt) / EASE_S)));
     const target = session.controller.fovScale(player);
     this.fovScale += (target - this.fovScale) * Math.min(1, this.t.fovLerpPerS * Math.max(1e-4, frameDt));

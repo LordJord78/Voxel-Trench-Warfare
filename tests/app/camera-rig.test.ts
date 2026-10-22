@@ -67,8 +67,9 @@ describe('the camera rig', () => {
 
 describe('the eye over steps', () => {
   const FRAME = 1 / 60;
-  /** Move the player's foot straight to y (as a tick that snapped it would), and draw one frame. */
+  /** A frame of the game running: its clock moves on, the player's foot goes straight to y (as a tick that snapped it would), and it is drawn. */
   function snapTo(s: Session, rig: CameraRig, y: number, vy = 0) {
+    s.clock.advance(FRAME);
     const p = s.player.position;
     s.prevPosition = new Vec3(p.x, y, p.z);
     s.player.position = new Vec3(p.x, y, p.z);
@@ -116,6 +117,30 @@ describe('the eye over steps', () => {
       const y = 20 - 10 * f * FRAME;
       expect(Math.abs(snapTo(s, rig, y, -10) - (y + 1.62))).toBeLessThan(0.01);
     }
+  });
+
+  it('holds still while the game is paused, even mid-fall', () => {
+    const s = standing();
+    const rig = new CameraRig(rigTunables(tun));
+    snapTo(s, rig, 20);
+    const falling = snapTo(s, rig, 20 - 10 * FRAME, -10);
+    // Paused: frames are drawn, but the clock and the player stand still.
+    for (let f = 0; f < 30; f++) expect(rig.pose(s, FRAME).position[1]).toBe(falling);
+  });
+
+  it('follows a fall through a hitch the simulation could not keep up with', () => {
+    const s = standing();
+    const rig = new CameraRig(rigTunables(tun));
+    snapTo(s, rig, 20, -10);
+    // A 0.3 s frame: the clock runs at most five ticks of it, and the app's frame time is capped at 0.1 s.
+    const before = s.clock.simTime + s.clock.alpha * s.clock.dt;
+    s.clock.advance(0.3);
+    const ran = s.clock.simTime + s.clock.alpha * s.clock.dt - before;
+    const y = 20 - 10 * ran;
+    const p = s.player.position;
+    s.prevPosition = new Vec3(p.x, y, p.z);
+    s.player.position = new Vec3(p.x, y, p.z);
+    expect(Math.abs(rig.pose(s, 0.1).position[1] - (y + 1.62))).toBeLessThan(0.01);
   });
 
   it('snaps to a teleport', () => {
