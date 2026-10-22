@@ -119,7 +119,13 @@ async function start(): Promise<void> {
   const gpuReady: Promise<Gpu | Error> = createGpu().catch(asError);
   // Without a GPU there is nothing to draw: say so at once, not after generating a world.
   void gpuReady.then((g) => g instanceof Error && fail(g));
-  const compiling = gpuReady.then((g) => (g instanceof Error ? g : compileFrame(g.device).catch(asError)));
+  // How long the pipelines take to compile, from the device's coming up (a load timing).
+  let compileMs = 0;
+  const compiling = gpuReady.then((g) => {
+    if (g instanceof Error) return g;
+    const t0 = performance.now();
+    return compileFrame(g.device).then((c) => ((compileMs = Math.round(performance.now() - t0)), c), asError);
+  });
   const world = await generateInWorkers(
     SEED,
     (phase, done, total) => {
@@ -149,6 +155,7 @@ async function start(): Promise<void> {
   const compiled = await compiling;
   if (compiled instanceof Error) throw compiled;
   world.timings.pipelinesWait = Math.round(performance.now() - t);
+  world.timings.compile = compileMs;
   [canvas.width, canvas.height] = canvasTarget();
   const tun = loadTunables();
   const render = rendererTunables(tun);

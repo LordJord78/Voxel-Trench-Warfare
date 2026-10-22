@@ -9,6 +9,7 @@ interface Report {
   run: string;
   timer: 'timestamps' | 'submitted-work';
   promptMs: number;
+  timings: Record<string, number>;
   fingerprint: string;
   views: { name: string; hours: number; gpuMs: number; res: [number, number]; canvas: [number, number]; shot: string; spread: number }[];
   day: { hours: number; gpuMs: number }[];
@@ -44,6 +45,8 @@ test('the check reports the world, its timings, every view at the four keys and 
   expect(report.fingerprint).toBe(golden.fingerprint);
   expect(report.timer).toBe('timestamps');
   expect(report.promptMs).toBeGreaterThan(0);
+  // The load's phases, the pipelines' compile among them.
+  for (const phase of ['fill', 'farField', 'compile']) expect(report.timings[phase], phase).toBeGreaterThan(0);
   expect(report.views.map((v) => v.shot)).toEqual(VIEWS.flatMap((name) => KEYS.map((key) => `${name}-${key}.png`)));
   expect(report.day.map((d) => hhmm(d.hours))).toEqual(DAY);
   for (const d of report.day) expect(d.gpuMs, hhmm(d.hours)).toBeGreaterThan(0);
