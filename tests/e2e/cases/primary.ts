@@ -70,10 +70,11 @@ export const cases = {
 
   /**
    * The beam pre-pass changes nothing but where rays start: two renderers, one with the beam
-   * off, draw the same poses with jitter on. Every pixel's hit and depth, compared; every
-   * pixel's beam start against its own hit; and inside a roofed box, every beam start is 0.
+   * off, draw the same poses with jitter on, each pose at its scale of the textures' `size` (as
+   * dynamic resolution renders them). Every pixel's hit and depth, compared; every pixel's beam
+   * start against its own hit; and inside a roofed box, every beam start is 0.
    */
-  async beamIdentity() {
+  async beamIdentity(args?: { size?: [number, number]; scales?: number[] }) {
     const g = await gpu();
     const map = new BrickMap({ x: 256, y: 128, z: 256 });
     map.fillBox(0, 0, 0, 256, 40, 256, P.SOD);
@@ -95,9 +96,9 @@ export const cases = {
     map.fillBox(59, 40, 40, 60, 62, 60, P.TIMBER);
     map.fillBox(40, 62, 40, 60, 63, 60, P.TIMBER);
     const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
-    const res: [number, number] = [128, 128];
-    const withBeam = await Renderer.create(g, null, world, null, { size: res });
-    const without = await Renderer.create(g, null, world, null, { size: res });
+    const alloc: [number, number] = args?.size ?? [128, 128];
+    const withBeam = await Renderer.create(g, null, world, null, { size: alloc });
+    const without = await Renderer.create(g, null, world, null, { size: alloc });
     without.flags = FLAGS.BEAM_OFF;
     const poses: CameraPose[] = [
       { position: [3.0, 4.3, 12.8], yaw: 90, pitch: 0 },
@@ -111,9 +112,15 @@ export const cases = {
     let compared = 0;
     let elevatedStart = 0;
     const firstDiffs: string[] = [];
+    const sizes: [number, number][] = [];
     for (const [k, pose] of poses.entries()) {
+      const scale = args?.scales?.[k] ?? 1;
+      withBeam.setQuality({ scale });
+      without.setQuality({ scale });
       withBeam.render(pose, 0, k);
       without.render(pose, 0, k);
+      const res = withBeam.stats.res;
+      sizes.push([...res]);
       const [d1, d0] = [new Float32Array(await readTexture(withBeam.texture('gDepth'))), new Float32Array(await readTexture(without.texture('gDepth')))];
       const [h1, h0] = [new Uint32Array(await readTexture(withBeam.texture('gHit'))), new Uint32Array(await readTexture(without.texture('gHit')))];
       const beamTex = withBeam.texture('beam');
@@ -121,7 +128,7 @@ export const cases = {
       const { forward } = cameraBasis(pose.yaw, pose.pitch);
       for (let y = 0; y < res[1]; y++) {
         for (let x = 0; x < res[0]; x++) {
-          const i = y * res[0] + x;
+          const i = y * alloc[0] + x;
           compared++;
           if (d1[i] !== d0[i] || h1[i * 2] !== h0[i * 2] || h1[i * 2 + 1] !== h0[i * 2 + 1]) {
             differ++;
@@ -136,6 +143,6 @@ export const cases = {
       }
     }
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
-    return { compared, differ, beyond, insideNonZero, elevatedStart, firstDiffs, errors: [...g.errors] };
+    return { compared, sizes, differ, beyond, insideNonZero, elevatedStart, firstDiffs, errors: [...g.errors] };
   },
 };
