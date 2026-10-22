@@ -74,3 +74,16 @@ test('emission shows in the dark', async ({ page }) => {
     expect(r.got[0]).toBeGreaterThan(1);
   }
 });
+
+test('seen from 2 km up, the ground shades through the fog as the formula says', async ({ page }) => {
+  // Looking down 60° from 2,000 m at ground 2.3 km away. The fog's two exponentials, taken apart,
+  // under- and overflow in f32 (0 × ∞); the f64 reference says the ground shows through light haze.
+  // Sixteen regions, so the sample pixels run from 10° to 80° below the horizon: the steepest
+  // climb x = rd.y·L/h is about -143 fog heights there, and e^143 overflows f32.
+  const high = { position: [128, 2000, 128] as [number, number, number], yaw: 0, pitch: -45 };
+  const results = await shade(page, Array.from({ length: 16 }, () => region(P.SOD, 3, 20400, [0.1, 0.12, 0.2, 1])), high);
+  for (const r of results) {
+    for (const c of r.got) expect(Number.isFinite(c), `${r.got}`).toBe(true);
+    close(r.got, r.want);
+  }
+});

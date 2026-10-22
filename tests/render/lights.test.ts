@@ -14,18 +14,13 @@ describe('the scene\'s lights', () => {
   const lights = sceneLights(plan, tun);
   const lanterns = lights.filter((l) => l.kind === 'lantern');
   const flares = lights.filter((l) => l.kind === 'flare');
-  it('hang one lantern in each dugout, one voxel out from its glass', () => {
+  it('hang one lantern in each dugout, in the middle of its glass', () => {
     const dugouts = plan.lines.flatMap((l) => l.dugouts);
     expect(lanterns).toHaveLength(dugouts.length);
     dugouts.forEach((d, i) => {
       const at = lanterns[i].position.map((m) => m / v - 0.5);
-      for (let k = 0; k < 3; k++) {
-        expect(at[k]).toBeGreaterThanOrEqual(d.lo[k]);
-        expect(at[k]).toBeLessThan(d.hi[k]);
-      }
       const glass = lanternVoxel(d, p);
-      const away = at.reduce((sum, c, k) => sum + Math.abs(c - glass[k]), 0);
-      expect(away).toBeCloseTo(1, 9);
+      for (let k = 0; k < 3; k++) expect(at[k]).toBeCloseTo(glass[k], 9);
     });
   });
   it('hangs the same flares over no man\'s land for the same seed', () => {

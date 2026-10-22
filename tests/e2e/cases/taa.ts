@@ -159,4 +159,61 @@ export const cases = {
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
     return { worst, errors: [...g.errors] };
   },
+
+  /**
+   * TAA over a flat 0.5 image with one NaN pixel and a 3 × 3 block of -2: how many outputs are not
+   * finite, what the NaN pixel became, and the range the block's outputs span.
+   */
+  async taaHardening() {
+    const g = await gpu();
+    const device = g.device;
+    const map = new BrickMap({ x: 32, y: 32, z: 32 });
+    const world = GpuWorld.create(device, { map, mirror: HeapMirror.fromMap(map) });
+    const r = await Renderer.create(g, null, world, null, { size: [32, 32] });
+    // Two frames, so the frame uniform no longer starts the history afresh.
+    r.render({ position: [1, 1, 1], yaw: 0, pitch: 0 }, 0, 0);
+    r.render({ position: [1, 1, 1], yaw: 0, pitch: 0 }, 0, 1);
+    const compiled = await compileFrame(device);
+    const usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST;
+    const tex = (format: GPUTextureFormat, u = usage) => device.createTexture({ size: [32, 32], format, usage: u });
+    const current = tex('rgba16float');
+    const motion = tex('rgba16float');
+    const history = tex('rgba16float');
+    const out = tex('rgba16float', GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC);
+    const half = floatToHalf(0.5);
+    const flat = () => new Uint16Array(32 * 32 * 4).map((_, i) => (i % 4 === 3 ? floatToHalf(1) : half));
+    const image = flat();
+    const set = (x: number, y: number, v: number) => image.set([v, v, v, floatToHalf(1)], (y * 32 + x) * 4);
+    set(10, 10, 0x7e00);
+    for (let y = 20; y <= 22; y++) for (let x = 20; x <= 22; x++) set(x, y, floatToHalf(-2));
+    device.queue.writeTexture({ texture: current }, image, { bytesPerRow: 32 * 8 }, [32, 32]);
+    device.queue.writeTexture({ texture: motion }, new Uint16Array(32 * 32 * 4), { bytesPerRow: 32 * 8 }, [32, 32]);
+    device.queue.writeTexture({ texture: history }, flat(), { bytesPerRow: 32 * 8 }, [32, 32]);
+    const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+    const group = device.createBindGroup({
+      layout: compiled.layouts.taa,
+      entries: [current.createView(), motion.createView(), history.createView(), out.createView(), sampler].map((resource, binding) => ({ binding, resource })),
+    });
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(compiled.pipelines.taa);
+    pass.setBindGroup(0, r.sceneBindGroup());
+    pass.setBindGroup(1, group);
+    pass.dispatchWorkgroups(4, 4);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    const px = await rgba(out);
+    let nonFinite = 0;
+    for (const v of px) if (!Number.isFinite(v)) nonFinite++;
+    const at = (x: number, y: number) => px[(y * 32 + x) * 4];
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let y = 20; y <= 22; y++) for (let x = 20; x <= 22; x++) {
+      lo = Math.min(lo, at(x, y));
+      hi = Math.max(hi, at(x, y));
+    }
+    for (const t of [current, motion, history, out]) t.destroy();
+    for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
+    return { nonFinite, nanPixel: at(10, 10), blockLo: lo, blockHi: hi, errors: [...g.errors] };
+  },
 };

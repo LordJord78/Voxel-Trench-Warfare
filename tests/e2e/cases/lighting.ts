@@ -4,7 +4,7 @@ import { P } from '../../../src/world/materials';
 import type { CameraPose } from '../../../src/render/camera';
 import { PROBE_DUSK, type FrameSky } from '../../../src/render/frame-uniforms';
 import { GpuWorld } from '../../../src/render/gpu-world';
-import type { SceneLight } from '../../../src/render/lights';
+import { lanternLight, type SceneLight } from '../../../src/render/lights';
 import { Renderer } from '../../../src/render/renderer';
 import { gpu, readTexture } from '../support/gpu';
 import { halfToFloat } from '../support/half';
@@ -83,5 +83,60 @@ export const cases = {
     const lit = lights.map((l) => analytic(l, floor));
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
     return { mean, keyMin, skyUp, lit, errors: [...g.errors] };
+  },
+
+  /**
+   * A lantern on a wall, lit as the game places its light: of the wall faces touching the glass,
+   * the light they receive over 64 frames against what reaches them unshadowed. (A light just in
+   * front of the glass throws the glass's own shadow, three voxels square, onto exactly these.)
+   */
+  async lanternFrame() {
+    const g = await gpu();
+    const map = new BrickMap(DIMS);
+    map.fillBox(0, 0, 0, 128, 40, 128, P.SOD);
+    map.fillBox(40, 40, 100, 90, 80, 104, P.BRICK);
+    const glass: [number, number, number] = [64, 60, 99];
+    map.set(...glass, P.LANTERN_GLOW);
+    const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
+    const renderer = await Renderer.create(g, null, world, null, { size: [128, 128] });
+    renderer.sky = { ...PROBE_DUSK, keyColour: [0, 0, 0], ambient: 0, zenith: [0, 0, 0], horizon: [0, 0, 0] };
+    const light: SceneLight = { position: lanternLight(glass, 0.1), radius: 7, colour: [1, 1, 1], intensity: 2.5, kind: 'lantern' };
+    renderer.setLights([light], 1);
+    const pose: CameraPose = { position: [6.45, 6.05, 8.0], yaw: 0, pitch: 0 };
+    const [lw, lh] = [64, 64];
+    const sum = new Float64Array(lw * lh);
+    const ring = new Map<number, [number, number]>();
+    for (let f = 0; f < 64; f++) {
+      renderer.render(pose, 0, f);
+      const noisy = Array.from(new Uint16Array(await readTexture(renderer.texture('lNoisy'))), halfToFloat);
+      const hit = new Uint32Array(await readTexture(renderer.texture('hHit')));
+      for (let i = 0; i < lw * lh; i++) {
+        const w0 = hit[i * 2];
+        const w1 = hit[i * 2 + 1];
+        const face = (w0 >>> 24) & 7;
+        const cell = [w0 & 0xfff, w1 & 0xffff, (w0 >>> 12) & 0xfff];
+        // The wall's front face (normal -z, face 4), in the ring of eight voxels touching the glass.
+        const near = Math.max(Math.abs(cell[0] - glass[0]), Math.abs(cell[1] - glass[1]));
+        if (face !== 4 || cell[2] !== 100 || near !== 1) continue;
+        sum[i] += noisy[i * 4];
+        ring.set(i, [cell[0], cell[1]]);
+      }
+    }
+    let ratio = 0;
+    let n = 0;
+    for (const [i, [x, y]] of ring) {
+      // The face's centre point, and the unshadowed light there as lighting.wgsl computes it.
+      const at = [(x + 0.5) * 0.1, (y + 0.5) * 0.1, 10.0];
+      const d = [light.position[0] - at[0], light.position[1] - at[1], light.position[2] - at[2]];
+      const dist = Math.hypot(d[0], d[1], d[2]);
+      const ndl = Math.max(-d[2] / dist, 0);
+      const win = Math.min(1, Math.max(0, 1 - (dist / light.radius) ** 4));
+      const unshadowed = (light.intensity * ndl * win * win) / (dist * dist + 1);
+      if (unshadowed <= 0) continue;
+      ratio += sum[i] / 64 / unshadowed;
+      n++;
+    }
+    for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
+    return { ring: n, ratio: ratio / n, errors: [...g.errors] };
   },
 };

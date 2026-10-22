@@ -25,6 +25,15 @@ export interface SceneLight {
   kind: 'lantern' | 'flare';
 }
 
+/**
+ * Where a lantern's light goes (metres): the middle of its glass voxel. Shadow rays toward a light
+ * stop at its own voxel (lighting.wgsl), so the glass does not shadow its own light; a light in
+ * front of the glass would cast the glass's shadow, three voxels square, round it on the wall.
+ */
+export function lanternLight(glass: readonly [number, number, number], voxel: number): [number, number, number] {
+  return [(glass[0] + 0.5) * voxel, (glass[1] + 0.5) * voxel, (glass[2] + 0.5) * voxel];
+}
+
 export function sceneLights(plan: WorldPlan, tun: Tunables): SceneLight[] {
   const p = plan.params;
   const v = p.voxel;
@@ -33,12 +42,8 @@ export function sceneLights(plan: WorldPlan, tun: Tunables): SceneLight[] {
   const lights: SceneLight[] = [];
   for (const line of plan.lines) {
     for (const d of line.dugouts) {
-      // The light sits in the air voxel in front of the glass: inside the glass, it would shadow itself.
-      const [x, y, z] = lanternVoxel(d, p);
-      const inward: [number, number, number] =
-        d.longAxis === 0 ? [x, y, z === d.lo[2] ? z + 1 : z - 1] : [x === d.lo[0] ? x + 1 : x - 1, y, z];
       lights.push({
-        position: [(inward[0] + 0.5) * v, (inward[1] + 0.5) * v, (inward[2] + 0.5) * v],
+        position: lanternLight(lanternVoxel(d, p), v),
         radius: tun.f('render.lantern_radius_m'),
         colour: lanternColour,
         intensity: tun.f('render.lantern_intensity'),

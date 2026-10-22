@@ -105,7 +105,15 @@ fn pickLight(p: vec3f, n: vec3f, u0: f32) -> Pick {
   let dist = length(d);
   out.light = c * (total / luminance(c));
   out.dir = d / dist;
-  out.len = dist - 1.0;
+  // The shadow ray stops where it reaches the light's own voxel, so a lantern's glass does not
+  // shadow its own light. A point already touching that voxel has nothing in the way (len <= 0).
+  let lo = floor(l.pos);
+  let moving = out.dir != vec3f(0.0);
+  let inv = select(vec3f(1e30), vec3f(1.0) / out.dir, moving);
+  let t0 = (lo - p) * inv;
+  let t1 = (lo + 1.0 - p) * inv;
+  let tNear = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), min(t0.z, t1.z));
+  out.len = min(tNear, dist) - 0.01;
   return out;
 }
 
@@ -141,6 +149,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
     var d = skyDir;
     var len = frame.skyRay;
     var want = true;
+    var touching = false;
     if (k == 0u) {
       d = keyDir;
       len = 1e7;
@@ -149,8 +158,9 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
       d = pick.dir;
       len = pick.len;
       want = pick.len > 0.0;
+      touching = !want && any(pick.light > vec3f(0.0));
     }
-    if (want && !traceWorld(at, d, 0.0, len, false).hit) {
+    if (touching || (want && !traceWorld(at, d, 0.0, len, false).hit)) {
       open[k] = 1.0;
     }
   }

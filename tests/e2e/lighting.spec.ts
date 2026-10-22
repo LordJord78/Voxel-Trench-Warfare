@@ -50,3 +50,11 @@ test('light picks follow the weights and the estimate is unbiased', async ({ pag
     expect(Math.abs(r.mean[c] - want)).toBeLessThanOrEqual(0.03 * (r.lit[0][c] + r.lit[1][c]));
   }
 });
+
+test("a lantern does not frame itself in its own shadow", async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ ring: number; ratio: number; errors: string[] }>(page, 'lanternFrame');
+  expect(r.errors).toEqual([]);
+  expect(r.ring).toBeGreaterThan(8);
+  expect(r.ratio).toBeGreaterThan(0.5);
+});

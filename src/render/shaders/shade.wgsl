@@ -89,11 +89,19 @@ fn skyWithMoon(rd: vec3f) -> vec3f {
 // colour the fog glows. Density falls off exponentially above the ground.
 fn fog(eyeY: f32, rd: vec3f, metres: f32) -> vec4f {
   let h = frame.fogHeight;
-  let start = exp(-(eyeY - frame.fogBase) / h);
+  // The eye's height over the fog's base, and how far the ray climbs, both in fog heights.
+  let a = (eyeY - frame.fogBase) / h;
   let x = rd.y * metres / h;
-  // (1 - e^-x) / x, without dividing by nothing for level rays.
-  let shape = select((1.0 - exp(-x)) / x, 1.0 - 0.5 * x, abs(x) < 1e-3);
-  let depth = frame.fogDensity * start * metres * shape;
+  // Density × length × e^-a × (1 - e^-x)/x, with the exponents combined as (e^-a - e^-(a+x))/x:
+  // apart, a high eye looking far down underflows one and overflows the other (0 × ∞). Each
+  // exponent is clamped only at the end, where f32 runs out.
+  let eyeFog = exp(-clamp(a, -80.0, 80.0));
+  var depth: f32;
+  if (abs(x) < 1e-3) {
+    depth = frame.fogDensity * metres * eyeFog * (1.0 - 0.5 * x);
+  } else {
+    depth = frame.fogDensity * metres * (eyeFog - exp(-clamp(a + x, -80.0, 80.0))) / x;
+  }
   let colour = frame.horizon * 0.9 + frame.keyColour * 0.08 * pow(max(dot(rd, frame.sunDir), 0.0), 4.0);
   return vec4f(colour, exp(-max(depth, 0.0)));
 }

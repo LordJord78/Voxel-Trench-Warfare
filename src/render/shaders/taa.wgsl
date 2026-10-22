@@ -27,6 +27,12 @@ fn luma(c: vec3f) -> f32 {
   return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
+// Every channel a finite number. By the bits: NaN and infinity have an all-ones exponent, and
+// WGSL lets a compiler assume x != x is never true.
+fn finite(c: vec3f) -> bool {
+  return all((bitcast<vec3u>(c) & vec3u(0x7f800000u)) != vec3u(0x7f800000u));
+}
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) g: vec3u) {
   if (g.x >= frame.res.x || g.y >= frame.res.y) {
@@ -34,7 +40,27 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   }
   let p = vec2i(g.xy);
   let res = vec2i(frame.res);
-  let current = textureLoad(colourNow, p, 0).rgb;
+  // The neighbourhood's colours, in YCoCg; a NaN or infinity among them is left out, so one bad
+  // pixel cannot spread through the history.
+  var lo = vec3f(1e9);
+  var hi = vec3f(-1e9);
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      let c = textureLoad(colourNow, clamp(p + vec2i(dx, dy), vec2i(0), res - 1), 0).rgb;
+      if (finite(c)) {
+        lo = min(lo, toYCoCg(c));
+        hi = max(hi, toYCoCg(c));
+      }
+    }
+  }
+  if (any(lo > hi)) {
+    lo = vec3f(0.0);
+    hi = vec3f(0.0);
+  }
+  var current = textureLoad(colourNow, p, 0).rgb;
+  if (!finite(current)) {
+    current = fromYCoCg(0.5 * (lo + hi));
+  }
   let m = textureLoad(motion, p, 0).xy;
   // Where this pixel was in the last frame's image, which dynamic resolution may have sized differently.
   let uv = (vec2f(g.xy) + 0.5 + m) * (vec2f(frame.prevRes) / vec2f(frame.res)) / vec2f(frame.alloc);
@@ -43,19 +69,14 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
     textureStore(historyOut, p, vec4f(current, 1.0));
     return;
   }
-  var lo = vec3f(1e9);
-  var hi = vec3f(-1e9);
-  for (var dy = -1; dy <= 1; dy++) {
-    for (var dx = -1; dx <= 1; dx++) {
-      let c = toYCoCg(textureLoad(colourNow, clamp(p + vec2i(dx, dy), vec2i(0), res - 1), 0).rgb);
-      lo = min(lo, c);
-      hi = max(hi, c);
-    }
+  var before = catmullRom(historyBefore, linear, uv, vec2f(frame.alloc), vec2f(frame.prevRes)).rgb;
+  if (!finite(before)) {
+    before = current;
   }
-  let before = catmullRom(historyBefore, linear, uv, vec2f(frame.alloc), vec2f(frame.prevRes)).rgb;
   let history = fromYCoCg(clamp(toYCoCg(before), lo, hi));
   let a = clamp(0.06 + 0.04 * length(m), 0.06, 0.25);
-  let wc = a / (1.0 + luma(current));
-  let wh = (1.0 - a) / (1.0 + luma(history));
+  // Below zero, 1 + luma would turn a weight's sign: clamp it.
+  let wc = a / (1.0 + max(luma(current), 0.0));
+  let wh = (1.0 - a) / (1.0 + max(luma(history), 0.0));
   textureStore(historyOut, p, vec4f((current * wc + history * wh) / (wc + wh), 1.0));
 }
