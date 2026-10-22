@@ -34,3 +34,15 @@ test('far hits match the reference march', () => {
 test('the far field is empty inside the map', () => {
   expect(r.insideHits).toBe(0);
 });
+
+test('the far field shades smoothly across its patches', async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ worst: number; tilt: number; edgeBad: number; errors: string[] }>(page, 'farSmoothness');
+  expect(r.errors).toEqual([]);
+  // The ground does slope (it is not flat): the test measures smoothness, not flatness.
+  expect(r.tilt).toBeGreaterThan(3);
+  // Bilinear patches' slopes jump 1.8° at their edges here; a smooth surface's change 0.2°.
+  expect(r.worst).toBeLessThan(0.5);
+  // Beside the map's hole, where the stencil reaches samples with no ground, normals stay sane.
+  expect(r.edgeBad).toBe(0);
+});

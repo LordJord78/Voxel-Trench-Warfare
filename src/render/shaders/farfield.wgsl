@@ -34,11 +34,42 @@ fn farPatchNormal(i: i32, j: i32, fu: f32, fv: f32) -> vec3f {
   return normalize(vec3f(-dx, 1.0, -dz));
 }
 
-// The far field's normal and material under a point on it.
+// Catmull-Rom weights at t over samples at -1, 0, 1 and 2, and their derivatives.
+fn catmullWeights(t: f32) -> vec4f {
+  return 0.5 * vec4f(t * (-1.0 + t * (2.0 - t)), 2.0 + t * t * (-5.0 + 3.0 * t), t * (1.0 + t * (4.0 - 3.0 * t)), t * t * (t - 1.0));
+}
+
+fn catmullSlopes(t: f32) -> vec4f {
+  return 0.5 * vec4f(-1.0 + t * (4.0 - 3.0 * t), t * (-10.0 + 9.0 * t), 1.0 + t * (8.0 - 9.0 * t), t * (3.0 * t - 2.0));
+}
+
+// The far field's shading normal under a point: the slope of a Catmull-Rom surface through the
+// 4 × 4 samples round it. The march meets the bilinear patches, whose slope jumps at every patch
+// edge, and lit by that slope the ground reads as flat facets; this one is smooth across them.
 fn farNormalAt(p: vec3f) -> vec3f {
   let s = (p.xz - frame.far.xy) / frame.far.z - 0.5;
-  let c = floor(s);
-  return farPatchNormal(i32(c.x), i32(c.y), s.x - c.x, s.y - c.y);
+  let c = vec2i(floor(s));
+  let f = s - floor(s);
+  let wx = catmullWeights(f.x);
+  let wz = catmullWeights(f.y);
+  let dx = catmullSlopes(f.x);
+  let dz = catmullSlopes(f.y);
+  var gx = 0.0;
+  var gz = 0.0;
+  var lowest = 0.0;
+  for (var j = 0; j < 4; j++) {
+    for (var i = 0; i < 4; i++) {
+      let h = farSample(c.x + i - 1, c.y + j - 1);
+      lowest = min(lowest, h);
+      gx += dx[i] * wz[j] * h;
+      gz += wx[i] * dz[j] * h;
+    }
+  }
+  // Beside the map, the stencil reaches samples with no ground (-1e30): use the patch's own slope.
+  if (lowest < -1e29) {
+    return farPatchNormal(c.x, c.y, f.x, f.y);
+  }
+  return normalize(vec3f(-gx / frame.far.z, 1.0, -gz / frame.far.z));
 }
 
 fn farMaterialAt(p: vec3f) -> u32 {

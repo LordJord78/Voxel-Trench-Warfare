@@ -27,3 +27,10 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let h = marchFar(r.o, r.d, r.tMin, r.tMax);
   results[g.x] = Result(h.n, h.t, select(0u, 1u, h.hit), h.mat, 0u, 0u);
 }
+
+// The far field's shading normal at each ray's origin (only its x and z matter).
+@compute @workgroup_size(64)
+fn normals(@builtin(global_invocation_id) g: vec3u) {
+  if (g.x >= arrayLength(&rays)) { return; }
+  results[g.x] = Result(farNormalAt(rays[g.x].o), 0.0, 0u, 0u, 0u, 0u);
+}

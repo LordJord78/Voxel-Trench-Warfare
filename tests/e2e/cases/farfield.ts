@@ -127,4 +127,77 @@ export const cases = {
     far.destroy();
     return { count, agree, hits, worstT, worstAngle, insideHits, wrong, errors: [...g.errors] };
   },
+
+  /**
+   * The far field's shading normal along a line of points 0.1 cell apart across eight patch
+   * edges: the largest angle between neighbours, in degrees.
+   */
+  async farSmoothness() {
+    const g = await gpu();
+    const device = g.device;
+    const ff = syntheticFar();
+    const far = FarFieldGpu.create(device, ff);
+    const map = syntheticWorld(1);
+    const world = GpuWorld.create(device, { map, mirror: HeapMirror.fromMap(map) });
+    const line = 81;
+    // Then 20 points on the last patches before the map's hole, whose stencils reach into it.
+    const edge = 20;
+    const count = line + edge;
+    const data = new Float32Array(count * 8);
+    for (let k = 0; k < line; k++) {
+      // From the middle of cell 30 to the middle of cell 38, along x, at z in the middle of row 40.
+      data.set([ff.originX + (30.5 + 0.1 * k) * ff.cell, 400, ff.originZ + 40.3 * ff.cell, 0, 0, -1, 0, 0], k * 8);
+    }
+    for (let k = 0; k < edge; k++) {
+      // Patch 101 is the last outside the hole (x < 0), between sample 101 and the ring of ground
+      // carried into the map (102): its stencil reaches sample 103, which has none. z is mid-hole.
+      data.set([ff.originX + (101.5 + 0.045 * k) * ff.cell, 400, 500, 0, 0, -1, 0, 0], (line + k) * 8);
+    }
+    const points = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(points, 0, data);
+    const results = device.createBuffer({ size: count * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const frame = new StructWriter(FRAME);
+    writeWorldInfo(frame, world);
+    frame.set('far', far.info);
+    const frameBuffer = device.createBuffer({ size: frame.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(frameBuffer, 0, frame.buffer);
+    const scene = sceneLayout(device);
+    const local = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
+    const module = device.createShaderModule({ code: moduleSource(farTest) });
+    const pipeline = await device.createComputePipelineAsync({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [scene, local] }),
+      compute: { module, entryPoint: 'normals' },
+    });
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, sceneGroup(device, scene, { frame: frameBuffer, world, far, ...sceneExtras(device) }));
+    pass.setBindGroup(1, device.createBindGroup({ layout: local, entries: [{ binding: 0, resource: { buffer: points } }, { binding: 1, resource: { buffer: results } }] }));
+    pass.dispatchWorkgroups(Math.ceil(count / 64));
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    const n = new Float32Array(await readBuffer(results, count * 32));
+    let worst = 0;
+    let tilt = 0;
+    let edgeBad = 0;
+    for (let k = line; k < count; k++) {
+      const y = n[k * 8 + 1];
+      if (!(Number.isFinite(y) && y > 0.5)) edgeBad++;
+    }
+    for (let k = 1; k < line; k++) {
+      const a = [n[(k - 1) * 8], n[(k - 1) * 8 + 1], n[(k - 1) * 8 + 2]];
+      const b = [n[k * 8], n[k * 8 + 1], n[k * 8 + 2]];
+      const cos = Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+      worst = Math.max(worst, (Math.acos(cos) * 180) / Math.PI);
+      tilt = Math.max(tilt, (Math.acos(Math.min(1, b[1])) * 180) / Math.PI);
+    }
+    for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid, points, results, frameBuffer]) b.destroy();
+    far.destroy();
+    return { worst, tilt, edgeBad, errors: [...g.errors] };
+  },
 };
