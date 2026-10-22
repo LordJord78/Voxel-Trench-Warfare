@@ -68,3 +68,24 @@ test('walking the bay at dusk and strafing it at night, the firing step, the per
   await page.screenshot({ path: 'artifacts/m5/periscope.png' });
   if (errors.length) throw new Error(errors.join('\n'));
 });
+
+// The exposure adapting: the dugout settled at dusk, then the clock put to night (no fresh start),
+// so the lantern-lit chamber comes down from the dusk's exposure at its rate, three stops a second.
+// Written to artifacts/m5.
+test('the dugout as the eye comes down from dusk into the lantern-lit night', async ({ page }) => {
+  const errors = await openGame(page);
+  await hooks(page, (h) => {
+    h.setQuality({ preset: 'high', dynres: false });
+    h.view('dugout');
+  });
+  await hooks(page, (h) => h.waitConverged());
+  await hooks(page, (h) => h.setTimeOfDay(21));
+  // Shots 1, 15, 30, 60 and 120 frames after.
+  let at = 0;
+  for (const [k, frames] of [1, 15, 30, 60, 120].entries()) {
+    await hooks(page, (h, n) => h.waitFrames(n as number), frames - at);
+    at = frames;
+    await page.screenshot({ path: `artifacts/m5/dugout-adapt-${k}.png` });
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
+});
