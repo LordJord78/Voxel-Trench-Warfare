@@ -21,6 +21,7 @@ describe('quality', () => {
       denoise: { historyMax: 32, sigmaLuma: 4, sigmaPlane: 1 },
       sharpness: 0.4,
       bloomWeight: 0.04,
+      bloomMax: 30000,
       // The exposure's adaptation: the approved views' norm and zone, and the eye's rates.
       exposureTarget: -2.92,
       exposureZone: 1.88,

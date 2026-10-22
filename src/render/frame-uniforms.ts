@@ -133,6 +133,8 @@ export const FRAME: StructDef = {
     // Smoke and dust over the lines, a second height fog: per metre at the ground, and the metres it thins by e over.
     ['smokeDensity', 'f32'],
     ['smokeHeight', 'f32'],
+    // The sky's glow a few degrees round the key light, over the key's light (see sky.wgsl).
+    ['aureole', 'f32'],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
     // The atmosphere as this frame's sky view was built.
@@ -166,6 +168,7 @@ export interface FrameSky {
   frontGlow: readonly number[];
   smokeDensity: number;
   smokeHeight: number;
+  aureole: number;
   skyRay: number;
   /** Film grain's deviation in 8-bit steps, for the present pass (not the frame uniform). */
   grain: number;
@@ -217,6 +220,7 @@ export function writeSky(w: StructWriter, sky: FrameSky): void {
   w.set('frontGlow', sky.frontGlow);
   w.set('smokeDensity', sky.smokeDensity);
   w.set('smokeHeight', sky.smokeHeight);
+  w.set('aureole', sky.aureole);
   w.set('skyRay', sky.skyRay);
 }
 
@@ -258,6 +262,7 @@ export const PROBE_DUSK: FrameSky = {
   frontGlow: [0, 0, 0],
   smokeDensity: 0.00053,
   smokeHeight: 300,
+  aureole: 12,
   skyRay: 40,
-  grain: 1.5,
+  grain: 0.6,
 };

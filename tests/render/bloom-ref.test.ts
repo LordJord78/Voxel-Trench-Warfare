@@ -28,4 +28,13 @@ describe('the bloom reference', () => {
     for (let j = 0; j < b.h; j++) for (let i = 0; i < b.w; i++) if (Math.hypot(i + 0.5 - 256, j + 0.5 - 192) > 16) far += b.v[j * b.w + i];
     expect(far / sum(b.v)).toBeGreaterThan(0.2);
   });
+
+  it("caps the first level's taps, and only those", () => {
+    const capped = bloom(image(256, 256, 0.1, 30000, 128, 128), 6, 999);
+    const free = bloom(image(256, 256, 0.1, 30000, 128, 128));
+    // Less light from the point, none of it lost elsewhere: a cap past every tap changes nothing.
+    expect(sum(capped.v)).toBeLessThan(sum(free.v));
+    const loose = bloom(image(256, 256, 0.1, 30000, 128, 128), 6, 1e9);
+    loose.v.forEach((v, i) => expect(v).toBe(free.v[i]));
+  });
 });

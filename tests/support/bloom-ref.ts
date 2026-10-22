@@ -28,15 +28,18 @@ function bilinear(l: Level, x: number, y: number): number {
   return top * (1 - ty) + bottom * ty;
 }
 
-/** Half the size (rounded up): Jimenez's 13 taps round each texel's 2 × 2 block, five 4 × 4 boxes weighted 1/2 and 1/8 each. */
-export function down(src: Level): Level {
+/**
+ * Half the size (rounded up): Jimenez's 13 taps round each texel's 2 × 2 block, five 4 × 4 boxes
+ * weighted 1/2 and 1/8 each, no tap brighter than `cap`.
+ */
+export function down(src: Level, cap = Infinity): Level {
   const w = Math.ceil(src.w / 2);
   const h = Math.ceil(src.h / 2);
   const v = new Float64Array(w * h);
   for (let j = 0; j < h; j++) {
     for (let i = 0; i < w; i++) {
       const [cx, cy] = [2 * i + 1, 2 * j + 1];
-      const s = (dx: number, dy: number) => bilinear(src, cx + dx, cy + dy);
+      const s = (dx: number, dy: number) => Math.min(bilinear(src, cx + dx, cy + dy), cap);
       const inner = (s(-1, -1) + s(1, -1) + s(-1, 1) + s(1, 1)) / 4;
       const g = s(0, 0);
       const corners =
@@ -69,11 +72,11 @@ export function up(coarse: Level, fine: Level, count: number): Level {
   return { w: fine.w, h: fine.h, v };
 }
 
-/** The pyramid's top: `levels` levels down from `image`, and back up to the first (half the image): their mean. */
-export function bloom(image: Level, levels = 6): Level {
+/** The pyramid's top: `levels` levels down from `image` (the first's taps no brighter than `cap`), and back up to the first (half the image): their mean. */
+export function bloom(image: Level, levels = 6, cap = Infinity): Level {
   const downs: Level[] = [];
   let at = image;
-  for (let k = 0; k < levels; k++) downs.push((at = down(at)));
+  for (let k = 0; k < levels; k++) downs.push((at = down(at, k === 0 ? cap : Infinity)));
   let acc = downs[levels - 1];
   for (let k = levels - 2; k >= 0; k--) acc = up(acc, downs[k], levels - 1 - k);
   return acc;

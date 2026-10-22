@@ -54,6 +54,14 @@ test("upscaling a point as bright as the sun's disc leaves no dark ring round it
   expect(Math.min(...r.green)).toBeGreaterThanOrEqual(r.expected - 1);
 });
 
+test("CAS passes a texel as bright as the sun's disc through, unclipped, for the bloom to spread", async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<{ worst: number; spot: number[]; errors: string[] }>(page, 'casFlat', { c: [0.3, 0.2, 0.1, 1], spot: 30000 });
+  expect(r.errors).toEqual([]);
+  for (const v of r.spot) expect(v).toBe(30000);
+  expect(r.worst).toBeLessThan(2e-3);
+});
+
 test('CAS leaves a flat colour unchanged', async ({ page }) => {
   await openHarness(page);
   const r = await runCase<{ worst: number; errors: string[] }>(page, 'casFlat', { c: [0.3, 0.2, 0.1, 1] });

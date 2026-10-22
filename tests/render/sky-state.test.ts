@@ -115,17 +115,27 @@ describe('the sky by the clock', () => {
     for (const hours of [22, 0, 3]) expect(skyState(tun, hours).exposure).toBeCloseTo(0.175, 12);
   });
 
-  it('keeps the fog, the flares and the grain on their keys, linear between them, round the clock', () => {
+  it("grains the image by the sun's height: the day's while it is up, the night's once it is 12° down, between by its depth", () => {
+    const [day, night] = [tun.f('sky.grain_day'), tun.f('sky.grain_night')];
+    // By day under the dither's step; stronger at night.
+    expect(day).toBeLessThan(1);
+    expect(night).toBeGreaterThan(day);
+    for (let h = 0; h < 24; h += 0.25) {
+      const s = skyState(tun, h);
+      const depth = Math.min(Math.max(-s.sunElevationDeg / 12, 0), 1);
+      expect(s.grain, `${h} h`).toBeCloseTo(day + (night - day) * depth, 12);
+    }
+    expect(skyState(tun, 8).grain).toBe(day);
+    expect(skyState(tun, CLOCK_KEYS.night).grain).toBe(night);
+  });
+
+  it('keeps the fog and the flares on their keys, linear between them, round the clock', () => {
     const keys = [CLOCK_KEYS.dawn, CLOCK_KEYS.noon, CLOCK_KEYS.dusk, CLOCK_KEYS.night];
     keys.forEach((hours, k) => {
       const s = skyState(tun, hours);
       expect(s.fogDensity).toBeCloseTo(keyed('fog_density')[k], 12);
       expect(s.flares).toBeCloseTo(keyed('flares')[k], 12);
-      expect(s.grain).toBeCloseTo(keyed('grain')[k], 12);
     });
-    // Stronger at night than by day, and by day under the dither's step.
-    expect(keyed('grain')[3]).toBeGreaterThan(keyed('grain')[1]);
-    expect(keyed('grain')[1]).toBeLessThan(1);
     const mid = skyState(tun, (CLOCK_KEYS.dusk + CLOCK_KEYS.night) / 2);
     expect(mid.fogDensity).toBeCloseTo((keyed('fog_density')[2] + keyed('fog_density')[3]) / 2, 12);
     // From night round to the next dawn: 1:55 is halfway.

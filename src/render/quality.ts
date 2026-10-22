@@ -30,8 +30,9 @@ export interface RenderSettings {
   denoise: { historyMax: number; sigmaLuma: number; sigmaPlane: number };
   /** Sharpening after TAA, 0 to 1. */
   sharpness: number;
-  /** How much of the image's light its bloom spreads, 0 to 1. */
+  /** How much of the image's light its bloom spreads, 0 to 1; and the brightest it takes a tap of the image in at. */
   bloomWeight: number;
+  bloomMax: number;
   /** The exposure's adaptation: the norm the approved views meter round and the zone round it left alone (stops), and its rates toward a darker scene and a brighter (stops a second). */
   exposureTarget: number;
   exposureZone: number;
@@ -49,6 +50,7 @@ export function rendererTunables(tun: Tunables): RenderSettings {
     denoise: { historyMax: tun.i('render.history_max'), sigmaLuma: tun.f('render.atrous_sigma_luma'), sigmaPlane: tun.f('render.atrous_sigma_plane') },
     sharpness: tun.f('render.cas_sharpness'),
     bloomWeight: tun.f('render.bloom_weight'),
+    bloomMax: tun.f('render.bloom_max'),
     exposureTarget: tun.f('sky.exposure_target'),
     exposureZone: tun.f('sky.exposure_zone'),
     adaptToDarker: tun.f('sky.adapt_to_darker'),

@@ -1,7 +1,7 @@
 /**
  * The sky at an hour of the clock (see sky-clock.ts): the sun and moon where
  * the ephemeris puts them, their light through the atmosphere, the key light,
- * and the fog, flares, grain and exposure keyed to the clock.
+ * the fog, flares and exposure keyed to the clock, and the grain to the sun's height.
  *
  * Units. The sun's light above the air is `sky.sun_illuminance`, set so that
  * dusk's key light is the approved one; the atmosphere's sky views are per
@@ -68,6 +68,8 @@ const DISC_DEG = 0.265;
 const MOON_SKY_DEG = -10;
 /** The key's fades, in degrees of the sun's elevation either side of the crossing. */
 const CROSSFADE_DEG = 2;
+/** How far below the horizon the sun is when the grain is the night's, in degrees. */
+const GRAIN_NIGHT_DEG = 12;
 /** A magnitude-0 star's light against the full moon's: 2.1e-6 lux against 0.25. */
 const MAG0_PER_FULL_MOON = 8.4e-6;
 
@@ -149,6 +151,12 @@ function crossing(m: AtmosphereModel, sunLight: Vec3, target: number): number {
   return (lo + hi) / 2;
 }
 
+/** Film grain's deviation (8-bit steps) with the sun `elevationDeg` up: the day's while it is up, the night's once it is GRAIN_NIGHT_DEG down, between by its depth. */
+function grainAt(tun: Tunables, elevationDeg: number): number {
+  const [day, night] = [tun.f('sky.grain_day'), tun.f('sky.grain_night')];
+  return day + (night - day) * Math.min(Math.max(-elevationDeg / GRAIN_NIGHT_DEG, 0), 1);
+}
+
 const smoothstep = (a: number, b: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
@@ -188,7 +196,7 @@ export function skyState(tun: Tunables, hours: number): SkyState {
     fogDensity: keyed(tun, 'fog_density', hours),
     exposure: exposureBias(tun, hours),
     flares: keyed(tun, 'flares', hours),
-    grain: keyed(tun, 'grain', hours),
+    grain: grainAt(tun, c.sun.elevationDeg),
   };
 }
 
@@ -219,6 +227,7 @@ export function frameSky(sky: SkyState, tun: Tunables): FrameSky {
     frontGlow: scale(triple(tun, 'sky.front_glow'), sky.flares),
     smokeDensity: tun.f('sky.smoke_density'),
     smokeHeight: tun.f('sky.smoke_height_m'),
+    aureole: tun.f('sky.aureole'),
     skyRay: tun.f('render.sky_ray_m') / voxel,
     grain: sky.grain,
   };

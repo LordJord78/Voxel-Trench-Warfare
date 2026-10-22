@@ -188,7 +188,21 @@ fn stars(rd: vec3f, behind: vec3f) -> vec3f {
 }
 
 // The sky with its bodies: the sun's and moon's discs and the stars.
+// The aureole: the sky's glow a few degrees round the key light (the sun's, or the moon's at night),
+// as cos⁹⁰⁰ of the angle from it, some 2.7° to 1/e: the bright, near-forward scattering of the haze
+// over the lines, finer than the sky-view LUT's texels (some 2°) can hold, and the approved dusk's
+// glow round the sun. Through the key's light, it fades as the key does at sunset and sunrise.
+const AUREOLE_POWER: f32 = 900.0;
+
+fn aureole(rd: vec3f) -> vec3f {
+  let c = dot(rd, frame.keyDir);
+  if (c <= 0.0) {
+    return vec3f(0.0);
+  }
+  return frame.keyColour * (frame.aureole * exp(AUREOLE_POWER * log(c)));
+}
+
 fn skyWithBodies(rd: vec3f) -> vec3f {
   let sky = skyColour(rd);
-  return sky + sunDisc(rd) + moonDisc(rd) + stars(rd, sky);
+  return sky + aureole(rd) + sunDisc(rd) + moonDisc(rd) + stars(rd, sky);
 }

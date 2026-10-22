@@ -579,7 +579,7 @@ export class Renderer {
     pass('shade', 'shade', this.res);
     pass('taa', 'taa', this.res);
     pass('cas', 'cas', this.res);
-    this.bloom.encode(encoder, this.res, this.timer.writes('bloom'));
+    this.bloom.encode(encoder, this.res, this.options.bloomMax ?? 999, this.timer.writes('bloom'));
     // Without settings (tests), the zone is wide enough that nothing is ever corrected.
     this.autoExposure.encode(
       encoder,

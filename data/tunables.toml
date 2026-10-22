@@ -468,6 +468,7 @@ atrous_sigma_luma   = 4.0      # edge-stopping on brightness, in standard deviat
 atrous_sigma_plane  = 1.0      # edge-stopping on distance from the face's plane, in voxels
 cas_sharpness       = 0.4      # contrast-adaptive sharpening, 0 to 1
 bloom_weight        = 0.04     # how much of the image's light its bloom spreads: a six-level pyramid, no threshold (bloom.ts)
+bloom_max           = 30000.0  # the brightest a tap of the image is taken into the bloom at: how far the sun's disc (up to 30,000) lights the sky round it
 gpu_budget_ms       = 14.0     # dynamic resolution holds the GPU frame under this
 internal_mp_high    = 1.5      # internal image of the "high" preset, in megapixels
 flares              = 6        # static flares hanging over no man's land at night
@@ -524,7 +525,10 @@ star_gain           = 16.0     # the stars over their light against the moon's: 
 # Keyed to the clock: dawn 06:50, noon 12:00, dusk 17:35, night 21:00; between them by the hour.
 fog_density         = [0.02, 0.006, 0.012, 0.02]   # per metre, at the ground
 flares              = [0.2, 0.0, 0.0, 1.0]         # how brightly the static flares burn
-grain               = [2.0, 0.6, 1.5, 3.0]         # film grain's deviation, in 8-bit steps: by day under the dither's step
+# Film grain's deviation, in 8-bit steps, by the sun's height: the day's while it is up, the night's
+# once it is 12° below the horizon, between by its depth.
+grain_day           = 0.6      # under the dither's step
+grain_night         = 3.0
 # The frame is exposed by a bias over the light it shows (exposure.wgsl), keyed to hours of its
 # own and geometric between them, round the clock. Dusk's and night's keep their approved exposures
 # (1.0 and 3.2); night stays dark on purpose, held to 04:30. Twilight is darker than the moonlit
@@ -554,4 +558,5 @@ front_glow          = [0.0153, 0.0045, 0.0]   # the front's fires and flares on 
 # the lower sky as the approved sky's horizon colour did.
 smoke_density       = 0.00053  # per metre, at the ground
 smoke_height_m      = 300.0    # it thins by e over this many metres
+aureole             = 12.0     # the sky's glow round the key light (sun or moon), over the key's light at its middle, falling as cos⁹⁰⁰: some 2.7° to 1/e, the approved sun's glow
 

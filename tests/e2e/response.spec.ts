@@ -30,6 +30,15 @@ test('with dynamic resolution only the rendered part blooms, whatever lies beyon
   expect(Math.abs(r.energy - 1)).toBeLessThan(0.01);
 });
 
+test('the bloom takes its input in no brighter than its cap', async ({ page }) => {
+  await openHarness(page);
+  const r = await runCase<BloomResult>(page, 'bloom', { w: 1024, h: 768, noise: 0.02, point: 30000, cap: 999 });
+  expect(r.errors).toEqual([]);
+  expect(r.bad).toBe(0);
+  expect(r.worst).toBeLessThan(1);
+  expect(Math.abs(r.energy - 1)).toBeLessThan(0.01);
+});
+
 test("the sun's disc spreads into a halo: falling outward, never negative", async ({ page }) => {
   await openHarness(page);
   const r = await runCase<BloomResult>(page, 'bloom', { w: 1024, h: 768, noise: 0, point: 30000 });
@@ -136,8 +145,10 @@ test('grain is blue, keyed to the hour, and moves', async ({ page }) => {
   expect(Math.abs(deviation(a) / night.key - 1)).toBeLessThan(0.1);
   expect(low / high).toBeLessThan(0.2);
   expect(Math.abs(correlation)).toBeLessThan(0.2);
-  // By day, below the dither's step.
-  const noon = await runCase<Grain>(page, 'grain', { hours: 12, shifts });
-  expect(noon.errors).toEqual([]);
-  expect(deviation(noon.a.map((v, i) => v - noon.none[i]))).toBeLessThan(1);
+  // By day, below the dither's step: at noon and in the morning.
+  for (const hours of [12, 8]) {
+    const day = await runCase<Grain>(page, 'grain', { hours, shifts });
+    expect(day.errors).toEqual([]);
+    expect(deviation(day.a.map((v, i) => v - day.none[i])), `${hours} h`).toBeLessThan(1);
+  }
 });

@@ -10,7 +10,8 @@ struct Level {
   out: vec2u,
   // Going up: how many levels the coarser image is the mean of.
   count: f32,
-  pad: f32,
+  // No tap brighter than this (going down from the image: render.bloom_max; elsewhere, none).
+  cap: f32,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -21,7 +22,9 @@ struct Level {
 
 fn tap(p: vec2f) -> vec3f {
   let q = clamp(p, vec2f(0.5), level.valid - 0.5);
-  return textureSampleLevel(source, linear, q / level.alloc, 0.0).rgb;
+  let c = textureSampleLevel(source, linear, q / level.alloc, 0.0).rgb;
+  // Its colour kept, its brightest channel no higher than the cap.
+  return c * min(1.0, level.cap / max(max(c.r, max(c.g, c.b)), 1e-30));
 }
 
 // Half the size: Jimenez's 13 taps round each texel's 2 × 2 block of the finer level, five 4 × 4

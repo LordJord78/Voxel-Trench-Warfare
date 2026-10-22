@@ -330,6 +330,28 @@ test("the sun's disc is brightest at its centre, darker at its limb, and sets in
   expect(lum(below.values[0])).toBeLessThan(2 * lum(below.values[1]) + 1e-6);
 });
 
+test('the aureole: the sky glows a few degrees round the key light, as cos⁹⁰⁰ of the angle from it', async ({ page }) => {
+  await openHarness(page);
+  // A white key 30° up; the sky itself dark, so what shows is the glow (and, inside 0.27°, the disc, which these miss).
+  const key = direction(40, 30);
+  const angles = [0.4, 1, 2, 3, 5, 10];
+  const dirs = angles.map((a) => {
+    const e = ((30 + a) * Math.PI) / 180;
+    const z = (40 * Math.PI) / 180;
+    return [Math.sin(z) * Math.cos(e), Math.sin(e), Math.cos(z) * Math.cos(e)] as V3;
+  });
+  const r = await runCase<{ compileErrors: string[]; values: number[][]; errors: string[] }>(page, 'skyBodies', {
+    dirs,
+    sky: { sunDir: [0, -1, 0], moonDir: [0, -1, 0], keyDir: key, keyColour: [1, 1, 1], aureole: 10 },
+  });
+  expect(r.compileErrors).toEqual([]);
+  expect(r.errors).toEqual([]);
+  angles.forEach((a, i) => {
+    const want = 10 * Math.cos((a * Math.PI) / 180) ** 900;
+    expect(Math.abs(r.values[i][1] - want), `${a}°: ${r.values[i][1]} for ${want}`).toBeLessThanOrEqual(0.01 * want + 1e-6);
+  });
+});
+
 test('the stars: a field fixed in the sky at night, a few hundred pixels in a 60° patch, none at noon or in civil twilight', async ({ page }) => {
   test.setTimeout(240_000);
   await openHarness(page);

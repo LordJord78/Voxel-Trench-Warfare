@@ -3,7 +3,8 @@
  * (Jimenez's 13-tap filter going down, a 3 × 3 tent coming back up), brought back into the first
  * as their mean (bloom.wgsl). Each level keeps the image's energy, so their mean does too, and the
  * present pass mixes it into the image at `render.bloom_weight` with no threshold: light is only
- * spread, never made.
+ * spread, never made. The one bound on it is `render.bloom_max`, the brightest a tap of the first
+ * level is taken in at: it sets how far the sun's disc, at up to 30,000, lights the sky round it.
  *
  * Dynamic resolution renders part of each texture; every level's rendered part is half the one
  * before it (rounded up), and no tap reads outside it.
@@ -91,20 +92,23 @@ export class Bloom {
     }
   }
 
-  /** The pyramid over the source's rendered part, `res`, in one compute pass (timed by `timestampWrites`, if given). */
-  encode(encoder: GPUCommandEncoder, res: readonly [number, number], timestampWrites?: GPUComputePassTimestampWrites): void {
+  /**
+   * The pyramid over the source's rendered part, `res`, in one compute pass (timed by
+   * `timestampWrites`, if given), no tap of the first level brighter than `cap`.
+   */
+  encode(encoder: GPUCommandEncoder, res: readonly [number, number], cap: number, timestampWrites?: GPUComputePassTimestampWrites): void {
     // Each level's rendered texels (the source's first) and the size its texture was allocated at.
     const valid: [number, number][] = [[res[0], res[1]]];
     for (let k = 0; k < BLOOM_LEVELS; k++) valid.push([half(valid[k][0]), half(valid[k][1])]);
     const allocs: [number, number][] = [this.alloc, ...this.downs.map((t): [number, number] => [t.width, t.height])];
     const data = new ArrayBuffer(STRIDE * PASSES);
-    const write = (pass: number, from: number, to: number, count: number) => {
+    const write = (pass: number, from: number, to: number, count: number, tapCap: number) => {
       new Float32Array(data, pass * STRIDE, 4).set([...valid[from], ...allocs[from]]);
       new Uint32Array(data, pass * STRIDE + 16, 2).set(valid[to]);
-      new Float32Array(data, pass * STRIDE + 24, 1).set([count]);
+      new Float32Array(data, pass * STRIDE + 24, 2).set([count, tapCap]);
     };
-    for (let k = 0; k < BLOOM_LEVELS; k++) write(k, k, k + 1, 0);
-    for (let k = BLOOM_LEVELS - 2; k >= 0; k--) write(BLOOM_LEVELS + (BLOOM_LEVELS - 2 - k), k + 2, k + 1, BLOOM_LEVELS - 1 - k);
+    for (let k = 0; k < BLOOM_LEVELS; k++) write(k, k, k + 1, 0, k === 0 ? cap : 1e30);
+    for (let k = BLOOM_LEVELS - 2; k >= 0; k--) write(BLOOM_LEVELS + (BLOOM_LEVELS - 2 - k), k + 2, k + 1, BLOOM_LEVELS - 1 - k, 1e30);
     this.device.queue.writeBuffer(this.uniform, 0, data);
     const pass = encoder.beginComputePass({ label: 'bloom', timestampWrites });
     const dispatch = (pipeline: GPUComputePipeline, group: GPUBindGroup, size: [number, number]) => {

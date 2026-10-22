@@ -149,8 +149,11 @@ export const cases = {
     return { green, expected, errors: [...g.errors] };
   },
 
-  /** CAS over a flat image: how far any output pixel strays from the input colour. */
-  async casFlat(args: { c: number[] }) {
+  /**
+   * CAS over a flat image (with one texel of `spot` at its middle, if given): how far any other
+   * output pixel strays from the input colour, and what the spot comes out as.
+   */
+  async casFlat(args: { c: number[]; spot?: number }) {
     const g = await gpu();
     const map = new BrickMap({ x: 32, y: 32, z: 32 });
     const world = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
@@ -160,7 +163,9 @@ export const cases = {
     const input = device.createTexture({ size: [32, 32], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     const out = device.createTexture({ size: [32, 32], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
     const hc = args.c.map(floatToHalf);
-    device.queue.writeTexture({ texture: input }, new Uint16Array(32 * 32 * 4).map((_, i) => (i % 4 === 3 ? floatToHalf(1) : hc[i % 4])), { bytesPerRow: 32 * 8 }, [32, 32]);
+    const texels = new Uint16Array(32 * 32 * 4).map((_, i) => (i % 4 === 3 ? floatToHalf(1) : hc[i % 4]));
+    if (args.spot !== undefined) texels.fill(floatToHalf(args.spot), (16 * 32 + 16) * 4, (16 * 32 + 16) * 4 + 3);
+    device.queue.writeTexture({ texture: input }, texels, { bytesPerRow: 32 * 8 }, [32, 32]);
     // Render once so the renderer's frame uniform (resolution, sharpness) is written, then run CAS alone with it.
     r.render({ position: [1, 1, 1], yaw: 0, pitch: 0 }, 0, 0);
     const group = device.createBindGroup({ layout: compiled.layouts.cas, entries: [input.createView(), out.createView()].map((resource, binding) => ({ binding, resource })) });
@@ -173,10 +178,16 @@ export const cases = {
     pass.end();
     device.queue.submit([encoder.finish()]);
     const px = await rgba(out);
+    const spotAt = 16 * 32 + 16;
     let worst = 0;
-    for (let i = 0; i < px.length; i += 4) for (let c = 0; c < 3; c++) worst = Math.max(worst, Math.abs(px[i + c] - halfToFloat(hc[c])));
+    for (let i = 0; i < px.length; i += 4) {
+      // Away from the spot and the four texels beside it, which it may sharpen against.
+      const k = i / 4;
+      if (args.spot !== undefined && [spotAt, spotAt - 1, spotAt + 1, spotAt - 32, spotAt + 32].includes(k)) continue;
+      for (let c = 0; c < 3; c++) worst = Math.max(worst, Math.abs(px[i + c] - halfToFloat(hc[c])));
+    }
     for (const b of [world.table, world.sectors, world.heap, world.palette, world.pyramid]) b.destroy();
-    return { worst, errors: [...g.errors] };
+    return { worst, spot: px.slice(spotAt * 4, spotAt * 4 + 3), errors: [...g.errors] };
   },
 
   /**
