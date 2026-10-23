@@ -99,6 +99,18 @@ export interface Hooks {
   rifleCheck(n: number): Promise<{ visible: boolean; samples: { px: [number, number]; gpu: number; cpu: number | null }[] }>;
   /** The mean luminance (linear) of the rifle's pixels in the last frame's shaded image. */
   rifleLuminance(): Promise<number>;
+  /**
+   * A shell landing at `at` (metres; its y is ignored, the ground's top is used) of `radiusM`: it
+   * resolves once its crater is written back into the world, with the time from the drop and the
+   * bricks it changed.
+   */
+  shell(at: [number, number, number], radiusM: number): Promise<{ ms: number; bricks: number }>;
+  /** As shell, and once it lands, whether the world's bricks over its region are what an in-process detonate on a copy taken at the drop cuts. */
+  shellCheck(at: [number, number, number], radiusM: number): Promise<{ ms: number; bricks: number; equal: boolean }>;
+  /** Craters landed. */
+  craters(): number;
+  /** Each of the last 600 frames' main-thread time, ms, from the frame's start to its render's return. */
+  mainMs(): number[];
   /** The sound: its context's state ('none' before the click that starts play) and how many voices have started. */
   audio(): { state: 'none' | 'suspended' | 'running' | 'closed'; voices: number };
 }

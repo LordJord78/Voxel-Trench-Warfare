@@ -37,8 +37,13 @@ import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
 import { PeriscopeFrame } from '../ui/periscope';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from '../ui/settings';
+import { UNIFORM } from '../world/bricks';
+import { DETONATION_MARGIN, DETONATION_WIDEN, detonationRegion, runDetonation } from '../world/detonation';
 import { fingerprint } from '../world/fingerprint';
+import { groundTop } from '../world/raycast';
+import { copyRegion, type RegionCopy } from '../world/region-copy';
 import { CameraRig, rigTunables } from './camera-rig';
+import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
 import { EffectsFrameBuilder, effectsTunables, type BuiltEffects, type DebugQuad, type DebugRibbon } from './effects-frame';
 import { FlyCam } from './flycam';
@@ -169,7 +174,29 @@ async function start(): Promise<void> {
   const renderer = await Renderer.create(gpu, canvas, gpuWorld, world.plan, { ...render, far, compiled, dynres: true });
 
   const views = standardViews(world.plan, world.spawn);
-  const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn }, tun, SEED, views.bay.yaw);
+  // Craters are cut in a worker, off the frame.
+  const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn, runner: workerRunner() }, tun, SEED, views.bay.yaw);
+  // Shells the tests drop: each one's waiter, told its crater's bricks when it lands.
+  const craterWaiters = new Map<number, (bricks: number) => void>();
+  let cratersLanded = 0;
+  let shellsDropped = 0;
+  const voxelM = world.plan.params.voxel;
+  const dropShell = (at: readonly number[], radiusM: number, keep: boolean) => {
+    const x = at[0] / voxelM;
+    const z = at[2] / voxelM;
+    const top = groundTop(session.map, x, z);
+    if (top === null) throw new Error(`no ground at ${at[0]}, ${at[2]}`);
+    const centre: [number, number, number] = [x, top, z];
+    const radius = radiusM / voxelM;
+    const seed = 0x5eed0000 + shellsDropped++;
+    // For a check: a copy wide enough for two widenings, taken before the shell goes out.
+    const wide = keep ? detonationRegion(session.map.dims, centre, radius, session.destruction.t.options.loosen, DETONATION_MARGIN + 2 * DETONATION_WIDEN) : null;
+    const copy: RegionCopy | null = wide ? copyRegion(session.map, wide) : null;
+    const t0 = performance.now();
+    const id = session.destruction.shell(centre, radius, seed);
+    const landed = new Promise<{ ms: number; bricks: number }>((resolve) => craterWaiters.set(id, (bricks) => resolve({ ms: performance.now() - t0, bricks })));
+    return { id, centre, radius, seed, copy, landed };
+  };
   const rig = new CameraRig(rigTunables(tun));
   const effects = new EffectsFrameBuilder(effectsTunables(tun));
   const hearing = audioTunables(tun);
@@ -381,6 +408,10 @@ async function start(): Promise<void> {
   // test reads back stays put.
   let frozen = false;
   let steps = 0;
+  // Each of the last MAIN_FRAMES frames' main-thread time (the hooks' mainMs).
+  const MAIN_FRAMES = 600;
+  const mainMs = new Float64Array(MAIN_FRAMES);
+  let mainFrames = 0;
   const frame = (time: number) => {
     if (stopped) return;
     if (frozen && steps === 0) {
@@ -389,7 +420,9 @@ async function start(): Promise<void> {
     }
     if (frozen) steps--;
     try {
+      const t0 = performance.now();
       step(frozen ? last - skipped + 1000 / 60 : time);
+      mainMs[mainFrames++ % MAIN_FRAMES] = performance.now() - t0;
     } catch (e) {
       // A frame that throws would otherwise freeze the last image without a word.
       console.error(e);
@@ -432,6 +465,11 @@ async function start(): Promise<void> {
     renderer.setRifle(rifle);
     // What this frame's ticks did, once: seen, from the rifle as it is drawn, and heard.
     const events = session.drainEvents();
+    for (const c of events.craters) {
+      cratersLanded++;
+      craterWaiters.get(c.id)?.(c.bricks);
+      craterWaiters.delete(c.id);
+    }
     const frameEffects = effects.build(session, events, rifle);
     audio.listen(pose);
     audio.play(planVoices(hearing, events, pose.position));
@@ -601,6 +639,41 @@ async function start(): Promise<void> {
       renderer.flags = on ? renderer.flags & ~FLAGS.JITTER_OFF : renderer.flags | FLAGS.JITTER_OFF;
     },
     audio: () => ({ state: audio.state, voices: audio.voices }),
+    shell: (at: [number, number, number], radiusM: number) => dropShell(at, radiusM, false).landed,
+    shellCheck: async (at: [number, number, number], radiusM: number) => {
+      const drop = dropShell(at, radiusM, true);
+      const { ms, bricks } = await drop.landed;
+      const copy = drop.copy!;
+      const map = session.map;
+      const r = runDetonation({ id: drop.id, centre: drop.centre, radius: drop.radius, seed: drop.seed, options: session.destruction.t.options, copy, world: map.dims });
+      if (!('patches' in r)) return { ms, bricks, equal: false };
+      // Over the copy's region: the bricks the job changed as it left them, the rest as they were.
+      const changed = new Map(r.patches.map((p) => [map.brickIndex(p.at[0], p.at[1], p.at[2]), p]));
+      const got = new Uint8Array(512);
+      const want = new Uint8Array(512);
+      let equal = true;
+      for (let i = 0; i < copy.entries.length && equal; i++) {
+        const bx = i % copy.size[0];
+        const by = ((i - bx) / copy.size[0]) % copy.size[1];
+        const bz = (i - bx - by * copy.size[0]) / (copy.size[0] * copy.size[1]);
+        const bi = map.brickIndex(copy.origin[0] + bx, copy.origin[1] + by, copy.origin[2] + bz);
+        map.readBrick(bi, got);
+        const p = changed.get(bi);
+        const e = copy.entries[i];
+        if (p) {
+          if (p.voxels) want.set(p.voxels);
+          else want.fill(p.entry & 0xff);
+        } else if (e === 0 || e & UNIFORM) want.fill(e & 0xff);
+        else want.set(copy.dense.subarray((e - 1) * 512, e * 512));
+        for (let v = 0; v < 512 && equal; v++) equal = got[v] === want[v];
+      }
+      return { ms, bricks, equal };
+    },
+    craters: () => cratersLanded,
+    mainMs: () => {
+      const n = Math.min(mainFrames, MAIN_FRAMES);
+      return Array.from({ length: n }, (_, k) => mainMs[(mainFrames - n + k) % MAIN_FRAMES]);
+    },
     rifleVisible: () => renderer.rifleState().visible,
     showRifle(on: boolean) {
       rifleHeld = on;
