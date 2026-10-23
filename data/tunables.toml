@@ -473,6 +473,7 @@ flash_intensity     = 60.0
 flash_light_radius_m  = 6.0    # a shot's light: warm, falling to nothing at this
 flash_light_intensity = 40.0
 flash_light_colour    = [1.0, 0.72, 0.40]
+rifle_specular      = 0.35     # the key's light off the rifle's steel, toward the eye
 particle_glow       = 60.0     # the flash's and the sparks' particles
 dust_key            = 0.4      # how much of the key's light a mote of dust or a
 dust_sky            = 0.6      # case of brass takes, and of the sky's from above
@@ -483,6 +484,10 @@ rest_up_m           = -0.205
 rest_forward_m      = 0.440
 sway_follow         = 0.5      # the walk's sideways sway the rifle carries
 run_dip_m           = 0.012    # how far it drops at a run (the reference's)
+step_raise_m        = 0.14     # raised to the shoulder on the firing step, so it
+                               # clears a crest 0.12 m under a standing eye (at
+                               # rest it hangs 0.205 m under it, in the parapet)
+raise_s             = 0.18     # how long raising and lowering it takes, roughly
 
 # The trench periscope. Elevation is the payoff — this is the only way to look
 # at no-man's-land from behind the parapet rather than over it — and the costs

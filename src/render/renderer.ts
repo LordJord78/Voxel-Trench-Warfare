@@ -55,7 +55,9 @@ import { Bloom, type BloomPipelines } from './bloom';
 import { copyPose, jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
+import { rifleModel } from '../combat/rifle-model';
 import { Effects, effectsLook, type EffectsFrame, type EffectsPipelines, type TransientLight } from './effects';
+import { Rifle, type RifleDrawn, type RiflePipelines, type RiflePose } from './rifle';
 import { FarFieldGpu } from './farfield-gpu';
 import { FlareShadows } from './flare-shadows';
 import { froxelLayouts, Froxels, type FroxelPipelines } from './froxels';
@@ -81,7 +83,7 @@ import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['sky', 'beam', 'maps', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'froxels', 'shade', 'taa', 'cas', 'effects-light', 'effects', 'bloom', 'expose', 'present'] as const;
+const PASSES = ['sky', 'beam', 'maps', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'froxels', 'shade', 'rifle', 'taa', 'cas', 'effects-light', 'effects', 'bloom', 'expose', 'present'] as const;
 type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas' | 'exposure';
 type Timed = (typeof PASSES)[number];
 
@@ -173,6 +175,7 @@ export interface CompiledFrame {
   keyShadow: KeyShadowPipelines;
   froxels: FroxelPipelines;
   effects: EffectsPipelines;
+  rifle: RiflePipelines;
   lights: GPUBuffer;
   noise: GPUTexture;
   /** Empty sky LUTs, for scenes built without an atmosphere. */
@@ -243,7 +246,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects] = await Promise.all([
+  const [beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects, rifle] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'primary keyed', primarySrc, [scene, layouts.primary, keyLayouts.write], 'keyed'),
@@ -269,8 +272,9 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     KeyShadow.compile(device, scene, keyLayouts),
     Froxels.compile(device, scene, keyLayouts, froxelLayout),
     Effects.compile(device, scene, keyLayouts.read),
+    Rifle.compile(device, scene, keyLayouts.read),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects, rifle, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -308,6 +312,8 @@ export class Renderer {
   private readonly froxels: Froxels;
   /** Tracers, the flash's star and the particles, over the sharpened image. */
   private readonly effects: Effects;
+  /** The player's rifle, traced and lit after shade. */
+  private readonly rifle: Rifle;
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
   /** Bind groups by frame parity: histories ping-pong between two sets of textures. */
@@ -376,6 +382,7 @@ export class Renderer {
     this.keyShadow = KeyShadow.create(device, compiled.keyShadow, world.map.dims, this.voxelSize(), this.flareShadows);
     this.froxels = Froxels.create(device, compiled.froxels, this.cells, this.keyShadow, FROXEL_COLUMNS[this.preset]);
     this.effects = Effects.create(device, compiled.effects, this.frameBuffer, this.keyShadow.group, effectsLook(loadTunables()));
+    this.rifle = Rifle.create(device, compiled.rifle, rifleModel(), this.cells, this.keyShadow.group, loadTunables().f('effects.rifle_specular'));
     this.lightScale = LIGHT_SCALE[this.preset];
     this.budgetMs = options.budgetMs ?? 14;
     if (options.dynres) this.dynres = new DynamicResolution(frameBudget(this.timer.enabled, this.budgetMs));
@@ -436,6 +443,56 @@ export class Renderer {
     this.effects.set(frame);
   }
 
+  /** Where the player's rifle is this frame (camera-rig.ts); null hides it. */
+  setRifle(pose: RiflePose | null): void {
+    this.rifle.set(pose);
+  }
+
+  /** What the last frame drew of the rifle: whether, where on the image, and through what. */
+  rifleState(): RifleDrawn {
+    return this.rifle.drawn;
+  }
+
+  /** The G-buffer's depth the last frame left over a box of the internal image, in metres along each pixel's ray, a row at a time. */
+  async readDepthBox(box: readonly [number, number, number, number]): Promise<Float32Array> {
+    const [x, y, w, h] = box;
+    const row = Math.ceil((w * 4) / 256) * 256;
+    const staging = this.device.createBuffer({ size: Math.max(1, row * h), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const encoder = this.device.createCommandEncoder();
+    if (w > 0 && h > 0) encoder.copyTextureToBuffer({ texture: this.textures.gDepth, origin: { x, y } }, { buffer: staging, bytesPerRow: row }, { width: w, height: h });
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const data = new Float32Array(staging.getMappedRange().slice(0));
+    staging.destroy();
+    const out = new Float32Array(w * h);
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) out[j * w + i] = data[(j * row) / 4 + i] * this.voxelSize();
+    return out;
+  }
+
+  /** The last frame's shaded image (before TAA) over a box of the internal image: linear rgb, a row at a time. */
+  async readColour(box: readonly [number, number, number, number]): Promise<Float32Array> {
+    const [x, y, w, h] = box;
+    const row = Math.ceil((w * 8) / 256) * 256;
+    const staging = this.device.createBuffer({ size: Math.max(1, row * h), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const encoder = this.device.createCommandEncoder();
+    if (w > 0 && h > 0) encoder.copyTextureToBuffer({ texture: this.textures.colour, origin: { x, y } }, { buffer: staging, bytesPerRow: row }, { width: w, height: h });
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const halves = new Uint16Array(staging.getMappedRange().slice(0));
+    staging.destroy();
+    const out = new Float32Array(w * h * 3);
+    const half = (b: number) => {
+      const e = (b >> 10) & 0x1f;
+      const m = b & 0x3ff;
+      const s = b & 0x8000 ? -1 : 1;
+      if (e === 0) return s * m * 2 ** -24;
+      if (e === 31) return m ? NaN : s * Infinity;
+      return s * (1 + m / 1024) * 2 ** (e - 15);
+    };
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) for (let c = 0; c < 3; c++) out[(j * w + i) * 3 + c] = half(halves[(j * row) / 2 + i * 4 + c]);
+    return out;
+  }
+
   /** This frame's transient lights (shots' flashes): the strongest MAX_FLASHES of them light it. */
   setTransientLights(lights: readonly TransientLight[]): void {
     this.flashes = [...lights].sort((a, b) => b.intensity - a.intensity).slice(0, MAX_FLASHES);
@@ -488,6 +545,7 @@ export class Renderer {
     make('gHit', 'rg32uint', this.alloc);
     make('gMotion', 'rgba16float', this.alloc);
     make('colour', 'rgba16float', this.alloc);
+    this.rifle.bind(this.textures.gDepth, this.textures.gMotion, this.textures.colour, this.alloc);
     make('taa0', 'rgba16float', this.alloc);
     make('taa1', 'rgba16float', this.alloc);
     // The effects are drawn into it, by a render pass.
@@ -709,6 +767,8 @@ export class Renderer {
     pass('atrous3', 'atrous', light);
     this.froxels.encode(encoder, this.sceneGroup!, this.frameIndex & 1, this.timer.writes('froxels'));
     pass('shade', 'shade', this.res, [this.froxels.none, this.froxels.group]);
+    // Timed only when it runs, as the effects.
+    this.rifle.encode(encoder, this.sceneGroup!, pose, this.res, (name) => this.timer.writes(name));
     pass('taa', 'taa', this.res);
     pass('cas', 'cas', this.res);
     // Timed only when they run (a slot not written this frame would hold another frame's times).

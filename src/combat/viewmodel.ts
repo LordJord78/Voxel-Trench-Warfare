@@ -22,6 +22,9 @@ export interface ViewmodelTunables {
   swayFollow: number;
   /** How far the rifle drops at a run. */
   runDipM: number;
+  /** How far it is raised on the firing step, and the time constant of raising it. */
+  stepRaiseM: number;
+  raiseS: number;
 }
 
 export function viewmodelTunables(tun: Tunables): ViewmodelTunables {
@@ -31,6 +34,8 @@ export function viewmodelTunables(tun: Tunables): ViewmodelTunables {
     restForwardM: tun.f('viewmodel.rest_forward_m'),
     swayFollow: tun.f('viewmodel.sway_follow'),
     runDipM: tun.f('viewmodel.run_dip_m'),
+    stepRaiseM: tun.f('viewmodel.step_raise_m'),
+    raiseS: tun.f('viewmodel.raise_s'),
   };
 }
 
@@ -52,10 +57,10 @@ export interface ViewmodelPose {
   roll: number;
 }
 
-/** The pose for a kick, the walk's sway (metres, as the camera's) and a run's share of full speed. */
-export function viewmodelPose(t: ViewmodelTunables, kick: ViewmodelKick, sway: number, speedRatio: number): ViewmodelPose {
+/** The pose for a kick, the walk's sway (metres, as the camera's), a run's share of full speed, and how far raised for the firing step (0 to 1). */
+export function viewmodelPose(t: ViewmodelTunables, kick: ViewmodelKick, sway: number, speedRatio: number, raised = 0): ViewmodelPose {
   return {
-    offset: [t.restRightM + kick.side + sway * t.swayFollow, t.restUpM + kick.up - speedRatio * t.runDipM, t.restForwardM - kick.back],
+    offset: [t.restRightM + kick.side + sway * t.swayFollow, t.restUpM + kick.up - speedRatio * t.runDipM + raised * t.stepRaiseM, t.restForwardM - kick.back],
     pitch: kick.pitch,
     yaw: kick.yaw,
     roll: kick.roll,

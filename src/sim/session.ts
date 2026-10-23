@@ -20,7 +20,7 @@ import { ViewKick, viewKickProfile } from '../combat/viewkick';
 import { modelToView, viewBasis, viewmodelPose, viewmodelTunables, type ViewmodelKick, type ViewmodelPose, type ViewmodelTunables } from '../combat/viewmodel';
 import { Weapon, weaponSpec } from '../combat/weapon';
 import { FixedClock } from '../core/clock';
-import { hypot } from '../core/dmath';
+import { exp, hypot } from '../core/dmath';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import { CharacterController, controllerTunables, newCharacter, Stance, type CharacterState, type MoveIntent } from '../physics/character';
@@ -96,6 +96,9 @@ export class Session {
   /** Where the rifle is held, and the view kick's channels before the last tick. */
   readonly viewmodel: ViewmodelTunables;
   private prevKick: ViewmodelKick;
+  /** How far the rifle is raised for the firing step (0 to 1), now and before the last tick. */
+  private raised = 0;
+  private prevRaised = 0;
   /** The player's rifle, and the rounds in the air. */
   readonly weapon: Weapon;
   readonly rounds: Rounds;
@@ -176,8 +179,12 @@ export class Session {
     this.prevPosition = p.position;
     this.prevView = this.view();
     this.prevKick = this.kick();
+    this.prevRaised = this.raised;
     this.controller.tick(p, this.intent, this.clock.dt);
     if (wasOnStep && p.pinned && p.stance !== Stance.FIRING_STEP) this.ejected++;
+    // To the shoulder on the firing step, over the parapet; down off it.
+    const raise = p.stance === Stance.FIRING_STEP ? 1 : 0;
+    this.raised += (raise - this.raised) * (1 - exp(-this.clock.dt / this.viewmodel.raiseS));
     this.combat(this.clock.dt);
     this.particles.step(this.clock.dt);
   }
@@ -294,7 +301,8 @@ export class Session {
     const a = this.prevKick;
     const b = this.kick();
     const at = (k: keyof ViewmodelKick) => a[k] + (b[k] - a[k]) * alpha;
-    return viewmodelPose(this.viewmodel, { back: at('back'), up: at('up'), side: at('side'), pitch: at('pitch'), yaw: at('yaw'), roll: at('roll') }, sway, speedRatio);
+    const raised = this.prevRaised + (this.raised - this.prevRaised) * alpha;
+    return viewmodelPose(this.viewmodel, { back: at('back'), up: at('up'), side: at('side'), pitch: at('pitch'), yaw: at('yaw'), roll: at('roll') }, sway, speedRatio, raised);
   }
 
   /** The rifle's muzzle in world metres, as the last tick left the view and the kick: where the flash and the tracers start. */
@@ -312,7 +320,7 @@ export class Session {
     const p = this.player;
     const view = this.view();
     const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
-    const v = modelToView(viewmodelPose(this.viewmodel, this.kick(), 0, 0), point);
+    const v = modelToView(viewmodelPose(this.viewmodel, this.kick(), 0, 0, this.raised), point);
     const eye = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
     return [0, 1, 2].map((k) => eye[k] + right[k] * v[0] + up[k] * v[1] + forward[k] * v[2]) as [number, number, number];
   }

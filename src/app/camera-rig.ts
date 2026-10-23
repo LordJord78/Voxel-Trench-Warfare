@@ -15,8 +15,10 @@
  * does not ease at all.
  */
 
+import { modelToView } from '../combat/viewmodel';
 import type { Tunables } from '../core/tunables';
-import type { CameraPose } from '../render/camera';
+import { cameraBasis, type CameraPose } from '../render/camera';
+import type { RiflePose } from '../render/rifle';
 import type { Session } from '../sim/session';
 
 export interface RigTunables {
@@ -55,18 +57,26 @@ export class CameraRig {
   private lastEye: number | null = null;
   /** The simulation time the last frame showed, interpolated between ticks as the foot is. */
   private lastSimTime = 0;
+  /** Where the rifle was drawn the last frame it was. */
+  private lastRifle: Float32Array | null = null;
 
   constructor(t: RigTunables) {
     this.t = t;
+  }
+
+  /** How fast the player walks of a run's 5 m/s, and the stride's sideways sway (metres). */
+  private stride(session: Session): { speedRatio: number; sway: number } {
+    const player = session.player;
+    const speedRatio = Math.min(1, player.velocity.horizontalLength / 5);
+    return { speedRatio, sway: Math.sin(player.bobPhase * 0.5) * this.t.bobAmplitude * 0.6 * speedRatio };
   }
 
   pose(session: Session, frameDt: number, baseFov = this.t.fov): CameraPose {
     const player = session.player;
     const foot = session.footAt();
     const eye = session.controller.eyeHeight(player);
-    const speedRatio = Math.min(1, player.velocity.horizontalLength / 5);
+    const { speedRatio, sway } = this.stride(session);
     const bob = Math.sin(player.bobPhase) * this.t.bobAmplitude * speedRatio;
-    const sway = Math.sin(player.bobPhase * 0.5) * this.t.bobAmplitude * 0.6 * speedRatio;
     const dip = (-Math.min(player.landingImpact, 8) / 8) * this.t.landingDip;
     const body = foot.y + eye;
     const clock = session.clock;
@@ -95,5 +105,31 @@ export class CameraRig {
       roll: view.roll,
       fov: baseFov * this.fovScale + view.fov,
     };
+  }
+
+  /**
+   * Where the rifle is drawn this frame, held in the view `pose` shows (combat/viewmodel.ts), and
+   * where it was the last frame the rifle was drawn (itself, after a frame without it).
+   */
+  rifle(session: Session, pose: CameraPose): RiflePose {
+    const { speedRatio, sway } = this.stride(session);
+    const held = session.viewmodelAt(undefined, sway, speedRatio);
+    const { forward, right, up } = cameraBasis(pose.yaw, pose.pitch, pose.roll ?? 0);
+    const toWorld = (v: readonly number[]) => [0, 1, 2].map((k) => right[k] * v[0] + up[k] * v[1] + forward[k] * v[2]);
+    const origin = modelToView(held, [0, 0, 0]);
+    const axis = (a: readonly number[]) => {
+      const v = modelToView(held, a);
+      return toWorld([v[0] - origin[0], v[1] - origin[1], v[2] - origin[2]]);
+    };
+    const at = toWorld(origin).map((v, k) => v + pose.position[k]);
+    const m = new Float32Array([...axis([1, 0, 0]), ...axis([0, 1, 0]), ...axis([0, 0, 1]), ...at]);
+    const out = { toWorld: m, prevToWorld: this.lastRifle ?? m };
+    this.lastRifle = m;
+    return out;
+  }
+
+  /** The rifle is not drawn this frame: the next one drawn starts its motion afresh. */
+  hideRifle(): void {
+    this.lastRifle = null;
   }
 }

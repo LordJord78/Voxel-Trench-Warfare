@@ -16,8 +16,11 @@
 import { CLOCK_KEYS } from '../core/sky-clock';
 import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
-import type { CameraPose } from '../render/camera';
+import { rifleModel, traceRifle } from '../combat/rifle-model';
+import { rayDir, type CameraPose } from '../render/camera';
 import type { TransientLight } from '../render/effects';
+import { FLAGS } from '../render/frame-uniforms';
+import { throughPose, type RifleDrawn } from '../render/rifle';
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
 import { FarFieldGpu } from '../render/farfield-gpu';
 import { GpuWorld } from '../render/gpu-world';
@@ -168,6 +171,8 @@ async function start(): Promise<void> {
   const rig = new CameraRig(rigTunables(tun));
   const effects = new EffectsFrameBuilder(effectsTunables(tun));
   let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0 };
+  /** Whether the rifle is in hand (tests put it down to read the world behind it). */
+  let rifleHeld = true;
   const input = new Input();
   const fly = new FlyCam(views.bay);
   const pitchLimit = tun.f('player.pitch_limit');
@@ -416,6 +421,13 @@ async function start(): Promise<void> {
     const frameEffects = effects.build(session, session.drainEvents());
     renderer.setEffects(frameEffects.frame);
     renderer.setTransientLights(frameEffects.lights);
+    // The rifle in hand while playing (paused too), not through the periscope or flying.
+    if (rifleHeld && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) {
+      renderer.setRifle(rig.rifle(session, pose));
+    } else {
+      renderer.setRifle(null);
+      rig.hideRifle();
+    }
     built = frameEffects.counts;
     light(dt);
     renderer.render(pose, timeOfDay, now);
@@ -503,6 +515,34 @@ async function start(): Promise<void> {
   }
 
   const waitFrames = (n: number) => new Promise<void>((resolve) => waiting.push({ until: frames + n, resolve }));
+  // For tests: the rifle as the CPU traces it through the last frame's pixels.
+  const rifleShape = rifleModel();
+  /** Metres along pixel (x, y)'s ray to the rifle as the last frame drew it, or null. */
+  const traceRiflePixel = (s: RifleDrawn, x: number, y: number): number | null => {
+    const m = s.toWorld!;
+    const cam = s.camera!;
+    const d = rayDir(cam, s.res, x + 0.5, y + 0.5);
+    const o = [cam.position[0] - m[9], cam.position[1] - m[10], cam.position[2] - m[11]];
+    const along = (v: readonly number[], c: number) => v[0] * m[c * 3] + v[1] * m[c * 3 + 1] + v[2] * m[c * 3 + 2];
+    const hit = traceRifle(rifleShape, [along(o, 0), along(o, 1), along(o, 2)], [along(d, 0), along(d, 1), along(d, 2)]);
+    return hit ? hit.t : null;
+  };
+  /** n × n pixels across the last frame's rifle box: the G-buffer's depth there and the CPU's trace (metres). */
+  const rifleCheck = async (n: number) => {
+    const s = renderer.rifleState();
+    if (!s.visible || !s.toWorld || !s.camera) return { visible: false, samples: [] };
+    const [x0, y0, w, h] = s.box;
+    const depth = await renderer.readDepthBox(s.box);
+    const samples: { px: [number, number]; gpu: number; cpu: number | null }[] = [];
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const x = x0 + Math.floor(((i + 0.5) * w) / n);
+        const y = y0 + Math.floor(((j + 0.5) * h) / n);
+        samples.push({ px: [x, y], gpu: depth[(y - y0) * w + (x - x0)], cpu: traceRiflePixel(s, x, y) });
+      }
+    }
+    return { visible: true, samples };
+  };
   Object.assign(hooks, {
     world,
     renderer,
@@ -533,6 +573,38 @@ async function start(): Promise<void> {
     },
     depthAt: (points: [number, number][]) => renderer.readDepth(points),
     gpuErrors: () => gpu.errors,
+    jitter(on: boolean) {
+      renderer.flags = on ? renderer.flags & ~FLAGS.JITTER_OFF : renderer.flags | FLAGS.JITTER_OFF;
+    },
+    rifleVisible: () => renderer.rifleState().visible,
+    showRifle(on: boolean) {
+      rifleHeld = on;
+    },
+    rifleMuzzle: () => {
+      const m = renderer.rifleState().toWorld;
+      return m ? throughPose(m, rifleModel().muzzle) : null;
+    },
+    rifleCheck: (n: number) => rifleCheck(n),
+    // Over every other pixel of the box where the rifle was drawn: the CPU's trace meets it, and
+    // the G-buffer's depth there is the rifle's.
+    rifleLuminance: async () => {
+      const s = renderer.rifleState();
+      if (!s.visible) return 0;
+      const [x0, y0, w, h] = s.box;
+      const [colour, depth] = await Promise.all([renderer.readColour(s.box), renderer.readDepthBox(s.box)]);
+      let sum = 0;
+      let count = 0;
+      for (let y = y0; y < y0 + h; y += 2) {
+        for (let x = x0; x < x0 + w; x += 2) {
+          const t = traceRiflePixel(s, x, y);
+          const k = (y - y0) * w + (x - x0);
+          if (t === null || Math.abs(depth[k] - t) > 1e-3) continue;
+          sum += 0.2126 * colour[k * 3] + 0.7152 * colour[k * 3 + 1] + 0.0722 * colour[k * 3 + 2];
+          count++;
+        }
+      }
+      return count === 0 ? 0 : sum / count;
+    },
     play: () => play(false),
     teleport(at: { position: [number, number, number]; yaw: number; pitch: number }) {
       session.teleport(at.position, at.yaw, at.pitch);

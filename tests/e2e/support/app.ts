@@ -75,6 +75,22 @@ export interface Hooks {
   depthAt(points: [number, number][]): Promise<number[]>;
   /** GPU validation errors so far. */
   gpuErrors(): string[];
+  /** The frame's sub-pixel jitter on (the game's) or off (so a pixel's ray is its centre's). */
+  jitter(on: boolean): void;
+  /** Whether the last frame drew the rifle. */
+  rifleVisible(): boolean;
+  /** Hold the rifle (the game's) or put it down, for a test reading the world behind it. */
+  showRifle(on: boolean): void;
+  /** The rifle's muzzle as the last frame drew it, in metres. */
+  rifleMuzzle(): [number, number, number];
+  /**
+   * The last frame's rifle: whether it was drawn, and `n` × `n` pixels across its screen box, each
+   * with the G-buffer's depth there and the CPU's trace of the model along the pixel's ray (null
+   * where it misses), in metres.
+   */
+  rifleCheck(n: number): Promise<{ visible: boolean; samples: { px: [number, number]; gpu: number; cpu: number | null }[] }>;
+  /** The mean luminance (linear) of the rifle's pixels in the last frame's shaded image. */
+  rifleLuminance(): Promise<number>;
 }
 
 export async function openGame(page: Page): Promise<string[]> {

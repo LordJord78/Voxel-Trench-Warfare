@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadTunables } from '../../src/core/tunables';
 import { CameraRig, rigTunables } from '../../src/app/camera-rig';
+import { rifleModel } from '../../src/combat/rifle-model';
 import { Stance } from '../../src/physics/character';
 import { Vec3 } from '../../src/physics/vec';
 import { Rng } from '../../src/core/rng';
@@ -181,5 +182,43 @@ describe('the eye over steps', () => {
     const rig = new CameraRig(rigTunables(tun));
     snapTo(s, rig, 2.0);
     expect(Math.abs(snapTo(s, rig, 9.0) - (9.0 + 1.62))).toBeLessThan(0.01);
+  });
+});
+
+describe('the rifle as the rig draws it', () => {
+  /** A model point (metres) through a 3×4 column-major transform. */
+  const through = (m: Float32Array, p: readonly number[]) => [0, 1, 2].map((k) => m[k] * p[0] + m[3 + k] * p[1] + m[6 + k] * p[2] + m[9 + k]);
+
+  it("its muzzle is drawn where the session fires from", () => {
+    const s = standing();
+    const rig = new CameraRig(rigTunables(tun));
+    const drawn = through(rig.rifle(s, rig.pose(s, 1 / 60)).toWorld, rifleModel().muzzle);
+    const fired = s.muzzle();
+    for (let k = 0; k < 3; k++) expect(drawn[k]).toBeCloseTo(fired[k], 5);
+  });
+
+  it('turns with the view, its axes square', () => {
+    const s = standing();
+    s.player.yaw = 90;
+    const rig = new CameraRig(rigTunables(tun));
+    const m = rig.rifle(s, rig.pose(s, 1 / 60)).toWorld;
+    // The model's forward is the view's (+x at yaw 90), and its axes are unit and square.
+    expect(m[6]).toBeCloseTo(1, 6);
+    const axis = (c: number) => [m[c * 3], m[c * 3 + 1], m[c * 3 + 2]];
+    for (const c of [0, 1, 2]) expect(Math.hypot(...axis(c))).toBeCloseTo(1, 6);
+    const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    expect(dot(axis(0), axis(1))).toBeCloseTo(0, 6);
+    expect(dot(axis(1), axis(2))).toBeCloseTo(0, 6);
+  });
+
+  it("its previous transform is the last frame's", () => {
+    const s = standing();
+    const rig = new CameraRig(rigTunables(tun));
+    const first = rig.rifle(s, rig.pose(s, 1 / 60));
+    s.player.yaw += 10;
+    s.tick();
+    const second = rig.rifle(s, rig.pose(s, 1 / 60));
+    expect(Array.from(second.prevToWorld)).toEqual(Array.from(first.toWorld));
+    expect(Array.from(second.toWorld)).not.toEqual(Array.from(first.toWorld));
   });
 });

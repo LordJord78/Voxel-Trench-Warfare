@@ -46,6 +46,33 @@ describe('the viewmodel', () => {
     }
   });
 
+  it('on the firing step the rifle is raised over the crest, eased up and down', () => {
+    // A standing eye is 0.12 m over its crest, and the rest pose holds the bore 0.205 m under the eye.
+    const on = (floor: number) => {
+      const map = new BrickMap({ x: 64, y: 64, z: 64 });
+      map.fillBox(0, 0, 0, 64, 4, 64, floor);
+      const s = Session.create({ map, plan: null, spawn: { position: [3.2, 0.4, 3.2] } }, tun, 7, 0);
+      return s;
+    };
+    const height = (s: Session) => s.muzzle()[1] - (s.player.position.y + s.controller.eyeHeight(s.player));
+    const ground = on(P.SOD);
+    const step = on(P.TIMBER);
+    for (let k = 0; k < 6; k++) {
+      ground.tick();
+      step.tick();
+    }
+    const eased = height(step) - height(ground);
+    expect(eased).toBeGreaterThan(0.01);
+    expect(eased).toBeLessThan(t.stepRaiseM - 0.01);
+    for (let k = 0; k < 60; k++) {
+      ground.tick();
+      step.tick();
+    }
+    expect(height(step) - height(ground)).toBeCloseTo(t.stepRaiseM, 3);
+    // Over a crest 0.12 m under the eye.
+    expect(height(step)).toBeGreaterThan(-0.12);
+  });
+
   it("the session's muzzle and port follow the view: turned 90°, they are turned 90°", () => {
     const map = new BrickMap({ x: 64, y: 64, z: 64 });
     map.fillBox(0, 0, 0, 64, 4, 64, P.SOD);
