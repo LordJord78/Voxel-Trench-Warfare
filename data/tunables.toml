@@ -216,10 +216,11 @@ transition_time     = 0.30
 gravity             = -9.81    # m/s^2, actual
 air_density         = 1.225    # kg/m^3 at sea level, 15 C
 substeps_per_tick   = 4        # 240 Hz integration under a 60 Hz tick: a rifle
-                               # round covers 3.7 m per tick and 0.9 m per
-                               # substep, which is under two voxels
+                               # round covers 14.7 m a tick and 3.7 m a
+                               # substep (37 voxels at 10 cm); hits are found
+                               # along each substep's segment, not at its end
 pool_capacity       = 256      # rounds in the air at once; full is full
-max_range_m         = 400.0    # wider than the 128 m map, so nothing vanishes
+max_range_m         = 400.0    # wider than the 256 m map, so nothing vanishes
                                # mid-flight over open ground
 max_flight_time_s   = 4.0
 
