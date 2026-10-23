@@ -259,6 +259,67 @@ test('firing a magazine stays within the frame budget', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('shells landing 20–50 m off at one a second, with a magazine fired, stay within the frame budget', async ({ page }) => {
+  // Done-table row 3's main thread (no frame over 20 ms while shells land) and the GPU's budget,
+  // by each frame's own GPU time (stats' gpuMs is smoothed, and would hide a crater's frame).
+  test.setTimeout(300_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  await hooks(page, (h) => h.play());
+  const lines: string[] = [];
+  for (const view of ['step', 'bay'] as const) {
+    for (const [label, hours] of [['dusk', TIMES.dusk], ['night', TIMES.night]] as const) {
+      const r = await hooks(
+        page,
+        async (h, arg) => {
+          const { view, hours } = arg as { view: 'step' | 'bay'; hours: number };
+          const v = h.views[view];
+          h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: 0 });
+          h.setTimeOfDay(hours);
+          await h.waitFrames(90);
+          const from = h.frames();
+          (h.session.weapon as { rounds: number }).rounds = 30;
+          h.trigger(true);
+          const gpu: number[] = [];
+          const landings: Promise<{ ms: number; bricks: number }>[] = [];
+          let seen = h.stats().gpuSamples;
+          const p = h.player().position;
+          const t0 = performance.now();
+          let dropped = 0;
+          while (performance.now() - t0 < 6000) {
+            if (dropped < 5 && performance.now() - t0 >= dropped * 1000) {
+              const angle = 0.7 + dropped * 1.9;
+              const d = 20 + dropped * 7;
+              landings.push(h.shell([p[0] + Math.cos(angle) * d, 0, p[2] + Math.sin(angle) * d], 2.2 + dropped * 0.3));
+              dropped++;
+            }
+            await h.waitFrames(1);
+            const s = h.stats();
+            if (s.gpuSamples > seen && s.gpuLastMs !== null) gpu.push(s.gpuLastMs);
+            seen = s.gpuSamples;
+          }
+          h.trigger(false);
+          const landed = await Promise.all(landings);
+          const frames = h.frames() - from;
+          const main = h.mainMs().slice(-frames);
+          const at = (xs: number[], q: number) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(q * xs.length))];
+          return { count: gpu.length, frames, p95: at(gpu, 0.95), median: at(gpu, 0.5), max: Math.max(...gpu), mainMax: Math.max(...main), mainP99: at(main, 0.99), landed };
+        },
+        { view, hours },
+      );
+      if (r.count === 0) test.skip(true, 'no GPU timestamps');
+      lines.push(
+        `${view} ${label}: GPU p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, worst ${r.max.toFixed(2)}; main thread worst ${r.mainMax.toFixed(1)} ms, p99 ${r.mainP99.toFixed(1)}, over ${r.frames} frames; landed in ${r.landed.map((l) => l.ms.toFixed(0)).join('/')} ms`,
+      );
+      expect(r.landed.length).toBe(5);
+      expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
+      expect(r.mainMax, lines.join('; ')).toBeLessThanOrEqual(20);
+    }
+  }
+  console.log(`Shells at one a second and a magazine: ${lines.join('; ')}`);
+  expect(errors).toEqual([]);
+});
+
 /** An hour of the clock as HH:MM. */
 function hhmm(hours: number): string {
   const m = Math.round(hours * 60);

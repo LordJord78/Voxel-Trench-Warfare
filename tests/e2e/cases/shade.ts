@@ -183,9 +183,11 @@ export const cases = {
     writer.set('far', far.info);
     const frame = device.createBuffer({ size: writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(frame, 0, writer.buffer);
+    // No shell's blast lights these cases (blastCount 0): its texture is bound, never read.
+    const blast = device.createTexture({ size: [8, 8], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING });
     const group = device.createBindGroup({
       layout: compiled.layouts.shade,
-      entries: [gDepth.createView(), gHit.createView(), out.createView(), light.createView(), lightHit.createView()].map((resource, binding) => ({ binding, resource })),
+      entries: [gDepth.createView(), gHit.createView(), out.createView(), light.createView(), lightHit.createView(), blast.createView()].map((resource, binding) => ({ binding, resource })),
     });
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();

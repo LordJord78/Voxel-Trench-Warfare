@@ -91,7 +91,11 @@ type Timed = (typeof PASSES)[number];
 const GAP_MS = 500;
 
 export interface RenderStats {
+  /** The frame's GPU time, smoothed (a tenth of each new frame's). */
   gpuMs: number | null;
+  /** The latest measured frame's, unsmoothed, and how many frames have been measured: a spike shows here, not in gpuMs. */
+  gpuLastMs: number | null;
+  gpuSamples: number;
   /** Each pass's share of the frame, and its own time (timing.ts's passTimes), smoothed. */
   passes: Record<string, number>;
   own: Record<string, number>;
@@ -287,7 +291,7 @@ export class Renderer {
   flags = 0;
   /** What the frame is lit by. */
   sky: FrameSky = PROBE_DUSK;
-  stats: RenderStats = { gpuMs: null, passes: {}, own: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
+  stats: RenderStats = { gpuMs: null, gpuLastMs: null, gpuSamples: 0, passes: {}, own: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
 
   private readonly canvas: HTMLCanvasElement | null;
   private readonly context: GPUCanvasContext | null;
@@ -871,6 +875,8 @@ export class Renderer {
     this.frameIndex++;
     this.stats = {
       gpuMs: this.timer.gpuMs,
+      gpuLastMs: this.timer.lastMs,
+      gpuSamples: this.timer.samples,
       passes: { ...this.timer.passes },
       own: { ...this.timer.own },
       res: [...this.res],

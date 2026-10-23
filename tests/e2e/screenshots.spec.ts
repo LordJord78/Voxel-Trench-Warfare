@@ -286,3 +286,63 @@ test('a magazine along the bay and over the parapet, and the rifle in the light'
   await burst('artifacts/c3/step-burst-night.png', true);
   if (errors.length) throw new Error(errors.join('\n'));
 });
+
+// Combat milestone 4's review: a 3 m shell on the parapet's crest ahead of the step, seen from the
+// ground behind the trench, 12 m back, across it, at dusk and at night: before, the frames of its
+// blast (its light, flash, soil and debris), and once its crater is in and its smoke hangs. Written
+// to artifacts/c4. (A bay is 8 m between traverses: inside one, the crater's slump takes the eye.)
+test('a shell on the parapet, before, during and after', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  await hooks(page, (h) => h.play());
+  // The highest ground within 3 m ahead of the step: its parapet's crest.
+  const crest = await hooks(page, (h) => {
+    const v = h.views.step;
+    const yaw = (v.yaw * Math.PI) / 180;
+    let best: [number, number, number] = [v.position[0], -1, v.position[2]];
+    for (let d = 0; d <= 3; d += 0.1) {
+      const x = v.position[0] + Math.sin(yaw) * d;
+      const z = v.position[2] + Math.cos(yaw) * d;
+      let y = 319;
+      while (y >= 0 && h.world.map.get(Math.floor(x / 0.1), y, Math.floor(z / 0.1)) === 0) y--;
+      if ((y + 1) * 0.1 > best[1]) best = [x, (y + 1) * 0.1, z];
+    }
+    return best;
+  });
+  for (const [label, hours] of [['dusk', DUSK], ['night', 21]] as const) {
+    // On the ground behind the trench, 12 m back from the crest along the step's view, facing it.
+    await hooks(
+      page,
+      async (h, arg) => {
+        const { hours, crest } = arg as { hours: number; crest: [number, number, number] };
+        const v = h.views.step;
+        const yaw = (v.yaw * Math.PI) / 180;
+        const [x, z] = [crest[0] - Math.sin(yaw) * 12, crest[2] - Math.cos(yaw) * 12];
+        let y = 319;
+        while (y >= 0 && h.world.map.get(Math.floor(x / 0.1), y, Math.floor(z / 0.1)) === 0) y--;
+        h.teleport({ position: [x, (y + 1) * 0.1, z], yaw: v.yaw, pitch: -6 });
+        h.setTimeOfDay(hours);
+        await h.waitFrames(120);
+      },
+      { hours, crest },
+    );
+    await page.screenshot({ path: `artifacts/c4/parapet-before-${label}.png` });
+    await hooks(page, async (h, at) => {
+      h.freeze();
+      void h.shell(at as [number, number, number], 3);
+      await h.stepFrames(3);
+    }, crest);
+    await page.screenshot({ path: `artifacts/c4/parapet-blast-${label}.png` });
+    await hooks(page, async (h) => {
+      await h.stepFrames(12);
+    });
+    await page.screenshot({ path: `artifacts/c4/parapet-soil-${label}.png` });
+    await hooks(page, async (h) => {
+      h.thaw();
+      await h.waitFrames(150);
+    });
+    await page.screenshot({ path: `artifacts/c4/parapet-after-${label}.png` });
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
+});

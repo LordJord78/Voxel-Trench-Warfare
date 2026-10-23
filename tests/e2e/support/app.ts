@@ -31,6 +31,9 @@ export interface Hooks {
   stepFrames(n: number): Promise<void>;
   stats(): {
     gpuMs: number | null;
+    /** The latest measured frame's GPU time, unsmoothed, and how many frames have been measured. */
+    gpuLastMs: number | null;
+    gpuSamples: number;
     passes: Record<string, number>;
     own: Record<string, number>;
     res: [number, number];
