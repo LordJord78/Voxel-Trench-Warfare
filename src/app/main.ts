@@ -661,6 +661,10 @@ async function start(): Promise<void> {
     walk() {
       if (mode === 'fly') mode = 'playing';
     },
+    /** The camera flown to `pose`, the player left where they are: a test's fixed vantage (`walk` returns to them). */
+    flyTo(pose: { position: [number, number, number]; yaw: number; pitch: number }) {
+      enterFly({ ...pose, fov: settings.fov });
+    },
     /** The trigger, as the left button sets it with the pointer locked; for tests that play without the lock. */
     trigger(held: boolean) {
       input.trigger(held);

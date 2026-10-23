@@ -51,6 +51,7 @@ export interface Hooks {
   simulateGap(ms: number): void;
   play(): void;
   walk(): void;
+  flyTo(pose: { position: [number, number, number]; yaw: number; pitch: number }): void;
   teleport(at: { position: [number, number, number]; yaw: number; pitch: number }): void;
   player(): { position: [number, number, number]; velocity: [number, number, number]; stance: number; height: number; onGround: boolean; onFiringStep: boolean; wadeDepth: number };
   camera(): { position: [number, number, number]; yaw: number; pitch: number; fov?: number };

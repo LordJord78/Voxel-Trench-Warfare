@@ -1,4 +1,4 @@
-import { test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { useManyLights } from './many-lights';
 import { hooks, openGame } from './support/app';
 
@@ -343,6 +343,132 @@ test('a shell on the parapet, before, during and after', async ({ page }) => {
       await h.waitFrames(150);
     });
     await page.screenshot({ path: `artifacts/c4/parapet-after-${label}.png` });
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
+});
+
+// Combat milestone 5's review: a 3 m shell on the parapet's crest across from the spawn slumps it
+// into the bay; the player stands 2.5 m along the bay and digs toward the slump as a person would
+// (F held, stepping in when nothing is in reach, at most 2.5 m), at dusk. The bay from a fixed
+// vantage over their shoulder, 3.5 m up, looking down on the ground they dig through, before, after
+// 20 s and after 40 s; and the player's own view, with the HUD, 10 s in. Written to artifacts/c5.
+test('digging out a slumped bay', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  await expect(page.locator('#loading')).toBeHidden();
+  await hooks(page, (h, t) => h.setTimeOfDay(t as number), DUSK);
+  const plan = await hooks(page, (h) => {
+    h.setQuality({ preset: 'high', dynres: false });
+    h.setIntensity('off');
+    h.setShelling('off');
+    const { position: p, bay } = h.world.spawn;
+    // Across the bay toward the enemy, the highest ground within 4 m: the parapet's crest.
+    const across = bay.longAxis === 0 ? 2 : 0;
+    let crest: [number, number, number] = [p[0], -1, p[2]];
+    for (let d = 0; d <= 4; d += 0.1) {
+      const at: [number, number, number] = [p[0], 0, p[2]];
+      at[across] += bay.facing * d;
+      let y = 319;
+      while (y >= 0 && h.world.map.get(Math.floor(at[0] / 0.1), y, Math.floor(at[2] / 0.1)) === 0) y--;
+      if ((y + 1) * 0.1 > crest[1]) crest = [at[0], (y + 1) * 0.1, at[2]];
+    }
+    // 2.5 m along the bay from it, on the floor, facing back along the bay at it; the vantage a metre
+    // further back and 3.5 m up.
+    const stand: [number, number, number] = [p[0], p[1], p[2]];
+    stand[bay.longAxis] -= 2.5;
+    const vantage: [number, number, number] = [stand[0], stand[1] + 3.5, stand[2]];
+    vantage[bay.longAxis] -= 1.0;
+    const yaw = bay.longAxis === 0 ? 90 : 0;
+    return { crest, stand, vantage, yaw, axis: bay.longAxis };
+  });
+  await hooks(page, async (h, a) => {
+    const { crest } = a as { crest: [number, number, number] };
+    await h.shell(crest, 3);
+    await h.waitFrames(60);
+  }, plan);
+  await hooks(page, async (h, a) => {
+    const { stand, yaw } = a as { stand: [number, number, number]; yaw: number };
+    h.teleport({ position: stand, yaw, pitch: -12 });
+    await h.waitFrames(30);
+  }, plan);
+  const look = async (name: string) => {
+    await hooks(page, async (h, a) => {
+      const { vantage, yaw } = a as { vantage: [number, number, number]; yaw: number };
+      h.flyTo({ position: vantage, yaw, pitch: -55 });
+      await h.waitFrames(120);
+    }, plan);
+    await page.screenshot({ path: `artifacts/c5/${name}.png` });
+    await hooks(page, async (h) => {
+      h.walk();
+      await h.waitFrames(5);
+    });
+  };
+  const start = await hooks(page, (h) => h.session.player.position);
+  const along = (p: { x: number; z: number }) => (plan.axis === 0 ? p.x : p.z);
+  const dig = async (seconds: number, hudAt?: number) => {
+    await page.keyboard.down('KeyF');
+    for (let k = 0; k < seconds * 4; k++) {
+      await hooks(page, (h) => h.waitFrames(15));
+      const now = await hooks(page, (h) => ({ inReach: h.session.entrenching.inReach, at: h.session.player.position }));
+      if (!now.inReach && along(now.at) - along(start) < 2.5) {
+        await page.keyboard.down('KeyW');
+        await hooks(page, (h) => h.waitFrames(5));
+        await page.keyboard.up('KeyW');
+      }
+      if (hudAt !== undefined && k === hudAt * 4) await page.screenshot({ path: 'artifacts/c5/dig-hud-dusk.png' });
+    }
+    await page.keyboard.up('KeyF');
+  };
+  await look('dig-before-dusk');
+  await dig(20, 10);
+  await look('dig-20s-dusk');
+  await dig(20);
+  await look('dig-40s-dusk');
+  const cleared = await hooks(page, (h) => h.session.entrenching.cleared);
+  console.log(`Digging out a slumped bay: ${cleared} voxels cleared in 40 s`);
+  expect(cleared).toBeGreaterThan(1000);
+  if (errors.length) throw new Error(errors.join('\n'));
+});
+
+// Combat milestone 5's review: on the firing step, calm; the same frame at full suppression (frozen,
+// the look alone); and with the front's fire heavy, a second and a half in: the picture greyed and
+// closed in, the player pinned and pushed off the step. At dusk and at night; written to artifacts/c5.
+test('suppression under heavy fire', async ({ page }) => {
+  test.setTimeout(180_000);
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  await expect(page.locator('#loading')).toBeHidden();
+  for (const [label, hours] of [['dusk', DUSK], ['night', 21]] as const) {
+    await hooks(page, async (h, t) => {
+      h.setQuality({ preset: 'high', dynres: false });
+      h.setIntensity('off');
+      h.setShelling('off');
+      h.setTimeOfDay(t as number);
+      h.session.suppression.level = 0;
+      const v = h.views.step;
+      h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: 0 });
+      await h.waitFrames(120);
+    }, hours);
+    await page.screenshot({ path: `artifacts/c5/step-calm-${label}.png` });
+    await hooks(page, async (h) => {
+      h.freeze();
+      h.session.suppression.level = 1;
+      await h.stepFrames(1);
+    });
+    await page.screenshot({ path: `artifacts/c5/step-look-full-${label}.png` });
+    await hooks(page, async (h) => {
+      h.session.suppression.level = 0;
+      h.thaw();
+      await h.waitFrames(60);
+      h.setIntensity('heavy');
+      await h.waitFrames(90);
+    });
+    const level = await hooks(page, (h) => h.session.suppression.level);
+    await page.screenshot({ path: `artifacts/c5/step-suppressed-${label}.png` });
+    console.log(`Suppression under heavy fire at ${label}: level ${level.toFixed(2)}`);
+    expect(level).toBeGreaterThan(0.6);
+    await hooks(page, (h) => h.setIntensity('off'));
   }
   if (errors.length) throw new Error(errors.join('\n'));
 });
