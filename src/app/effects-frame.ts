@@ -14,7 +14,8 @@
 import { BILLBOARD_FLOATS } from '../combat/particles';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../combat/rifle-model';
 import type { Tunables } from '../core/tunables';
-import { MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, type EffectsFrame, type TransientLight } from '../render/effects';
+import { MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, type EffectsFrame, type SmokePuff, type TransientLight } from '../render/effects';
+import { MAX_PUFFS } from '../render/frame-uniforms';
 import { throughPose, type RiflePose } from '../render/rifle';
 import { MUZZLE_ANCHOR, PORT_ANCHOR, type CombatEvents, type Session } from '../sim/session';
 
@@ -40,6 +41,12 @@ export interface EffectsTunables {
   blastLightRadiusM: number;
   blastLightIntensity: number;
   blastLightColour: V3;
+  smokeS: number;
+  smokePuffs: number;
+  smokeRadiusScale: number;
+  smokeRiseMS: number;
+  smokeSpreadMS: number;
+  smokeDensity: number;
 }
 
 function rgb(tun: Tunables, key: string): V3 {
@@ -72,6 +79,12 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     blastLightRadiusM: f('blast_light_radius_m'),
     blastLightIntensity: f('blast_light_intensity'),
     blastLightColour: rgb(tun, 'effects.blast_light_colour'),
+    smokeS: f('smoke_s'),
+    smokePuffs: tun.i('effects.smoke_puffs'),
+    smokeRadiusScale: f('smoke_radius_scale'),
+    smokeRiseMS: f('smoke_rise_m_s'),
+    smokeSpreadMS: f('smoke_spread_m_s'),
+    smokeDensity: f('smoke_density'),
   };
 }
 
@@ -97,10 +110,13 @@ export interface BuiltEffects {
   lights: TransientLight[];
   /** Shells' blasts, lighting the world shadowed (renderer.setBlasts). */
   blasts: TransientLight[];
+  /** Their smoke in the haze, the nearest MAX_PUFFS puffs (renderer.setSmoke). */
+  smoke: SmokePuff[];
   counts: { billboards: number; tracers: number; stars: number; lights: number };
 }
 
 const RAD = Math.PI / 180;
+const TAU = 2 * Math.PI;
 const sub = (a: readonly number[], b: readonly number[]): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const unit = (a: readonly number[]): V3 => {
   const n = Math.hypot(a[0], a[1], a[2]);
@@ -117,20 +133,21 @@ export class EffectsFrameBuilder {
   debugRibbons: DebugRibbon[] = [];
   debugLights: TransientLight[] = [];
   debugBlasts: TransientLight[] = [];
+  debugSmoke: SmokePuff[] = [];
   /** Where the last frame's test quads start among its billboards. */
   debugAt = 0;
   private readonly billboards = new Float32Array(MAX_BILLBOARDS * BILLBOARD_FLOATS);
   private readonly ribbons = new Float32Array(MAX_RIBBONS * RIBBON_FLOATS);
   private flashes: { muzzle: V3; dir: V3; age: number }[] = [];
-  /** Shells landed, aged as the flashes are. */
+  /** Shells landed, aged as the flashes are, while their light or their smoke lasts. */
   private landed: { at: V3; radiusM: number; age: number }[] = [];
   /** The world's time the last frame showed. */
   private shown: number | null = null;
 
   constructor(readonly t: EffectsTunables) {}
 
-  /** `rifle`: the rifle as this frame draws it, or null when it is not drawn. */
-  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null): BuiltEffects {
+  /** `rifle`: the rifle as this frame draws it, or null when it is not drawn; `eye`: the camera (metres), the player's eye if not given. */
+  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[]): BuiltEffects {
     const t = this.t;
     // Flashes age with the world's time as the frame shows it: none while paused.
     const shown = (session.ticks + session.clock.alpha) * session.clock.dt;
@@ -140,7 +157,7 @@ export class EffectsFrameBuilder {
     this.flashes = this.flashes.filter((f) => f.age < t.flashS);
     for (const shot of events.shots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0 });
     for (const b of this.landed) b.age += elapsed;
-    this.landed = this.landed.filter((b) => b.age < t.blastLightS);
+    this.landed = this.landed.filter((b) => b.age < Math.max(t.blastLightS, t.smokeS));
     for (const b of events.blasts) this.landed.push({ at: b.at, radiusM: b.radiusM, age: 0 });
 
     // The drawn rifle's muzzle and bore, and how far it is drawn from where the simulation holds it.
@@ -216,18 +233,42 @@ export class EffectsFrameBuilder {
     lights.push(...this.debugLights);
 
     // Each shell's blast: a light a metre over where it landed, flaring and dying over blast_light_s.
-    const blasts: TransientLight[] = this.landed.map((b) => ({
-      position: [b.at[0], b.at[1] + 1, b.at[2]],
-      radiusM: t.blastLightRadiusM,
-      colour: t.blastLightColour,
-      intensity: t.blastLightIntensity * (1 - b.age / t.blastLightS) ** 2,
-    }));
+    const blasts: TransientLight[] = this.landed
+      .filter((b) => b.age < t.blastLightS)
+      .map((b) => ({
+        position: [b.at[0], b.at[1] + 1, b.at[2]],
+        radiusM: t.blastLightRadiusM,
+        colour: t.blastLightColour,
+        intensity: t.blastLightIntensity * (1 - b.age / t.blastLightS) ** 2,
+      }));
     blasts.push(...this.debugBlasts);
+
+    // Each shell's smoke: smoke_puffs puffs, one over the crater and the rest a third of its radius
+    // aside, rising, spreading and thinning to nothing by smoke_s; the nearest the eye drawn.
+    const from = eye ?? [session.player.position.x, session.player.position.y + session.controller.eyeHeight(session.player), session.player.position.z];
+    const puffs: SmokePuff[] = [];
+    for (const b of this.landed) {
+      if (b.age >= t.smokeS) continue;
+      const r0 = t.smokeRadiusScale * b.radiusM;
+      const turn = (((b.at[0] * 12.9898 + b.at[2] * 78.233) % TAU) + TAU) % TAU;
+      for (let k = 0; k < t.smokePuffs; k++) {
+        const aside = k === 0 ? 0 : b.radiusM / 3;
+        const a = turn + (TAU * (k - 1)) / Math.max(1, t.smokePuffs - 1);
+        puffs.push({
+          centre: [b.at[0] + Math.cos(a) * aside, b.at[1] + r0 * (k === 0 ? 1 : 0.6) + t.smokeRiseMS * b.age, b.at[2] + Math.sin(a) * aside],
+          radiusM: r0 + t.smokeSpreadMS * b.age,
+          density: t.smokeDensity * (1 - b.age / t.smokeS) ** 2,
+        });
+      }
+    }
+    const far = (p: SmokePuff) => Math.hypot(p.centre[0] - from[0], p.centre[1] - from[1], p.centre[2] - from[2]);
+    const smoke = [...this.debugSmoke, ...puffs.sort((a, b) => far(a) - far(b))].slice(0, MAX_PUFFS);
 
     return {
       frame: { billboards: this.billboards, billboardCount: billboards, ribbons: this.ribbons, ribbonCount: ribbons },
       lights,
       blasts,
+      smoke,
       counts: { billboards, tracers, stars, lights: lights.length },
     };
   }

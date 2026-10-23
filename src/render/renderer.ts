@@ -56,12 +56,12 @@ import { copyPose, jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
 import { rifleModel } from '../combat/rifle-model';
-import { Effects, effectsLook, type EffectsFrame, type EffectsPipelines, type TransientLight } from './effects';
+import { Effects, effectsLook, type EffectsFrame, type EffectsPipelines, type SmokePuff, type TransientLight } from './effects';
 import { Rifle, type RifleDrawn, type RiflePipelines, type RiflePose } from './rifle';
 import { FarFieldGpu } from './farfield-gpu';
 import { FlareShadows } from './flare-shadows';
 import { froxelLayouts, Froxels, type FroxelPipelines } from './froxels';
-import { FLAGS, FRAME, MAX_BLASTS, MAX_FLASHES, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
+import { FLAGS, FRAME, MAX_BLASTS, MAX_FLASHES, MAX_PUFFS, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
 import { KeyShadow, keyShadowLayouts, type Key, type KeyShadowPipelines } from './key-shadow';
@@ -345,6 +345,8 @@ export class Renderer {
   private flashes: TransientLight[] = [];
   /** This frame's shells' blasts, shadowed at the lighting resolution, outside the denoiser. */
   private blasts: TransientLight[] = [];
+  /** This frame's puffs of shells' smoke in the haze. */
+  private puffs: SmokePuff[] = [];
 
   static async create(gpu: Gpu, canvas: HTMLCanvasElement | null, world: GpuWorld, plan: WorldPlan | null, options: RendererOptions = {}): Promise<Renderer> {
     const compiled = options.compiled ?? (await compileFrame(gpu.device));
@@ -500,6 +502,11 @@ export class Renderer {
     };
     for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) for (let c = 0; c < 3; c++) out[(j * w + i) * 3 + c] = half(halves[(j * row) / 2 + i * 4 + c]);
     return out;
+  }
+
+  /** This frame's puffs of shells' smoke (metres), the first MAX_PUFFS of them. */
+  setSmoke(puffs: readonly SmokePuff[]): void {
+    this.puffs = puffs.slice(0, MAX_PUFFS);
   }
 
   /** This frame's shells' blasts: the strongest MAX_BLASTS of them light it. */
@@ -725,6 +732,12 @@ export class Renderer {
       w.set(`flashes.${k}.radius`, f.radiusM / voxel);
       w.set(`flashes.${k}.colour`, f.colour);
       w.set(`flashes.${k}.intensity`, f.intensity);
+    });
+    w.set('puffCount', this.puffs.length);
+    this.puffs.forEach((p, k) => {
+      w.set(`puffs.${k}.centre`, p.centre.map((m) => m / voxel));
+      w.set(`puffs.${k}.radius`, p.radiusM / voxel);
+      w.set(`puffs.${k}.density`, p.density);
     });
     w.set('blastCount', this.blasts.length);
     this.blasts.forEach((f, k) => {

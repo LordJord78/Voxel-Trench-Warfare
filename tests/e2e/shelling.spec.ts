@@ -149,3 +149,42 @@ test('a blast lights the faces that see it, and not those behind cover', async (
   expect(Math.abs(gone - before) / before, seen).toBeLessThan(0.01);
   expect(errors).toEqual([]);
 });
+
+test("the haze is denser inside a blast's smoke", async ({ page }) => {
+  const errors = await openGame(page);
+  const at = await hooks(page, async (h) => {
+    h.view('bay');
+    h.setTimeOfDay(17 + 35 / 60);
+    h.jitter(false);
+    h.freeze();
+    await h.stepFrames(40);
+    const c = h.camera();
+    const y = (c.yaw * Math.PI) / 180;
+    const p = (c.pitch * Math.PI) / 180;
+    return { position: c.position, forward: [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)], res: h.stats().res };
+  });
+  const centre = at.position.map((v, k) => v + at.forward[k] * 4);
+  const [w, h] = at.res;
+  const middle: [number, number, number, number] = [Math.floor(w / 2) - 4, Math.floor(h / 2) - 4, 9, 9];
+  const corner: [number, number, number, number] = [8, 8, 9, 9];
+  const read = (puffs: unknown[]) =>
+    hooks(
+      page,
+      async (hk, arg) => {
+        const { puffs, middle, corner } = arg as { puffs: never[]; middle: [number, number, number, number]; corner: [number, number, number, number] };
+        hk.debugSmoke(puffs);
+        // The froxels' history settles over a few frames.
+        await hk.stepFrames(12);
+        const lum = (c: number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+        return { middle: lum(await hk.colourAt(middle)), corner: lum(await hk.colourAt(corner)) };
+      },
+      { puffs, middle, corner },
+    );
+  const clear = await read([]);
+  const smoky = await read([{ centre, radiusM: 1, density: 0.5 }]);
+  const seen = JSON.stringify({ clear, smoky });
+  console.log(`A metre's puff of smoke 4 m off at dusk: the middle ${(smoky.middle / clear.middle).toFixed(3)}×, a corner ${(smoky.corner / clear.corner).toFixed(4)}×`);
+  expect(Math.abs(smoky.middle - clear.middle) / clear.middle, seen).toBeGreaterThan(0.1);
+  expect(Math.abs(smoky.corner - clear.corner) / clear.corner, seen).toBeLessThan(0.01);
+  expect(errors).toEqual([]);
+});

@@ -211,6 +211,44 @@ describe('a frame of effects', () => {
     for (let k = 0; k < 10; k++) expect(b.build(s, none()).blasts[0].intensity).toBe(t.blastLightIntensity);
   });
 
+  it("a blast's smoke rises, spreads and thins, and is gone by smoke_s", () => {
+    const s = stand();
+    const b = new EffectsFrameBuilder(t);
+    const crater = 3;
+    let built = b.build(s, { ...none(), blasts: [{ tick: s.ticks, at: [12.8, 0.4, 20], radiusM: crater, material: P.SOD }] });
+    expect(built.smoke.length).toBe(t.smokePuffs);
+    const start = built.smoke.map((p) => ({ ...p, centre: [...p.centre] }));
+    for (const p of start) {
+      expect(p.radiusM).toBeCloseTo(t.smokeRadiusScale * crater, 9);
+      expect(p.density).toBeCloseTo(t.smokeDensity, 9);
+      expect(Math.hypot(p.centre[0] - 12.8, p.centre[2] - 20)).toBeLessThanOrEqual(crater / 3 + 1e-9);
+    }
+    for (let k = 0; k < 5 * 60; k++) s.tick();
+    built = b.build(s, none());
+    expect(built.smoke.length).toBe(t.smokePuffs);
+    built.smoke.forEach((p, i) => {
+      expect(p.centre[1] - start[i].centre[1]).toBeCloseTo(t.smokeRiseMS * 5, 6);
+      expect(p.radiusM - start[i].radiusM).toBeCloseTo(t.smokeSpreadMS * 5, 6);
+      expect(p.density).toBeCloseTo(t.smokeDensity * (1 - 5 / t.smokeS) ** 2, 6);
+    });
+    for (let k = 0; k < (t.smokeS - 5) * 60; k++) s.tick();
+    expect(b.build(s, none()).smoke).toEqual([]);
+  });
+
+  it('at most 16 puffs are drawn, the nearest the eye', () => {
+    const s = stand();
+    const b = new EffectsFrameBuilder(t);
+    // Farthest first, so the first sixteen are not the nearest.
+    const blasts = Array.from({ length: 10 }, (_, k) => ({ tick: s.ticks, at: [12.8, 0.4, 46 - 4 * k] as [number, number, number], radiusM: 2.5, material: P.SOD }));
+    const eye: [number, number, number] = [12.8, 2, 0];
+    const built = b.build(s, { ...none(), blasts }, null, eye);
+    expect(built.smoke.length).toBe(16);
+    const far = (p: { centre: number[] }) => Math.hypot(p.centre[0] - eye[0], p.centre[1] - eye[1], p.centre[2] - eye[2]);
+    const drawn = Math.max(...built.smoke.map(far));
+    // The nearest blasts' puffs, every one of the first five's.
+    expect(drawn).toBeLessThan(10 + 4 * 6);
+  });
+
   it("the session's particles are the frame's billboards", () => {
     const s = stand();
     const built = new EffectsFrameBuilder(t).build(s, shoot(s));

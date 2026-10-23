@@ -15,9 +15,9 @@
 // how much of the key reaches it (so the haze never lags the light), adds the point lights' glow,
 // adds the shells' blasts' glow at the slice's middle (unshadowed, as the point lights', and in no
 // history: they last 0.3 s), and adds the slice over what the haze before it hides. How much the
-// haze hides is hazeDepth's,
-// along each column's ray: with nothing to cast a shaft and no point lights, the froxels' haze is
-// the analytic fog (fog.wgsl).
+// haze hides is hazeDepth's along each column's ray, and the shells' smoke's (puffDepth): with
+// nothing to cast a shaft, no point lights and no smoke, the froxels' haze is the analytic fog
+// (fog.wgsl).
 #include "haze.wgsl"
 #include "fog.wgsl"
 #include "light-cells.wgsl"
@@ -105,6 +105,35 @@ fn inject(@builtin(global_invocation_id) g: vec3u) {
   textureStore(glowOut, g, out);
 }
 
+// The shells' smoke's optical depth along the eye's ray rd to `metres` out. A puff's density falls
+// from its middle to nothing at its edge, as 1 - (r/R)^2, so along a chord passing p from its
+// middle, from s0 to s1 along it, its depth is the integral of 1 - (p^2 + s^2)/R^2: closed form,
+// with 1 - p^2/R^2 = h^2/R^2 for the half chord h. Smoke is haze, lit by the haze's own glow.
+fn puffDepth(rd: vec3f, metres: f32) -> f32 {
+  var depth = 0.0;
+  let end = metres / frame.voxel;
+  for (var i = 0u; i < min(frame.puffCount, 16u); i++) {
+    let puff = frame.puffs[i];
+    let o = frame.cam.origin - puff.centre;
+    // How far along the ray it passes nearest the puff's middle, and its half chord there, squared.
+    let along = -dot(rd, o);
+    let r2 = puff.radius * puff.radius;
+    let h2 = r2 - (dot(o, o) - along * along);
+    if (h2 <= 0.0) {
+      continue;
+    }
+    let h = sqrt(h2);
+    let s0 = max(-h, -along);
+    let s1 = min(h, end - along);
+    if (s1 <= s0) {
+      continue;
+    }
+    let voxels = (s1 - s0) * h2 / r2 - (s1 * s1 * s1 - s0 * s0 * s0) / (3.0 * r2);
+    depth += puff.density * voxels * frame.voxel;
+  }
+  return depth;
+}
+
 // The shells' blasts' glow on the haze at x (voxels), toward the eye looking along rd.
 fn blastGlow(x: vec3f, rd: vec3f) -> vec3f {
   var glow = vec3f(0.0);
@@ -132,7 +161,11 @@ fn integrate(@builtin(global_invocation_id) g: vec3u) {
   var depth = 0.0;
   for (var k = 0u; k < FROXEL_SLICES; k++) {
     let far = sliceMetres(f32(k + 1u));
-    let to = max(hazeDepth(eyeY, rd, far), depth);
+    var smoke = 0.0;
+    if (frame.puffCount > 0u) {
+      smoke = puffDepth(rd, far);
+    }
+    let to = max(hazeDepth(eyeY, rd, far) + smoke, depth);
     // The slice's glow, lit by this frame's key as far as it reaches, over what of it the haze
     // before it lets through.
     let sampled = textureLoad(glowNow, vec3u(g.xy, k), 0);

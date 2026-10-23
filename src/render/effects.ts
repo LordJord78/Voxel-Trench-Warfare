@@ -47,6 +47,13 @@ export interface TransientLight {
   intensity: number;
 }
 
+/** A puff of a shell's smoke in the haze: centre and radius in metres, density per metre at its middle. */
+export interface SmokePuff {
+  centre: [number, number, number];
+  radiusM: number;
+  density: number;
+}
+
 /** How the billboards are lit: the emissive's glow, and how much of the key's and the sky's light the rest take. */
 export interface EffectsLook {
   glow: number;

@@ -20,7 +20,7 @@ import { AudioEngine } from '../audio/engine';
 import { audioTunables, planVoices } from '../audio/plan';
 import { rifleModel, traceRifle } from '../combat/rifle-model';
 import { rayDir, type CameraPose } from '../render/camera';
-import type { TransientLight } from '../render/effects';
+import type { SmokePuff, TransientLight } from '../render/effects';
 import { FLAGS } from '../render/frame-uniforms';
 import { throughPose, type RifleDrawn, type RiflePose } from '../render/rifle';
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
@@ -473,12 +473,13 @@ async function start(): Promise<void> {
       craterWaiters.get(c.id)?.(c.bricks);
       craterWaiters.delete(c.id);
     }
-    const frameEffects = effects.build(session, events, rifle);
+    const frameEffects = effects.build(session, events, rifle, pose.position);
     audio.listen(pose);
     audio.play(planVoices(hearing, events, pose.position));
     renderer.setEffects(frameEffects.frame);
     renderer.setTransientLights(frameEffects.lights);
     renderer.setBlasts(frameEffects.blasts);
+    renderer.setSmoke(frameEffects.smoke);
     built = frameEffects.counts;
     light(dt);
     renderer.render(pose, timeOfDay, now);
@@ -625,6 +626,9 @@ async function start(): Promise<void> {
     },
     debugBlasts(lights: TransientLight[]) {
       effects.debugBlasts = lights;
+    },
+    debugSmoke(puffs: SmokePuff[]) {
+      effects.debugSmoke = puffs;
     },
     debugRibbons(ribbons: DebugRibbon[]) {
       effects.debugRibbons = ribbons;

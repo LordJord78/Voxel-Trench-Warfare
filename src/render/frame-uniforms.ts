@@ -84,6 +84,22 @@ export const MAX_FLASHES = 4;
 /** The most shells' blasts a frame lights by. */
 export const MAX_BLASTS = 4;
 
+/** A puff of a shell's smoke in the haze (froxels.wgsl): centre and radius in voxels, density per metre at its middle. */
+export const PUFF: StructDef = {
+  name: 'Puff',
+  fields: [
+    ['centre', 'vec3f'],
+    ['radius', 'f32'],
+    ['density', 'f32'],
+    ['pad0', 'f32'],
+    ['pad1', 'f32'],
+    ['pad2', 'f32'],
+  ],
+};
+
+/** The most puffs of smoke a frame's haze holds. */
+export const MAX_PUFFS = 16;
+
 export const FRAME: StructDef = {
   name: 'Frame',
   fields: [
@@ -161,6 +177,9 @@ export const FRAME: StructDef = {
     // Shells' blasts lighting the world this frame: shadowed at the lighting resolution (lighting.wgsl), outside the denoiser.
     ['blastCount', 'u32'],
     ['blasts', { element: FLASH, count: MAX_BLASTS }],
+    // Shells' smoke in the froxels' haze: its puffs this frame.
+    ['puffCount', 'u32'],
+    ['puffs', { element: PUFF, count: MAX_PUFFS }],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
     // The atmosphere as this frame's sky view was built.
