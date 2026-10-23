@@ -75,6 +75,14 @@ export interface DebugQuad {
   lit?: boolean;
 }
 
+/** A test's ribbon: emissive, as a tracer is, as bright at its tail as its head. */
+export interface DebugRibbon {
+  tail: V3;
+  head: V3;
+  width: number;
+  colour: V3;
+}
+
 export interface BuiltEffects {
   frame: EffectsFrame;
   lights: TransientLight[];
@@ -95,6 +103,7 @@ const STAR_LIFT = 0.3;
 export class EffectsFrameBuilder {
   /** Quads and transient lights a test asks for, every frame until it asks for none. */
   debug: DebugQuad[] = [];
+  debugRibbons: DebugRibbon[] = [];
   debugLights: TransientLight[] = [];
   /** Where the last frame's test quads start among its billboards. */
   debugAt = 0;
@@ -186,6 +195,7 @@ export class EffectsFrameBuilder {
       }
       lights.push({ position: at, radiusM: t.flashLightRadiusM, colour: t.flashLightColour, intensity: t.flashLightIntensity });
     }
+    for (const r of this.debugRibbons) ribbon(r.tail, r.head, r.width, r.colour, 1, 1);
     lights.push(...this.debugLights);
 
     return {

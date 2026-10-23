@@ -69,6 +69,10 @@ export interface Hooks {
   effects(): { billboards: number; tracers: number; stars: number; lights: number };
   /** Test quads (metres, metres across, linear colour) drawn with the effects from the next frame, emissive or `lit` as dust is; [] for none. */
   debugQuads(quads: { position: [number, number, number]; size: number; colour: [number, number, number]; lit?: boolean }[]): void;
+  /** Emissive test ribbons (metres; metres across; linear colour), as tracers are drawn, from the next frame; [] for none. */
+  debugRibbons(ribbons: { tail: [number, number, number]; head: [number, number, number]; width: number; colour: [number, number, number] }[]): void;
+  /** The last frame's sharpened image, the effects drawn over it, over a box of the internal image: linear rgb, a row at a time. */
+  sharpAt(box: [number, number, number, number]): Promise<number[]>;
   /** The last frame's test quads as the effects lit them: linear rgb premultiplied, and alpha. */
   debugLit(): Promise<[number, number, number, number][]>;
   /** Transient lights (as a shot's flash) added to the next frames' own; [] for none. */

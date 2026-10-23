@@ -295,3 +295,82 @@ test('a magazine on full auto draws tracers, the flash, brass and dust', async (
   expect(most.errors).toEqual([]);
   expect(errors).toEqual([]);
 });
+
+test('a far tracer stays an unbroken line, at least two pixels across, its light kept', async ({ page }) => {
+  // The review's case: 0.06 m at 150 m is under half a pixel, drawn after TAA, so the enemy's
+  // tracers across the view broke into dashes that shimmered.
+  const errors = await openGame(page);
+  const at = await hooks(page, async (h) => {
+    h.view('step');
+    h.setTimeOfDay(21);
+    h.jitter(false);
+    h.freeze();
+    await h.stepFrames(40);
+    const c = h.camera();
+    return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90 };
+  });
+  // 150 m out, 20° over the view (clear of the dead trees), 20 m across it and rising half a metre
+  // along it, against the sky.
+  const RAD = Math.PI / 180;
+  const y = at.yaw * RAD;
+  const p = (at.pitch + 20) * RAD;
+  const centre = [0, 1, 2].map((k) => at.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 150);
+  const right = [Math.cos(y), 0, -Math.sin(y)];
+  const tail = [0, 1, 2].map((k) => centre[k] - right[k] * 10 - (k === 1 ? 0.25 : 0)) as [number, number, number];
+  const head = [0, 1, 2].map((k) => centre[k] + right[k] * 10 + (k === 1 ? 0.25 : 0)) as [number, number, number];
+  const width = 0.06;
+  const glow = 20;
+  const columns = await hooks(
+    page,
+    async (h, arg) => {
+      const { tail, head, width, glow } = arg as { tail: [number, number, number]; head: [number, number, number]; width: number; glow: number };
+      const read = async (on: boolean) => {
+        h.debugRibbons(on ? [{ tail, head, width, colour: [glow, glow, glow] }] : []);
+        await h.stepFrames(2);
+        const s = h.stats();
+        const box: [number, number, number, number] = [0, 0, s.res[0], Math.floor(s.res[1] / 2)];
+        return { res: s.res, box, rgb: await h.sharpAt(box) };
+      };
+      const without = await read(false);
+      const withIt = await read(true);
+      const [w, hgt] = [without.box[2], without.box[3]];
+      const lum = (a: number[], i: number) => 0.2126 * a[i * 3] + 0.7152 * a[i * 3 + 1] + 0.0722 * a[i * 3 + 2];
+      // Each column's light from the ribbon, summed down it, and its brightest pixel's.
+      const sums: number[] = [];
+      const peaks: number[] = [];
+      for (let x = 0; x < w; x++) {
+        let sum = 0;
+        let peak = 0;
+        for (let yy = 0; yy < hgt; yy++) {
+          const d = lum(withIt.rgb, yy * w + x) - lum(without.rgb, yy * w + x);
+          sum += d;
+          peak = Math.max(peak, d);
+        }
+        sums.push(sum);
+        peaks.push(peak);
+      }
+      return { res: withIt.res, sums, peaks };
+    },
+    { tail, head, width, glow },
+  );
+  // The columns it crosses, by where any light fell; the middle 80% of them.
+  const touched = columns.peaks.map((v, x) => (v > 0.01 * glow ? x : -1)).filter((x) => x >= 0);
+  expect(touched.length).toBeGreaterThan(5);
+  const [first, last] = [touched[0], touched[touched.length - 1]];
+  const span = last - first;
+  const middle = Array.from({ length: Math.floor(span * 0.8) }, (_, i) => first + Math.floor(span * 0.1) + i);
+  const lit = middle.filter((x) => columns.peaks[x] > 0.01 * glow).length / middle.length;
+  const sums = middle.map((x) => columns.sums[x]);
+  const mean = sums.reduce((a, b) => a + b, 0) / sums.length;
+  const spread = Math.sqrt(sums.reduce((a, b) => a + (b - mean) ** 2, 0) / sums.length) / mean;
+  // Its light down a column: the profile's integral (half its drawn width, effects.wgsl) times its
+  // true width in pixels, at whatever width it is drawn.
+  const pixelM = (2 * 150 * Math.tan((at.fov * RAD) / 2)) / columns.res[0];
+  const expected = 0.504 * (width / pixelM) * glow;
+  const seen = JSON.stringify({ lit, spread, mean, expected, span, res: columns.res });
+  expect(lit, seen).toBeGreaterThan(0.97);
+  expect(spread, seen).toBeLessThan(0.5);
+  expect(mean / expected, seen).toBeGreaterThan(0.7);
+  expect(mean / expected, seen).toBeLessThan(1.4);
+  expect(errors).toEqual([]);
+});

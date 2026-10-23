@@ -474,13 +474,13 @@ export class Renderer {
     return this.effects.readLit(first, count);
   }
 
-  /** The last frame's shaded image (before TAA) over a box of the internal image: linear rgb, a row at a time. */
-  async readColour(box: readonly [number, number, number, number]): Promise<Float32Array> {
+  /** The last frame's shaded image (before TAA), or its sharpened one with the effects (`sharp`), over a box of the internal image: linear rgb, a row at a time. */
+  async readColour(box: readonly [number, number, number, number], image: 'colour' | 'sharp' = 'colour'): Promise<Float32Array> {
     const [x, y, w, h] = box;
     const row = Math.ceil((w * 8) / 256) * 256;
     const staging = this.device.createBuffer({ size: Math.max(1, row * h), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
     const encoder = this.device.createCommandEncoder();
-    if (w > 0 && h > 0) encoder.copyTextureToBuffer({ texture: this.textures.colour, origin: { x, y } }, { buffer: staging, bytesPerRow: row }, { width: w, height: h });
+    if (w > 0 && h > 0) encoder.copyTextureToBuffer({ texture: this.textures[image], origin: { x, y } }, { buffer: staging, bytesPerRow: row }, { width: w, height: h });
     this.device.queue.submit([encoder.finish()]);
     await staging.mapAsync(GPUMapMode.READ);
     const halves = new Uint16Array(staging.getMappedRange().slice(0));

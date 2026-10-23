@@ -1,5 +1,7 @@
 // The effects drawn over the sharpened image (effects.ts): the lit billboards facing the camera,
-// then the ribbons (tracers, the flash's star) turned about their length to face it. Projected
+// then the ribbons (tracers, the flash's star) turned about their length to face it, never drawn
+// narrower than MIN_RIBBON_PX: a far tracer's light is spread over that width instead, so it stays
+// a line rather than breaking into dashes between pixel centres (this is after TAA). Projected
 // through the frame's camera without jitter (this is after TAA), each fragment is dropped where
 // the G-buffer's depth along its pixel's ray is nearer, so walls hide what is behind them, and
 // blended premultiplied: the emissive add their light (alpha 0), dust covers what is behind it.
@@ -35,6 +37,9 @@ struct EffectsDraw {
 
 // The nearest the camera anything is drawn, in voxels: clipped there, not at the eye.
 const NEAR: f32 = 0.5;
+// The narrowest a ribbon is drawn, in pixels: wide enough that every column it crosses has a pixel
+// centre within half a pixel of its middle (its soft edge falls to a twentieth).
+const MIN_RIBBON_PX: f32 = 2.0;
 
 const CORNERS = array(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
 
@@ -79,13 +84,18 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
   // Across the ribbon: square to its length and to the line of sight, so it faces the camera.
   let across = cross(head - tail, (tail + head) * 0.5 - frame.cam.origin);
   let span = length(across);
-  let side = select(frame.cam.right, across / max(span, 1e-6), span > 1e-6) * (r.width * 0.5 * toVoxels);
   let along = corner.y * 0.5 + 0.5;
-  let p = mix(tail, head, along) + side * corner.x;
+  let mid = mix(tail, head, along);
+  // A pixel's width where this end is (voxels), and the width drawn there: its light kept.
+  let pixel = 2.0 * max(dot(mid - frame.cam.origin, frame.cam.forward), NEAR) * frame.cam.tanHalf / f32(frame.res.x);
+  let width = r.width * toVoxels;
+  let drawn = max(width, MIN_RIBBON_PX * pixel);
+  let side = select(frame.cam.right, across / max(span, 1e-6), span > 1e-6) * (drawn * 0.5);
+  let p = mid + side * corner.x;
   f.clip = toClip(p);
   f.world = p;
   f.uv = vec2f(corner.x, along);
-  f.colour = vec4f(r.rgb, 0.0);
+  f.colour = vec4f(r.rgb * (width / drawn), 0.0);
   f.alphas = vec2f(r.alphaTail, r.alphaHead);
   return f;
 }

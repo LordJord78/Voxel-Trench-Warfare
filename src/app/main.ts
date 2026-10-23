@@ -40,7 +40,7 @@ import { defaultSettings, loadSettings, saveSettings, type Settings } from '../u
 import { fingerprint } from '../world/fingerprint';
 import { CameraRig, rigTunables } from './camera-rig';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
-import { EffectsFrameBuilder, effectsTunables, type BuiltEffects, type DebugQuad } from './effects-frame';
+import { EffectsFrameBuilder, effectsTunables, type BuiltEffects, type DebugQuad, type DebugRibbon } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
@@ -580,6 +580,10 @@ async function start(): Promise<void> {
     debugLights(lights: TransientLight[]) {
       effects.debugLights = lights;
     },
+    debugRibbons(ribbons: DebugRibbon[]) {
+      effects.debugRibbons = ribbons;
+    },
+    sharpAt: async (box: [number, number, number, number]) => Array.from(await renderer.readColour(box, 'sharp')),
     debugLit: async () => {
       const lit = await renderer.readEffectsLit(effects.debugAt, effects.debug.length);
       return Array.from({ length: lit.length / 8 }, (_, i) => Array.from(lit.subarray(i * 8 + 4, i * 8 + 8)));
