@@ -142,3 +142,14 @@ test('the HUD is hidden on the loading screen, paused and flying, and the crossh
   await expect(page.locator('#hud .crosshair i').first()).toBeHidden();
   expect(errors).toEqual([]);
 });
+
+test('the HUD goes when the game stops: not over the failure screen', async ({ page }) => {
+  // The review's case: the GPU lost mid-play, the failure sheet came up with the crosshair and the
+  // stance still drawn over it.
+  await playing(page);
+  expect((await hudAfter(page, 5)).visible).toBe(true);
+  await hooks(page, (h) => h.loseDevice());
+  await expect(page.locator('#loading.failed')).toBeVisible();
+  await expect(page.locator('#hud')).toBeHidden();
+  await expect(page.locator('#hud .crosshair i').first()).toBeHidden();
+});
