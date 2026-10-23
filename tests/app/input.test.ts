@@ -95,4 +95,25 @@ describe('input', () => {
     i.look(s, 0.14, 88);
     expect([s.yaw, s.pitch].map((v) => +v.toFixed(9))).toEqual([336, 88]);
   });
+  it('the trigger and R reach the intent: R stands, though released, until a tick has taken it', () => {
+    const i = new Input();
+    expect([i.intent().fire, i.intent().reload]).toEqual([false, false]);
+    i.trigger(true);
+    expect(i.intent().fire).toBe(true);
+    i.trigger(false);
+    expect(i.intent().fire).toBe(false);
+    press(i, 'KeyR');
+    expect(i.intent().reload).toBe(true);
+    // A frame too short for a tick.
+    expect(i.intent().reload).toBe(true);
+    i.ticked();
+    expect(i.intent().reload).toBe(false);
+  });
+
+  it('blur lets go of the trigger', () => {
+    const i = new Input();
+    i.trigger(true);
+    i.blur();
+    expect(i.intent().fire).toBe(false);
+  });
 });

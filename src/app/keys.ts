@@ -34,7 +34,7 @@ export function actionFor(code: string): KeyAction | null {
       return { kind: 'time-step', by: 1 };
     case 'KeyP':
       return { kind: 'preset' };
-    case 'KeyR':
+    case 'KeyY':
       return { kind: 'dynres' };
     case 'F3':
       return { kind: 'overlay' };

@@ -56,7 +56,13 @@ export interface Hooks {
   promptMs?: number;
   phases: string[];
   views: Record<string, { position: [number, number, number]; yaw: number; pitch: number; hours: number }>;
-  world: { spawn: { position: [number, number, number] } };
+  world: {
+    spawn: { position: [number, number, number]; bay: { longAxis: 0 | 2; facing: 1 | -1 } };
+    map: { get(x: number, y: number, z: number): number };
+  };
+  /** The trigger, as the left mouse button sets it with the pointer locked (headless Chrome refuses the lock). */
+  trigger(held: boolean): void;
+  session: { weapon: { rounds: number } };
 }
 
 export async function openGame(page: Page): Promise<string[]> {

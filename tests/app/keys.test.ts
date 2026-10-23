@@ -13,7 +13,9 @@ describe('keys', () => {
     expect(actionFor('BracketLeft')).toEqual({ kind: 'time-step', by: -1 });
     expect(actionFor('BracketRight')).toEqual({ kind: 'time-step', by: 1 });
     expect(actionFor('KeyP')).toEqual({ kind: 'preset' });
-    expect(actionFor('KeyR')).toEqual({ kind: 'dynres' });
+    // R reloads the rifle (input.ts); dynamic resolution's developer key is Y.
+    expect(actionFor('KeyY')).toEqual({ kind: 'dynres' });
+    expect(actionFor('KeyR')).toBeNull();
     expect(actionFor('F3')).toEqual({ kind: 'overlay' });
     expect(actionFor('KeyW')).toBeNull();
   });

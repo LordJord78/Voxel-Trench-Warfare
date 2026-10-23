@@ -312,6 +312,13 @@ async function start(): Promise<void> {
   document.addEventListener('pointerlockchange', () => {
     if (document.pointerLockElement !== canvas && (mode === 'playing' || mode === 'fly')) pause();
   });
+  // The trigger: the left button, with the pointer locked to the game (a click that locks it does not fire).
+  window.addEventListener('mousedown', (e) => {
+    if (e.button === 0 && mode === 'playing' && document.pointerLockElement === canvas) input.trigger(true);
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (e.button === 0) input.trigger(false);
+  });
   window.addEventListener('mousemove', (e) => {
     if (document.pointerLockElement !== canvas) return;
     if (mode === 'playing') input.mouse(e.movementX, e.movementY);
@@ -392,7 +399,7 @@ async function start(): Promise<void> {
       if (mode === 'playing') {
         input.look(session.player, settings.sensitivity, pitchLimit);
         session.intent = input.intent();
-        session.advance(ms / 1000);
+        if (session.advance(ms / 1000) > 0) input.ticked();
         if (!session.player.onFiringStep) input.lowerPeriscope();
       }
       pose = rig.pose(session, dt, settings.fov);
@@ -496,6 +503,10 @@ async function start(): Promise<void> {
     },
     walk() {
       if (mode === 'fly') mode = 'playing';
+    },
+    /** The trigger, as the left button sets it with the pointer locked (headless Chrome refuses the lock). */
+    trigger(held: boolean) {
+      input.trigger(held);
     },
     play: () => play(false),
     teleport(at: { position: [number, number, number]; yaw: number; pitch: number }) {
