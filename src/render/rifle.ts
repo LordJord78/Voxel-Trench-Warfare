@@ -47,7 +47,7 @@ const RIFLE: StructDef = {
 };
 
 /** The probe's floats: the sky's openness at 8 points along the rifle, then each of the cell's 32 lights' visibility. */
-const PROBE_FLOATS = 8 + 32;
+const PROBE_FLOATS = 8 + 32 + 4;
 
 export interface RiflePipelines {
   probe: GPUComputePipeline;

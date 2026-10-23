@@ -36,6 +36,10 @@ export interface EffectsTunables {
   flashLightRadiusM: number;
   flashLightIntensity: number;
   flashLightColour: V3;
+  blastLightS: number;
+  blastLightRadiusM: number;
+  blastLightIntensity: number;
+  blastLightColour: V3;
 }
 
 function rgb(tun: Tunables, key: string): V3 {
@@ -64,6 +68,10 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     flashLightRadiusM: f('flash_light_radius_m'),
     flashLightIntensity: f('flash_light_intensity'),
     flashLightColour: rgb(tun, 'effects.flash_light_colour'),
+    blastLightS: f('blast_light_s'),
+    blastLightRadiusM: f('blast_light_radius_m'),
+    blastLightIntensity: f('blast_light_intensity'),
+    blastLightColour: rgb(tun, 'effects.blast_light_colour'),
   };
 }
 
@@ -87,6 +95,8 @@ export interface DebugRibbon {
 export interface BuiltEffects {
   frame: EffectsFrame;
   lights: TransientLight[];
+  /** Shells' blasts, lighting the world shadowed (renderer.setBlasts). */
+  blasts: TransientLight[];
   counts: { billboards: number; tracers: number; stars: number; lights: number };
 }
 
@@ -106,11 +116,14 @@ export class EffectsFrameBuilder {
   debug: DebugQuad[] = [];
   debugRibbons: DebugRibbon[] = [];
   debugLights: TransientLight[] = [];
+  debugBlasts: TransientLight[] = [];
   /** Where the last frame's test quads start among its billboards. */
   debugAt = 0;
   private readonly billboards = new Float32Array(MAX_BILLBOARDS * BILLBOARD_FLOATS);
   private readonly ribbons = new Float32Array(MAX_RIBBONS * RIBBON_FLOATS);
   private flashes: { muzzle: V3; dir: V3; age: number }[] = [];
+  /** Shells landed, aged as the flashes are. */
+  private landed: { at: V3; radiusM: number; age: number }[] = [];
   /** The world's time the last frame showed. */
   private shown: number | null = null;
 
@@ -126,6 +139,9 @@ export class EffectsFrameBuilder {
     for (const f of this.flashes) f.age += elapsed;
     this.flashes = this.flashes.filter((f) => f.age < t.flashS);
     for (const shot of events.shots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0 });
+    for (const b of this.landed) b.age += elapsed;
+    this.landed = this.landed.filter((b) => b.age < t.blastLightS);
+    for (const b of events.blasts) this.landed.push({ at: b.at, radiusM: b.radiusM, age: 0 });
 
     // The drawn rifle's muzzle and bore, and how far it is drawn from where the simulation holds it.
     const muzzle = rifle ? throughPose(rifle.toWorld, RIFLE_MUZZLE) : null;
@@ -199,9 +215,19 @@ export class EffectsFrameBuilder {
     for (const r of this.debugRibbons) ribbon(r.tail, r.head, r.width, r.colour, 1, 1);
     lights.push(...this.debugLights);
 
+    // Each shell's blast: a light a metre over where it landed, flaring and dying over blast_light_s.
+    const blasts: TransientLight[] = this.landed.map((b) => ({
+      position: [b.at[0], b.at[1] + 1, b.at[2]],
+      radiusM: t.blastLightRadiusM,
+      colour: t.blastLightColour,
+      intensity: t.blastLightIntensity * (1 - b.age / t.blastLightS) ** 2,
+    }));
+    blasts.push(...this.debugBlasts);
+
     return {
       frame: { billboards: this.billboards, billboardCount: billboards, ribbons: this.ribbons, ribbonCount: ribbons },
       lights,
+      blasts,
       counts: { billboards, tracers, stars, lights: lights.length },
     };
   }

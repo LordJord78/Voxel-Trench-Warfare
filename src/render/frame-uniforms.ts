@@ -81,6 +81,8 @@ export const FLASH: StructDef = {
 
 /** The most shots' flashes a frame lights by. */
 export const MAX_FLASHES = 4;
+/** The most shells' blasts a frame lights by. */
+export const MAX_BLASTS = 4;
 
 export const FRAME: StructDef = {
   name: 'Frame',
@@ -156,6 +158,9 @@ export const FRAME: StructDef = {
     // Shots' flashes lighting the trench this frame, outside the light buffer and the denoiser.
     ['flashCount', 'u32'],
     ['flashes', { element: FLASH, count: MAX_FLASHES }],
+    // Shells' blasts lighting the world this frame: shadowed at the lighting resolution (lighting.wgsl), outside the denoiser.
+    ['blastCount', 'u32'],
+    ['blasts', { element: FLASH, count: MAX_BLASTS }],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
     // The atmosphere as this frame's sky view was built.

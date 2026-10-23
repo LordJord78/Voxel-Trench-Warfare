@@ -478,6 +478,7 @@ async function start(): Promise<void> {
     audio.play(planVoices(hearing, events, pose.position));
     renderer.setEffects(frameEffects.frame);
     renderer.setTransientLights(frameEffects.lights);
+    renderer.setBlasts(frameEffects.blasts);
     built = frameEffects.counts;
     light(dt);
     renderer.render(pose, timeOfDay, now);
@@ -621,6 +622,9 @@ async function start(): Promise<void> {
     },
     debugLights(lights: TransientLight[]) {
       effects.debugLights = lights;
+    },
+    debugBlasts(lights: TransientLight[]) {
+      effects.debugBlasts = lights;
     },
     debugRibbons(ribbons: DebugRibbon[]) {
       effects.debugRibbons = ribbons;

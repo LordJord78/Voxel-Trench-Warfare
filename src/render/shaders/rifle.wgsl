@@ -20,7 +20,8 @@
 @group(3) @binding(0) var<uniform> rifle: Rifle;
 // Palette ids, four to a word, x fastest.
 @group(3) @binding(1) var<storage, read> model: array<u32>;
-// The probe's: the sky's openness at PROBE_POINTS along the rifle, then the cell's lights' visibility.
+// The probe's: the sky's openness at PROBE_POINTS along the rifle, then the cell's lights' visibility,
+// then the shells' blasts'.
 @group(3) @binding(2) var<storage, read_write> probed: array<f32>;
 @group(3) @binding(3) var gDepth: texture_2d<f32>;
 @group(3) @binding(4) var gMotion: texture_storage_2d<rgba16float, write>;
@@ -93,6 +94,20 @@ fn probe(@builtin(local_invocation_index) i: u32) {
       }
     }
     probed[i] = mix(probed[i], seen, PROBE_BLEND);
+  } else if (i < PROBE_POINTS + CELL_LIGHTS + 4u) {
+    // Whether each shell's blast is in view of the rifle: at once, not smoothed (it lasts 0.3 s).
+    let k = i - PROBE_POINTS - CELL_LIGHTS;
+    let middle = rifleToWorld(vec3f(0.0, 0.0, PROBE_MIDDLE)) / frame.voxel;
+    var seen = 0.0;
+    if (k < frame.blastCount) {
+      let b = frame.blasts[k];
+      let d = b.pos - middle;
+      let dist = length(d);
+      if (dist < b.radius && (dist <= PROBE_FITTING || !traceWorld(middle, d / dist, 0.0, dist - PROBE_FITTING, false).hit)) {
+        seen = 1.0;
+      }
+    }
+    probed[i] = seen;
   }
 }
 
@@ -201,6 +216,10 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
     for (var k = 0u; k < cellCount(cell); k++) {
       lit += unshadowed(lights[cellLight(cell, k)], pv, n) * probed[PROBE_POINTS + k];
     }
+  }
+  for (var k = 0u; k < min(frame.blastCount, 4u); k++) {
+    let b = frame.blasts[k];
+    lit += unshadowed(Light(b.pos, b.radius, b.colour, b.intensity), pv, n) * probed[PROBE_POINTS + CELL_LIGHTS + k];
   }
   // A little of the key's light off the steel, toward the eye.
   let toward = normalize(frame.keyDir - rd);

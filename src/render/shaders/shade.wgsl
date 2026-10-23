@@ -29,6 +29,8 @@ const FAR_SKY_METRES: f32 = 2000.0;
 @group(1) @binding(2) var outColour: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(3) var light: texture_2d<f32>;
 @group(1) @binding(4) var lightHit: texture_2d<u32>;
+// The shells' blasts' light, shadowed, at the lighting resolution (lighting.wgsl).
+@group(1) @binding(5) var lBlast: texture_2d<f32>;
 
 // The probe's per-voxel variation: fine grain, coarser blotches, a slight tint.
 fn varied(albedo: vec3f, cell: vec3i) -> vec3f {
@@ -39,8 +41,9 @@ fn varied(albedo: vec3f, cell: vec3i) -> vec3f {
   return albedo * fine * blotch * tint;
 }
 
-// The denoised light reaching pixel p, which lies on `face` at `plane`.
-fn upsampled(p: vec2u, face: u32, plane: i32, n: vec3f) -> vec4f {
+// The light of lighting texture `t` (the denoised, or the blasts') reaching pixel p, which lies on
+// `face` at `plane`; `none` where no texel near saw its face.
+fn upsampledFrom(t: texture_2d<f32>, none: vec4f, p: vec2u, face: u32, plane: i32, n: vec3f) -> vec4f {
   let grid = (vec2f(p) + 0.5) / f32(frame.lightScale) - 0.5;
   let base = vec2i(floor(grid));
   let f = grid - floor(grid);
@@ -49,33 +52,33 @@ fn upsampled(p: vec2u, face: u32, plane: i32, n: vec3f) -> vec4f {
   var total = 0.0;
   for (var k = 0; k < 4; k++) {
     let o = vec2i(k & 1, k >> 1);
-    let t = clamp(base + o, vec2i(0), size - 1);
-    let h = textureLoad(lightHit, t, 0).xy;
+    let q = clamp(base + o, vec2i(0), size - 1);
+    let h = textureLoad(lightHit, q, 0).xy;
     if (hitFace(h) != face) {
       continue;
     }
     let w = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1) * exp(-f32(abs(hitPlane(h) - plane)));
-    sum += w * textureLoad(light, t, 0);
+    sum += w * textureLoad(t, q, 0);
     total += w;
   }
   if (total > 1e-3) {
     return sum / total;
   }
-  // No texel around saw this face: the nearest same-face texel within one more, else open sky.
+  // No texel around saw this face: the nearest same-face texel within one more, else `none`.
   let centre = vec2i(round(grid));
   var best = -1.0;
-  var pick = vec4f(skyIrradiance(n), 1.0);
+  var pick = none;
   for (var dy = -1; dy <= 1; dy++) {
     for (var dx = -1; dx <= 1; dx++) {
-      let t = clamp(centre + vec2i(dx, dy), vec2i(0), size - 1);
-      let h = textureLoad(lightHit, t, 0).xy;
+      let q = clamp(centre + vec2i(dx, dy), vec2i(0), size - 1);
+      let h = textureLoad(lightHit, q, 0).xy;
       if (hitFace(h) != face) {
         continue;
       }
       let w = exp(-f32(abs(hitPlane(h) - plane))) / (1.0 + f32(abs(dx) + abs(dy)));
       if (w > best) {
         best = w;
-        pick = textureLoad(light, t, 0);
+        pick = textureLoad(t, q, 0);
       }
     }
   }
@@ -132,8 +135,11 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
       if ((frame.flags & FLAG_DEBUG_SHADE) != 0u) {
         colour = albedo * (0.3 + 0.7 * max(dot(n, normalize(vec3f(0.4, 0.8, 0.45))), 0.0));
       } else {
-        let l = upsampled(g.xy, face, hitPlane(hit), n);
-        let lit = frame.keyColour * l.a * max(dot(n, frame.keyDir), 0.0) + l.rgb + flashLight(frame.cam.origin + rd * depth, n);
+        let l = upsampledFrom(light, vec4f(skyIrradiance(n), 1.0), g.xy, face, hitPlane(hit), n);
+        var lit = frame.keyColour * l.a * max(dot(n, frame.keyDir), 0.0) + l.rgb + flashLight(frame.cam.origin + rd * depth, n);
+        if (frame.blastCount > 0u) {
+          lit += upsampledFrom(lBlast, vec4f(0.0), g.xy, face, hitPlane(hit), n).rgb;
+        }
         colour = albedo * lit + emissionOf(mat);
         if (kindOf(mat) == KIND_WATER && face == 3u) {
           let fresnel = 0.02 + 0.98 * pow(1.0 - abs(dot(rd, n)), 5.0);

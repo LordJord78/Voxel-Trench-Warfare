@@ -71,6 +71,8 @@ export interface Hooks {
   debugQuads(quads: { position: [number, number, number]; size: number; colour: [number, number, number]; lit?: boolean; square?: boolean }[]): void;
   /** Emissive test ribbons (metres; metres across; linear colour), as tracers are drawn, from the next frame; [] for none. */
   debugRibbons(ribbons: { tail: [number, number, number]; head: [number, number, number]; width: number; colour: [number, number, number] }[]): void;
+  /** Shells' blast lights, added to the next frames' own (as a blast's, shadowed, outside the denoiser); [] for none. */
+  debugBlasts(lights: { position: number[]; radiusM: number; colour: number[]; intensity: number }[]): void;
   /** The last frame's sharpened image, the effects drawn over it, over a box of the internal image: linear rgb, a row at a time. */
   sharpAt(box: [number, number, number, number]): Promise<number[]>;
   /** The last frame's test quads as the effects lit them: linear rgb premultiplied, and alpha. */

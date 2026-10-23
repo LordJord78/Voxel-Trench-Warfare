@@ -60,12 +60,16 @@ fn skyAround() -> vec3f {
   return (x + y + z) / 6.0;
 }
 
-// The shots' flashes at p (voxels).
+// The shots' flashes and the shells' blasts at p (voxels).
 fn flashesAt(p: vec3f) -> vec3f {
   var sum = vec3f(0.0);
   for (var i = 0u; i < min(frame.flashCount, 4u); i++) {
     let f = frame.flashes[i];
     sum += facing(Light(f.pos, f.radius, f.colour, f.intensity), p);
+  }
+  for (var i = 0u; i < min(frame.blastCount, 4u); i++) {
+    let b = frame.blasts[i];
+    sum += facing(Light(b.pos, b.radius, b.colour, b.intensity), p);
   }
   return sum;
 }

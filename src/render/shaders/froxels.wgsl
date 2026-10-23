@@ -13,7 +13,9 @@
 // last frame's view held it: they are what each frame samples only a little of. `integrate` runs
 // down each column, front to back: it lights each slice's haze with this frame's key and sky by
 // how much of the key reaches it (so the haze never lags the light), adds the point lights' glow,
-// and adds the slice over what the haze before it hides. How much the haze hides is hazeDepth's,
+// adds the shells' blasts' glow at the slice's middle (unshadowed, as the point lights', and in no
+// history: they last 0.3 s), and adds the slice over what the haze before it hides. How much the
+// haze hides is hazeDepth's,
 // along each column's ray: with nothing to cast a shaft and no point lights, the froxels' haze is
 // the analytic fog (fog.wgsl).
 #include "haze.wgsl"
@@ -103,6 +105,18 @@ fn inject(@builtin(global_invocation_id) g: vec3u) {
   textureStore(glowOut, g, out);
 }
 
+// The shells' blasts' glow on the haze at x (voxels), toward the eye looking along rd.
+fn blastGlow(x: vec3f, rd: vec3f) -> vec3f {
+  var glow = vec3f(0.0);
+  for (var i = 0u; i < min(frame.blastCount, 4u); i++) {
+    let b = frame.blasts[i];
+    let d = b.pos - x;
+    let toward = d / max(length(d), 1e-6);
+    glow += unshadowed(Light(b.pos, b.radius, b.colour, b.intensity), x, toward) * (frame.hazeLights * hazePhase(dot(rd, toward)));
+  }
+  return min(glow, vec3f(GLOW_MAX));
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn integrate(@builtin(global_invocation_id) g: vec3u) {
   let grid = textureDimensions(hazeOut);
@@ -122,7 +136,10 @@ fn integrate(@builtin(global_invocation_id) g: vec3u) {
     // The slice's glow, lit by this frame's key as far as it reaches, over what of it the haze
     // before it lets through.
     let sampled = textureLoad(glowNow, vec3u(g.xy, k), 0);
-    let glow = hazeGlow(rd, mix(shadow, 1.0, sampled.a)) + sampled.rgb;
+    var glow = hazeGlow(rd, mix(shadow, 1.0, sampled.a)) + sampled.rgb;
+    if (frame.blastCount > 0u) {
+      glow += blastGlow(frame.cam.origin + rd * (sliceMetres(f32(k) + 0.5) / frame.voxel), rd);
+    }
     light += glow * (exp(-depth) - exp(-to));
     depth = to;
     textureStore(hazeOut, vec3u(g.xy, k), vec4f(light, exp(-depth)));

@@ -61,7 +61,7 @@ import { Rifle, type RifleDrawn, type RiflePipelines, type RiflePose } from './r
 import { FarFieldGpu } from './farfield-gpu';
 import { FlareShadows } from './flare-shadows';
 import { froxelLayouts, Froxels, type FroxelPipelines } from './froxels';
-import { FLAGS, FRAME, MAX_FLASHES, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
+import { FLAGS, FRAME, MAX_BLASTS, MAX_FLASHES, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
 import { KeyShadow, keyShadowLayouts, type Key, type KeyShadowPipelines } from './key-shadow';
@@ -200,6 +200,8 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
         storageTexture(5, 'r32float'),
         // This frame's reservoirs (restir.ts).
         { binding: 6, visibility: STAGE(), buffer: { type: 'read-only-storage' } },
+        // The shells' blasts' light, shadowed, with no history.
+        storageTexture(7, 'rgba16float'),
       ],
     }),
     temporal: device.createBindGroupLayout({
@@ -216,7 +218,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
     shade: device.createBindGroupLayout({
       label: 'shade',
-      entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), sampled(3, 'float'), sampled(4, 'uint')],
+      entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), sampled(3, 'float'), sampled(4, 'uint'), sampled(5, 'float')],
     }),
     taa: device.createBindGroupLayout({
       label: 'taa',
@@ -341,6 +343,8 @@ export class Renderer {
   private lightCount = 0;
   /** This frame's shots' flashes, lighting the trench outside the denoiser (flash.wgsl). */
   private flashes: TransientLight[] = [];
+  /** This frame's shells' blasts, shadowed at the lighting resolution, outside the denoiser. */
+  private blasts: TransientLight[] = [];
 
   static async create(gpu: Gpu, canvas: HTMLCanvasElement | null, world: GpuWorld, plan: WorldPlan | null, options: RendererOptions = {}): Promise<Renderer> {
     const compiled = options.compiled ?? (await compileFrame(gpu.device));
@@ -498,6 +502,11 @@ export class Renderer {
     return out;
   }
 
+  /** This frame's shells' blasts: the strongest MAX_BLASTS of them light it. */
+  setBlasts(lights: readonly TransientLight[]): void {
+    this.blasts = [...lights].sort((a, b) => b.intensity - a.intensity).slice(0, MAX_BLASTS);
+  }
+
   /** This frame's transient lights (shots' flashes): the strongest MAX_FLASHES of them light it. */
   setTransientLights(lights: readonly TransientLight[]): void {
     this.flashes = [...lights].sort((a, b) => b.intensity - a.intensity).slice(0, MAX_FLASHES);
@@ -572,6 +581,7 @@ export class Renderer {
     make('filteredA', 'rgba16float', light);
     make('filteredB', 'rgba16float', light);
     make('denoised', 'rgba16float', light);
+    make('lBlast', 'rgba16float', light);
     this.effects.bind(this.textures.sharp, this.textures.gDepth, this.textures.denoised);
     const view = (name: string) => this.textures[name].createView();
     this.restir.resize(light, { gDepth: view('gDepth'), gHit: view('gHit'), hDepth: [view('hDepth0'), view('hDepth1')], hHit: [view('hHit0'), view('hHit1')] });
@@ -582,7 +592,7 @@ export class Renderer {
       return {
         beam: group('beam', [view('beam')]),
         primary: group('primary', [view('gDepth'), view('gHit'), view('gMotion'), view('beam')]),
-        lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view('lSky'), { buffer: this.restir.shaded }]),
+        lighting: group('lighting', [view('gDepth'), view('gHit'), view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view('lSky'), { buffer: this.restir.shaded }, view('lBlast')]),
         temporal: group('temporal', [
           view('lNoisy'), view(`hDepth${cur}`), view(`hHit${cur}`), view(`hHit${prev}`), view(`hColour${prev}`), view(`hMoments${prev}`),
           view(`hColour${cur}`), view(`hMoments${cur}`), view('variance'), view(`hDepth${prev}`), view('lSky'),
@@ -590,7 +600,7 @@ export class Renderer {
         atrous1: group('atrous', [view(`hColour${cur}`), view('variance'), view(`hHit${cur}`), view('filteredA'), view('varianceA'), { buffer: this.steps[0] }, view(`hDepth${cur}`)]),
         atrous2: group('atrous', [view('filteredA'), view('varianceA'), view(`hHit${cur}`), view('filteredB'), view('varianceB'), { buffer: this.steps[1] }, view(`hDepth${cur}`)]),
         atrous3: group('atrous', [view('filteredB'), view('varianceB'), view(`hHit${cur}`), view('denoised'), view('varianceA'), { buffer: this.steps[2] }, view(`hDepth${cur}`)]),
-        shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('denoised'), view(`hHit${cur}`)]),
+        shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('denoised'), view(`hHit${cur}`), view('lBlast')]),
         taa: group('taa', [view('colour'), view('gMotion'), view(`taa${prev}`), view(`taa${cur}`), this.sampler]),
         cas: group('cas', [view(`taa${cur}`), view('sharp')]),
         present: group('present', [view('sharp'), this.sampler, { buffer: this.presentBuffer }, this.compiled.noise.createView(), this.bloom.output.createView()]),
@@ -701,7 +711,8 @@ export class Renderer {
     w.set('lightCount', this.lightCount);
     w.set('voxel', voxel);
     w.set('timeOfDay', timeOfDay);
-    w.set('lightRays', 3);
+    // The key's, the sky's and the chosen light's rays, and one to each blast (lighting.wgsl).
+    w.set('lightRays', 3 + this.blasts.length);
     const denoise = this.options.denoise ?? { historyMax: 32, sigmaLuma: 4, sigmaPlane: 1 };
     w.set('historyMax', denoise.historyMax);
     w.set('sigmaLuma', denoise.sigmaLuma);
@@ -714,6 +725,13 @@ export class Renderer {
       w.set(`flashes.${k}.radius`, f.radiusM / voxel);
       w.set(`flashes.${k}.colour`, f.colour);
       w.set(`flashes.${k}.intensity`, f.intensity);
+    });
+    w.set('blastCount', this.blasts.length);
+    this.blasts.forEach((f, k) => {
+      w.set(`blasts.${k}.pos`, f.position.map((m) => m / voxel));
+      w.set(`blasts.${k}.radius`, f.radiusM / voxel);
+      w.set(`blasts.${k}.colour`, f.colour);
+      w.set(`blasts.${k}.intensity`, f.intensity);
     });
     w.set('far', this.far.info);
     const encoder = device.createCommandEncoder({ label: `frame ${this.frameIndex}` });

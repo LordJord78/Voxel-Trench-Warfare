@@ -188,6 +188,29 @@ describe('a frame of effects', () => {
     expect(Math.hypot(on.head[0] - on.tail[0], on.head[1] - on.tail[1], on.head[2] - on.tail[2])).toBeLessThanOrEqual(t.tracerLengthM + 1e-4);
   });
 
+  it("a blast's light flares and dies over blast_light_s of the world's time, a metre over where it landed", () => {
+    const s = stand();
+    const b = new EffectsFrameBuilder(t);
+    const blast: CombatEvents = { ...none(), blasts: [{ tick: s.ticks, at: [12.8, 0.4, 20], radiusM: 3, material: P.SOD }] };
+    let built = b.build(s, blast);
+    expect(built.blasts).toEqual([{ position: [12.8, 1.4, 20], radiusM: t.blastLightRadiusM, colour: t.blastLightColour, intensity: t.blastLightIntensity }]);
+    // Half way, a quarter as bright; at the end, gone.
+    const half = Math.round((t.blastLightS / 2) * 60);
+    for (let k = 0; k < half; k++) s.tick();
+    built = b.build(s, none());
+    expect(built.blasts.length).toBe(1);
+    expect(built.blasts[0].intensity).toBeCloseTo(t.blastLightIntensity * 0.25, 6);
+    for (let k = 0; k < half; k++) s.tick();
+    expect(b.build(s, none()).blasts).toEqual([]);
+  });
+
+  it("a paused world holds a blast's light", () => {
+    const s = stand();
+    const b = new EffectsFrameBuilder(t);
+    b.build(s, { ...none(), blasts: [{ tick: s.ticks, at: [12.8, 0.4, 20], radiusM: 3, material: P.SOD }] });
+    for (let k = 0; k < 10; k++) expect(b.build(s, none()).blasts[0].intensity).toBe(t.blastLightIntensity);
+  });
+
   it("the session's particles are the frame's billboards", () => {
     const s = stand();
     const built = new EffectsFrameBuilder(t).build(s, shoot(s));

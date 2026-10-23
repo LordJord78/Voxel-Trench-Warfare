@@ -8,7 +8,10 @@
 //     tracing one of the two a frame and the other the next, so every pixel
 //     traces each every other frame;
 //   - one point light, the one ReSTIR chose for this pixel (restir.wgsl),
-//     with one shadow ray, its light scaled by the reservoir's weight.
+//     with one shadow ray, its light scaled by the reservoir's weight;
+//   - and one shadow ray to each shell's blast this frame (frame.blasts), their
+//     light summed into lBlast with no history: a 0.3 s flare through the
+//     denoiser's 32 frames would show late, dim and lingering.
 // It writes the point light as irradiance (rgb) and the key light's visibility
 // (a, -1 where its ray was not traced), and the sky's visibility on its own (-1
 // likewise): the temporal pass keeps their histories as averages of the samples
@@ -27,6 +30,7 @@
 @group(1) @binding(5) var lSky: texture_storage_2d<r32float, write>;
 // This frame's reservoirs: each lighting pixel's light.
 @group(1) @binding(6) var<storage, read> reservoirs: array<Reservoir>;
+@group(1) @binding(7) var lBlast: texture_storage_2d<rgba16float, write>;
 
 const NOISE_OFFSETS = array(vec2u(0u, 0u), vec2u(17u, 39u), vec2u(41u, 7u), vec2u(29u, 53u));
 
@@ -106,13 +110,14 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   if (face >= 6u) {
     textureStore(lNoisy, g.xy, vec4f(0.0));
     textureStore(lSky, g.xy, vec4f(-1.0));
+    textureStore(lBlast, g.xy, vec4f(0.0));
     return;
   }
   let rd = cameraRay(frame.cam, vec2f(p) + 0.5 + frameJitter(), vec2f(frame.res));
   let n = faceNormal(face);
   let at = frame.cam.origin + rd * depth + n * 0.02;
 
-  // The three rays this pixel traces: the key light's, the sky's and the chosen light's. The sky's
+  // The rays this pixel traces: the key light's, the sky's, the chosen light's, and the blasts'. The sky's
   // only on its band's turn: a band of four rows is one SIMD group of 32 here (8 wide), so whole
   // groups skip the ray together. Its samples step through their sequence once per turn.
   let wantKey = dot(n, frame.keyDir) > 0.0 && luminance(frame.keyColour) > 0.0;
@@ -126,6 +131,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   // GPU's registers and fewer pixels run at once. The count comes from the
   // frame so the compiler cannot unroll the loop back into three.
   var open = vec3f(0.0);
+  var blast = vec3f(0.0);
   for (var k = 0u; k < frame.lightRays; k++) {
     var d = skyDir;
     var len = frame.skyRay;
@@ -140,11 +146,27 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
       len = pick.len;
       want = pick.len > 0.0;
       touching = !want && any(pick.light > vec3f(0.0));
+    } else if (k >= 3u) {
+      // Blast k - 3, its ray ending LIGHT_FITTING short of it, as a point light's.
+      let b = frame.blasts[k - 3u];
+      let to = b.pos - at;
+      let dist = length(to);
+      d = to / max(dist, 1e-6);
+      len = dist - LIGHT_FITTING;
+      want = len > 0.0 && dist < b.radius && dot(d, n) > 0.0;
+      touching = len <= 0.0;
     }
-    if (touching || (want && !traceWorld(at, d, 0.0, len, false).hit)) {
-      open[k] = 1.0;
+    let lit = touching || (want && !traceWorld(at, d, 0.0, len, false).hit);
+    if (k < 3u) {
+      if (lit) {
+        open[k] = 1.0;
+      }
+    } else if (lit) {
+      let b = frame.blasts[k - 3u];
+      blast += unshadowed(Light(b.pos, b.radius, b.colour, b.intensity), at, n);
     }
   }
+  textureStore(lBlast, g.xy, vec4f(blast, 0.0));
   textureStore(lNoisy, g.xy, vec4f(pick.light * open.z, select(-1.0, open.x, keyTurn)));
   textureStore(lSky, g.xy, vec4f(select(-1.0, open.y, skyTurn)));
 }

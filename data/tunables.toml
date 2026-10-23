@@ -574,6 +574,10 @@ flash_light_radius_m  = 6.0    # a shot's light: warm, falling to nothing at thi
 flash_light_intensity = 3.0    # about a lantern's (render.lantern_intensity) for two
                                # frames: at 8, and 40, it lit the trench like noon
 flash_light_colour    = [1.0, 0.72, 0.40]
+blast_light_s       = 0.3      # a shell's blast: a light a metre over its crater,
+blast_light_radius_m = 30.0    # flaring and dying as (1 - t / this)^2, shadowed
+blast_light_intensity = 300.0  # (a lantern is about 3 at 1 m; this, 0.5 at 20 m)
+blast_light_colour  = [1.0, 0.62, 0.32]
 rifle_specular      = 0.35     # the key's light off the rifle's steel, toward the eye
 particle_glow       = 20.0     # the flash's and the sparks' particles
 dust_key            = 0.5      # how much of the key's light a mote of dust or a

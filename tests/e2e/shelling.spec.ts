@@ -88,3 +88,64 @@ test('a worker that will not start leaves shells landing in-process', async ({ p
   expect(await hooks(page, (h) => h.craters())).toBe(1);
   expect(errors).toEqual([]);
 });
+
+/** The bay at night, its lanterns out, frozen: its camera, and the step view's. */
+async function bayAtNight(page: Page) {
+  return hooks(page, async (h) => {
+    h.view('bay');
+    h.setTimeOfDay(21);
+    h.useLights([]);
+    h.jitter(false);
+    h.freeze();
+    await h.stepFrames(40);
+    const c = h.camera();
+    return { position: c.position, yaw: c.yaw, res: h.stats().res };
+  });
+}
+
+/** The floor at the image's lower middle: its mean shaded colour's luminance, with these blasts. */
+function floorWith(page: Page, res: [number, number], blasts: { position: number[]; radiusM: number; colour: number[]; intensity: number }[]) {
+  return hooks(
+    page,
+    async (h, arg) => {
+      const { blasts, box } = arg as { blasts: never[]; box: [number, number, number, number] };
+      h.debugBlasts(blasts);
+      await h.stepFrames(2);
+      const c = await h.colourAt(box);
+      return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    },
+    { blasts, box: [Math.floor(res[0] / 2) - 20, Math.floor(res[1] * 0.85), 40, 10] },
+  );
+}
+
+test('a blast lights the faces that see it, and not those behind cover', async ({ page }) => {
+  const errors = await openGame(page);
+  const crest = await crestAhead(page);
+  const step = await hooks(page, (h) => h.views.step);
+  const at = await bayAtNight(page);
+  const blast = (position: number[]) => [{ position, radiusM: 30, colour: [1.0, 0.62, 0.32], intensity: 300 }];
+  const yaw = (at.yaw * Math.PI) / 180;
+  // Three metres up the bay, a metre over its floor.
+  const inBay = [at.position[0] + Math.sin(yaw) * 3, at.position[1] - 1.0, at.position[2] + Math.cos(yaw) * 3];
+  // Three metres beyond the parapet's crest from the step, just over the field there.
+  const sy = (step.yaw * Math.PI) / 180;
+  const out = [crest[0] + Math.sin(sy) * 3, 0, crest[2] + Math.cos(sy) * 3];
+  out[1] = (await hooks(page, (h, xz) => {
+    const [x, z] = xz as number[];
+    let y = 319;
+    while (y >= 0 && h.world.map.get(Math.floor(x / 0.1), y, Math.floor(z / 0.1)) === 0) y--;
+    return (y + 1) * 0.1;
+  }, [out[0], out[2]])) + 0.3;
+  const before = await floorWith(page, at.res, []);
+  const near = await floorWith(page, at.res, blast(inBay));
+  const covered = await floorWith(page, at.res, blast(out));
+  const gone = await floorWith(page, at.res, []);
+  const seen = JSON.stringify({ before, near, covered, gone, inBay, out });
+  console.log(`A blast and the bay's floor: ${before.toExponential(3)} unlit, ${(near / before).toFixed(2)}× with it 3 m up the bay, ${(covered / before).toFixed(3)}× with it behind the parapet, ${(gone / before).toFixed(4)}× the frame after`);
+  expect(near / before, seen).toBeGreaterThan(1.2);
+  // Behind cover it lights only the haze between the eye and the floor.
+  expect(covered - before, seen).toBeLessThan((near - before) / 10);
+  // In no history: gone the frame after.
+  expect(Math.abs(gone - before) / before, seen).toBeLessThan(0.01);
+  expect(errors).toEqual([]);
+});
