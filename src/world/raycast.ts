@@ -89,3 +89,18 @@ export function raycast(map: BrickMap, origin: readonly [number, number, number]
     face = axis * 2 + (dir[axis] > 0 ? 0 : 1);
   }
 }
+
+/**
+ * One past the highest voxel down column (⌊x⌋, ⌊z⌋) that is not air (water counts): where a shell
+ * falling straight down meets the ground. Null for an empty column, or one off the map.
+ */
+export function groundTop(map: BrickMap, x: number, z: number): number | null {
+  const cx = Math.floor(x);
+  const cz = Math.floor(z);
+  if (!map.inBounds(cx, 0, cz)) return null;
+  for (let by = map.bricks.y - 1; by >= 0; by--) {
+    if (map.table[map.brickIndex(cx >> 3, by, cz >> 3)] === 0) continue;
+    for (let y = by * 8 + 7; y >= by * 8; y--) if (map.get(cx, y, cz) !== 0) return y + 1;
+  }
+  return null;
+}
