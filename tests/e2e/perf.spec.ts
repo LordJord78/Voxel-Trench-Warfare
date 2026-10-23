@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { useManyLights } from './many-lights';
 import { hooks, openGame } from './support/app';
+import { digAlong, shellTheBay } from './support/bay';
 
 // 1600 × 1000 CSS pixels at a device scale of 1: a 1.6 MP canvas, so the
 // internal image is the high preset's 1.5 MP.
@@ -325,3 +326,28 @@ function hhmm(hours: number): string {
   const m = Math.round(hours * 60);
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 }
+
+test('digging out a shelled bay keeps the main thread within its budget', async ({ page }) => {
+  // Done-table row 6's main thread, ≤ 8 ms a frame at the 99th percentile, while a player digs:
+  // each scoop settles the ground about it on the main thread (milestone 5's review measured
+  // 10.6–11.3 ms there), and no frame over 20 ms.
+  test.setTimeout(300_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => {
+    h.setQuality({ preset: 'high', dynres: false });
+    h.play();
+  });
+  const bay = await shellTheBay(page);
+  const main: number[] = [];
+  await digAlong(page, bay, 20, 2.5, async () => {
+    main.push(...(await hooks(page, (h) => h.mainMs().slice(-15))));
+  });
+  const cleared = await hooks(page, (h) => h.session.entrenching.cleared);
+  const at = (q: number) => [...main].sort((a, b) => a - b)[Math.min(main.length - 1, Math.floor(q * main.length))];
+  const line = `Digging a shelled bay: ${cleared} voxels in 20 s; main thread p99 ${at(0.99).toFixed(1)} ms, p95 ${at(0.95).toFixed(1)}, median ${at(0.5).toFixed(2)}, worst ${Math.max(...main).toFixed(1)} over ${main.length} frames`;
+  console.log(line);
+  expect(cleared, line).toBeGreaterThan(1000);
+  expect(at(0.99), line).toBeLessThanOrEqual(8);
+  expect(Math.max(...main), line).toBeLessThanOrEqual(20);
+  expect(errors).toEqual([]);
+});

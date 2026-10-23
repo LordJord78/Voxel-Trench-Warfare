@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/core/rng';
 import { BrickMap } from '../../src/world/bricks';
-import { collapseRegion, floodRegion } from '../../src/world/destruction';
+import { collapseRegion, floodRegion, settleRegion } from '../../src/world/destruction';
 import { K, P, isGranular, isLoose, isSolid, kindOf } from '../../src/world/materials';
 
 const D = { x: 64, y: 64, z: 64 };
@@ -182,6 +182,42 @@ describe('collapseRegion', () => {
     expect(() => collapseRegion(w, { x0: -5, y0: 30, z0: -5, x1: 6, y1: 70, z1: 6 })).not.toThrow();
     expect(count(w, P.SPOIL)).toBe(before);
     expect(w.get(0, 0, 0)).toBe(P.SPOIL);
+  });
+});
+
+describe('settleRegion', () => {
+  it('leaves the world as settling and then flooding it does, whether the box is high and dry, wet above the table, or reaches it', () => {
+    // A heap of spoil to slump; dry above the table, then beside a film of water above it (a ditch's),
+    // then reaching down to the table: settleRegion floods only where flooding can change anything.
+    const cases: [string, (w: BrickMap) => void, number][] = [
+      ['high and dry', () => {}, 4],
+      ['a film of water above the table', (w) => w.fillBox(20, 20, 20, 30, 21, 30, P.WATER), 4],
+      ['reaching the table', () => {}, 19],
+    ];
+    for (const [name, wet, table] of cases) {
+      const make = () => {
+        const w = new BrickMap(D);
+        w.fillBox(0, 0, 0, 64, 20, 64, P.CLAY);
+        w.fillBox(24, 20, 24, 28, 30, 28, P.SPOIL);
+        wet(w);
+        w.takeDirty();
+        return w;
+      };
+      const box = { x0: 22, y0: 20, z0: 22, x1: 30, y1: 30, z1: 30 };
+      const a = make();
+      settleRegion(a, box, table, { pad: 4, widen: false });
+      const b = make();
+      const worked = { ...box };
+      collapseRegion(b, box, {
+        pad: 4,
+        widen: false,
+        onWork: (w) => Object.assign(worked, { x0: Math.min(worked.x0, w.x0), y0: Math.min(worked.y0, w.y0), z0: Math.min(worked.z0, w.z0), x1: Math.max(worked.x1, w.x1), y1: Math.max(worked.y1, w.y1), z1: Math.max(worked.z1, w.z1) }),
+      });
+      floodRegion(b, worked, table);
+      let differ = 0;
+      for (let z = 0; z < 64; z++) for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) if (a.get(x, y, z) !== b.get(x, y, z)) differ++;
+      expect(differ, name).toBe(0);
+    }
   });
 });
 

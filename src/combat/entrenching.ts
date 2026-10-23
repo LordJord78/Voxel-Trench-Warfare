@@ -56,9 +56,13 @@ export interface Scoop {
 }
 
 /** Voxels about a scoop its settling starts from. */
-const SETTLE_PAD = 2;
-/** Voxels further a settling may spread sideways (collapseRegion's pad), for the box a caller is asked to free. */
-const SPREAD = 24;
+const SETTLE_PAD = 1;
+/**
+ * Voxels further a scoop's settling may spread sideways, in one round: the ground beyond is left
+ * as steep as it stood (never hanging) until digging comes to it, so a scoop costs the main thread
+ * its neighbourhood, not the whole slope behind it. The box a caller is asked to free is exactly this.
+ */
+const SPREAD = 2;
 /** How much further a voxel to the side of the way the feet face counts than one ahead of them. */
 const ASIDE = 2;
 
@@ -150,7 +154,7 @@ export class Entrenching {
       at[1] += y + 0.5;
       at[2] += z + 0.5;
     }
-    settleRegion(this.map, box, this.waterTable);
+    settleRegion(this.map, box, this.waterTable, { pad: SPREAD, widen: false });
     this.banked = Math.min(this.banked - this.scoopS, this.scoopS);
     this.cleared += taken.length;
     const per = this.voxel / taken.length;
@@ -174,7 +178,9 @@ export class Entrenching {
     const ax = fx + forward.x * reach * 0.5;
     const az = fz + forward.z * reach * 0.5;
     const cx = Math.floor(ax);
-    const cy = Math.floor(fy);
+    // The row the feet stand in: the controller stands them at k × voxel, which over the voxel can
+    // fall just short of k (4.3 m: 42.99999999999999), and a row lower the search would dig two down.
+    const cy = Math.floor(fy + 1e-6);
     const cz = Math.floor(az);
     const x0 = Math.max(0, cx - span);
     const y0 = Math.max(0, cy - 1);
@@ -184,7 +190,6 @@ export class Entrenching {
     const z1 = Math.min(map.dims.z, cz + span + 1);
     const r2 = reach * reach;
     // Below the feet and under the body's footprint: what they stand on.
-    const footY = Math.floor(fy + 1e-6);
     const half = this.t.footprintM / this.voxel + 0.5;
     for (let bz = Math.floor(z0 / BRICK); bz * BRICK < z1; bz++) {
       for (let by = Math.floor(y0 / BRICK); by * BRICK < y1; by++) {
@@ -203,7 +208,7 @@ export class Entrenching {
                 const dy = y + 0.5 - fy;
                 const dz = z + 0.5 - fz;
                 if (dx * dx + dy * dy + dz * dz > r2) continue;
-                if (y < footY && Math.abs(dx) < half && Math.abs(dz) < half) continue;
+                if (y < cy && Math.abs(dx) < half && Math.abs(dz) < half) continue;
                 const ex = x + 0.5 - ax;
                 const ez = z + 0.5 - az;
                 const along = ex * forward.x + ez * forward.z;

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { useManyLights } from './many-lights';
 import { hooks, openGame } from './support/app';
+import { digAlong, shellTheBay, type ShelledBay } from './support/bay';
 
 // The six standard views at dusk, night, dawn and noon, and at 18:30, the darkest of the evening's
 // twilight, where the exposure peaks: for review by eye (grain, seams, the horizon, lanterns and
@@ -357,73 +358,29 @@ test('digging out a slumped bay', async ({ page }) => {
   const errors = await openGame(page);
   await page.locator('#play').click();
   await expect(page.locator('#loading')).toBeHidden();
-  await hooks(page, (h, t) => h.setTimeOfDay(t as number), DUSK);
-  const plan = await hooks(page, (h) => {
+  await hooks(page, (h, t) => {
     h.setQuality({ preset: 'high', dynres: false });
-    h.setIntensity('off');
-    h.setShelling('off');
-    const { position: p, bay } = h.world.spawn;
-    // Across the bay toward the enemy, the highest ground within 4 m: the parapet's crest.
-    const across = bay.longAxis === 0 ? 2 : 0;
-    let crest: [number, number, number] = [p[0], -1, p[2]];
-    for (let d = 0; d <= 4; d += 0.1) {
-      const at: [number, number, number] = [p[0], 0, p[2]];
-      at[across] += bay.facing * d;
-      let y = 319;
-      while (y >= 0 && h.world.map.get(Math.floor(at[0] / 0.1), y, Math.floor(at[2] / 0.1)) === 0) y--;
-      if ((y + 1) * 0.1 > crest[1]) crest = [at[0], (y + 1) * 0.1, at[2]];
-    }
-    // 2.5 m along the bay from it, on the floor, facing back along the bay at it; the vantage a metre
-    // further back and 3.5 m up.
-    const stand: [number, number, number] = [p[0], p[1], p[2]];
-    stand[bay.longAxis] -= 2.5;
-    const vantage: [number, number, number] = [stand[0], stand[1] + 3.5, stand[2]];
-    vantage[bay.longAxis] -= 1.0;
-    const yaw = bay.longAxis === 0 ? 90 : 0;
-    return { crest, stand, vantage, yaw, axis: bay.longAxis };
-  });
-  await hooks(page, async (h, a) => {
-    const { crest } = a as { crest: [number, number, number] };
-    await h.shell(crest, 3);
-    await h.waitFrames(60);
-  }, plan);
-  await hooks(page, async (h, a) => {
-    const { stand, yaw } = a as { stand: [number, number, number]; yaw: number };
-    h.teleport({ position: stand, yaw, pitch: -12 });
-    await h.waitFrames(30);
-  }, plan);
+    h.setTimeOfDay(t as number);
+  }, DUSK);
+  const bay = await shellTheBay(page);
   const look = async (name: string) => {
     await hooks(page, async (h, a) => {
-      const { vantage, yaw } = a as { vantage: [number, number, number]; yaw: number };
+      const { vantage, yaw } = a as ShelledBay;
       h.flyTo({ position: vantage, yaw, pitch: -55 });
       await h.waitFrames(120);
-    }, plan);
+    }, bay);
     await page.screenshot({ path: `artifacts/c5/${name}.png` });
     await hooks(page, async (h) => {
       h.walk();
       await h.waitFrames(5);
     });
   };
-  const start = await hooks(page, (h) => h.session.player.position);
-  const along = (p: { x: number; z: number }) => (plan.axis === 0 ? p.x : p.z);
-  const dig = async (seconds: number, hudAt?: number) => {
-    await page.keyboard.down('KeyF');
-    for (let k = 0; k < seconds * 4; k++) {
-      await hooks(page, (h) => h.waitFrames(15));
-      const now = await hooks(page, (h) => ({ inReach: h.session.entrenching.inReach, at: h.session.player.position }));
-      if (!now.inReach && along(now.at) - along(start) < 2.5) {
-        await page.keyboard.down('KeyW');
-        await hooks(page, (h) => h.waitFrames(5));
-        await page.keyboard.up('KeyW');
-      }
-      if (hudAt !== undefined && k === hudAt * 4) await page.screenshot({ path: 'artifacts/c5/dig-hud-dusk.png' });
-    }
-    await page.keyboard.up('KeyF');
-  };
   await look('dig-before-dusk');
-  await dig(20, 10);
+  await digAlong(page, bay, 20, 2.5, async (k) => {
+    if (k === 40) await page.screenshot({ path: 'artifacts/c5/dig-hud-dusk.png' });
+  });
   await look('dig-20s-dusk');
-  await dig(20);
+  await digAlong(page, bay, 20);
   await look('dig-40s-dusk');
   const cleared = await hooks(page, (h) => h.session.entrenching.cleared);
   console.log(`Digging out a slumped bay: ${cleared} voxels cleared in 40 s`);

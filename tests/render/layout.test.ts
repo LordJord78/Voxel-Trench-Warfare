@@ -43,4 +43,27 @@ describe('WGSL struct layout', () => {
     expect(u[4]).toBe(7);
     expect(() => w.set('nope', 1)).toThrow();
   });
+
+  it('writes a path set again in the same place, each element of an array at its own, and checks every write', () => {
+    // The frame's uniform is written every frame, the same paths each time: the writer keeps where each goes.
+    const listed: StructDef = { name: 'Listed', fields: [['n', 'u32'], ['items', { element: inner, count: 3 }], ['tail', 'f32']] };
+    const w = new StructWriter(listed);
+    const f = new Float32Array(w.buffer);
+    const u = new Uint32Array(w.buffer);
+    for (let pass = 0; pass < 2; pass++) {
+      w.set('n', 3 + pass);
+      for (let k = 0; k < 3; k++) {
+        w.set(`items.${k}.a`, [k, k + pass, 2]);
+        w.set(`items.${k}.b`, 10 * k + pass);
+      }
+      w.set('tail', 0.5 + pass);
+      expect(u[0]).toBe(3 + pass);
+      for (let k = 0; k < 3; k++) expect([f[4 + 4 * k], f[5 + 4 * k], f[6 + 4 * k], f[7 + 4 * k]]).toEqual([k, k + pass, 2, 10 * k + pass]);
+      expect(f[16]).toBe(0.5 + pass);
+      expect(() => w.set('items.0.a', [1, 2])).toThrow();
+      expect(() => w.set('items.3.b', 1)).toThrow();
+      expect(() => w.set('items.1', 1)).toThrow();
+    }
+    expect(structLayout(listed)).toBe(structLayout(listed));
+  });
 });

@@ -55,7 +55,13 @@ function shape(t: WgslType): Shape {
   return BASIC[t];
 }
 
-export function structLayout(def: StructDef): { size: number; align: number; offsets: Record<string, number> } {
+type Layout = { readonly size: number; readonly align: number; readonly offsets: Readonly<Record<string, number>> };
+const layouts = new WeakMap<StructDef, Layout>();
+
+/** `def`'s size, alignment and fields' offsets: worked out once a struct, and kept. */
+export function structLayout(def: StructDef): Layout {
+  const known = layouts.get(def);
+  if (known) return known;
   const offsets: Record<string, number> = {};
   let end = 0;
   let align = 1;
@@ -66,7 +72,9 @@ export function structLayout(def: StructDef): { size: number; align: number; off
     end = offset + s.size;
     align = Math.max(align, s.align);
   }
-  return { size: roundUp(align, end), align, offsets };
+  const layout = { size: roundUp(align, end), align, offsets };
+  layouts.set(def, layout);
+  return layout;
 }
 
 function typeName(t: WgslType): string {
@@ -90,13 +98,18 @@ export function structWgsl(def: StructDef): string {
   return out.join('\n\n');
 }
 
-/** A buffer laid out as `def`, written field by field with dotted paths ('cam.origin', 'pyramid.3'). */
+/**
+ * A buffer laid out as `def`, written field by field with dotted paths ('cam.origin', 'pyramid.3').
+ * Where each path goes is worked out the first time it is written and kept: a frame writes the
+ * same paths every frame.
+ */
 export class StructWriter {
   readonly buffer: ArrayBuffer;
   private readonly f32: Float32Array;
   private readonly u32: Uint32Array;
   private readonly i32: Int32Array;
   private readonly def: StructDef;
+  private readonly places = new Map<string, { word: number; view: Float32Array | Uint32Array | Int32Array; lanes: number }>();
 
   constructor(def: StructDef) {
     this.def = def;
@@ -107,6 +120,23 @@ export class StructWriter {
   }
 
   set(path: string, value: number | readonly number[]): void {
+    let place = this.places.get(path);
+    if (!place) {
+      place = this.place(path);
+      this.places.set(path, place);
+    }
+    const { word, view, lanes } = place;
+    if (typeof value === 'number') {
+      if (lanes !== 1) throw new Error(`'${path}' takes ${lanes} value(s), got 1`);
+      view[word] = value;
+      return;
+    }
+    if (value.length !== lanes) throw new Error(`'${path}' takes ${lanes} value(s), got ${value.length}`);
+    for (let k = 0; k < lanes; k++) view[word + k] = value[k];
+  }
+
+  /** Where `path` goes: its first word, the view of its kind, and its lanes. */
+  private place(path: string): { word: number; view: Float32Array | Uint32Array | Int32Array; lanes: number } {
     let type: WgslType = this.def;
     let offset = 0;
     for (const part of path.split('.')) {
@@ -127,9 +157,6 @@ export class StructWriter {
     }
     if (isStruct(type) || isArray(type)) throw new Error(`'${path}' is not a scalar or vector`);
     const { kind, lanes } = BASIC[type];
-    const values = typeof value === 'number' ? [value] : value;
-    if (values.length !== lanes) throw new Error(`'${path}' takes ${lanes} value(s), got ${values.length}`);
-    const view = kind === 'f32' ? this.f32 : kind === 'u32' ? this.u32 : this.i32;
-    values.forEach((v, k) => (view[offset / 4 + k] = v));
+    return { word: offset / 4, view: kind === 'f32' ? this.f32 : kind === 'u32' ? this.u32 : this.i32, lanes };
   }
 }

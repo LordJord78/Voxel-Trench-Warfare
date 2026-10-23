@@ -7,7 +7,7 @@
  */
 
 import type { Rng } from '../core/rng';
-import type { BrickMap } from './bricks';
+import { BRICK, UNIFORM, type BrickMap } from './bricks';
 import { K, P, PALETTE, hardness, isGranular, isLoose, isSolid, kindOf, spoilOf } from './materials';
 import { Region, clampBox, type Box } from './region';
 import type { Clip, VoxelSink } from './sink';
@@ -238,11 +238,12 @@ export function settleCrater(map: BrickMap, box: Box, o: DetonateOptions): Box |
   return settleRegion(map, box, o.waterTable);
 }
 
-/** Everything in and around `box` comes to rest (collapseRegion), and, given the water table, floods. The box it worked over. */
-export function settleRegion(map: BrickMap, box: Box, waterTable?: number): Box | null {
+/** Everything in and around `box` comes to rest (collapseRegion, with `opts`), and, given the water table, floods. The box it worked over. */
+export function settleRegion(map: BrickMap, box: Box, waterTable?: number, opts: Pick<CollapseOptions, 'pad' | 'widen'> = {}): Box | null {
   // Flood over everything the collapse touched: slumps displace water out past the blast box.
   const worked = { ...box };
   collapseRegion(map, box, {
+    ...opts,
     onWork: (w) => {
       worked.x0 = Math.min(worked.x0, w.x0);
       worked.y0 = Math.min(worked.y0, w.y0);
@@ -252,8 +253,35 @@ export function settleRegion(map: BrickMap, box: Box, waterTable?: number): Box 
       worked.z1 = Math.max(worked.z1, w.z1);
     },
   });
-  if (waterTable !== undefined) floodRegion(map, worked, waterTable);
+  // Above the table, flooding fills nothing, and drains only water already there: a box high and dry skips it.
+  if (waterTable !== undefined && (worked.y0 <= waterTable || holdsWater(map, worked))) floodRegion(map, worked, waterTable);
   return clampBox(worked, map.dims);
+}
+
+/** Whether any voxel in `box` is water: a brick at a time, so empty and uniform bricks cost one look. */
+function holdsWater(map: BrickMap, box: Box): boolean {
+  const b = clampBox(box, map.dims);
+  if (!b) return false;
+  const brick = new Uint8Array(512);
+  for (let bz = Math.floor(b.z0 / BRICK); bz * BRICK < b.z1; bz++) {
+    for (let by = Math.floor(b.y0 / BRICK); by * BRICK < b.y1; by++) {
+      for (let bx = Math.floor(b.x0 / BRICK); bx * BRICK < b.x1; bx++) {
+        const e = map.table[map.brickIndex(bx, by, bz)];
+        if (e === 0) continue;
+        if (e & UNIFORM) {
+          if (WATER[e & 0xff]) return true;
+          continue;
+        }
+        map.readBrick(map.brickIndex(bx, by, bz), brick);
+        for (let z = Math.max(b.z0, bz * BRICK); z < Math.min(b.z1, (bz + 1) * BRICK); z++) {
+          for (let y = Math.max(b.y0, by * BRICK); y < Math.min(b.y1, (by + 1) * BRICK); y++) {
+            for (let x = Math.max(b.x0, bx * BRICK); x < Math.min(b.x1, (bx + 1) * BRICK); x++) if (WATER[brick[(x & 7) + ((y & 7) << 3) + ((z & 7) << 6)]]) return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
 }
 
 export interface CollapseOptions {
@@ -261,6 +289,10 @@ export interface CollapseOptions {
   maxPasses?: number;
   /** Let loose material slump sideways to its angle of repose. */
   repose?: boolean;
+  /** Voxels of room sideways past the box for a heap to spread; by default the box's height, at least 4 and at most 24. */
+  pad?: number;
+  /** Whether a heap still steep at the work region's edge widens it and settles again (by default it does, up to five times). */
+  widen?: boolean;
   /** Told each work region collapse settled, so a caller can flood or track exactly that. */
   onWork?: (work: Box) => void;
 }
@@ -469,7 +501,7 @@ export function collapseRegion(map: BrickMap, box: Box, opts: CollapseOptions = 
     const { moved, work } = settleOnce(map, box, opts, widen);
     total += moved;
     if (work) opts.onWork?.(work);
-    if (!work || !(opts.repose ?? true) || !steepAtEdge(map, work)) break;
+    if (!work || !(opts.repose ?? true) || opts.widen === false || !steepAtEdge(map, work)) break;
   }
   return total;
 }
@@ -478,7 +510,7 @@ function settleOnce(map: BrickMap, box: Box, opts: CollapseOptions, widen: numbe
   const repose = opts.repose ?? true;
   const b = clampBox(box, map.dims);
   if (!b) return { moved: 0, work: null };
-  const pad = (repose ? Math.min(24, Math.max(4, b.y1 - b.y0)) : 0) + widen;
+  const pad = (repose ? (opts.pad ?? Math.min(24, Math.max(4, b.y1 - b.y0))) : 0) + widen;
   const foot = clampBox({ x0: b.x0 - pad, y0: b.y0, z0: b.z0 - pad, x1: b.x1 + pad, y1: b.y1, z1: b.z1 + pad }, map.dims);
   if (!foot) return { moved: 0, work: null };
 

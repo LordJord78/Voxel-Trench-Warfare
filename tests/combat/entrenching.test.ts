@@ -3,6 +3,7 @@ import { Entrenching, entrenchingTunables, type Scoop } from '../../src/combat/e
 import { loadTunables } from '../../src/core/tunables';
 import { BrickMap } from '../../src/world/bricks';
 import { isGranular, isLoose, P } from '../../src/world/materials';
+import type { Box } from '../../src/world/region';
 import { sameWorld } from '../support/worlds';
 
 // The entrenching tool (the spec's §5, "Digging"): loose soil — spoil, rubble, sandbags — cleared
@@ -127,6 +128,23 @@ describe('what a shovel may touch', () => {
     expect(under).toBeGreaterThan(16);
   });
 
+  it('feet at any height dig no deeper than a voxel below them', () => {
+    // The controller stands the feet at k × 0.1 m, and at some rows (k × 0.1) / 0.1 falls just short
+    // of k (43: 42.99999999999999): the search started a row lower there (the review's case).
+    for (const k of [43, 44, 81, 86]) {
+      const map = new BrickMap({ x: 64, y: 96, z: 64 });
+      map.fillBox(0, 0, 0, 64, k - 6, 64, P.SUBSOIL);
+      map.fillBox(0, k - 6, 0, 64, k, 64, P.SPOIL);
+      map.takeDirty();
+      const tool = new Entrenching(map, t, V);
+      dig(tool, 20, [3.25, k * V, 3.25]);
+      expect(tool.cleared, `k ${k}`).toBeGreaterThan(0);
+      let deeper = 0;
+      for (let z = 0; z < 64; z++) for (let x = 0; x < 64; x++) if (map.get(x, k - 2, z) !== P.SPOIL) deeper++;
+      expect(deeper, `k ${k}`).toBe(0);
+    }
+  });
+
   it('revetment timber, duckboards and undisturbed ground are not shovel work', () => {
     const map = bench();
     const tool = new Entrenching(map, t, V);
@@ -243,6 +261,33 @@ describe('what a scoop leaves', () => {
     const without = new Entrenching(dry, t, V);
     dig(without, without.scoopS + 0.05);
     for (const [x, y, z] of taken) expect(dry.get(x, y, z)).toBe(P.AIR);
+  });
+
+  it('a scoop writes nothing outside the box it asked to be free', () => {
+    // A sheer face of spoil 1.2 m high across the whole of the ground, 0.75 m ahead: settled from a
+    // scoop at its foot, it slumped along its length round after round, far past the box asked about.
+    const map = new BrickMap({ x: 192, y: 64, z: 64 });
+    map.fillBox(0, 0, 0, 192, 16, 64, P.SUBSOIL);
+    map.fillBox(0, 16, 28, 192, 28, 40, P.SPOIL);
+    map.takeDirty();
+    const tool = new Entrenching(map, t, V);
+    const writes: [number, number][] = [];
+    const set = map.set.bind(map);
+    map.set = (x: number, y: number, z: number, p: number) => {
+      writes.push([x, z]);
+      set(x, y, z, p);
+    };
+    let asked: Box | null = null;
+    let scoops = 0;
+    for (let k = 0; k < 120; k++) {
+      writes.length = 0;
+      if (!tool.work([9.6, 1.6, 2.05], 0, DT, (box) => ((asked = box), true))) continue;
+      scoops++;
+      const b = asked!;
+      const outside = writes.filter(([x, z]) => x < b.x0 || x >= b.x1 || z < b.z0 || z >= b.z1);
+      expect(outside.length, `scoop ${scoops}: ${writes.length} writes, ${JSON.stringify(b)}`).toBe(0);
+    }
+    expect(scoops).toBeGreaterThan(3);
   });
 
   it('digging is deterministic', () => {
