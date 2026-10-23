@@ -7,8 +7,14 @@
  * nearest loose voxels in reach go at once — thrown over the parapet, not moved
  * — and the ground about them settles, so nothing is left hanging over the
  * hole. The search is the reference's `find_target`: about a point half the
- * reach ahead, from a voxel below the feet up to the reach, nearest the feet
- * first. Timber, duckboards and undisturbed ground are not shovel work, so the
+ * reach ahead, from a voxel below the feet up to the reach. Its voxels are
+ * taken nearest that point first, not the feet as the reference's were: at
+ * 10 cm what is nearest the feet is under them, and the tool dug a well. A
+ * voxel aside counts twice its distance, so a heap ahead goes before the walls
+ * beside it (a shell loosens a bay's walls and floor as well as filling it). Nor
+ * is what the feet stand on dug out from under them: in front of the feet, the
+ * spec says. Timber,
+ * duckboards and undisturbed ground are not shovel work, so the
  * tool cannot quietly re-excavate the map. Banked work survives letting go:
  * being shot at should make you stop, not start again.
  */
@@ -28,6 +34,8 @@ export interface EntrenchingTunables {
   /** While digging: the exposure shown, and the aim's sway. */
   exposureScale: number;
   swayScale: number;
+  /** The body's half-width (`player.radius`): the ground under it is not dug. */
+  footprintM: number;
 }
 
 export function entrenchingTunables(tun: Tunables): EntrenchingTunables {
@@ -37,6 +45,7 @@ export function entrenchingTunables(tun: Tunables): EntrenchingTunables {
     scoopVoxels: tun.i('entrenching.scoop_voxels'),
     exposureScale: tun.f('entrenching.exposure_scale'),
     swayScale: tun.f('entrenching.sway_scale'),
+    footprintM: tun.f('player.radius'),
   };
 }
 
@@ -50,6 +59,8 @@ export interface Scoop {
 const SETTLE_PAD = 2;
 /** Voxels further a settling may spread sideways (collapseRegion's pad), for the box a caller is asked to free. */
 const SPREAD = 24;
+/** How much further a voxel to the side of the way the feet face counts than one ahead of them. */
+const ASIDE = 2;
 
 const LOOSE = Uint8Array.from({ length: 256 }, (_, p) => (isLoose(p) ? 1 : 0));
 
@@ -80,7 +91,7 @@ export class Entrenching {
     return Math.min(1, this.banked / this.scoopS);
   }
 
-  /** The voxels the next scoop would take from feet at `feet` (metres) facing `yaw` (degrees): the nearest loose ones in reach, nearest first, ties by index. */
+  /** The voxels the next scoop would take from feet at `feet` (metres) facing `yaw` (degrees): the loose ones in reach nearest the point half the reach ahead (aside counting ASIDE times), nearest first, ties by index. */
   findScoop(feet: readonly number[], yaw: number): [number, number, number][] {
     const n = this.t.scoopVoxels;
     const { dims } = this.map;
@@ -147,9 +158,10 @@ export class Entrenching {
   }
 
   /**
-   * Each loose voxel in reach of `feet`, with its squared distance in voxels, until `visit` says
-   * stop: the reference's search box about a point half the reach ahead, a voxel below the feet
-   * to the reach above them, a brick at a time so empty and uniform bricks cost one look.
+   * Each loose voxel in reach of `feet`, with its squared distance in voxels from the point half the
+   * reach ahead at the feet's height (aside counting ASIDE times), until `visit` says stop: the reference's search box about that
+   * point, a voxel below the feet to the reach above them, less what the feet stand on, a brick at
+   * a time so empty and uniform bricks cost one look.
    */
   private scan(feet: readonly number[], yaw: number, visit: (x: number, y: number, z: number, d2: number) => boolean): void {
     const { map } = this;
@@ -159,9 +171,11 @@ export class Entrenching {
     const fx = feet[0] / this.voxel;
     const fy = feet[1] / this.voxel;
     const fz = feet[2] / this.voxel;
-    const cx = Math.floor(fx + forward.x * reach * 0.5);
+    const ax = fx + forward.x * reach * 0.5;
+    const az = fz + forward.z * reach * 0.5;
+    const cx = Math.floor(ax);
     const cy = Math.floor(fy);
-    const cz = Math.floor(fz + forward.z * reach * 0.5);
+    const cz = Math.floor(az);
     const x0 = Math.max(0, cx - span);
     const y0 = Math.max(0, cy - 1);
     const z0 = Math.max(0, cz - span);
@@ -169,6 +183,9 @@ export class Entrenching {
     const y1 = Math.min(map.dims.y, cy + span + 1);
     const z1 = Math.min(map.dims.z, cz + span + 1);
     const r2 = reach * reach;
+    // Below the feet and under the body's footprint: what they stand on.
+    const footY = Math.floor(fy + 1e-6);
+    const half = this.t.footprintM / this.voxel + 0.5;
     for (let bz = Math.floor(z0 / BRICK); bz * BRICK < z1; bz++) {
       for (let by = Math.floor(y0 / BRICK); by * BRICK < y1; by++) {
         for (let bx = Math.floor(x0 / BRICK); bx * BRICK < x1; bx++) {
@@ -185,8 +202,13 @@ export class Entrenching {
                 const dx = x + 0.5 - fx;
                 const dy = y + 0.5 - fy;
                 const dz = z + 0.5 - fz;
-                const d2 = dx * dx + dy * dy + dz * dz;
-                if (d2 <= r2 && visit(x, y, z, d2)) return;
+                if (dx * dx + dy * dy + dz * dz > r2) continue;
+                if (y < footY && Math.abs(dx) < half && Math.abs(dz) < half) continue;
+                const ex = x + 0.5 - ax;
+                const ez = z + 0.5 - az;
+                const along = ex * forward.x + ez * forward.z;
+                const side = ASIDE * (ex * forward.z - ez * forward.x);
+                if (visit(x, y, z, along * along + side * side + dy * dy)) return;
               }
             }
           }

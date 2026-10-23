@@ -64,17 +64,67 @@ describe('what a shovel may touch', () => {
     const tool = new Entrenching(map, t, V);
     const next = tool.findScoop(FEET, 0);
     expect(next).toHaveLength(t.scoopVoxels);
-    const away = next.map(([x, y, z]) => Math.hypot((x + 0.5) * V - FEET[0], (y + 0.5) * V - FEET[1], (z + 0.5) * V - FEET[2]));
-    for (const [i, [x, y, z]] of next.entries()) {
-      expect(isLoose(map.get(x, y, z))).toBe(true);
-      expect(away[i]).toBeLessThanOrEqual(t.reachM);
-      if (i > 0) expect(away[i]).toBeGreaterThanOrEqual(away[i - 1]);
+    // Nearest first to the point half the reach ahead at the feet's height, aside (x, facing +z) counting twice; all in reach of the feet.
+    const ahead = (v: readonly number[]) => Math.hypot(2 * ((v[0] + 0.5) * V - FEET[0]), (v[1] + 0.5) * V - FEET[1], (v[2] + 0.5) * V - FEET[2] - t.reachM / 2);
+    for (const [i, v] of next.entries()) {
+      expect(isLoose(map.get(v[0], v[1], v[2]))).toBe(true);
+      expect(Math.hypot((v[0] + 0.5) * V - FEET[0], (v[1] + 0.5) * V - FEET[1], (v[2] + 0.5) * V - FEET[2])).toBeLessThanOrEqual(t.reachM);
+      if (i > 0) expect(ahead(v)).toBeGreaterThanOrEqual(ahead(next[i - 1]) - 1e-9);
     }
     const scoops = dig(tool, tool.scoopS + 0.1);
     expect(tool.cleared).toBe(t.scoopVoxels);
     expect(scoops).toHaveLength(1);
     expect(scoops[0].voxels).toBe(t.scoopVoxels);
     expect(Math.hypot(scoops[0].at[0] - FEET[0], scoops[0].at[1] - FEET[1], scoops[0].at[2] - FEET[2])).toBeLessThanOrEqual(t.reachM);
+  });
+
+  it('a scoop is taken in front of the feet, not from under them', () => {
+    // Standing on a floor of spoil, a heap of it ahead: what is nearest the feet is under them.
+    const map = new BrickMap({ x: 64, y: 64, z: 64 });
+    map.fillBox(0, 0, 0, 64, 12, 64, P.SUBSOIL);
+    map.fillBox(0, 12, 0, 64, 16, 64, P.SPOIL);
+    map.fillBox(24, 16, 26, 42, 22, 40, P.SPOIL);
+    map.takeDirty();
+    const taken = new Entrenching(map, t, V).findScoop(FEET, 0);
+    expect(taken).toHaveLength(t.scoopVoxels);
+    for (const [, , z] of taken) expect((z + 0.5) * V).toBeGreaterThan(FEET[2] + 0.4);
+    // And turned about, behind.
+    for (const [, , z] of new Entrenching(map, t, V).findScoop(FEET, 180)) expect((z + 0.5) * V).toBeLessThan(FEET[2] - 0.4);
+  });
+
+  it('ahead before aside: a heap in front is dug before loose walls beside the feet', () => {
+    // A trench with walls of spoil half a metre either side, and a heap 1.5 m ahead between them.
+    const map = new BrickMap({ x: 64, y: 64, z: 64 });
+    map.fillBox(0, 0, 0, 64, 16, 64, P.SUBSOIL);
+    map.fillBox(0, 16, 0, 28, 24, 64, P.SPOIL);
+    map.fillBox(38, 16, 0, 64, 24, 64, P.SPOIL);
+    map.fillBox(28, 16, 35, 38, 20, 41, P.SPOIL);
+    map.takeDirty();
+    for (const [x, y, z] of new Entrenching(map, t, V).findScoop(FEET, 0)) {
+      expect(x >= 28 && x < 38 && z >= 35, `${x},${y},${z}`).toBe(true);
+    }
+  });
+
+  it('the ground under the feet is never dug out from under them', () => {
+    // Standing on a floor of spoil and nothing else: the ring about the feet goes, a voxel deep; what they stand on stays.
+    const map = new BrickMap({ x: 64, y: 64, z: 64 });
+    map.fillBox(0, 0, 0, 64, 12, 64, P.SUBSOIL);
+    map.fillBox(0, 12, 0, 64, 16, 64, P.SPOIL);
+    map.takeDirty();
+    const tool = new Entrenching(map, t, V);
+    dig(tool, 30);
+    expect(tool.cleared).toBeGreaterThan(500);
+    expect(tool.inReach).toBe(false);
+    const half = t.footprintM / V + 0.5;
+    let under = 0;
+    for (let z = 0; z < 64; z++) {
+      for (let x = 0; x < 64; x++) {
+        if (Math.abs(x + 0.5 - FEET[0] / V) >= half || Math.abs(z + 0.5 - FEET[2] / V) >= half) continue;
+        under++;
+        expect(map.get(x, 15, z)).toBe(P.SPOIL);
+      }
+    }
+    expect(under).toBeGreaterThan(16);
   });
 
   it('revetment timber, duckboards and undisturbed ground are not shovel work', () => {
