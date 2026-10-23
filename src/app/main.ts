@@ -22,7 +22,7 @@ import { rifleModel, traceRifle } from '../combat/rifle-model';
 import { rayDir, type CameraPose } from '../render/camera';
 import type { TransientLight } from '../render/effects';
 import { FLAGS } from '../render/frame-uniforms';
-import { throughPose, type RifleDrawn } from '../render/rifle';
+import { throughPose, type RifleDrawn, type RiflePose } from '../render/rifle';
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
 import { FarFieldGpu } from '../render/farfield-gpu';
 import { GpuWorld } from '../render/gpu-world';
@@ -425,20 +425,18 @@ async function start(): Promise<void> {
       pose = rig.pose(session, dt, settings.fov);
       periscope.set((1 - rig.fovScale) / (1 - periscopeScale));
     }
-    // What this frame's ticks did, once: seen and heard.
+    // The rifle in hand while playing (paused too), not through the periscope or flying.
+    let rifle: RiflePose | null = null;
+    if (rifleHeld && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) rifle = rig.rifle(session, pose);
+    else rig.hideRifle();
+    renderer.setRifle(rifle);
+    // What this frame's ticks did, once: seen, from the rifle as it is drawn, and heard.
     const events = session.drainEvents();
-    const frameEffects = effects.build(session, events);
+    const frameEffects = effects.build(session, events, rifle);
     audio.listen(pose);
     audio.play(planVoices(hearing, events, pose.position));
     renderer.setEffects(frameEffects.frame);
     renderer.setTransientLights(frameEffects.lights);
-    // The rifle in hand while playing (paused too), not through the periscope or flying.
-    if (rifleHeld && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) {
-      renderer.setRifle(rig.rifle(session, pose));
-    } else {
-      renderer.setRifle(null);
-      rig.hideRifle();
-    }
     built = frameEffects.counts;
     light(dt);
     renderer.render(pose, timeOfDay, now);

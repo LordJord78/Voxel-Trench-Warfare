@@ -33,6 +33,9 @@ import { K, kindOf, paletteData } from '../world/materials';
 
 /** Kinds that throw sparks when struck. */
 const METAL = new Set<number>([K.PICKET, K.HULL, K.CORRUGATE, K.WIRE]);
+/** The shot's particles are anchored to the rifle's muzzle and port, which the renderer draws elsewhere (Particles.billboards). */
+export const MUZZLE_ANCHOR = 1;
+export const PORT_ANCHOR = 2;
 
 export function idleIntent(): MoveIntent {
   return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false };
@@ -257,8 +260,8 @@ export class Session {
     const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
     const along = (spec: ParticleSpec, d: readonly number[]) => [0, 1, 2].map((k) => d[k] * spec.speed + up[k] * spec.lift);
     const { flash, brass } = this.kinds;
-    this.particles.emit(muzzle, along(flash, forward), flash, flash.count, this.particleRng);
-    this.particles.emit(this.port(), along(brass, right), brass, brass.count, this.particleRng);
+    this.particles.emit(muzzle, along(flash, forward), flash, flash.count, this.particleRng, undefined, MUZZLE_ANCHOR);
+    this.particles.emit(this.port(), along(brass, right), brass, brass.count, this.particleRng, undefined, PORT_ANCHOR);
   }
 
   /** What a round throws where it strikes: dust of the struck material off its face, and sparks off metal. */

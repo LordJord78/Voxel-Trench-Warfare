@@ -482,7 +482,10 @@ tracer_intensity    = 60.0
 tracer_tail_alpha   = 0.16     # the reference's 40 of 255 at the tail, 255 at the head
 tracer_converge_m   = 20.0     # the player's tracer leaves the muzzle and joins its
                                # round's path (from the eye) by this far
-flash_frames        = 2        # a shot's flash star and its light, in frames
+flash_s             = 0.03     # a shot's flash star and its light, in the world's
+                               # seconds: two frames at 60 Hz, five at 144
+particle_attach_s   = 0.15     # the shot's flash and brass leave the rifle as drawn,
+                               # joining their own paths over this
 flash_star_length_m = 0.22
 flash_star_width_m  = 0.06
 flash_colour        = [1.0, 0.86, 0.55]

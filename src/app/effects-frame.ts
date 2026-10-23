@@ -1,16 +1,22 @@
 /**
- * A frame's effects, from the session and the events the frame drained: the
- * particles' billboards; each tracer round's ribbon, 7 m back from its head,
+ * A frame's effects, from the session, the events the frame drained and the
+ * rifle as it is drawn: the particles' billboards, the shot's flash and brass
+ * leaving the drawn rifle; each tracer round's ribbon, 7 m back from its head,
  * the player's drawn from the rifle's muzzle and joining the round's path by
  * `tracer_converge_m` (the round leaves the eye, so the reticle tells the
- * truth); and each shot's flash — a star of three ribbons from the muzzle and a
- * transient light there — for `flash_frames` frames (spec §4).
+ * truth); and each shot's flash — a star of three ribbons from the drawn
+ * muzzle along its bore and a transient light there — for `flash_s` of the
+ * world's time, so as long at any frame rate and held while paused (spec §4).
+ * The simulation's muzzle is the bare eye's at the tick; the drawn rifle's
+ * follows the interpolated, bobbing eye, centimetres away while walking.
  */
 
 import { BILLBOARD_FLOATS } from '../combat/particles';
+import { RIFLE_MUZZLE, RIFLE_PORT } from '../combat/rifle-model';
 import type { Tunables } from '../core/tunables';
 import { MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, type EffectsFrame, type TransientLight } from '../render/effects';
-import type { CombatEvents, Session } from '../sim/session';
+import { throughPose, type RiflePose } from '../render/rifle';
+import { MUZZLE_ANCHOR, PORT_ANCHOR, type CombatEvents, type Session } from '../sim/session';
 
 type V3 = [number, number, number];
 
@@ -21,7 +27,8 @@ export interface EffectsTunables {
   tracerIntensity: number;
   tracerTailAlpha: number;
   tracerConvergeM: number;
-  flashFrames: number;
+  flashS: number;
+  particleAttachS: number;
   flashStarLengthM: number;
   flashStarWidthM: number;
   flashColour: V3;
@@ -48,7 +55,8 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     tracerIntensity: f('tracer_intensity'),
     tracerTailAlpha: f('tracer_tail_alpha'),
     tracerConvergeM: f('tracer_converge_m'),
-    flashFrames: tun.i('effects.flash_frames'),
+    flashS: f('flash_s'),
+    particleAttachS: f('particle_attach_s'),
     flashStarLengthM: f('flash_star_length_m'),
     flashStarWidthM: f('flash_star_width_m'),
     flashColour: rgb(tun, 'effects.flash_colour'),
@@ -73,6 +81,11 @@ export interface BuiltEffects {
 }
 
 const RAD = Math.PI / 180;
+const sub = (a: readonly number[], b: readonly number[]): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const unit = (a: readonly number[]): V3 => {
+  const n = Math.hypot(a[0], a[1], a[2]);
+  return n > 0 ? [a[0] / n, a[1] / n, a[2] / n] : [0, 0, 1];
+};
 /** The flash's star: forward, and two rays 60° either side of it, a little up, each 0.6 as long. */
 const STAR_SIDE = 60 * RAD;
 const STAR_SIDE_LENGTH = 0.6;
@@ -84,15 +97,33 @@ export class EffectsFrameBuilder {
   debugLights: TransientLight[] = [];
   private readonly billboards = new Float32Array(MAX_BILLBOARDS * BILLBOARD_FLOATS);
   private readonly ribbons = new Float32Array(MAX_RIBBONS * RIBBON_FLOATS);
-  private flashes: { muzzle: V3; dir: V3; frames: number }[] = [];
+  private flashes: { muzzle: V3; dir: V3; age: number }[] = [];
+  /** The world's time the last frame showed. */
+  private shown: number | null = null;
 
   constructor(readonly t: EffectsTunables) {}
 
-  build(session: Session, events: CombatEvents): BuiltEffects {
+  /** `rifle`: the rifle as this frame draws it, or null when it is not drawn. */
+  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null): BuiltEffects {
     const t = this.t;
-    for (const shot of events.shots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, frames: t.flashFrames });
+    // Flashes age with the world's time as the frame shows it: none while paused.
+    const shown = (session.ticks + session.clock.alpha) * session.clock.dt;
+    const elapsed = this.shown === null ? 0 : Math.max(0, shown - this.shown);
+    this.shown = shown;
+    for (const f of this.flashes) f.age += elapsed;
+    this.flashes = this.flashes.filter((f) => f.age < t.flashS);
+    for (const shot of events.shots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0 });
 
-    let billboards = session.particles.billboards(this.billboards);
+    // The drawn rifle's muzzle and bore, and how far it is drawn from where the simulation holds it.
+    const muzzle = rifle ? throughPose(rifle.toWorld, RIFLE_MUZZLE) : null;
+    const bore = rifle ? unit([rifle.toWorld[6], rifle.toWorld[7], rifle.toWorld[8]]) : null;
+    const drift: V3[] = [];
+    if (muzzle && rifle) {
+      drift[MUZZLE_ANCHOR - 1] = sub(muzzle, session.muzzle());
+      drift[PORT_ANCHOR - 1] = sub(throughPose(rifle.toWorld, RIFLE_PORT), session.port());
+    }
+
+    let billboards = session.particles.billboards(this.billboards, drift, t.particleAttachS);
     for (const q of this.debug) {
       if (billboards >= MAX_BILLBOARDS) break;
       this.billboards.set([...q.position, q.size / 2, ...q.colour, 1, 1], billboards * BILLBOARD_FLOATS);
@@ -128,12 +159,14 @@ export class EffectsFrameBuilder {
       tracers++;
     }
 
-    // Each live flash: its star and its light.
+    // Each live flash: its star and its light, at the drawn muzzle (where the shot left it when
+    // the rifle is not drawn).
     let stars = 0;
     const lights: TransientLight[] = [];
     const flash = t.flashColour.map((c) => c * t.flashIntensity);
     for (const f of this.flashes) {
-      const d = f.dir;
+      const at = muzzle ?? f.muzzle;
+      const d = bore ?? f.dir;
       let side: V3 = [d[2], 0, -d[0]];
       const level = Math.hypot(side[0], side[2]);
       side = level > 1e-6 ? [side[0] / level, 0, side[2] / level] : [1, 0, 0];
@@ -145,12 +178,10 @@ export class EffectsFrameBuilder {
         rays.push([[r[0] / n, r[1] / n, r[2] / n], t.flashStarLengthM * STAR_SIDE_LENGTH]);
       }
       for (const [r, length] of rays) {
-        if (ribbon(f.muzzle, f.muzzle.map((v, k) => v + r[k] * length), t.flashStarWidthM, flash, 1, 0)) stars++;
+        if (ribbon(at, at.map((v, k) => v + r[k] * length), t.flashStarWidthM, flash, 1, 0)) stars++;
       }
-      lights.push({ position: f.muzzle, radiusM: t.flashLightRadiusM, colour: t.flashLightColour, intensity: t.flashLightIntensity });
-      f.frames--;
+      lights.push({ position: at, radiusM: t.flashLightRadiusM, colour: t.flashLightColour, intensity: t.flashLightIntensity });
     }
-    this.flashes = this.flashes.filter((f) => f.frames > 0);
     lights.push(...this.debugLights);
 
     return {

@@ -10,7 +10,10 @@
  * reference's does — speed jittered by N(0, `speedJitter`), then an N(0, 1)
  * vector times `spread` added — and a full pool refuses the rest and counts
  * them. Billboards run size and colour from start to end by age, for the
- * renderer (effects.ts), which lights the ones not emissive.
+ * renderer (effects.ts), which lights the ones not emissive. A particle may be
+ * anchored to a point the renderer draws elsewhere than the simulation holds it
+ * (the shot's flash and brass, to the drawn rifle): its billboard starts off by
+ * that point's drift and joins its own path as it ages.
  */
 
 import type { Rng } from '../core/rng';
@@ -83,6 +86,7 @@ export class Particles {
   private readonly colourStart: Float64Array;
   private readonly colourEnd: Float64Array;
   private readonly emissive: Uint8Array;
+  private readonly anchor: Uint8Array;
 
   constructor(readonly capacity: number) {
     const n = capacity;
@@ -97,10 +101,14 @@ export class Particles {
     this.colourStart = new Float64Array(n * 4);
     this.colourEnd = new Float64Array(n * 4);
     this.emissive = new Uint8Array(n);
+    this.anchor = new Uint8Array(n);
   }
 
-  /** `count` particles of `spec` from `origin` (m) at `velocity` (m/s), drawn about it with `rng` if given, their colour times `tint` if given: how many the pool took. */
-  emit(origin: readonly number[], velocity: readonly number[], spec: ParticleSpec, count: number, rng?: Rng, tint?: readonly [number, number, number]): number {
+  /**
+   * `count` particles of `spec` from `origin` (m) at `velocity` (m/s), drawn about it with `rng` if
+   * given, their colour times `tint` if given, anchored to `anchor` (0: none): how many the pool took.
+   */
+  emit(origin: readonly number[], velocity: readonly number[], spec: ParticleSpec, count: number, rng?: Rng, tint?: readonly [number, number, number], anchor = 0): number {
     const n = Math.max(0, Math.min(count, this.capacity - this.count));
     this.dropped += count - n;
     for (let k = 0; k < n; k++) {
@@ -133,6 +141,7 @@ export class Particles {
         this.colourEnd[i * 4 + c] = spec.colourEnd[c] * t;
       }
       this.emissive[i] = spec.emissive ? 1 : 0;
+      this.anchor[i] = anchor;
     }
     return n;
   }
@@ -152,15 +161,18 @@ export class Particles {
     this.count = w;
   }
 
-  /** Each live particle's billboard into `out` (BILLBOARD_FLOATS each): how many. */
-  billboards(out: Float32Array): number {
+  /**
+   * Each live particle's billboard into `out` (BILLBOARD_FLOATS each): how many. A particle anchored
+   * to `a` is drawn off by `drift[a - 1]` (metres), all of it when thrown and none by `driftS`.
+   */
+  billboards(out: Float32Array, drift?: readonly (readonly number[] | undefined)[], driftS = 0): number {
     const n = Math.min(this.count, Math.floor(out.length / BILLBOARD_FLOATS));
     for (let i = 0; i < n; i++) {
       const t = Math.min(1, Math.max(0, this.age[i] / this.life[i]));
       const o = i * BILLBOARD_FLOATS;
-      out[o] = this.pos[i * 3];
-      out[o + 1] = this.pos[i * 3 + 1];
-      out[o + 2] = this.pos[i * 3 + 2];
+      const off = this.anchor[i] > 0 && driftS > 0 ? drift?.[this.anchor[i] - 1] : undefined;
+      const share = off ? Math.max(0, 1 - this.age[i] / driftS) : 0;
+      for (let k = 0; k < 3; k++) out[o + k] = this.pos[i * 3 + k] + (off ? off[k] * share : 0);
       out[o + 3] = (this.sizeStart[i] + (this.sizeEnd[i] - this.sizeStart[i]) * t) * 0.5;
       const alpha = this.colourStart[i * 4 + 3] + (this.colourEnd[i * 4 + 3] - this.colourStart[i * 4 + 3]) * t;
       for (let c = 0; c < 3; c++) out[o + 4 + c] = (this.colourStart[i * 4 + c] + (this.colourEnd[i * 4 + c] - this.colourStart[i * 4 + c]) * t) * alpha;
@@ -183,5 +195,6 @@ export class Particles {
     this.colourStart.copyWithin(to * 4, from * 4, from * 4 + 4);
     this.colourEnd.copyWithin(to * 4, from * 4, from * 4 + 4);
     this.emissive[to] = this.emissive[from];
+    this.anchor[to] = this.anchor[from];
   }
 }

@@ -109,4 +109,45 @@ describe('particles', () => {
     expect(new Set(a.map((b) => b[0].toFixed(6))).size).toBeGreaterThan(5);
     expect(run()).toEqual(a);
   });
+
+  it("an anchored particle is drawn off by its anchor's drift, less as it ages, none by the time given", () => {
+    // The shot's flash and brass leave the rifle as it is drawn, then join their own paths.
+    const still = spec({ gravity: 0, drag: 0 });
+    const p = new Particles(8);
+    p.emit([0, 1, 0], [0, 0, 0], still, 1);
+    p.emit([0, 1, 0], [0, 0, 0], still, 1, undefined, undefined, 1);
+    p.emit([0, 1, 0], [0, 0, 0], still, 1, undefined, undefined, 2);
+    const drift = [
+      [0.1, -0.2, 0.05],
+      [0, 0.3, 0],
+    ];
+    const at = (d?: number[][]) => {
+      const out = new Float32Array(p.capacity * BILLBOARD_FLOATS);
+      expect(p.billboards(out, d, 0.15)).toBe(3);
+      return [0, 1, 2].map((i) => Array.from(out.slice(i * BILLBOARD_FLOATS, i * BILLBOARD_FLOATS + 3)));
+    };
+    const expectAt = (got: number[][], want: number[][]) => got.forEach((g, i) => g.forEach((v, k) => expect(v, `${i}.${k}`).toBeCloseTo(want[i][k], 6)));
+    expectAt(at(drift), [
+      [0, 1, 0],
+      [0.1, 0.8, 0.05],
+      [0, 1.3, 0],
+    ]);
+    expectAt(at(), [
+      [0, 1, 0],
+      [0, 1, 0],
+      [0, 1, 0],
+    ]);
+    p.step(0.075);
+    expectAt(at(drift), [
+      [0, 1, 0],
+      [0.05, 0.9, 0.025],
+      [0, 1.15, 0],
+    ]);
+    p.step(0.075);
+    expectAt(at(drift), [
+      [0, 1, 0],
+      [0, 1, 0],
+      [0, 1, 0],
+    ]);
+  });
 });
