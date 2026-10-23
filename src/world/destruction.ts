@@ -176,6 +176,23 @@ export function loosenRim(map: BrickMap, cx: number, cy: number, cz: number, out
   return box;
 }
 
+/**
+ * A round's mark, ported from Python's `chip`: struck with at least
+ * `chipEnergyJ` × its hardness, a voxel becomes its spoil — soil to spoil,
+ * timber to rubble, a branch to air. Spoil and rubble are their own spoil, so
+ * a second round in the same place does nothing, and air and water have no
+ * hardness to mark. True if the voxel changed.
+ */
+export function chip(map: BrickMap, x: number, y: number, z: number, energyJ: number, chipEnergyJ: number): boolean {
+  const p = map.get(x, y, z);
+  const h = hardness(p);
+  if (!(h > 0) || energyJ < chipEnergyJ * h) return false;
+  const q = spoilOf(p);
+  if (kindOf(q) === kindOf(p)) return false;
+  map.set(x, y, z, q);
+  return true;
+}
+
 export interface DetonateOptions {
   /** Materials harder than this survive outside the core. */
   hardLimit: number;
