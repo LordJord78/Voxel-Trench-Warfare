@@ -23,7 +23,7 @@ import { FixedClock } from '../core/clock';
 import { exp, hypot } from '../core/dmath';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
-import { CharacterController, controllerTunables, newCharacter, Stance, type CharacterState, type MoveIntent } from '../physics/character';
+import { CharacterController, controllerTunables, letGoOfLedge, newCharacter, Stance, type CharacterState, type MoveIntent } from '../physics/character';
 import { brickGrid } from '../physics/grid';
 import { Vec3, ZERO } from '../physics/vec';
 import type { BrickMap } from '../world/bricks';
@@ -354,6 +354,7 @@ export class Session {
     p.onGround = false;
     p.onFiringStep = false;
     p.landingImpact = 0;
+    letGoOfLedge(p);
     p.bobPhase = 0;
     this.prevPosition = p.position;
   }

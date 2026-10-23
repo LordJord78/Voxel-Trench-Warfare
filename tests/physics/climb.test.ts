@@ -84,6 +84,33 @@ describe('climbing onto the firing step', () => {
     expect(s.onGround).toBe(true);
   });
 
+  it('turning away mid-climb, or at the top, never leaves the body in the air', () => {
+    // Looking round while climbing (the review's case: a 180° turn at the top carried the body 2.3 m
+    // back over the step, held at the bench's height; a 90° turn mid-rise floated it along the face).
+    for (const [at, turn] of [[1.0, 180], [1.0, 90], [1.99, 180], [1.99, 90]] as const) {
+      const { c, s } = bay(1.6);
+      let k = 0;
+      while (s.position.y < at && k++ < 300) c.tick(s, intent({ forward: 1 }), DT);
+      expect(s.climbTo, `${at} ${turn}`).not.toBeNull();
+      s.yaw += turn;
+      // It lets go at once, then falls: never holding its height, and down within a free fall's time.
+      c.tick(s, intent({ forward: 1 }), DT);
+      expect(s.climbTo, `${at} ${turn}`).toBeNull();
+      const fall = Math.ceil(Math.sqrt((2 * (s.position.y - 0.4)) / -T.gravity) / DT) + 6;
+      let y = s.position.y;
+      let aloft = 0;
+      for (let t = 0; t < 120 && !s.onGround; t++) {
+        c.tick(s, intent({ forward: 1 }), DT);
+        if (s.onGround) break;
+        aloft++;
+        if (t > 0) expect(s.position.y, `${at} ${turn} tick ${t}`).toBeLessThan(y);
+        y = s.position.y;
+      }
+      expect(s.onGround, `${at} ${turn}`).toBe(true);
+      expect(aloft, `${at} ${turn}`).toBeLessThanOrEqual(fall);
+    }
+  });
+
   it('from the bench, a parapet faced with timber is not climbed', () => {
     // The generator's parapets are faced with a voxel of wattle (timber) over sandbags and spoil.
     const { c, s, map, top } = bay();

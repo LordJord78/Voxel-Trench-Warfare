@@ -25,6 +25,9 @@ export type Stance = (typeof Stance)[keyof typeof Stance];
 
 const STANCE_KEYS = ['standing', 'crouched', 'prone', 'firing_step', 'periscope'] as const;
 
+/** A climb lets go of its ledge when the player turns further than 60° from it (cos 60°). */
+const CLIMB_FACING = 0.5;
+
 export interface StanceProfile {
   height: number;
   eyeHeight: number;
@@ -124,6 +127,9 @@ export interface CharacterState {
   pinned: boolean;
   /** While climbing onto a ledge, its top (metres); null otherwise. */
   climbTo: number | null;
+  /** The level way the climb faces, fixed when it began, and how far it has gone over the edge (metres). */
+  climbDir: Vec3 | null;
+  climbOver: number;
 }
 
 export function newCharacter(position: Vec3, yaw = 0, pitch = 0): CharacterState {
@@ -143,7 +149,16 @@ export function newCharacter(position: Vec3, yaw = 0, pitch = 0): CharacterState
     speedScale: 1,
     pinned: false,
     climbTo: null,
+    climbDir: null,
+    climbOver: 0,
   };
+}
+
+/** Let go of any ledge: the climb's state as when not climbing. */
+export function letGoOfLedge(state: CharacterState): void {
+  state.climbTo = null;
+  state.climbDir = null;
+  state.climbOver = 0;
 }
 
 /** Moves a CharacterState through a voxel grid. */
@@ -187,26 +202,32 @@ export class CharacterController {
   /**
    * The climb onto a firing step's bench: out of a step-up's reach from the treads (1.0–2.2 m
    * over them), so a player standing on the step who walks into firing-step timber within
-   * `climbM` climbs it — straight up its face at `climbSpeed`, then forward at that speed, held
-   * at the ledge's height, until the ledge bears the body. Letting go of forward, being pinned,
-   * crouching or going prone, or meeting anything on the way lets go of the ledge. Whether this
-   * tick was spent climbing.
+   * `climbM` climbs it — straight up its face at `climbSpeed`, then over the edge the way it
+   * began facing, at that speed, held at the ledge's height, until the ledge bears the body.
+   * Letting go of forward, turning more than 60° from the ledge, being pinned, crouching or going
+   * prone, meeting anything on the way, or going further over than the body's radius and two
+   * voxels without finding the ledge (it is gone) lets go. Whether this tick was spent climbing.
    */
   private climb(state: CharacterState, intent: MoveIntent, dt: number): boolean {
+    const facing = yawBasis(state.yaw)[0];
     const letGo = intent.forward <= 0 || state.pinned || intent.stance === Stance.CROUCHED || intent.stance === Stance.PRONE;
     if (state.climbTo === null) {
       if (letGo || !state.onGround || !state.onFiringStep || state.stance !== Stance.FIRING_STEP) return false;
       state.climbTo = this.ledgeAhead(state);
       if (state.climbTo === null) return false;
-    } else if (letGo) {
-      state.climbTo = null;
+      state.climbDir = facing;
+      state.climbOver = 0;
+    } else if (letGo || state.climbDir === null || facing.dot(state.climbDir) < CLIMB_FACING) {
+      letGoOfLedge(state);
       return false;
     }
     const pos = state.position;
     const step = this.t.climbSpeed * dt;
-    const next = pos.y < state.climbTo ? pos.withY(Math.min(state.climbTo, pos.y + step)) : pos.add(yawBasis(state.yaw)[0].mul(step));
-    if (boxHitsSolid(this.grid, next, this.t.radius, state.height)) {
-      state.climbTo = null;
+    const rising = pos.y < state.climbTo;
+    const next = rising ? pos.withY(Math.min(state.climbTo, pos.y + step)) : pos.add(state.climbDir!.mul(step));
+    if (!rising) state.climbOver += step;
+    if (state.climbOver > this.t.radius + 2 * this.grid.voxel + 1e-9 || boxHitsSolid(this.grid, next, this.t.radius, state.height)) {
+      letGoOfLedge(state);
       return false;
     }
     state.position = next;
@@ -214,7 +235,7 @@ export class CharacterController {
     state.onGround = false;
     // Over the edge: the ledge bears the body once any of it stands on the ledge's top.
     if (next.y >= state.climbTo && boxHitsSolid(this.grid, next.withY(next.y - 0.06), this.t.radius, 0.05)) {
-      state.climbTo = null;
+      letGoOfLedge(state);
       state.onGround = true;
     }
     return true;
