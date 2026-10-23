@@ -63,7 +63,7 @@ export interface CombatEvents {
   /** The front's, from its muzzles. */
   frontShots: ShotEvent[];
   impacts: (Impact & { tick: number })[];
-  /** Near misses of the player's head: how near, and where the round passed. */
+  /** Rounds past the player's head, one each: how near, and where it passed nearest. */
   cracks: { tick: number; missM: number; at: [number, number, number] }[];
 }
 
@@ -230,10 +230,10 @@ export class Session {
     }
     this.rounds.listen(eye, this.suppression.t.crackRadiusM);
     this.rounds.step(dt);
-    for (const c of this.rounds.cracks) {
-      this.suppression.crack(c.missM, this.suppressionRng);
-      this.events.cracks.push({ tick: this.ticks, missM: c.missM, at: c.at });
-    }
+    // Suppression counts every substep a round was near (milestone 2's ruling); the ear hears each
+    // round once, where it passed nearest.
+    for (const c of this.rounds.cracks) this.suppression.crack(c.missM, this.suppressionRng);
+    for (const c of this.rounds.passes) this.events.cracks.push({ tick: this.ticks, missM: c.missM, at: c.at });
     for (const hit of this.rounds.impacts) {
       chip(this.map, hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
       if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));

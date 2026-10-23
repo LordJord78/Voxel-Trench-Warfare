@@ -90,8 +90,10 @@ export class Rounds {
   dropped = 0;
   /** The last step's impacts, in slot order. */
   readonly impacts: Impact[] = [];
-  /** The last step's near misses of the listener: one per substep a round not the player's passed within its radius, how near (m) and where. */
+  /** The last step's near misses of the listener: one per substep a round not the player's passed within its radius, how near (m) and where (suppression counts each). */
   readonly cracks: { missM: number; at: [number, number, number] }[] = [];
+  /** The last step's rounds heard passing the listener: one per round, at its nearest approach (or as near as it came before it stopped). */
+  readonly passes: { missM: number; at: [number, number, number] }[] = [];
   private listener: readonly [number, number, number] | null = null;
   private listenRadius = 0;
   private readonly pos: Float64Array;
@@ -104,6 +106,10 @@ export class Rounds {
   /** Where each round left, and where its tracer is drawn from: the muzzle for the player's, which leave from the eye. */
   private readonly origin: Float64Array;
   private readonly from: Float64Array;
+  /** Each round's nearest miss of the listener so far (m) and where, and whether its pass has been heard. */
+  private readonly nearMiss: Float64Array;
+  private readonly nearAt: Float64Array;
+  private readonly heard: Uint8Array;
   private readonly specs: ProjectileSpec[] = [];
   private readonly size: [number, number, number];
 
@@ -122,6 +128,9 @@ export class Rounds {
     this.tracer = new Uint8Array(n);
     this.origin = new Float64Array(n * 3);
     this.from = new Float64Array(n * 3);
+    this.nearMiss = new Float64Array(n);
+    this.nearAt = new Float64Array(n * 3);
+    this.heard = new Uint8Array(n);
     this.size = [map.dims.x * voxel, map.dims.y * voxel, map.dims.z * voxel];
   }
 
@@ -144,6 +153,8 @@ export class Rounds {
     this.tracer[i] = tracer ? 1 : 0;
     this.origin.set(origin, i * 3);
     this.from.set(from, i * 3);
+    this.nearMiss[i] = Infinity;
+    this.heard[i] = 0;
     return i;
   }
 
@@ -157,10 +168,11 @@ export class Rounds {
     this.listenRadius = radiusM;
   }
 
-  /** One tick of `dt` seconds in substeps: this step's impacts and cracks, and rounds retired by range, age or the world's edge. */
+  /** One tick of `dt` seconds in substeps: this step's impacts, cracks and passes, and rounds retired by range, age or the world's edge. */
   step(dt: number): void {
     this.impacts.length = 0;
     this.cracks.length = 0;
+    this.passes.length = 0;
     const h = dt / this.t.substeps;
     const retire: number[] = [];
     for (let s = 0; s < this.t.substeps; s++) {
@@ -244,7 +256,17 @@ export class Rounds {
       const cy = ay + ty * u;
       const cz = az + tz * u;
       const miss = Math.sqrt((cx - lx) * (cx - lx) + (cy - ly) * (cy - ly) + (cz - lz) * (cz - lz));
-      if (miss <= this.listenRadius) this.cracks.push({ missM: miss, at: [cx, cy, cz] });
+      if (miss <= this.listenRadius) {
+        this.cracks.push({ missM: miss, at: [cx, cy, cz] });
+        if (miss < this.nearMiss[i]) {
+          this.nearMiss[i] = miss;
+          this.nearAt[p] = cx;
+          this.nearAt[p + 1] = cy;
+          this.nearAt[p + 2] = cz;
+        }
+      }
+      // Its nearest approach is in this substep (the segment's nearest point short of its end), or behind it.
+      if (u < 1) this.hearPass(i);
     }
     if (len > 0) {
       const dir: [number, number, number] = [tx / len, ty / len, tz / len];
@@ -265,6 +287,8 @@ export class Rounds {
           owner: this.owner[i],
           spec: spec.name,
         });
+        // Stopped before it passed: heard as near as it came.
+        this.hearPass(i);
         return true;
       }
     }
@@ -276,7 +300,16 @@ export class Rounds {
     const y = this.pos[p + 1];
     const z = this.pos[p + 2];
     const [sx, sy, sz] = this.size;
-    return this.distance[i] >= this.t.maxRangeM || this.age[i] >= this.t.maxFlightS || x < 0 || y < 0 || z < 0 || x >= sx || y >= sy || z >= sz;
+    const retired = this.distance[i] >= this.t.maxRangeM || this.age[i] >= this.t.maxFlightS || x < 0 || y < 0 || z < 0 || x >= sx || y >= sy || z >= sz;
+    if (retired) this.hearPass(i);
+    return retired;
+  }
+
+  /** Round `i` is heard passing the listener, once, if it has come within reach. */
+  private hearPass(i: number): void {
+    if (this.heard[i] || !(this.nearMiss[i] <= this.listenRadius)) return;
+    this.heard[i] = 1;
+    this.passes.push({ missM: this.nearMiss[i], at: [this.nearAt[i * 3], this.nearAt[i * 3 + 1], this.nearAt[i * 3 + 2]] });
   }
 
   /** Retire slot `i`: the last live round takes its place. */
@@ -292,5 +325,8 @@ export class Rounds {
     this.tracer[i] = this.tracer[last];
     this.origin.copyWithin(i * 3, last * 3, last * 3 + 3);
     this.from.copyWithin(i * 3, last * 3, last * 3 + 3);
+    this.nearMiss[i] = this.nearMiss[last];
+    this.nearAt.copyWithin(i * 3, last * 3, last * 3 + 3);
+    this.heard[i] = this.heard[last];
   }
 }

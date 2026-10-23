@@ -244,6 +244,43 @@ describe('cracks', () => {
     }
   });
 
+  it('a round passing the head is heard once, where it passed nearest, however many substeps cracked', () => {
+    const r = new Rounds(T, world(), VOXEL);
+    const ear: [number, number, number] = [6.4, 3, 30];
+    r.listen(ear, 3.2);
+    r.fire([7.4, 3.3, 0.5], [0, 0, 880], RIFLE, 1, false);
+    const passes: { missM: number; at: [number, number, number] }[] = [];
+    const misses: number[] = [];
+    for (let k = 0; k < 6; k++) {
+      r.step(TICK);
+      passes.push(...r.passes);
+      misses.push(...r.cracks.map((c) => c.missM));
+    }
+    expect(misses.length).toBeGreaterThanOrEqual(2);
+    expect(passes).toHaveLength(1);
+    expect(passes[0].missM).toBeCloseTo(Math.min(...misses), 12);
+    expect(Math.hypot(passes[0].at[0] - ear[0], passes[0].at[1] - ear[1], passes[0].at[2] - ear[2])).toBeCloseTo(passes[0].missM, 9);
+  });
+
+  it('a round that strikes before it passes the head is heard once, as near as it came', () => {
+    // A wall just short of the ear: the round comes within the radius and stops before its nearest approach.
+    const map = world();
+    map.fillBox(0, 0, 285, 128, 64, 290, P.CLAY);
+    const r = new Rounds(T, map, VOXEL);
+    r.listen([6.4, 3, 30], 3.2);
+    r.fire([7.4, 3.3, 0.5], [0, 0, 880], RIFLE, 1, false);
+    const passes: number[] = [];
+    let struck = 0;
+    for (let k = 0; k < 6; k++) {
+      r.step(TICK);
+      passes.push(...r.passes.map((p) => p.missM));
+      struck += r.impacts.length;
+    }
+    expect(struck).toBe(1);
+    expect(passes).toHaveLength(1);
+    expect(passes[0]).toBeLessThanOrEqual(3.2);
+  });
+
   it('a crack carries where the round passed', () => {
     const r = new Rounds(T, world(), VOXEL);
     const ear: [number, number, number] = [6.4, 3, 30];

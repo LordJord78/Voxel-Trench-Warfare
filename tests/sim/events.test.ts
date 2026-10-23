@@ -63,6 +63,28 @@ describe("a frame's combat events", () => {
     expect(s.drainEvents().shots.length).toBe(0);
   });
 
+  it("a round past the head is one crack, however many substeps it was near", () => {
+    // Heavy fire aimed at the head, nothing in the way: most rounds pass within the crack's reach;
+    // none is heard twice.
+    const s = stand(7, lineSource(38, 0.4), P.AIR);
+    s.front.intensity = 'heavy';
+    let shots = 0;
+    let cracks = 0;
+    for (let k = 0; k < 600; k++) {
+      s.tick();
+      const e = s.drainEvents();
+      shots += e.frontShots.length;
+      cracks += e.cracks.length;
+    }
+    for (let k = 0; k < 60; k++) {
+      s.tick();
+      cracks += s.drainEvents().cracks.length;
+    }
+    expect(shots).toBeGreaterThan(50);
+    expect(cracks).toBeGreaterThan(shots / 4);
+    expect(cracks).toBeLessThanOrEqual(shots);
+  });
+
   it("the front's shots are recorded where they left, and its rounds' cracks where they passed", () => {
     const s = stand(7, lineSource(38, 0.4));
     s.front.intensity = 'heavy';
