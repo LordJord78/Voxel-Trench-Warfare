@@ -69,6 +69,8 @@ export interface Hooks {
   effects(): { billboards: number; tracers: number; stars: number; lights: number };
   /** Emissive test quads (metres, metres across, linear colour) drawn with the effects from the next frame; [] for none. */
   debugQuads(quads: { position: [number, number, number]; size: number; colour: [number, number, number] }[]): void;
+  /** Transient lights (as a shot's flash) added to the next frames' own; [] for none. */
+  debugLights(lights: { position: [number, number, number]; radiusM: number; colour: [number, number, number]; intensity: number }[]): void;
   /** The G-buffer's depth at pixels of the internal image, in metres along each pixel's ray. */
   depthAt(points: [number, number][]): Promise<number[]>;
   /** GPU validation errors so far. */

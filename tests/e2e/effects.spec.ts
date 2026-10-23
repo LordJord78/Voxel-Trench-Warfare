@@ -75,6 +75,89 @@ test('effects follow dynamic resolution', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+/** The step view at night, frozen: its camera and forward. */
+async function atNight(page: Page) {
+  await hooks(page, async (h) => {
+    h.view('step');
+    h.setTimeOfDay(23);
+    h.freeze();
+    await h.stepFrames(40);
+  });
+  return hooks(page, (h) => {
+    const c = h.camera();
+    const y = (c.yaw * Math.PI) / 180;
+    const p = (c.pitch * Math.PI) / 180;
+    return { position: c.position, forward: [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)] };
+  });
+}
+
+/** The image's mean with a shot's light 1.2 m along the view, or none. */
+async function meanLit(page: Page, at: { position: number[]; forward: number[] }, lit: boolean): Promise<number> {
+  return hooks(
+    page,
+    async (h, arg) => {
+      const { at, lit } = arg as { at: { position: number[]; forward: number[] }; lit: boolean };
+      const position = at.position.map((v, k) => v + at.forward[k] * 1.2) as [number, number, number];
+      h.debugLights(lit ? [{ position, radiusM: 6, colour: [1.0, 0.72, 0.4], intensity: 40 }] : []);
+      const shot = h.snapshot();
+      await h.stepFrames(1);
+      return (await shot).mean;
+    },
+    { at, lit },
+  );
+}
+
+test("a shot's light lights the trench, and leaves nothing behind once gone", async ({ page }) => {
+  const errors = await openGame(page);
+  const at = await atNight(page);
+  const before = await meanLit(page, at, false);
+  const lit = await meanLit(page, at, true);
+  const still = await meanLit(page, at, true);
+  const gone = await meanLit(page, at, false);
+  const seen = JSON.stringify({ before, lit, still, gone });
+  expect(lit / before, seen).toBeGreaterThan(1.02);
+  // In no history: whole on its first frame (a denoised light would show a thirtieth of itself)
+  // and gone on the first frame after (one would linger for half a second, here some 80% over).
+  // Within the exposure's adaptation to the two lit frames, a percent and a half each.
+  expect(Math.abs(lit - still) / still, seen).toBeLessThan(0.03);
+  expect(Math.abs(gone - before) / before, seen).toBeLessThan(0.06);
+  expect(errors).toEqual([]);
+});
+
+test("a shot's light lights the trench at the low preset's light scale too", async ({ page }) => {
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'low' }));
+  const at = await atNight(page);
+  const before = await meanLit(page, at, false);
+  const lit = await meanLit(page, at, true);
+  expect(lit / before, JSON.stringify({ before, lit })).toBeGreaterThan(1.02);
+  expect(errors).toEqual([]);
+});
+
+test("a shot's flash and light last two frames", async ({ page }) => {
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.play());
+  await hooks(page, (h) => {
+    const v = h.views.step;
+    h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: -2 });
+  });
+  const seen = await hooks(page, async (h) => {
+    await h.waitFrames(20);
+    h.freeze();
+    h.trigger(true);
+    const out: [number, number][] = [];
+    for (let k = 0; k < 4; k++) {
+      await h.stepFrames(1);
+      if (k === 0) h.trigger(false);
+      const e = h.effects();
+      out.push([e.stars, e.lights]);
+    }
+    return out;
+  });
+  expect(seen).toEqual([[3, 1], [3, 1], [0, 0], [0, 0]]);
+  expect(errors).toEqual([]);
+});
+
 test('a magazine on full auto draws tracers, the flash, brass and dust', async ({ page }) => {
   const errors = await openGame(page);
   await hooks(page, (h) => h.play());

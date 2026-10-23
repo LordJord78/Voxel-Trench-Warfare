@@ -55,11 +55,11 @@ import { Bloom, type BloomPipelines } from './bloom';
 import { copyPose, jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
-import { Effects, effectsLook, type EffectsFrame, type EffectsPipelines } from './effects';
+import { Effects, effectsLook, type EffectsFrame, type EffectsPipelines, type TransientLight } from './effects';
 import { FarFieldGpu } from './farfield-gpu';
 import { FlareShadows } from './flare-shadows';
 import { froxelLayouts, Froxels, type FroxelPipelines } from './froxels';
-import { FLAGS, FRAME, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
+import { FLAGS, FRAME, MAX_FLASHES, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
 import { KeyShadow, keyShadowLayouts, type Key, type KeyShadowPipelines } from './key-shadow';
@@ -333,6 +333,8 @@ export class Renderer {
   /** The jitter the last frame applied (none if it turned jitter off): its history was rendered through it. */
   private prevJitter: [number, number] = [0, 0];
   private lightCount = 0;
+  /** This frame's shots' flashes, lighting the trench outside the denoiser (flash.wgsl). */
+  private flashes: TransientLight[] = [];
 
   static async create(gpu: Gpu, canvas: HTMLCanvasElement | null, world: GpuWorld, plan: WorldPlan | null, options: RendererOptions = {}): Promise<Renderer> {
     const compiled = options.compiled ?? (await compileFrame(gpu.device));
@@ -432,6 +434,11 @@ export class Renderer {
   /** This frame's tracers, flash stars and particles (effects.ts). */
   setEffects(frame: EffectsFrame): void {
     this.effects.set(frame);
+  }
+
+  /** This frame's transient lights (shots' flashes): the strongest MAX_FLASHES of them light it. */
+  setTransientLights(lights: readonly TransientLight[]): void {
+    this.flashes = [...lights].sort((a, b) => b.intensity - a.intensity).slice(0, MAX_FLASHES);
   }
 
   /** The G-buffer's depth the last frame left at pixels of the internal image, in metres along each pixel's ray. */
@@ -638,6 +645,13 @@ export class Renderer {
     w.set('sigmaPlane', denoise.sigmaPlane);
     w.set('casSharpness', this.options.sharpness ?? 0.4);
     writeSky(w, this.sky);
+    w.set('flashCount', this.flashes.length);
+    this.flashes.forEach((f, k) => {
+      w.set(`flashes.${k}.pos`, f.position.map((m) => m / voxel));
+      w.set(`flashes.${k}.radius`, f.radiusM / voxel);
+      w.set(`flashes.${k}.colour`, f.colour);
+      w.set(`flashes.${k}.intensity`, f.intensity);
+    });
     w.set('far', this.far.info);
     const encoder = device.createCommandEncoder({ label: `frame ${this.frameIndex}` });
     // The sky views for this frame's sun and moon (the moon's while its light counts), from the

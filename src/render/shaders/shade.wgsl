@@ -19,6 +19,7 @@
 #include "haze.wgsl"
 #include "palette.wgsl"
 #include "lightgrid.wgsl"
+#include "flash.wgsl"
 
 const KIND_WATER: u32 = 14u;
 const FAR_SKY_METRES: f32 = 2000.0;
@@ -132,7 +133,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
         colour = albedo * (0.3 + 0.7 * max(dot(n, normalize(vec3f(0.4, 0.8, 0.45))), 0.0));
       } else {
         let l = upsampled(g.xy, face, hitPlane(hit), n);
-        let lit = frame.keyColour * l.a * max(dot(n, frame.keyDir), 0.0) + l.rgb;
+        let lit = frame.keyColour * l.a * max(dot(n, frame.keyDir), 0.0) + l.rgb + flashLight(frame.cam.origin + rd * depth, n);
         colour = albedo * lit + emissionOf(mat);
         if (kindOf(mat) == KIND_WATER && face == 3u) {
           let fresnel = 0.02 + 0.98 * pow(1.0 - abs(dot(rd, n)), 5.0);

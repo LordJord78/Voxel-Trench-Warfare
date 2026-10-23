@@ -68,6 +68,20 @@ export const ATMOSPHERE: StructDef = {
   ],
 };
 
+/** A shot's flash, a point light for a frame or two (flash.wgsl): position and radius in voxels, linear colour, intensity. */
+export const FLASH: StructDef = {
+  name: 'Flash',
+  fields: [
+    ['pos', 'vec3f'],
+    ['radius', 'f32'],
+    ['colour', 'vec3f'],
+    ['intensity', 'f32'],
+  ],
+};
+
+/** The most shots' flashes a frame lights by. */
+export const MAX_FLASHES = 4;
+
 export const FRAME: StructDef = {
   name: 'Frame',
   fields: [
@@ -139,6 +153,9 @@ export const FRAME: StructDef = {
     ['smokeHeight', 'f32'],
     // The sky's glow a few degrees round the key light, over the key's light (see sky.wgsl).
     ['aureole', 'f32'],
+    // Shots' flashes lighting the trench this frame, outside the light buffer and the denoiser.
+    ['flashCount', 'u32'],
+    ['flashes', { element: FLASH, count: MAX_FLASHES }],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
     // The atmosphere as this frame's sky view was built.

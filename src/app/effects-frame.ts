@@ -79,8 +79,9 @@ const STAR_SIDE_LENGTH = 0.6;
 const STAR_LIFT = 0.3;
 
 export class EffectsFrameBuilder {
-  /** Quads a test asks for, drawn every frame until it asks for none. */
+  /** Quads and transient lights a test asks for, every frame until it asks for none. */
   debug: DebugQuad[] = [];
+  debugLights: TransientLight[] = [];
   private readonly billboards = new Float32Array(MAX_BILLBOARDS * BILLBOARD_FLOATS);
   private readonly ribbons = new Float32Array(MAX_RIBBONS * RIBBON_FLOATS);
   private flashes: { muzzle: V3; dir: V3; frames: number }[] = [];
@@ -150,6 +151,7 @@ export class EffectsFrameBuilder {
       f.frames--;
     }
     this.flashes = this.flashes.filter((f) => f.frames > 0);
+    lights.push(...this.debugLights);
 
     return {
       frame: { billboards: this.billboards, billboardCount: billboards, ribbons: this.ribbons, ribbonCount: ribbons },

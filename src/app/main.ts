@@ -17,6 +17,7 @@ import { CLOCK_KEYS } from '../core/sky-clock';
 import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import type { CameraPose } from '../render/camera';
+import type { TransientLight } from '../render/effects';
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
 import { FarFieldGpu } from '../render/farfield-gpu';
 import { GpuWorld } from '../render/gpu-world';
@@ -414,6 +415,7 @@ async function start(): Promise<void> {
     // What this frame's ticks did, once: the effects take it (and from Task 8, the sound).
     const frameEffects = effects.build(session, session.drainEvents());
     renderer.setEffects(frameEffects.frame);
+    renderer.setTransientLights(frameEffects.lights);
     built = frameEffects.counts;
     light(dt);
     renderer.render(pose, timeOfDay, now);
@@ -525,6 +527,9 @@ async function start(): Promise<void> {
     effects: () => built,
     debugQuads(quads: DebugQuad[]) {
       effects.debug = quads;
+    },
+    debugLights(lights: TransientLight[]) {
+      effects.debugLights = lights;
     },
     depthAt: (points: [number, number][]) => renderer.readDepth(points),
     gpuErrors: () => gpu.errors,
