@@ -5,7 +5,7 @@ import { hooks, openGame } from './support/app';
 // The six standard views at dusk, night, dawn and noon, and at 18:30, the darkest of the evening's
 // twilight, where the exposure peaks: for review by eye (grain, seams, the horizon, lanterns and
 // flares in twilight) and the look against the approved frames (artifacts/approved). Written to
-// artifacts/m4 (git-ignored); the test fails only on errors.
+// artifacts/l6/views (git-ignored); the test fails only on errors.
 test.use({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
 
 const VIEWS = ['bay', 'step', 'nml-night', 'overview', 'dugout', 'hamlet'];
@@ -24,8 +24,27 @@ test('the standard views, at dusk, night, dawn, noon and twilight', async ({ pag
       }, [name, time]);
       // Long enough for the lighting history and TAA to settle.
       await hooks(page, (h) => h.waitFrames(120));
-      await page.screenshot({ path: `artifacts/m4/${name}-${label}.png` });
+      await page.screenshot({ path: `artifacts/l6/views/${name}-${label}.png` });
     }
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
+});
+
+// The low preset (half the froxels each way, no spatial reuse, a quarter of the sky view, lit at one
+// pixel in sixteen), where it shows: the church's shafts at dusk, the flares' glow in no man's land
+// at night, and the overview's sky at dusk. Written to artifacts/l6/low.
+test('three views on the low preset', async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'low', dynres: false }));
+  for (const [name, label, time] of [['hamlet', 'dusk', DUSK], ['nml-night', 'night', 21], ['overview', 'dusk', DUSK]] as const) {
+    await hooks(page, (h, a) => {
+      const [n, t] = a as [string, number];
+      h.view(n);
+      h.setTimeOfDay(t);
+    }, [name, time]);
+    await hooks(page, (h) => h.waitFrames(120));
+    await page.screenshot({ path: `artifacts/l6/low/${name}-${label}.png` });
   }
   if (errors.length) throw new Error(errors.join('\n'));
 });

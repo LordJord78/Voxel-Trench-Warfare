@@ -35,6 +35,7 @@ try {
     const t = report.timings;
     const core = t.fill + t.assemble + t.events;
     console.log(`fill + assemble + events: ${Math.round(core)} ms; click to play at ${report.promptMs} ms (${report.promptMs <= 4000 ? 'within' : 'OVER'} 4 s)`);
+    console.log(`timings (ms): ${Object.entries(t).map(([k, v]) => `${k} ${v}`).join(', ')}`);
     // The spec's measure: navigation to the click-to-play prompt.
     if (!(report.promptMs <= 4000)) process.exitCode = 1;
     if (print) console.log(`fingerprint: ${print}`);
