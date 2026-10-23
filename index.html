@@ -76,6 +76,30 @@
         box-shadow: 0 0 0 200vmax rgba(9, 8, 11, 0.97), inset 0 0 70px rgba(0, 0, 0, 0.7), inset 0 0 0 1px rgba(231, 211, 184, 0.14);
       }
 
+      /*
+       * The HUD: the soldier's own reckoning where the title block stood, its bars a tally of
+       * uprights; and the reference's four ticks round a gap at the middle (0.014 of a half-height
+       * apart, 0.020 long, 0.0022 thick), haloed so they read against the dusk sky and the clay.
+       */
+      #hud { position: fixed; inset: 0; pointer-events: none; --tick: max(1px, 0.11vh); }
+      #hud .readout {
+        position: absolute; left: clamp(16px, 6vw, 88px); bottom: clamp(24px, 7vh, 72px); margin: 0;
+        line-height: 1.5; text-shadow: 0 1px 2px rgba(23, 20, 31, 0.9), 0 0 10px rgba(23, 20, 31, 0.6);
+      }
+      #hud p { margin: 0; }
+      #hud .stance { font-size: 1.2rem; letter-spacing: 0.03em; }
+      #hud .rifle { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+      #hud .label { color: var(--duckboard); font-style: italic; margin-right: 0.6em; }
+      #hud .bar { display: inline-flex; gap: 3px; vertical-align: -0.05em; }
+      #hud .bar i { width: 3px; height: 0.75em; background: rgba(168, 152, 128, 0.32); box-shadow: 0 0 2px rgba(23, 20, 31, 0.7); }
+      #hud .bar i.on { background: var(--haze); }
+      #hud .crosshair { position: absolute; left: 50%; top: 50%; }
+      #hud .crosshair i { position: absolute; background: rgba(231, 211, 184, 0.95); box-shadow: 0 0 0 1px rgba(23, 20, 31, 0.45); }
+      #hud .crosshair i:nth-child(1) { left: calc(var(--tick) / -2); top: -1.7vh; width: var(--tick); height: 1vh; }
+      #hud .crosshair i:nth-child(2) { left: calc(var(--tick) / -2); top: 0.7vh; width: var(--tick); height: 1vh; }
+      #hud .crosshair i:nth-child(3) { left: 0.7vh; top: calc(var(--tick) / -2); width: 1vh; height: var(--tick); }
+      #hud .crosshair i:nth-child(4) { left: -1.7vh; top: calc(var(--tick) / -2); width: 1vh; height: var(--tick); }
+
       /* F3: what the frame costs. A developer's readout, so it is set as one. */
       #overlay {
         position: fixed; right: 16px; top: 12px; margin: 0; padding: 8px 12px; white-space: pre; pointer-events: none;
@@ -87,6 +111,15 @@
   <body>
     <canvas id="view"></canvas>
     <div id="periscope" hidden><div class="mirror"></div></div>
+    <div id="hud" hidden>
+      <div class="crosshair" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <div class="readout">
+        <p class="stance"></p>
+        <p class="exposure"></p>
+        <p class="rifle"></p>
+        <p class="dig" hidden></p>
+      </div>
+    </div>
     <section id="loading" class="sheet" aria-label="Loading">
       <div class="block">
         <h1>TRENCHLINE</h1>

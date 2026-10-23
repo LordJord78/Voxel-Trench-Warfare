@@ -36,6 +36,7 @@ import { Session } from '../sim/session';
 import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
+import { Hud } from '../ui/hud';
 import { PeriscopeFrame } from '../ui/periscope';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from '../ui/settings';
 import { UNIFORM } from '../world/bricks';
@@ -260,6 +261,7 @@ async function start(): Promise<void> {
   };
   const overlay = new Overlay(document.body);
   const periscope = new PeriscopeFrame(document);
+  const hud = new Hud(document);
   const pauseMenu = new PauseMenu(document, {
     resume: () => resume(),
     change: changeSettings,
@@ -404,6 +406,7 @@ async function start(): Promise<void> {
   let frames = 0;
   let last = performance.now();
   let shown = 0;
+  let hudShown = Number.NEGATIVE_INFINITY;
   /** Smoothed frame interval, for the frame rate. */
   let interval = 0;
   /** Added to the clock, to test a long pause (simulateGap). */
@@ -537,6 +540,23 @@ async function start(): Promise<void> {
         waiting[i].resolve();
         waiting.splice(i, 1);
       }
+    }
+    // The HUD only in play (not over the loading screen, the pause menu or flying), redrawn ten times a second.
+    hud.visible = mode === 'playing';
+    if (hud.visible && now - hudShown >= 100) {
+      hudShown = now;
+      const p = session.player;
+      hud.update({
+        stance: p.stance,
+        exposure: session.exposure(),
+        rounds: session.weapon.rounds,
+        magazine: session.weapon.spec.magazine,
+        reloading: session.weapon.reloading,
+        digging: session.digging,
+        digFraction: session.entrenching.fraction,
+        digInReach: session.entrenching.inReach,
+        crosshair: p.stance !== Stance.PERISCOPE,
+      });
     }
     if (now - shown > 250) {
       shown = now;
@@ -804,6 +824,7 @@ async function start(): Promise<void> {
     },
     waitConverged: () => waitFrames(render.denoise.historyMax + 8),
     stats: () => renderer.stats,
+    hud: () => ({ visible: hud.visible, crosshair: hud.visible && hud.crosshair, text: hud.text }),
     snapshot: () => new Promise<{ mean: number; std: number; saturation: number; edge: number; middle: number }>((resolve) => (snapshot = resolve)),
     fingerprint: () => fingerprint(world.map),
     setQuality: (q: Partial<Quality> & { budgetMs?: number }) => {

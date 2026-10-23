@@ -61,11 +61,20 @@ export interface Hooks {
   views: Record<string, { position: [number, number, number]; yaw: number; pitch: number; hours: number }>;
   world: {
     spawn: { position: [number, number, number]; bay: { longAxis: 0 | 2; facing: 1 | -1 } };
-    map: { get(x: number, y: number, z: number): number };
+    map: { get(x: number, y: number, z: number): number; set(x: number, y: number, z: number, p: number): void; fillBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, p: number): void };
   };
   /** The trigger, as the left mouse button sets it with the pointer locked; for tests that play without the lock. */
   trigger(held: boolean): void;
-  session: { weapon: { rounds: number }; suppression: { level: number }; front: { intensity: 'off' | 'light' | 'heavy' } };
+  session: {
+    weapon: { rounds: number };
+    suppression: { level: number };
+    front: { intensity: 'off' | 'light' | 'heavy' };
+    entrenching: { cleared: number; inReach: boolean };
+    digging: boolean;
+    player: { position: { x: number; y: number; z: number }; yaw: number };
+  };
+  /** The HUD as drawn: whether it shows, whether its crosshair does, and its words. */
+  hud(): { visible: boolean; crosshair: boolean; text: string };
   /** The front's shells alone, for a test: the rifle fire is left as it is. */
   setShelling(i: 'off' | 'light' | 'heavy'): void;
   /** The front's fire, for this visit (the pause menu's choice is what is kept). */
