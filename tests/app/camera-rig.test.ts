@@ -20,20 +20,36 @@ function standing(): Session {
 }
 
 describe('the camera rig', () => {
-  it('carries recoil, flinch, shake and the FOV pulse in the pose', () => {
+  it('carries recoil, flinch, shake and the FOV pulse in the pose, eased between ticks as the foot is', () => {
+    // Mouse look turns the view every frame, and frames do not fall on ticks: offsets that moved
+    // only on ticks would judder against it.
     const s = standing();
     s.intent = { ...s.intent, fire: true };
     for (let t = 0; t < 12; t++) s.tick();
     s.suppression.crack(0.5, Rng.root(1).derive('crack'));
+    const offsets = () => {
+      const shake = s.suppression.shake;
+      return { yaw: s.recoil.yaw + s.suppression.flinchYaw, pitch: s.recoil.pitch + s.suppression.flinchPitch + shake.pitch, roll: shake.roll, fov: s.viewKick.fovOffset };
+    };
+    const before = offsets();
     s.tick();
+    const after = offsets();
     expect(Math.abs(s.recoil.pitch)).toBeGreaterThan(0);
     expect(Math.abs(s.suppression.flinchPitch)).toBeGreaterThan(0);
-    expect(Math.abs(s.suppression.shake.roll)).toBeGreaterThan(0);
-    const pose = new CameraRig(rigTunables(tun)).pose(s, 1 / 60);
-    expect(pose.yaw).toBeCloseTo(s.player.yaw + s.recoil.yaw + s.suppression.flinchYaw, 9);
-    expect(pose.pitch).toBeCloseTo(s.player.pitch + s.recoil.pitch + s.suppression.flinchPitch + s.suppression.shake.pitch, 9);
-    expect(pose.roll).toBeCloseTo(s.suppression.shake.roll, 9);
-    expect(pose.fov).toBeCloseTo(tun.f('camera.fov') + s.viewKick.fovOffset, 9);
+    expect(Math.abs(after.roll)).toBeGreaterThan(0);
+    expect(Math.abs(after.pitch - before.pitch)).toBeGreaterThan(1e-3);
+    const rig = new CameraRig(rigTunables(tun));
+    // No tick runs while the frames creep a quarter, then three quarters, of the way to the next.
+    for (const [creep, alpha] of [[0, 0], [0.25, 0.25], [0.5, 0.75]]) {
+      expect(s.clock.advance(creep / 60)).toBe(0);
+      expect(s.clock.alpha).toBeCloseTo(alpha, 9);
+      const pose = rig.pose(s, creep / 60);
+      const at = (k: keyof typeof before) => before[k] + (after[k] - before[k]) * alpha;
+      expect(pose.yaw).toBeCloseTo(s.player.yaw + at('yaw'), 9);
+      expect(pose.pitch).toBeCloseTo(s.player.pitch + at('pitch'), 9);
+      expect(pose.roll).toBeCloseTo(at('roll'), 9);
+      expect(pose.fov).toBeCloseTo(tun.f('camera.fov') + at('fov'), 9);
+    }
   });
 
   it('puts the eye 1.62 m over a standing player and 1.10 m over a crouched one', () => {

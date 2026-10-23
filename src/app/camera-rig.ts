@@ -2,8 +2,10 @@
  * Where the camera is each frame: the player's interpolated foot raised to
  * the eye (which follows the body's height, so crouching is smooth), bobbing
  * with the stride, dipping on a hard landing, and narrowing for the periscope,
- * eased so raising it does not read as a cut. Python's `_place_camera` and
- * `_place_viewmodel`, without the roll the renderer's pose does not carry.
+ * eased so raising it does not read as a cut; turned by the rifle's recoil,
+ * suppression's flinch and shake, and the view kick's pulse of the field of
+ * view, interpolated between ticks as the foot is. Python's `_place_camera`
+ * and `_place_viewmodel`, without the stride's roll (the shake's it carries).
  *
  * At 10 cm the ground is all steps: the body snaps up and down them, and
  * stands or raises the periscope in a tick. The eye eases those jumps out
@@ -84,14 +86,14 @@ export class CameraRig {
     const lean = sway * 0.4;
     // The view as the rifle sees it: its recoil and the flinch, with the shake of suppression and
     // the view kick's pulse of the field of view (the round leaves before the shake: it is the
-    // camera's alone).
-    const shake = session.suppression.shake;
+    // camera's alone), between ticks as the foot is.
+    const view = session.viewAt();
     return {
       position: [foot.x + Math.cos(yaw) * lean, body + this.trail + bob + dip, foot.z - Math.sin(yaw) * lean],
-      yaw: player.yaw + session.recoil.yaw + session.suppression.flinchYaw,
-      pitch: player.pitch + session.recoil.pitch + session.suppression.flinchPitch + shake.pitch,
-      roll: shake.roll,
-      fov: baseFov * this.fovScale + session.viewKick.fovOffset,
+      yaw: player.yaw + view.yaw,
+      pitch: player.pitch + view.pitch,
+      roll: view.roll,
+      fov: baseFov * this.fovScale + view.fov,
     };
   }
 }

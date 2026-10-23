@@ -6,8 +6,8 @@
  * design.
  *
  * Frames feed it real time; it runs whole ticks, each with the latest intent
- * and the player's latest yaw and pitch, and keeps the position before the
- * last tick so the camera can interpolate between the two.
+ * and the player's latest yaw and pitch, and keeps the position and the view's
+ * offsets before the last tick so the camera can interpolate between the two.
  */
 
 import { ballisticsTunables, Rounds } from '../combat/ballistics';
@@ -31,6 +31,14 @@ export function idleIntent(): MoveIntent {
   return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false };
 }
 
+/** How the rifle and suppression turn the view, in degrees: recoil and the flinch (yaw, pitch), the shake (pitch, roll), and the view kick's pulse of the field of view. */
+export interface ViewOffsets {
+  yaw: number;
+  pitch: number;
+  roll: number;
+  fov: number;
+}
+
 export interface SessionWorld {
   map: BrickMap;
   /** The trench network and landmarks; absent in small test worlds. */
@@ -51,6 +59,8 @@ export class Session {
   intent: MoveIntent = idleIntent();
   /** The player's foot before the last tick. */
   prevPosition: Vec3;
+  /** The view's offsets before the last tick. */
+  private prevView: ViewOffsets;
   /** The player's rifle, and the rounds in the air. */
   readonly weapon: Weapon;
   readonly rounds: Rounds;
@@ -95,6 +105,7 @@ export class Session {
     const front = frontTunables(tun);
     const plan = world.plan;
     this.front = new Front(front, world.front ?? (plan ? planSource(plan, front.reachM) : () => null), this.streams.derive('front'));
+    this.prevView = this.view();
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -111,6 +122,7 @@ export class Session {
     p.pinned = this.suppression.pinned;
     const wasOnStep = p.stance === Stance.FIRING_STEP;
     this.prevPosition = p.position;
+    this.prevView = this.view();
     this.controller.tick(p, this.intent, this.clock.dt);
     if (wasOnStep && p.pinned && p.stance !== Stance.FIRING_STEP) this.ejected++;
     this.combat(this.clock.dt);
@@ -163,6 +175,29 @@ export class Session {
   /** The foot between the last two ticks, `alpha` of the way to the latest. */
   footAt(alpha = this.clock.alpha): Vec3 {
     return this.prevPosition.lerp(this.player.position, alpha);
+  }
+
+  /** The view's offsets between the last two ticks, `alpha` of the way to the latest. */
+  viewAt(alpha = this.clock.alpha): ViewOffsets {
+    const a = this.prevView;
+    const b = this.view();
+    return {
+      yaw: a.yaw + (b.yaw - a.yaw) * alpha,
+      pitch: a.pitch + (b.pitch - a.pitch) * alpha,
+      roll: a.roll + (b.roll - a.roll) * alpha,
+      fov: a.fov + (b.fov - a.fov) * alpha,
+    };
+  }
+
+  /** The view's offsets as the last tick left them. */
+  private view(): ViewOffsets {
+    const shake = this.suppression.shake;
+    return {
+      yaw: this.recoil.yaw + this.suppression.flinchYaw,
+      pitch: this.recoil.pitch + this.suppression.flinchPitch + shake.pitch,
+      roll: shake.roll,
+      fov: this.viewKick.fovOffset,
+    };
   }
 
   /** Put the player at a foot position (metres), standing and still; it settles on the next tick. */
