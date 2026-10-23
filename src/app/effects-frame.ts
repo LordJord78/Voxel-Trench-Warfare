@@ -67,11 +67,12 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
   };
 }
 
-/** A test's quad: emissive, square to the camera. */
+/** A test's quad, square to the camera: emissive, or lit as dust is. */
 export interface DebugQuad {
   position: V3;
   size: number;
   colour: V3;
+  lit?: boolean;
 }
 
 export interface BuiltEffects {
@@ -95,6 +96,8 @@ export class EffectsFrameBuilder {
   /** Quads and transient lights a test asks for, every frame until it asks for none. */
   debug: DebugQuad[] = [];
   debugLights: TransientLight[] = [];
+  /** Where the last frame's test quads start among its billboards. */
+  debugAt = 0;
   private readonly billboards = new Float32Array(MAX_BILLBOARDS * BILLBOARD_FLOATS);
   private readonly ribbons = new Float32Array(MAX_RIBBONS * RIBBON_FLOATS);
   private flashes: { muzzle: V3; dir: V3; age: number }[] = [];
@@ -124,9 +127,10 @@ export class EffectsFrameBuilder {
     }
 
     let billboards = session.particles.billboards(this.billboards, drift, t.particleAttachS);
+    this.debugAt = billboards;
     for (const q of this.debug) {
       if (billboards >= MAX_BILLBOARDS) break;
-      this.billboards.set([...q.position, q.size / 2, ...q.colour, 1, 1], billboards * BILLBOARD_FLOATS);
+      this.billboards.set([...q.position, q.size / 2, ...q.colour, 1, q.lit ? 0 : 1], billboards * BILLBOARD_FLOATS);
       billboards++;
     }
 

@@ -4,8 +4,11 @@
  * bloom and the exposure treat them as they treat the world.
  *
  * Two passes. A compute pass lights the billboards that are not emissive —
- * the key through its height map (`keyLit`) and the sky's irradiance from
- * above, as the world is lit — and gives the emissive their glow. Then one
+ * the key through its height map (`keyLit`), the shots' flashes as on a face
+ * turned to each, and the rest as the faces near them take it (the denoised
+ * light behind them) or, in the open, the sky from all round and their light
+ * cell's lights — and gives the emissive their glow, each seen through the
+ * haze before it as shade sees the world (froxels.ts `group`). Then one
  * render pass draws billboards and ribbons into `sharp`, each fragment dropped
  * where the G-buffer's depth is nearer, blended premultiplied: light adds,
  * dust covers. Neither runs in a frame with nothing to draw, so the standard
@@ -13,6 +16,7 @@
  */
 
 import type { Tunables } from '../core/tunables';
+import type { LightCells } from './light-cells';
 import { moduleSource } from './shaders';
 import effectsLightSrc from './shaders/effects-light.wgsl';
 import effectsSrc from './shaders/effects.wgsl';
@@ -21,6 +25,8 @@ import effectsSrc from './shaders/effects.wgsl';
 export const RIBBON_FLOATS = 12;
 /** A billboard's floats, as particles.ts writes them. */
 const BILLBOARD_FLOATS = 9;
+/** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4). */
+const LIT_BYTES = 32;
 /** The particle pool, and room for test quads. */
 export const MAX_BILLBOARDS = 4096 + 64;
 /** Every round in flight a tracer, and a few shots' stars. */
@@ -67,21 +73,27 @@ export class Effects {
   private readonly ribbons: GPUBuffer;
   private readonly lightParams: GPUBuffer;
   private readonly drawParams: GPUBuffer;
-  private readonly lightGroup: GPUBindGroup;
+  private lightGroup: GPUBindGroup | null = null;
   private drawGroup: GPUBindGroup | null = null;
   private target: GPUTextureView | null = null;
   private billboardCount = 0;
   private ribbonCount = 0;
 
-  static async compile(device: GPUDevice, scene: GPUBindGroupLayout, keyRead: GPUBindGroupLayout): Promise<EffectsPipelines> {
+  /** Lit over the scene's group, the key light's map's (`keyRead`) and the haze's (`haze`, froxels.ts). */
+  static async compile(device: GPUDevice, scene: GPUBindGroupLayout, keyRead: GPUBindGroupLayout, haze: GPUBindGroupLayout): Promise<EffectsPipelines> {
     const C = GPUShaderStage.COMPUTE;
     const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
+    // light-cells.wgsl's grid and cells (read and written where they are built), then its own.
     const lightLayout = device.createBindGroupLayout({
       label: 'effects light',
       entries: [
         { binding: 0, visibility: C, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: C, buffer: { type: 'read-only-storage' } },
-        { binding: 2, visibility: C, buffer: { type: 'storage' } },
+        { binding: 1, visibility: C, buffer: { type: 'storage' } },
+        { binding: 2, visibility: C, buffer: { type: 'uniform' } },
+        { binding: 3, visibility: C, buffer: { type: 'read-only-storage' } },
+        { binding: 4, visibility: C, buffer: { type: 'storage' } },
+        { binding: 5, visibility: C, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 6, visibility: C, texture: { sampleType: 'unfilterable-float' } },
       ],
     });
     const drawLayout = device.createBindGroupLayout({
@@ -103,7 +115,7 @@ export class Effects {
     const [light, draw] = await Promise.all([
       device.createComputePipelineAsync({
         label: 'effects light',
-        layout: device.createPipelineLayout({ bindGroupLayouts: [scene, lightLayout, keyRead] }),
+        layout: device.createPipelineLayout({ bindGroupLayouts: [scene, lightLayout, keyRead, haze] }),
         compute: { module: lightModule, entryPoint: 'main' },
       }),
       device.createRenderPipelineAsync({
@@ -129,38 +141,46 @@ export class Effects {
     return { light, draw, lightLayout, drawLayout };
   }
 
-  /** Over the frame's uniform and the key light's map's group (key-shadow.ts `group`). */
-  static create(device: GPUDevice, pipelines: EffectsPipelines, frame: GPUBuffer, keyGroup: GPUBindGroup, look: EffectsLook): Effects {
-    return new Effects(device, pipelines, frame, keyGroup, look);
+  /** Over the frame's uniform, the light cells and the key light's map's group (key-shadow.ts `group`). */
+  static create(device: GPUDevice, pipelines: EffectsPipelines, frame: GPUBuffer, cells: LightCells, keyGroup: GPUBindGroup, look: EffectsLook): Effects {
+    return new Effects(device, pipelines, frame, cells, keyGroup, look);
   }
 
   private constructor(
     private readonly device: GPUDevice,
     private readonly pipelines: EffectsPipelines,
     private readonly frame: GPUBuffer,
+    private readonly cells: LightCells,
     private readonly keyGroup: GPUBindGroup,
     readonly look: EffectsLook,
   ) {
     const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
     this.billboards = device.createBuffer({ label: 'effects billboards', size: MAX_BILLBOARDS * BILLBOARD_FLOATS * 4, usage: storage });
-    this.lit = device.createBuffer({ label: 'effects lit', size: MAX_BILLBOARDS * 32, usage: GPUBufferUsage.STORAGE });
+    this.lit = device.createBuffer({ label: 'effects lit', size: MAX_BILLBOARDS * LIT_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     this.ribbons = device.createBuffer({ label: 'effects ribbons', size: MAX_RIBBONS * RIBBON_FLOATS * 4, usage: storage });
     this.lightParams = device.createBuffer({ label: 'effects light params', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.drawParams = device.createBuffer({ label: 'effects draw params', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.lightGroup = device.createBindGroup({
-      label: 'effects light',
-      layout: pipelines.lightLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.lightParams } },
-        { binding: 1, resource: { buffer: this.billboards } },
-        { binding: 2, resource: { buffer: this.lit } },
-      ],
-    });
   }
 
-  /** Draw into `target` (sharp, which must allow render attachment), hidden by `gDepth`: after each reallocation. */
-  bind(target: GPUTexture, gDepth: GPUTexture): void {
+  /**
+   * Draw into `target` (sharp, which must allow render attachment), hidden by `gDepth`, lit near the
+   * world's faces by `denoised` (shade's light): after each reallocation.
+   */
+  bind(target: GPUTexture, gDepth: GPUTexture, denoised: GPUTexture): void {
     this.target = target.createView();
+    this.lightGroup = this.device.createBindGroup({
+      label: 'effects light',
+      layout: this.pipelines.lightLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.cells.grid } },
+        { binding: 1, resource: { buffer: this.cells.cells } },
+        { binding: 2, resource: { buffer: this.lightParams } },
+        { binding: 3, resource: { buffer: this.billboards } },
+        { binding: 4, resource: { buffer: this.lit } },
+        { binding: 5, resource: gDepth.createView() },
+        { binding: 6, resource: denoised.createView() },
+      ],
+    });
     this.drawGroup = this.device.createBindGroup({
       label: 'effects',
       layout: this.pipelines.drawLayout,
@@ -188,15 +208,16 @@ export class Effects {
     queue.writeBuffer(this.drawParams, 0, new Uint32Array([this.billboardCount, this.ribbonCount, 0, 0]));
   }
 
-  /** Light and draw this frame's effects into the image's `res` corner, timing each pass it runs. */
-  encode(encoder: GPUCommandEncoder, scene: GPUBindGroup, res: readonly [number, number], writes: Writes): void {
-    if (!this.target || !this.drawGroup || this.billboardCount + this.ribbonCount === 0) return;
+  /** Light and draw this frame's effects into the image's `res` corner, seen through `haze` (froxels.ts `group`), timing each pass it runs. */
+  encode(encoder: GPUCommandEncoder, scene: GPUBindGroup, haze: GPUBindGroup, res: readonly [number, number], writes: Writes): void {
+    if (!this.target || !this.drawGroup || !this.lightGroup || this.billboardCount + this.ribbonCount === 0) return;
     if (this.billboardCount > 0) {
       const p = encoder.beginComputePass({ label: 'effects light', timestampWrites: writes('effects-light') });
       p.setPipeline(this.pipelines.light);
       p.setBindGroup(0, scene);
       p.setBindGroup(1, this.lightGroup);
       p.setBindGroup(2, this.keyGroup);
+      p.setBindGroup(3, haze);
       p.dispatchWorkgroups(Math.ceil(this.billboardCount / 64));
       p.end();
     }
@@ -211,6 +232,19 @@ export class Effects {
     p.setBindGroup(0, this.drawGroup);
     p.draw(6, this.billboardCount + this.ribbonCount);
     p.end();
+  }
+
+  /** The last frame's lit billboards `first` to `first + count`: eight floats each, as Lit. */
+  async readLit(first: number, count: number): Promise<Float32Array> {
+    const n = Math.max(0, Math.min(count, MAX_BILLBOARDS - first));
+    const staging = this.device.createBuffer({ size: Math.max(LIT_BYTES, n * LIT_BYTES), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const encoder = this.device.createCommandEncoder();
+    if (n > 0) encoder.copyBufferToBuffer(this.lit, first * LIT_BYTES, staging, 0, n * LIT_BYTES);
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const out = new Float32Array(staging.getMappedRange().slice(0, n * LIT_BYTES));
+    staging.destroy();
+    return out;
   }
 
   destroy(): void {

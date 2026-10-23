@@ -67,10 +67,14 @@ export interface Hooks {
   setIntensity(i: 'off' | 'light' | 'heavy'): void;
   /** What the last frame's effects held: particles' billboards, tracers, flash stars, transient lights. */
   effects(): { billboards: number; tracers: number; stars: number; lights: number };
-  /** Emissive test quads (metres, metres across, linear colour) drawn with the effects from the next frame; [] for none. */
-  debugQuads(quads: { position: [number, number, number]; size: number; colour: [number, number, number] }[]): void;
+  /** Test quads (metres, metres across, linear colour) drawn with the effects from the next frame, emissive or `lit` as dust is; [] for none. */
+  debugQuads(quads: { position: [number, number, number]; size: number; colour: [number, number, number]; lit?: boolean }[]): void;
+  /** The last frame's test quads as the effects lit them: linear rgb premultiplied, and alpha. */
+  debugLit(): Promise<[number, number, number, number][]>;
   /** Transient lights (as a shot's flash) added to the next frames' own; [] for none. */
   debugLights(lights: { position: [number, number, number]; radiusM: number; colour: [number, number, number]; intensity: number }[]): void;
+  /** The last frame's shaded image (before TAA and the effects) over a box of the internal image: its mean linear rgb. */
+  colourAt(box: [number, number, number, number]): Promise<[number, number, number]>;
   /** The G-buffer's depth at pixels of the internal image, in metres along each pixel's ray. */
   depthAt(points: [number, number][]): Promise<number[]>;
   /** GPU validation errors so far. */

@@ -271,7 +271,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     Restir.compile(device),
     KeyShadow.compile(device, scene, keyLayouts),
     Froxels.compile(device, scene, keyLayouts, froxelLayout),
-    Effects.compile(device, scene, keyLayouts.read),
+    Effects.compile(device, scene, keyLayouts.read, froxelLayout.haze),
     Rifle.compile(device, scene, keyLayouts.read),
   ]);
   return { scene, layouts, pipelines: { beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects, rifle, ...sceneExtras(device) };
@@ -381,7 +381,7 @@ export class Renderer {
     this.flareShadows = FlareShadows.create(device);
     this.keyShadow = KeyShadow.create(device, compiled.keyShadow, world.map.dims, this.voxelSize(), this.flareShadows);
     this.froxels = Froxels.create(device, compiled.froxels, this.cells, this.keyShadow, FROXEL_COLUMNS[this.preset]);
-    this.effects = Effects.create(device, compiled.effects, this.frameBuffer, this.keyShadow.group, effectsLook(loadTunables()));
+    this.effects = Effects.create(device, compiled.effects, this.frameBuffer, this.cells, this.keyShadow.group, effectsLook(loadTunables()));
     this.rifle = Rifle.create(device, compiled.rifle, rifleModel(), this.cells, this.keyShadow.group, loadTunables().f('effects.rifle_specular'));
     this.lightScale = LIGHT_SCALE[this.preset];
     this.budgetMs = options.budgetMs ?? 14;
@@ -469,6 +469,11 @@ export class Renderer {
     return out;
   }
 
+  /** The last frame's lit billboards `first` to `first + count` (effects.ts `readLit`). */
+  readEffectsLit(first: number, count: number): Promise<Float32Array> {
+    return this.effects.readLit(first, count);
+  }
+
   /** The last frame's shaded image (before TAA) over a box of the internal image: linear rgb, a row at a time. */
   async readColour(box: readonly [number, number, number, number]): Promise<Float32Array> {
     const [x, y, w, h] = box;
@@ -550,7 +555,6 @@ export class Renderer {
     make('taa1', 'rgba16float', this.alloc);
     // The effects are drawn into it, by a render pass.
     make('sharp', 'rgba16float', this.alloc, GPUTextureUsage.RENDER_ATTACHMENT);
-    this.effects.bind(this.textures.sharp, this.textures.gDepth);
     this.bloom.resize(this.alloc, this.textures.sharp.createView());
     this.autoExposure.bind(this.textures.sharp.createView());
     const light = this.lightSize(this.alloc);
@@ -568,6 +572,7 @@ export class Renderer {
     make('filteredA', 'rgba16float', light);
     make('filteredB', 'rgba16float', light);
     make('denoised', 'rgba16float', light);
+    this.effects.bind(this.textures.sharp, this.textures.gDepth, this.textures.denoised);
     const view = (name: string) => this.textures[name].createView();
     this.restir.resize(light, { gDepth: view('gDepth'), gHit: view('gHit'), hDepth: [view('hDepth0'), view('hDepth1')], hHit: [view('hHit0'), view('hHit1')] });
     const group = (pass: ComputePass | 'present', resources: GPUBindingResource[]) =>
@@ -772,7 +777,7 @@ export class Renderer {
     pass('taa', 'taa', this.res);
     pass('cas', 'cas', this.res);
     // Timed only when they run (a slot not written this frame would hold another frame's times).
-    this.effects.encode(encoder, this.sceneGroup!, this.res, (name) => this.timer.writes(name));
+    this.effects.encode(encoder, this.sceneGroup!, this.froxels.group, this.res, (name) => this.timer.writes(name));
     this.bloom.encode(encoder, this.res, this.options.bloomMax ?? 999, this.timer.writes('bloom'));
     // Without settings (tests), the zone is wide enough that nothing is ever corrected.
     this.autoExposure.encode(

@@ -430,8 +430,11 @@ gravity             = -1.5     # it hangs, then settles
 drag                = 3.5
 size_start_m        = 0.05
 size_end_m          = 0.32
-colour_start        = [1.0, 1.0, 1.0, 0.55] # times the struck material's colour
-colour_end          = [1.0, 1.0, 1.0, 0.0]
+colour_start        = [2.0, 2.0, 2.0, 0.55] # times the struck material's colour: dry dust
+colour_end          = [2.0, 2.0, 2.0, 0.0]  # is about twice as pale as the face it came
+                                            # off (soil's albedo some 0.3 to 0.15); at 1.0,
+                                            # lit as the face is and seen through the same
+                                            # haze, a puff did not show against it
 emissive            = false
 count               = 7
 speed               = 2.2      # off the struck face
@@ -496,8 +499,10 @@ flash_light_intensity = 3.0    # about a lantern's (render.lantern_intensity) fo
 flash_light_colour    = [1.0, 0.72, 0.40]
 rifle_specular      = 0.35     # the key's light off the rifle's steel, toward the eye
 particle_glow       = 20.0     # the flash's and the sparks' particles
-dust_key            = 0.4      # how much of the key's light a mote of dust or a
-dust_sky            = 0.6      # case of brass takes, and of the sky's from above
+dust_key            = 0.5      # how much of the key's light a mote of dust or a
+dust_sky            = 1.0      # case of brass takes (a flake turned every way: the
+                               # mean of n·l), and of the mean of the sky's on its
+                               # faces, in the open (near a face it takes the face's)
 
 [viewmodel]
 rest_right_m        = 0.175    # where the rifle sits when nothing is happening

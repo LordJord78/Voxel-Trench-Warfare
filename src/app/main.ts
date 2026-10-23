@@ -580,7 +580,18 @@ async function start(): Promise<void> {
     debugLights(lights: TransientLight[]) {
       effects.debugLights = lights;
     },
+    debugLit: async () => {
+      const lit = await renderer.readEffectsLit(effects.debugAt, effects.debug.length);
+      return Array.from({ length: lit.length / 8 }, (_, i) => Array.from(lit.subarray(i * 8 + 4, i * 8 + 8)));
+    },
     depthAt: (points: [number, number][]) => renderer.readDepth(points),
+    colourAt: async (box: [number, number, number, number]) => {
+      const rgb = await renderer.readColour(box);
+      const n = rgb.length / 3;
+      const sum = [0, 0, 0];
+      for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) sum[c] += rgb[i * 3 + c];
+      return sum.map((v) => v / Math.max(1, n));
+    },
     gpuErrors: () => gpu.errors,
     jitter(on: boolean) {
       renderer.flags = on ? renderer.flags & ~FLAGS.JITTER_OFF : renderer.flags | FLAGS.JITTER_OFF;
