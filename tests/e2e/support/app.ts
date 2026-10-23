@@ -91,6 +91,8 @@ export interface Hooks {
   rifleCheck(n: number): Promise<{ visible: boolean; samples: { px: [number, number]; gpu: number; cpu: number | null }[] }>;
   /** The mean luminance (linear) of the rifle's pixels in the last frame's shaded image. */
   rifleLuminance(): Promise<number>;
+  /** The sound: its context's state ('none' before the click that starts play) and how many voices have started. */
+  audio(): { state: 'none' | 'suspended' | 'running' | 'closed'; voices: number };
 }
 
 export async function openGame(page: Page): Promise<string[]> {

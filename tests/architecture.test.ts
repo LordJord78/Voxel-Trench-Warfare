@@ -12,6 +12,10 @@ describe('architecture rules', () => {
     const v = checkSource('src/sim/x.ts', 'const c = document.body;\nconst u: GPUDevice = null!;');
     expect(v.map((x) => x.rule)).toEqual(['global', 'global']);
   });
+  it('flags imports from audio, and WebAudio globals', () => {
+    const v = checkSource('src/combat/x.ts', "import { a } from '../audio/engine';\nconst c = new AudioContext();");
+    expect(v.map((x) => x.rule)).toEqual(['import', 'global']);
+  });
   it('flags engine-dependent maths but not comments or strings', () => {
     const v = checkSource('src/core/x.ts', "// Math.sin is banned\nconst s = 'Math.cos';\nconst y = Math.exp(1) + Math.sqrt(2) + Math.floor(3);");
     expect(v).toHaveLength(1);

@@ -16,6 +16,8 @@
 import { CLOCK_KEYS } from '../core/sky-clock';
 import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
+import { AudioEngine } from '../audio/engine';
+import { audioTunables, planVoices } from '../audio/plan';
 import { rifleModel, traceRifle } from '../combat/rifle-model';
 import { rayDir, type CameraPose } from '../render/camera';
 import type { TransientLight } from '../render/effects';
@@ -170,6 +172,8 @@ async function start(): Promise<void> {
   const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn }, tun, SEED, views.bay.yaw);
   const rig = new CameraRig(rigTunables(tun));
   const effects = new EffectsFrameBuilder(effectsTunables(tun));
+  const hearing = audioTunables(tun);
+  const audio = new AudioEngine(hearing, { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') });
   let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0 };
   /** Whether the rifle is in hand (tests put it down to read the world behind it). */
   let rifleHeld = true;
@@ -229,6 +233,8 @@ async function start(): Promise<void> {
     if (stopped) return;
     loading.hide();
     mode = 'playing';
+    // The click that starts play is where the browser lets the sound start.
+    audio.start();
     if (lock) lockPointer();
   };
   const pause = () => {
@@ -239,12 +245,14 @@ async function start(): Promise<void> {
     held.clear();
     // The menu needs the cursor; an Esc the browser did not act on can leave the lock held.
     if (document.pointerLockElement) document.exitPointerLock();
+    audio.suspend();
     pauseMenu.open(settings, timeOfDay, lapse);
   };
   const resume = () => {
     if (stopped || mode !== 'paused') return;
     pauseMenu.close();
     mode = resumeTo;
+    audio.start();
     lockPointer();
   };
   const enterFly = (pose: CameraPose) => {
@@ -417,8 +425,11 @@ async function start(): Promise<void> {
       pose = rig.pose(session, dt, settings.fov);
       periscope.set((1 - rig.fovScale) / (1 - periscopeScale));
     }
-    // What this frame's ticks did, once: the effects take it (and from Task 8, the sound).
-    const frameEffects = effects.build(session, session.drainEvents());
+    // What this frame's ticks did, once: seen and heard.
+    const events = session.drainEvents();
+    const frameEffects = effects.build(session, events);
+    audio.listen(pose);
+    audio.play(planVoices(hearing, events, pose.position));
     renderer.setEffects(frameEffects.frame);
     renderer.setTransientLights(frameEffects.lights);
     // The rifle in hand while playing (paused too), not through the periscope or flying.
@@ -576,6 +587,7 @@ async function start(): Promise<void> {
     jitter(on: boolean) {
       renderer.flags = on ? renderer.flags & ~FLAGS.JITTER_OFF : renderer.flags | FLAGS.JITTER_OFF;
     },
+    audio: () => ({ state: audio.state, voices: audio.voices }),
     rifleVisible: () => renderer.rifleState().visible,
     showRifle(on: boolean) {
       rifleHeld = on;

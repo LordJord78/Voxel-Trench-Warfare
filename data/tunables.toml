@@ -454,6 +454,23 @@ lift                = 0.0
 spread              = 2.5
 speed_jitter        = 0.3
 
+# The sound (src/audio): every voice made in WebAudio, nothing loaded. A sound is
+# late by its distance at the speed of sound, quieter past reference_m, and duller
+# toward far_m.
+[audio]
+speed_of_sound      = 343.0
+master_gain         = 0.7
+reference_m         = 2.0
+rolloff             = 1.0      # gain as (reference / distance)^rolloff past it
+far_m               = 150.0
+far_lowpass_hz      = 2500.0   # what is left of a sound this far off
+open_lowpass_hz     = 18000.0
+crack_gain          = 0.9      # a round past your ear at nil miss, falling to
+                               # nothing at suppression's crack radius
+impact_gain         = 0.6
+impact_within_m     = 60.0     # strikes further off are not heard
+front_report_gain   = 0.9      # the enemy's reports at reference_m (yours is 1)
+
 # What is drawn over the world after sharpening (render/effects.ts): tracers, each
 # shot's flash star and light, and how the particles take the world's light. The
 # intensities are against the world's own light; bloom takes what is too bright.

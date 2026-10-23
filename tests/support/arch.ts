@@ -17,12 +17,12 @@ export type Violation = { file: string; line: number; rule: 'import' | 'global' 
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-const FORBIDDEN = ['src/render', 'src/ui', 'src/app'];
+const FORBIDDEN = ['src/render', 'src/ui', 'src/app', 'src/audio'];
 
-/** Browser globals, wall-clock time and reflective global access. */
+/** Browser globals (WebAudio's among them), wall-clock time and reflective global access. */
 const BANNED_GLOBALS = new Set([
   'document', 'window', 'navigator', 'self', 'globalThis', 'location', 'localStorage', 'sessionStorage',
-  'requestAnimationFrame', 'cancelAnimationFrame', 'Date',
+  'requestAnimationFrame', 'cancelAnimationFrame', 'Date', 'AudioContext', 'OfflineAudioContext',
 ]);
 
 /** Math members every engine computes exactly: IEEE-rounded or integer operations, and constants. */
