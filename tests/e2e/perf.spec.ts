@@ -210,6 +210,55 @@ test('the overview renders within the budget through the day', async ({ page }) 
   DAY_HOURS.forEach((t, k) => expect(medians[k], hhmm(t)).toBeLessThanOrEqual(BUDGET_MS));
 });
 
+// A magazine on full auto, playing at the step view (over the parapet) and along the bay, at dusk and
+// at night: the rifle drawn, each shot's flash lighting the trench, tracers, brass and dust. Combat
+// milestone 6's gate adds shells and heavy fire to this; here the rifle and its effects alone.
+test('firing a magazine stays within the frame budget', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  await hooks(page, (h) => h.play());
+  const lines: string[] = [];
+  for (const view of ['step', 'bay'] as const) {
+    for (const [label, hours] of [['dusk', TIMES.dusk], ['night', TIMES.night]] as const) {
+      const r = await hooks(
+        page,
+        async (h, arg) => {
+          const { view, hours } = arg as { view: 'step' | 'bay'; hours: number };
+          const v = h.views[view];
+          h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: 0 });
+          h.setTimeOfDay(hours);
+          await h.waitFrames(90);
+          (h.session.weapon as { rounds: number }).rounds = 30;
+          h.trigger(true);
+          const gpu: number[] = [];
+          const rifle: number[] = [];
+          const effects: number[] = [];
+          let frames = 0;
+          while (h.session.weapon.rounds > 0 && frames < 400) {
+            await h.waitFrames(1);
+            frames++;
+            const s = h.stats();
+            if (s.gpuMs === null) continue;
+            gpu.push(s.gpuMs);
+            rifle.push(s.own.rifle ?? 0);
+            effects.push((s.own.effects ?? 0) + (s.own['effects-light'] ?? 0));
+          }
+          h.trigger(false);
+          const at = (xs: number[], q: number) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(q * xs.length))];
+          return { count: gpu.length, frames, p95: at(gpu, 0.95), median: at(gpu, 0.5), rifle: at(rifle, 0.5), effects: at(effects, 0.5) };
+        },
+        { view, hours },
+      );
+      if (r.count === 0) test.skip(true, 'no GPU timestamps');
+      lines.push(`${view} ${label}: p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)} (the rifle ${r.rifle.toFixed(2)}, the effects ${r.effects.toFixed(2)}) over ${r.frames} frames`);
+      expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
+    }
+  }
+  console.log(`Firing a magazine, GPU ms: ${lines.join('; ')}`);
+  expect(errors).toEqual([]);
+});
+
 /** An hour of the clock as HH:MM. */
 function hhmm(hours: number): string {
   const m = Math.round(hours * 60);

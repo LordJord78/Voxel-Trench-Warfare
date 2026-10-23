@@ -398,8 +398,8 @@ pool_capacity       = 4096     # the spec's (the reference's was 1024): heavy fi
 life_s              = 0.045    # two or three frames: a stab, not a flare
 gravity             = 0.0
 drag                = 12.0
-size_start_m        = 0.34
-size_end_m          = 0.08
+size_start_m        = 0.12     # the reference's 0.34, drawn 1.2 m from the eye, was a
+size_end_m          = 0.04     # disc 16 degrees across; a 5.45's flash is a hand's breadth
 colour_start        = [1.0, 0.90, 0.55, 0.95]
 colour_end          = [1.0, 0.45, 0.12, 0.0]
 emissive            = true
@@ -476,9 +476,9 @@ front_report_gain   = 0.9      # the enemy's reports at reference_m (yours is 1)
 # intensities are against the world's own light; bloom takes what is too bright.
 [effects]
 tracer_length_m     = 7.0      # the reference's render.tracer_length_m
-tracer_width_m      = 0.025
+tracer_width_m      = 0.06     # receding from the shooter, a narrower one is a dash
 tracer_colour       = [1.0, 0.83, 0.45] # the reference's
-tracer_intensity    = 40.0
+tracer_intensity    = 60.0
 tracer_tail_alpha   = 0.16     # the reference's 40 of 255 at the tail, 255 at the head
 tracer_converge_m   = 20.0     # the player's tracer leaves the muzzle and joins its
                                # round's path (from the eye) by this far
@@ -488,10 +488,11 @@ flash_star_width_m  = 0.06
 flash_colour        = [1.0, 0.86, 0.55]
 flash_intensity     = 60.0
 flash_light_radius_m  = 6.0    # a shot's light: warm, falling to nothing at this
-flash_light_intensity = 40.0
+flash_light_intensity = 3.0    # about a lantern's (render.lantern_intensity) for two
+                               # frames: at 8, and 40, it lit the trench like noon
 flash_light_colour    = [1.0, 0.72, 0.40]
 rifle_specular      = 0.35     # the key's light off the rifle's steel, toward the eye
-particle_glow       = 60.0     # the flash's and the sparks' particles
+particle_glow       = 20.0     # the flash's and the sparks' particles
 dust_key            = 0.4      # how much of the key's light a mote of dust or a
 dust_sky            = 0.6      # case of brass takes, and of the sky's from above
 

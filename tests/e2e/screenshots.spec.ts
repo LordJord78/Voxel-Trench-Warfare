@@ -226,3 +226,63 @@ test('row 5: a flare beyond the church tower at night', async ({ page }) => {
   await page.screenshot({ path: 'artifacts/l6/church-flare-night.png' });
   if (errors.length) throw new Error(errors.join('\n'));
 });
+
+// Combat milestone 3's review: a magazine fired along the bay at dusk and at night, and over the
+// parapet at night, each caught on a frame with its flash's star and a tracer in the air; the rifle
+// raised on the firing step at dusk, and down on the walkway in the trench's shadow. Written to
+// artifacts/c3.
+test('a magazine along the bay and over the parapet, and the rifle in the light', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  await hooks(page, (h) => h.play());
+  // Along the bay a round strikes the traverse in its first tick, so draws no tracer: its frames are
+  // the flash lighting the walls and the strike's dust. Over the parapet the tracers fly.
+  const stand = (view: 'bay' | 'step', hours: number, pitch = 0) =>
+    hooks(
+      page,
+      async (h, arg) => {
+        const { view, hours, pitch } = arg as { view: 'bay' | 'step'; hours: number; pitch: number };
+        const v = h.views[view];
+        h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch });
+        h.setTimeOfDay(hours);
+        await h.waitFrames(120);
+      },
+      { view, hours, pitch },
+    );
+  // Frozen, a frame at a time, until one shows a shot's star (and a tracer, if asked); then that frame.
+  const burst = async (path: string, tracer: boolean) => {
+    const caught = await hooks(
+      page,
+      async (h, tracer) => {
+        h.freeze();
+        (h.session.weapon as { rounds: number }).rounds = 30;
+        h.trigger(true);
+        for (let k = 0; k < 90; k++) {
+          await h.stepFrames(1);
+          const e = h.effects();
+          if (k > 20 && e.stars > 0 && (!tracer || e.tracers > 0)) return true;
+        }
+        return false;
+      },
+      tracer,
+    );
+    await page.screenshot({ path });
+    await hooks(page, (h) => {
+      h.trigger(false);
+      h.thaw();
+    });
+    if (!caught) throw new Error(`no frame with a flash and a tracer for ${path}`);
+  };
+  await stand('bay', DUSK);
+  await page.screenshot({ path: 'artifacts/c3/bay-rifle-dusk.png' });
+  await burst('artifacts/c3/bay-burst-dusk.png', false);
+  await stand('bay', 21);
+  await burst('artifacts/c3/bay-burst-night.png', false);
+  await stand('step', DUSK);
+  await page.screenshot({ path: 'artifacts/c3/step-rifle-dusk.png' });
+  await burst('artifacts/c3/step-burst-dusk.png', true);
+  await stand('step', 21);
+  await burst('artifacts/c3/step-burst-night.png', true);
+  if (errors.length) throw new Error(errors.join('\n'));
+});
