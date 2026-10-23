@@ -410,7 +410,7 @@ async function start(): Promise<void> {
   let skipped = 0;
   let lastPose: CameraPose = rig.pose(session, 0, settings.fov);
   const waiting: { until: number; resolve: () => void }[] = [];
-  let snapshot: ((stats: { mean: number; std: number }) => void) | null = null;
+  let snapshot: ((stats: ReturnType<typeof canvasStats>) => void) | null = null;
   let shot: ((taken: { png: Blob; spread: number }) => void) | null = null;
   let work: { count: number; left: number; samples: number[]; done: (samples: number[]) => void } | null = null;
 
@@ -474,6 +474,9 @@ async function start(): Promise<void> {
     if (rifleHeld && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) rifle = rig.rifle(session, pose);
     else rig.hideRifle();
     renderer.setRifle(rifle);
+    // Under fire the picture greys and closes in, while playing (and paused); not flying.
+    const shaken = mode === 'playing' || mode === 'paused';
+    renderer.setSuppressionLook(shaken ? session.suppression.desaturation : 0, shaken ? session.suppression.vignette : 0);
     // What this frame's ticks did, once: seen, from the rifle as it is drawn, and heard.
     const events = session.drainEvents();
     // A crater of more than 64 bricks: the key's shadow map is traced outright once they are up.
@@ -558,7 +561,12 @@ async function start(): Promise<void> {
   };
 
   /** An image shrunk to 160 × 100, as luminance statistics: a frame that is not blank has spread. */
-  function canvasStats(source: HTMLCanvasElement): { mean: number; std: number } {
+  /**
+   * The picture at 160 × 100: its mean luminance and their spread; its saturation, the mean of
+   * (max − min) / max per pixel; and the mean luminance of its outer tenth (`edge`) and of its
+   * middle half (`middle`), for suppression's look.
+   */
+  function canvasStats(source: HTMLCanvasElement): { mean: number; std: number; saturation: number; edge: number; middle: number } {
     const small = document.createElement('canvas');
     small.width = 160;
     small.height = 100;
@@ -567,14 +575,28 @@ async function start(): Promise<void> {
     const px = g.getImageData(0, 0, 160, 100).data;
     let sum = 0;
     let sq = 0;
+    let saturation = 0;
+    const edge = [0, 0];
+    const middle = [0, 0];
     const n = px.length / 4;
     for (let i = 0; i < px.length; i += 4) {
       const l = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
       sum += l;
       sq += l * l;
+      const hi = Math.max(px[i], px[i + 1], px[i + 2]);
+      if (hi > 0) saturation += (hi - Math.min(px[i], px[i + 1], px[i + 2])) / hi;
+      const x = (i / 4) % 160;
+      const y = Math.floor(i / 4 / 160);
+      if (x < 16 || x >= 144 || y < 10 || y >= 90) {
+        edge[0] += l;
+        edge[1]++;
+      } else if (x >= 40 && x < 120 && y >= 25 && y < 75) {
+        middle[0] += l;
+        middle[1]++;
+      }
     }
     const mean = sum / n;
-    return { mean, std: Math.sqrt(Math.max(0, sq / n - mean * mean)) };
+    return { mean, std: Math.sqrt(Math.max(0, sq / n - mean * mean)), saturation: saturation / n, edge: edge[0] / edge[1], middle: middle[0] / middle[1] };
   }
 
   const waitFrames = (n: number) => new Promise<void>((resolve) => waiting.push({ until: frames + n, resolve }));
@@ -782,7 +804,7 @@ async function start(): Promise<void> {
     },
     waitConverged: () => waitFrames(render.denoise.historyMax + 8),
     stats: () => renderer.stats,
-    snapshot: () => new Promise<{ mean: number; std: number }>((resolve) => (snapshot = resolve)),
+    snapshot: () => new Promise<{ mean: number; std: number; saturation: number; edge: number; middle: number }>((resolve) => (snapshot = resolve)),
     fingerprint: () => fingerprint(world.map),
     setQuality: (q: Partial<Quality> & { budgetMs?: number }) => {
       renderer.setQuality(q);

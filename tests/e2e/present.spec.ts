@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { hooks, openGame } from './support/app';
 import { openHarness, runCase } from './support/run';
 
 interface Present {
@@ -67,4 +68,47 @@ test('CAS leaves a flat colour unchanged', async ({ page }) => {
   const r = await runCase<{ worst: number; errors: string[] }>(page, 'casFlat', { c: [0.3, 0.2, 0.1, 1] });
   expect(r.errors).toEqual([]);
   expect(r.worst).toBeLessThan(2e-3);
+});
+
+// Suppression's look (the spec's §5, "The HUD"): the present pass greys the picture and darkens its
+// edges by the level, desaturation 0.55 and vignette 0.5 at full; with none, the picture is as it was.
+test('suppression greys the picture and closes it in, and none leaves it as it was', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  const seen: string[] = [];
+  for (const quality of [{ preset: 'high', dynres: false, scale: 1 }, { preset: 'low', dynres: false }, { preset: 'high', dynres: false, scale: 0.5 }] as const) {
+    const { none, full, after } = await hooks(
+      page,
+      async (h, q) => {
+        h.setQuality(q as { preset: 'high' | 'low'; dynres: boolean; scale?: number });
+        h.setIntensity('off');
+        h.setShelling('off');
+        h.play();
+        await h.waitFrames(90);
+        h.freeze();
+        // The bay at dusk, held still: a frame at each level, set before it is drawn.
+        const at = async (level: number) => {
+          h.session.suppression.level = level;
+          await h.stepFrames(30);
+          h.session.suppression.level = level;
+          const shot = h.snapshot();
+          await h.stepFrames(1);
+          return shot;
+        };
+        const none = await at(0);
+        const full = await at(1);
+        const after = await at(0);
+        h.thaw();
+        return { none, full, after };
+      },
+      quality,
+    );
+    const at = JSON.stringify({ quality, none, full, after });
+    seen.push(at);
+    expect(full.saturation, at).toBeLessThanOrEqual(0.6 * none.saturation);
+    expect(full.edge / full.middle, at).toBeLessThanOrEqual(0.8 * (none.edge / none.middle));
+    for (const k of ['mean', 'saturation', 'edge', 'middle'] as const) expect(Math.abs(after[k] - none[k]), at).toBeLessThanOrEqual(0.01 * none[k]);
+  }
+  console.log(seen.join('\n'));
+  expect(errors).toEqual([]);
 });

@@ -100,9 +100,9 @@ export const cases = {
       }
     }
     device.queue.writeTexture({ texture: bloom }, glow, { bytesPerRow: 16 * 8 }, [16, 16]);
-    const uniform = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const uniform = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     // The image is 16 × 16 of a 32 × 32 texture, shown on a 32 × 32 canvas; a quarter of its light from the bloom, so a stale texel read there would show.
-    device.queue.writeBuffer(uniform, 0, new Float32Array([16, 16, 32, 32, 32, 32, 1, 0.25, 0, 0, 0, 0]));
+    device.queue.writeBuffer(uniform, 0, new Float32Array([16, 16, 32, 32, 32, 32, 1, 0.25, 0, 0, 0, 0, 0, 0, 0, 0]));
     const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const group = device.createBindGroup({
       layout: compiled.layouts.present,

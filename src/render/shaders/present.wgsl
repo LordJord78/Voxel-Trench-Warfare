@@ -2,6 +2,8 @@
 // the texels round each sample, so it does not ring), its bloom mixed in, exposed,
 // through the ACES fit, gamma-2.2 encoded (the probe's look), grained, and
 // dithered with blue noise below a single 8-bit step, so night skies do not band.
+// Under fire the picture is greyed and its edges darkened (suppression's look);
+// with none, both are exactly nothing.
 #include "catmull.wgsl"
 
 struct Present {
@@ -16,7 +18,12 @@ struct Present {
   grain: f32,
   shiftX: f32,
   shiftY: f32,
-  pad: f32,
+  // Suppression's look: how far the colour goes to grey, and how dark the corners go.
+  desaturate: f32,
+  vignette: f32,
+  pad0: f32,
+  pad1: f32,
+  pad2: f32,
 }
 
 @group(0) @binding(0) var image: texture_2d<f32>;
@@ -59,8 +66,11 @@ fn fs(v: VOut) -> @location(0) vec4f {
   // The bloom where this pixel falls, within its rendered part; mixed in, it keeps the image's light.
   let q = clamp(v.pos.xy / present.canvas * present.res * 0.5, vec2f(0.5), ceil(present.res * 0.5) - 0.5);
   let glow = textureSampleLevel(bloom, linear, q / ceil(present.alloc * 0.5), 0.0).rgb;
-  let c = mix(sharp, glow, present.bloomWeight) * present.exposure;
-  let encoded = pow(aces(c), vec3f(1.0 / 2.2));
+  let lit = mix(sharp, glow, present.bloomWeight);
+  let c = mix(lit, vec3f(dot(lit, vec3f(0.2126, 0.7152, 0.0722))), present.desaturate) * present.exposure;
+  // Darkened toward the corners, by the pixel's distance from the middle over the corner's.
+  let r = length(v.pos.xy - 0.5 * present.canvas) / length(0.5 * present.canvas);
+  let encoded = pow(aces(c), vec3f(1.0 / 2.2)) * (1.0 - present.vignette * smoothstep(0.35, 1.0, r));
   let rank = textureLoad(dither, vec2i(v.pos.xy) & vec2i(63), 0).r;
   let noise = (f32(rank) + 0.5) / 4096.0 - 0.5;
   // Grain: the same blue noise shifted each frame, its ranks (even over the tile) scaled to the

@@ -351,6 +351,8 @@ export class Renderer {
   private blasts: TransientLight[] = [];
   /** This frame's puffs of shells' smoke in the haze. */
   private puffs: SmokePuff[] = [];
+  /** Suppression's look, as the present pass draws it: desaturation and vignette, 0 to 1. */
+  private suppressionLook: [number, number] = [0, 0];
   /** A large edit waits for its bricks to be up before the key's map is traced outright. */
   private largeEditPending = false;
 
@@ -374,10 +376,10 @@ export class Renderer {
     this.format = navigator.gpu.getPreferredCanvasFormat();
     this.timer = new GpuTimer(device, gpu.timestamps, PASSES);
     this.frameBuffer = device.createBuffer({ label: 'frame', size: this.writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    // The present pass's uniform: the image's sizes, the exposure, the bloom's weight, the grain (12 floats).
+    // The present pass's uniform: the image's sizes, the exposure, the bloom's weight, the grain, suppression's look (16 floats).
     this.presentBuffer = device.createBuffer({
       label: 'present',
-      size: 48,
+      size: 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     this.autoExposure = AutoExposure.create(device, compiled.autoExposure, this.presentBuffer);
@@ -526,6 +528,11 @@ export class Renderer {
   /** This frame's puffs of shells' smoke (metres), the first MAX_PUFFS of them. */
   setSmoke(puffs: readonly SmokePuff[]): void {
     this.puffs = puffs.slice(0, MAX_PUFFS);
+  }
+
+  /** Suppression's look from now on: how far the picture goes to grey, and how dark its corners go (0 to 1 each). */
+  setSuppressionLook(desaturate: number, vignette: number): void {
+    this.suppressionLook = [desaturate, vignette];
   }
 
   /** This frame's shells' blasts: the strongest MAX_BLASTS of them light it. */
@@ -852,7 +859,8 @@ export class Renderer {
       const bloomWeight = this.options.bloomWeight ?? 0.04;
       // The grain's shift into the 64 × 64 noise tile: an R2 sequence, so each frame's grain is unlike the last's.
       const shift = [0.7548776662466927, 0.5698402909980532].map((a) => Math.floor(((0.5 + this.frameIndex * a) % 1) * 64));
-      const present = new Float32Array([this.res[0], this.res[1], this.alloc[0], this.alloc[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, bloomWeight, this.sky.grain, shift[0], shift[1], 0]);
+      const [desaturate, vignette] = this.suppressionLook;
+      const present = new Float32Array([this.res[0], this.res[1], this.alloc[0], this.alloc[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, bloomWeight, this.sky.grain, shift[0], shift[1], desaturate, vignette, 0, 0, 0]);
       device.queue.writeBuffer(this.presentBuffer, 0, present);
       const p = encoder.beginRenderPass({
         label: 'present',

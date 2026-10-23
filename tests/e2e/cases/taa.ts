@@ -124,9 +124,9 @@ export const cases = {
     const b = floatToHalf(args.bloom ?? args.c);
     const bloom = device.createTexture({ size: [16, 16], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     device.queue.writeTexture({ texture: bloom }, new Uint16Array(16 * 16 * 4).map((_, i) => (i % 4 === 3 ? floatToHalf(1) : b)), { bytesPerRow: 16 * 8 }, [16, 16]);
-    const uniform = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const uniform = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const shift = args.shift ?? [0, 0];
-    device.queue.writeBuffer(uniform, 0, new Float32Array([32, 32, 32, 32, side, side, args.exposure, weight, args.grain ?? 0, shift[0], shift[1], 0]));
+    device.queue.writeBuffer(uniform, 0, new Float32Array([32, 32, 32, 32, side, side, args.exposure, weight, args.grain ?? 0, shift[0], shift[1], 0, 0, 0, 0, 0]));
     const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const group = device.createBindGroup({
       layout: compiled.layouts.present,

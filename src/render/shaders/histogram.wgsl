@@ -31,7 +31,7 @@ const LUMA: vec3f = vec3f(0.2126, 0.7152, 0.0722);
 // The base exposure (written by exposure.wgsl), the correction, its want, the metered mean.
 @group(0) @binding(3) var<storage, read_write> state: array<f32, 8>;
 // The present pass's uniform: the exposure goes at 6.
-@group(0) @binding(4) var<storage, read_write> present: array<f32, 12>;
+@group(0) @binding(4) var<storage, read_write> present: array<f32, 16>;
 
 var<workgroup> local: array<atomic<u32>, 128>;
 

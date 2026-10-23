@@ -10,7 +10,7 @@ import { cases as taa } from './taa';
 
 /** The meter and its adaptation, alone, with a present uniform to write into. */
 async function meter(device: GPUDevice) {
-  const present = device.createBuffer({ size: 48, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_SRC });
+  const present = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_SRC });
   const auto = AutoExposure.create(device, await AutoExposure.compile(device), present);
   return { auto, present };
 }

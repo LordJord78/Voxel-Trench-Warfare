@@ -45,7 +45,7 @@ export interface Hooks {
     reset: boolean;
     frame: number;
   };
-  snapshot(): Promise<{ mean: number; std: number }>;
+  snapshot(): Promise<{ mean: number; std: number; saturation: number; edge: number; middle: number }>;
   setQuality(q: { preset?: 'high' | 'low'; dynres?: boolean; scale?: number; budgetMs?: number }): void;
   loseDevice(): void;
   simulateGap(ms: number): void;
