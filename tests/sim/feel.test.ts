@@ -106,22 +106,31 @@ describe('feel in play', () => {
     expect(s.player.stance).not.toBe(Stance.PERISCOPE);
   });
 
-  it("a burst while pinned still leaves inside the stance's cone × 4.2, about its aim", () => {
+  it("a burst while pinned spreads past the stance's cone, inside it × 4.2, about its aim", () => {
+    // The reference documented this multiplier and discarded it; the port wires it, so a pinned
+    // burst must leave wider than an unsuppressed one could.
     const s = stand(arena(false, false), 7, lineSource(22, 0.4));
     s.front.intensity = 'heavy';
     for (let k = 0; k < 360 && s.suppression.level < 0.9; k++) s.tick();
+    expect(s.suppression.level).toBeGreaterThanOrEqual(0.9);
     s.intent = { ...s.intent, fire: true };
-    const limit = ((3.2 / 60) * tun.f('stance.standing.sway_scale') * tun.f('suppression.sway_at_full') * Math.PI) / 180;
+    const cone = ((3.2 / 60) * tun.f('stance.standing.sway_scale') * Math.PI) / 180;
+    const limit = cone * tun.f('suppression.sway_at_full');
     let checked = 0;
+    let widest = 0;
     for (let k = 0; k < 120; k++) {
       s.tick();
       for (const shot of s.shots) {
         const aim = fromYawPitch(shot.aim[0], shot.aim[1]);
         const cos = aim.x * shot.dir[0] + aim.y * shot.dir[1] + aim.z * shot.dir[2];
-        expect(Math.acos(Math.min(1, cos))).toBeLessThanOrEqual(limit * 1.0001);
+        const off = Math.acos(Math.min(1, cos));
+        expect(off).toBeLessThanOrEqual(limit * 1.0001);
+        widest = Math.max(widest, off);
         checked++;
       }
     }
     expect(checked).toBeGreaterThan(10);
+    // At 0.9 the cone is 3.9 times the stance's: ten rounds all inside 1.5 times it would be a 1-in-10⁸ draw.
+    expect(widest).toBeGreaterThan(cone * 1.5);
   });
 });
