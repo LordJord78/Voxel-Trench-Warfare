@@ -33,9 +33,6 @@ export interface ViewKickProfile {
   fovPulseDeg: number;
   fovSettleS: number;
   fovDamping: number;
-  muzzleForwardM: number;
-  muzzleSideM: number;
-  muzzleDownM: number;
   /** Each channel's draw, as a fraction of its punch. */
   jitterScale: number;
 }
@@ -53,9 +50,6 @@ const FIELDS: readonly [keyof ViewKickProfile, string][] = [
   ['fovPulseDeg', 'fov_pulse_deg'],
   ['fovSettleS', 'fov_settle_s'],
   ['fovDamping', 'fov_damping_ratio'],
-  ['muzzleForwardM', 'muzzle_forward_m'],
-  ['muzzleSideM', 'muzzle_side_m'],
-  ['muzzleDownM', 'muzzle_down_m'],
   ['jitterScale', 'jitter_scale'],
 ];
 
@@ -106,12 +100,5 @@ export class ViewKick {
     const p = this.profile;
     for (const c of CHANNELS) [this[c], this.velocity[c]] = advanceSpring(this[c], this.velocity[c], this.omega, p.damping, dt);
     [this.fovOffset, this.fovVelocity] = advanceSpring(this.fovOffset, this.fovVelocity, this.fovOmega, p.fovDamping, dt);
-  }
-
-  /** Where the flash and the brass leave: ahead of the eye, right of it and below, along the view's basis. */
-  muzzle(eye: readonly number[], forward: readonly number[], right: readonly number[], up: readonly number[]): [number, number, number] {
-    const p = this.profile;
-    const at = (k: number) => eye[k] + forward[k] * p.muzzleForwardM + right[k] * p.muzzleSideM - up[k] * p.muzzleDownM;
-    return [at(0), at(1), at(2)];
   }
 }

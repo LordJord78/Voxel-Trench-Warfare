@@ -72,12 +72,4 @@ describe('view kick', () => {
     for (let t = 0; t < Math.round(0.3 / TICK); t++) k.tick(TICK);
     expect(Math.abs(k.fovOffset)).toBeLessThan(0.006);
   });
-
-  it('the muzzle is ahead of the eye, right of it and below', () => {
-    const k = new ViewKick(profile);
-    const m = k.muzzle([0, 1.6, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0]);
-    expect(m[0]).toBeCloseTo(0.08, 12);
-    expect(m[1]).toBeCloseTo(1.5, 12);
-    expect(m[2]).toBeCloseTo(0.55, 12);
-  });
 });

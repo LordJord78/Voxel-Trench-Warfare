@@ -13,8 +13,10 @@
 import { ballisticsTunables, Rounds, type Impact } from '../combat/ballistics';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
 import { Recoil, recoilProfile } from '../combat/recoil';
+import { RIFLE_MUZZLE, RIFLE_PORT } from '../combat/rifle-model';
 import { Suppression, suppressionTunables } from '../combat/suppression';
 import { ViewKick, viewKickProfile } from '../combat/viewkick';
+import { modelToView, viewBasis, viewmodelPose, viewmodelTunables, type ViewmodelKick, type ViewmodelPose, type ViewmodelTunables } from '../combat/viewmodel';
 import { Weapon, weaponSpec } from '../combat/weapon';
 import { FixedClock } from '../core/clock';
 import { hypot } from '../core/dmath';
@@ -84,6 +86,9 @@ export class Session {
   prevPosition: Vec3;
   /** The view's offsets before the last tick. */
   private prevView: ViewOffsets;
+  /** Where the rifle is held, and the view kick's channels before the last tick. */
+  readonly viewmodel: ViewmodelTunables;
+  private prevKick: ViewmodelKick;
   /** The player's rifle, and the rounds in the air. */
   readonly weapon: Weapon;
   readonly rounds: Rounds;
@@ -132,6 +137,8 @@ export class Session {
     const plan = world.plan;
     this.front = new Front(front, world.front ?? (plan ? planSource(plan, front.reachM) : () => null), this.streams.derive('front'));
     this.prevView = this.view();
+    this.viewmodel = viewmodelTunables(tun);
+    this.prevKick = this.kick();
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -150,6 +157,7 @@ export class Session {
     const wasOnStep = p.stance === Stance.FIRING_STEP;
     this.prevPosition = p.position;
     this.prevView = this.view();
+    this.prevKick = this.kick();
     this.controller.tick(p, this.intent, this.clock.dt);
     if (wasOnStep && p.pinned && p.stance !== Stance.FIRING_STEP) this.ejected++;
     this.combat(this.clock.dt);
@@ -232,6 +240,43 @@ export class Session {
       roll: a.roll + (b.roll - a.roll) * alpha,
       fov: a.fov + (b.fov - a.fov) * alpha,
     };
+  }
+
+  /**
+   * The rifle's pose between the last two ticks, `alpha` of the way to the latest, with the
+   * walk's sway (metres, as the camera's) and a run's share of full speed, which the camera has.
+   */
+  viewmodelAt(alpha = this.clock.alpha, sway = 0, speedRatio = 0): ViewmodelPose {
+    const a = this.prevKick;
+    const b = this.kick();
+    const at = (k: keyof ViewmodelKick) => a[k] + (b[k] - a[k]) * alpha;
+    return viewmodelPose(this.viewmodel, { back: at('back'), up: at('up'), side: at('side'), pitch: at('pitch'), yaw: at('yaw'), roll: at('roll') }, sway, speedRatio);
+  }
+
+  /** The rifle's muzzle in world metres, as the last tick left the view and the kick: where the flash and the tracers start. */
+  muzzle(): [number, number, number] {
+    return this.rifleToWorld(RIFLE_MUZZLE);
+  }
+
+  /** The rifle's ejection port in world metres: where the brass leaves. */
+  port(): [number, number, number] {
+    return this.rifleToWorld(RIFLE_PORT);
+  }
+
+  /** A rifle point (model metres) in the world, from the eye along the view with its offsets; the walk's sway and dip (a centimetre) are the camera's. */
+  private rifleToWorld(point: readonly number[]): [number, number, number] {
+    const p = this.player;
+    const view = this.view();
+    const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
+    const v = modelToView(viewmodelPose(this.viewmodel, this.kick(), 0, 0), point);
+    const eye = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
+    return [0, 1, 2].map((k) => eye[k] + right[k] * v[0] + up[k] * v[1] + forward[k] * v[2]) as [number, number, number];
+  }
+
+  /** The view kick's channels now. */
+  private kick(): ViewmodelKick {
+    const k = this.viewKick;
+    return { back: k.back, up: k.up, side: k.side, pitch: k.pitch, yaw: k.yaw, roll: k.roll };
   }
 
   /** The view's offsets as the last tick left them. */

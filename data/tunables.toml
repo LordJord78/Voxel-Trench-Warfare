@@ -369,9 +369,6 @@ brass_count         = 1.0
 brass_speed         = 2.6      # to the right
 brass_up            = 1.5
 brass_spread        = 0.55
-muzzle_forward_m    = 0.55
-muzzle_side_m       = 0.08
-muzzle_down_m       = 0.10
 report_peak_db      = 158.0    # 5.45 at the shooter's ear
 report_low_hz       = 70.0     # where the body of the transient sits
 report_length_s     = 0.18
@@ -417,6 +414,8 @@ colour_end          = [0.70, 0.55, 0.24, 0.0]
 rest_right_m        = 0.175    # where the rifle sits when nothing is happening
 rest_up_m           = -0.205
 rest_forward_m      = 0.440
+sway_follow         = 0.5      # the walk's sideways sway the rifle carries
+run_dip_m           = 0.012    # how far it drops at a run (the reference's)
 
 # The trench periscope. Elevation is the payoff — this is the only way to look
 # at no-man's-land from behind the parapet rather than over it — and the costs
