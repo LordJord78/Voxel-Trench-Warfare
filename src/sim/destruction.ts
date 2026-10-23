@@ -90,6 +90,8 @@ const overlap = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 &&
 export class Destruction {
   /** Queued, out or landing, in the order they were shelled. */
   private readonly jobs: Job[] = [];
+  /** Bricks the last tick wrote into the world. */
+  written = 0;
   private nextId = 1;
 
   constructor(
@@ -144,11 +146,13 @@ export class Destruction {
     }
     const landed: Crater[] = [];
     let budget = this.t.bricksPerTick;
+    this.written = 0;
     for (const j of this.jobs) {
       if (j.state !== 'landing') continue;
       while (budget > 0 && j.applied < j.patches.length) {
         applyPatch(this.map, j.patches[j.applied++]);
         budget--;
+        this.written++;
       }
       if (j.applied < j.patches.length) break;
       this.makeHeld(j);

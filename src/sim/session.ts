@@ -26,6 +26,7 @@ import { exp, hypot } from '../core/dmath';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import { CharacterController, controllerTunables, letGoOfLedge, newCharacter, Stance, type CharacterState, type MoveIntent } from '../physics/character';
+import { boxHitsSolid } from '../physics/collision';
 import { brickGrid } from '../physics/grid';
 import { Vec3, ZERO } from '../physics/vec';
 import type { BrickMap } from '../world/bricks';
@@ -36,6 +37,8 @@ import { Destruction, destructionTunables, inProcessRunner, type Crater, type De
 
 /** Kinds that throw sparks when struck. */
 const METAL = new Set<number>([K.PICKET, K.HULL, K.CORRUGATE, K.WIRE]);
+/** Voxels a body buried by the world's edits is lifted, at most, to stand on what came down (4 m at 10 cm). */
+const LIFT_VOXELS = 40;
 /** The shot's particles are anchored to the rifle's muzzle and port, which the renderer draws elsewhere (Particles.billboards). */
 export const MUZZLE_ANCHOR = 1;
 export const PORT_ANCHOR = 2;
@@ -226,6 +229,7 @@ export class Session {
     this.raised += (raise - this.raised) * (1 - exp(-this.clock.dt / this.viewmodel.raiseS));
     this.combat(this.clock.dt);
     for (const c of this.destruction.tick()) this.events.craters.push({ ...c, tick: this.ticks });
+    if (this.destruction.written > 0) this.liftOut();
     this.particles.step(this.clock.dt);
   }
 
@@ -317,6 +321,29 @@ export class Session {
     this.blastShake.kick(d);
     this.suppression.blast(d);
     return id;
+  }
+
+  /**
+   * Whatever the world has just written into the player's body (a crater's slump): they are lifted,
+   * a voxel at a time, to the lowest height where the body is clear, and stand on what came down.
+   * The controller only ever looks down for ground, so without this they would stay inside it.
+   */
+  private liftOut(): void {
+    const p = this.player;
+    const g = this.controller.grid;
+    const r = this.controller.t.radius;
+    if (!boxHitsSolid(g, p.position, r, p.height)) return;
+    const v = this.voxel;
+    const feet = Math.floor(p.position.y / v + 1e-6) * v;
+    for (let k = 1; k <= LIFT_VOXELS; k++) {
+      const at = new Vec3(p.position.x, feet + k * v, p.position.z);
+      if (boxHitsSolid(g, at, r, p.height)) continue;
+      p.position = at;
+      p.velocity = new Vec3(p.velocity.x, 0, p.velocity.z);
+      p.onGround = true;
+      letGoOfLedge(p);
+      return;
+    }
   }
 
   /** What a shell throws up out of its crater: its flash, and soil and debris of the ground it struck. */
