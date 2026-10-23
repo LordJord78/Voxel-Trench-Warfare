@@ -615,6 +615,10 @@ async function start(): Promise<void> {
     trigger(held: boolean) {
       input.trigger(held);
     },
+    /** The front's shells alone, for a test. */
+    setShelling(i: 'off' | 'light' | 'heavy') {
+      session.artillery.intensity = i;
+    },
     /** The front's fire, for this visit (the pause menu's choice is what is kept). */
     setIntensity(i: 'off' | 'light' | 'heavy') {
       session.front.intensity = i;

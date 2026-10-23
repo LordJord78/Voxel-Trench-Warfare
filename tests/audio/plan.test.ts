@@ -82,4 +82,33 @@ describe('the sound of a frame', () => {
     };
     expect(planVoices(t, events, ear).map((v) => v.kind).sort()).toEqual(['crack', 'impact-metal', 'impact-soil', 'impact-timber', 'report', 'report', 'report']);
   });
+
+  it("a shell's whistle starts when it is announced, where it will land, and lasts until it lands", () => {
+    const at: [number, number, number] = [10, 2, 60];
+    const v = planVoices(t, { ...none(), incoming: [{ tick: 1, at, landsInS: 1.5 }] }, ear);
+    expect(v.length).toBe(1);
+    const d = Math.hypot(0, 0, 50);
+    expect(v[0]).toEqual({
+      kind: 'whistle',
+      at,
+      delayS: 0,
+      gain: t.whistleGain * Math.pow(t.referenceM / d, t.rolloff),
+      lowpassHz: expect.any(Number),
+      lengthS: 1.5,
+      fromHz: t.whistleFromHz,
+      toHz: t.whistleToHz,
+    });
+  });
+
+  it('a blast is late by its distance at 343 m/s, quieter and duller with it, and heard past impact_within_m', () => {
+    const blast = (z: number) => ({ tick: 1, at: [10, 2, 10 + z] as [number, number, number], radiusM: 3, material: P.SOD });
+    const v = planVoices(t, { ...none(), blasts: [blast(20), blast(200)] }, ear);
+    expect(v.map((x) => x.kind)).toEqual(['blast', 'blast']);
+    expect(v[0].delayS).toBeCloseTo(20 / 343, 9);
+    expect(v[1].delayS).toBeCloseTo(200 / 343, 9);
+    expect(v[1].gain).toBeLessThan(v[0].gain);
+    expect(v[1].lowpassHz).toBeLessThan(v[0].lowpassHz);
+    expect(200).toBeGreaterThan(t.impactWithinM);
+    expect(v[0].lengthS).toBe(t.blastRumbleS);
+  });
 });

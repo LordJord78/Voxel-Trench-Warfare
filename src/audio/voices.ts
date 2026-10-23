@@ -8,6 +8,8 @@
  * - A crack: a few milliseconds of high noise and a snap.
  * - Strikes: soil a low thud; timber a knock and its ring; metal a ping and an
  *   inharmonic partial over a tick of noise.
+ * - A shell's whistle: a tone and a band of noise falling in pitch until it
+ *   lands; its blast: a sub-bass thump, a rumble, and soil raining down.
  */
 
 import type { VoicePlan } from './plan';
@@ -28,6 +30,29 @@ function burst(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when:
   source.connect(new BiquadFilterNode(ctx, filter)).connect(shape).connect(into);
   const length = attack + decay + 0.05;
   source.start(when, Math.random() * Math.max(0, noise.duration - length), length);
+}
+
+/** A shell coming in: a tone and a narrow band of noise falling from `from` to `to` Hz over `length` seconds, louder as it nears, cut off as it lands. */
+function whistle(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, from: number, to: number, peak: number, length: number): void {
+  const end = when + Math.max(0.05, length);
+  const shape = new GainNode(ctx, { gain: 0 });
+  shape.gain.setValueAtTime(peak * 0.05, when);
+  shape.gain.exponentialRampToValueAtTime(peak, end);
+  shape.gain.setValueAtTime(0, end);
+  shape.connect(into);
+  const osc = new OscillatorNode(ctx, { type: 'sine', frequency: from });
+  osc.frequency.setValueAtTime(from, when);
+  osc.frequency.exponentialRampToValueAtTime(to, end);
+  osc.connect(shape);
+  osc.start(when);
+  osc.stop(end + 0.01);
+  const air = new AudioBufferSourceNode(ctx, { buffer: noise, loop: true });
+  const band = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: from, Q: 8 });
+  band.frequency.setValueAtTime(from, when);
+  band.frequency.exponentialRampToValueAtTime(to, end);
+  air.connect(band).connect(new GainNode(ctx, { gain: 0.6 })).connect(shape);
+  air.start(when);
+  air.stop(end + 0.01);
 }
 
 /** A tone gliding from `from` to `to` Hz as it dies away over `decay` seconds. */
@@ -70,6 +95,15 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       tone(ctx, dull, when, 'sine', 2400, 2380, 0.5 * g, 0.35);
       tone(ctx, dull, when, 'sine', 3710, 3690, 0.3 * g, 0.25);
       burst(ctx, noise, dull, when, { type: 'highpass', frequency: 4000 }, 0.4 * g, 0.0005, 0.01);
+      break;
+    case 'whistle':
+      whistle(ctx, noise, dull, when, v.fromHz ?? 1400, v.toHz ?? 450, 0.35 * g, v.lengthS ?? 1.5);
+      break;
+    case 'blast':
+      // A sub-bass thump falling 60 to 30 Hz, a rumble of low noise, then soil raining down.
+      tone(ctx, dull, when, 'sine', 60, 30, g, 0.4);
+      burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 200 }, 0.8 * g, 0.01, v.lengthS ?? 1.8);
+      for (let k = 0; k < 8; k++) burst(ctx, noise, dull, when + 0.3 + k * 0.12 + Math.random() * 0.08, { type: 'highpass', frequency: 2500 }, 0.12 * g, 0.002, 0.05);
       break;
   }
 }

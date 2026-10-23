@@ -63,6 +63,8 @@ export interface Hooks {
   /** The trigger, as the left mouse button sets it with the pointer locked; for tests that play without the lock. */
   trigger(held: boolean): void;
   session: { weapon: { rounds: number }; suppression: { level: number }; front: { intensity: 'off' | 'light' | 'heavy' } };
+  /** The front's shells alone, for a test: the rifle fire is left as it is. */
+  setShelling(i: 'off' | 'light' | 'heavy'): void;
   /** The front's fire, for this visit (the pause menu's choice is what is kept). */
   setIntensity(i: 'off' | 'light' | 'heavy'): void;
   /** What the last frame's effects held: particles' billboards, tracers, flash stars, transient lights. */

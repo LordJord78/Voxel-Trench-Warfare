@@ -6,13 +6,15 @@
  * their muzzle, at once and whole; a crack is heard where the round passed, as
  * it passes, louder the nearer. Strikes sound by what they hit — soil thuds,
  * timber knocks, metal rings — and further than `impact_within_m` not at all.
+ * A shell whistles from when it is announced until it lands, where it will
+ * land, falling in pitch; its blast is heard at any distance, late by it.
  */
 
 import type { Tunables } from '../core/tunables';
 import type { CombatEvents } from '../sim/session';
 import { K, kindOf } from '../world/materials';
 
-export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal';
+export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast';
 
 export interface VoicePlan {
   kind: VoiceKind;
@@ -23,6 +25,11 @@ export interface VoicePlan {
   gain: number;
   /** What distance leaves of it. */
   lowpassHz: number;
+  /** A whistle's time to its landing; a blast's rumble. */
+  lengthS?: number;
+  /** A whistle's pitch, falling from and to. */
+  fromHz?: number;
+  toHz?: number;
 }
 
 export interface AudioTunables {
@@ -38,6 +45,11 @@ export interface AudioTunables {
   impactGain: number;
   impactWithinM: number;
   frontReportGain: number;
+  whistleGain: number;
+  whistleFromHz: number;
+  whistleToHz: number;
+  blastGain: number;
+  blastRumbleS: number;
 }
 
 export function audioTunables(tun: Tunables): AudioTunables {
@@ -56,6 +68,11 @@ export function audioTunables(tun: Tunables): AudioTunables {
     impactGain: f('impact_gain'),
     impactWithinM: f('impact_within_m'),
     frontReportGain: f('front_report_gain'),
+    whistleGain: f('whistle_gain'),
+    whistleFromHz: f('whistle_from_hz'),
+    whistleToHz: f('whistle_to_hz'),
+    blastGain: f('blast_gain'),
+    blastRumbleS: f('blast_rumble_s'),
   };
 }
 
@@ -94,5 +111,7 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
     if (distance(i.position) > t.impactWithinM) continue;
     out.push(afar(i.position, t.impactGain, struck(i.material)));
   }
+  for (const s of events.incoming) out.push({ ...afar(s.at, t.whistleGain, 'whistle'), delayS: 0, lengthS: s.landsInS, fromHz: t.whistleFromHz, toHz: t.whistleToHz });
+  for (const b of events.blasts) out.push({ ...afar(b.at, t.blastGain, 'blast'), lengthS: t.blastRumbleS });
   return out;
 }

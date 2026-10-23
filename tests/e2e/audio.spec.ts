@@ -62,3 +62,19 @@ test('paused, the sound is suspended, and comes back on resuming', async ({ page
   expect((await hooks(page, (h) => h.audio())).state).toBe('running');
   expect(errors).toEqual([]);
 });
+
+test('shells are heard: their whistles, then their blasts', async ({ page }) => {
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  await hooks(page, (h) => h.waitFrames(10));
+  const before = (await hooks(page, (h) => h.audio())).voices;
+  // Shelling alone, heavy: about a shell a second, each a whistle and 1.5 s on a blast.
+  await hooks(page, async (h) => {
+    h.setShelling('heavy');
+    await new Promise((resolve) => setTimeout(resolve, 3500));
+    h.setShelling('off');
+  });
+  const after = (await hooks(page, (h) => h.audio())).voices;
+  expect(after - before).toBeGreaterThanOrEqual(2);
+  expect(errors).toEqual([]);
+});

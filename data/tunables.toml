@@ -550,6 +550,11 @@ crack_gain          = 0.9      # a round past your ear at nil miss, falling to
 impact_gain         = 0.6
 impact_within_m     = 60.0     # strikes further off are not heard
 front_report_gain   = 0.9      # the enemy's reports at reference_m (yours is 1)
+whistle_gain        = 0.5      # a shell coming in, falling from whistle_from_hz to
+whistle_from_hz     = 1400.0   # whistle_to_hz over its last whistle_s
+whistle_to_hz       = 450.0
+blast_gain          = 1.0      # a shell landing, heard at any distance
+blast_rumble_s      = 1.8
 
 # What is drawn over the world after sharpening (render/effects.ts): tracers, each
 # shot's flash star and light, and how the particles take the world's light. The
