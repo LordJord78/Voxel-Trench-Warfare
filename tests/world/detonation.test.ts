@@ -1,48 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/core/rng';
-import { loadTunables } from '../../src/core/tunables';
-import { BrickMap } from '../../src/world/bricks';
-import { detonate, type DetonateOptions } from '../../src/world/destruction';
+import type { BrickMap } from '../../src/world/bricks';
+import { detonate } from '../../src/world/destruction';
 import { detonationRegion, runDetonation, type DetonationResult } from '../../src/world/detonation';
 import { isLoose, P } from '../../src/world/materials';
 import { groundTop } from '../../src/world/raycast';
 import { applyPatch, copyRegion, regionMap, sectorBox, type BrickPatch } from '../../src/world/region-copy';
+import { sameWorld, shellOptions, trenchArena } from '../support/worlds';
 
 // A shell's crater is cut off the main thread, on a copy of the region it works over: the copy is
 // the world's, brick for brick; the job cuts what detonate cuts in place; and a slump cut short at
 // the copy's edge asks for a wider copy (the spec's §3, "a destruction worker").
-const tun = loadTunables();
-const options = (): DetonateOptions => ({
-  hardLimit: tun.f('destruction.resists_above_hardness'),
-  core: tun.f('destruction.core_radius_scale'),
-  loosen: tun.f('destruction.loosen_radius_scale'),
-  waterTable: 42,
-});
-
-/**
- * 25.6 × 12.8 × 25.6 m: clay to y 64, a trench along x floored at 44 from z 120 to 136, and a
- * parapet of spoil behind it at its angle of repose, z 138–162 at its foot, its crest at y 76; the
- * water table at 42. (Standing steeper, the whole ridge slumps when a shell disturbs it: 0.8 s.)
- */
-function trench(): BrickMap {
-  const map = new BrickMap({ x: 256, y: 128, z: 256 });
-  map.fillBox(0, 0, 0, 256, 64, 256, P.CLAY);
-  map.fillBox(0, 44, 120, 256, 64, 136, P.AIR);
-  for (let y = 64; y < 76; y++) map.fillBox(0, y, 138 + (y - 64), 256, y + 1, 162 - (y - 64), P.SPOIL);
-  map.takeDirty();
-  return map;
-}
-
-function sameWorld(a: BrickMap, b: BrickMap): boolean {
-  const x = new Uint8Array(512);
-  const y = new Uint8Array(512);
-  for (let bi = 0; bi < a.table.length; bi++) {
-    a.readBrick(bi, x);
-    b.readBrick(bi, y);
-    for (let i = 0; i < 512; i++) if (x[i] !== y[i]) return false;
-  }
-  return true;
-}
+const options = shellOptions;
+const trench = trenchArena;
 
 /** The job for a shell of `radius` at `centre` on `map`, asking again with each wider region it is told to; and its patches. */
 function job(map: BrickMap, centre: [number, number, number], radius: number, seed: number, margin?: number): { patches: BrickPatch[]; asked: number } {

@@ -27,9 +27,9 @@ import { CharacterController, controllerTunables, letGoOfLedge, newCharacter, St
 import { brickGrid } from '../physics/grid';
 import { Vec3, ZERO } from '../physics/vec';
 import type { BrickMap } from '../world/bricks';
-import { chip } from '../world/destruction';
 import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, paletteData } from '../world/materials';
+import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from './destruction';
 
 /** Kinds that throw sparks when struck. */
 const METAL = new Set<number>([K.PICKET, K.HULL, K.CORRUGATE, K.WIRE]);
@@ -68,16 +68,22 @@ export interface CombatEvents {
   impacts: (Impact & { tick: number })[];
   /** Rounds past the player's head, one each: how near, and where it passed nearest. */
   cracks: { tick: number; missM: number; at: [number, number, number] }[];
+  /** Craters written back into the world (voxels), with how many bricks each changed. */
+  craters: (Crater & { tick: number })[];
 }
 
 function noEvents(): CombatEvents {
-  return { shots: [], frontShots: [], impacts: [], cracks: [] };
+  return { shots: [], frontShots: [], impacts: [], cracks: [], craters: [] };
 }
 
 export interface SessionWorld {
   map: BrickMap;
   /** The trench network and landmarks; absent in small test worlds. */
   plan: WorldPlan | null;
+  /** Where craters are cut: the destruction worker in play; in-process, in step with the ticks, by default. */
+  runner?: DetonationRunner;
+  /** Voxels: below it a crater floods. The plan's; with no plan, none unless given. */
+  waterTable?: number;
   /** Foot centre, in metres. */
   spawn: { position: readonly [number, number, number] };
   /** Where the front fires from; by default the plan's enemy line, and nowhere without a plan. */
@@ -111,6 +117,8 @@ export class Session {
   readonly suppression: Suppression;
   /** The enemy line's incoming fire. */
   readonly front: Front;
+  /** Craters cut off the main thread and written back a budget a tick; rounds' marks go through it. */
+  readonly destruction: Destruction;
   /** The flash, brass, dust and sparks: cosmetic, and as deterministic as the rest. */
   readonly particles: Particles;
   /** Times suppression has taken the player off the firing step. */
@@ -163,6 +171,8 @@ export class Session {
     this.kinds = { flash: particleSpec(tun, 'muzzle_flash'), brass: particleSpec(tun, 'brass'), dust: particleSpec(tun, 'dust'), spark: particleSpec(tun, 'spark') };
     const palette = paletteData();
     this.tints = Array.from({ length: 256 }, (_, id) => [palette[id * 8], palette[id * 8 + 1], palette[id * 8 + 2]]);
+    const waterTable = world.waterTable ?? world.plan?.params.waterTable ?? -1;
+    this.destruction = new Destruction(world.map, world.runner ?? inProcessRunner(), destructionTunables(tun, waterTable));
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -189,6 +199,7 @@ export class Session {
     const raise = p.stance === Stance.FIRING_STEP ? 1 : 0;
     this.raised += (raise - this.raised) * (1 - exp(-this.clock.dt / this.viewmodel.raiseS));
     this.combat(this.clock.dt);
+    for (const c of this.destruction.tick()) this.events.craters.push({ ...c, tick: this.ticks });
     this.particles.step(this.clock.dt);
   }
 
@@ -238,7 +249,7 @@ export class Session {
     for (const c of this.rounds.cracks) this.suppression.crack(c.missM, this.suppressionRng);
     for (const c of this.rounds.passes) this.events.cracks.push({ tick: this.ticks, missM: c.missM, at: c.at });
     for (const hit of this.rounds.impacts) {
-      chip(this.map, hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
+      this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
       if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
       this.events.impacts.push({ ...hit, tick: this.ticks });
       this.throwImpact(hit);

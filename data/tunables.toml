@@ -335,6 +335,8 @@ chip_energy_j          = 260.0 # per unit hardness, for a single round to mark
                                # a surface. A rifle round scars a parapet over
                                # a magazine; it does not dig through it.
 collapse_max_passes    = 64
+bricks_per_tick        = 512   # a crater's changed bricks written back a tick:
+                               # about a millisecond (the spec's budget is 4 ms)
 
 # ---------------------------------------------------------------------------
 # VIEWKICK — cosmetic recoil

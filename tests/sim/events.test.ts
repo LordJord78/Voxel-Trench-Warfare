@@ -5,6 +5,7 @@ import { loadTunables } from '../../src/core/tunables';
 import { Session } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
 import { P } from '../../src/world/materials';
+import { trenchArena } from '../support/worlds';
 
 // A frame drains what its ticks did: two ticks or none, nothing is lost and nothing is doubled,
 // and each event knows its tick (milestone 1's deferred minor: shots and impacts were the last
@@ -101,6 +102,19 @@ describe("a frame's combat events", () => {
     expect(e.cracks.length).toBeGreaterThan(0);
     const eye = [s.player.position.x, s.player.position.y + s.controller.eyeHeight(s.player), s.player.position.z];
     for (const c of e.cracks) expect(Math.hypot(c.at[0] - eye[0], c.at[1] - eye[1], c.at[2] - eye[2])).toBeCloseTo(c.missM, 6);
+  });
+
+  it("a shell's crater is one event once it lands, with its bricks", () => {
+    const s = Session.create({ map: trenchArena(), plan: null, spawn: { position: [12.8, 4.4, 10] }, waterTable: 42 }, tun, 7, 0);
+    s.drainEvents();
+    const id = s.destruction.shell([128, 76, 150], 30, 11);
+    const craters = [];
+    for (let k = 0; k < 10; k++) {
+      s.tick();
+      craters.push(...s.drainEvents().craters);
+    }
+    expect(craters).toEqual([{ id, centre: [128, 76, 150], radius: 30, bricks: expect.any(Number), tick: expect.any(Number) }]);
+    expect(craters[0].bricks).toBeGreaterThan(50);
   });
 
   it('a shot throws one flash at the muzzle and one brass from the port', () => {
