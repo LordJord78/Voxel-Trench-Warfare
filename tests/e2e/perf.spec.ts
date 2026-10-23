@@ -351,3 +351,32 @@ test('digging out a shelled bay keeps the main thread within its budget', async 
   expect(Math.max(...main), line).toBeLessThanOrEqual(20);
   expect(errors).toEqual([]);
 });
+
+test('every standard view at dusk and at night under peak combat stays within the GPU and main-thread budgets', async ({ page }) => {
+  // Done-table row 6: a magazine on full auto, a shell a second 20–50 m off and the front's heavy fire,
+  // with sound (play started by its click) — each view's own GPU time a frame within 14 ms at the 95th
+  // percentile, the main thread within 8 ms at the 99th, and no frame over 20 ms (row 3's). Every view
+  // is measured before any is judged, so the log has them all.
+  test.setTimeout(600_000);
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  await expect(page.locator('#loading')).toBeHidden();
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  const lines: string[] = [];
+  const over: string[] = [];
+  for (const view of VIEWS) {
+    for (const [label, hours] of [['dusk', TIMES.dusk], ['night', TIMES.night]] as const) {
+      const r = await hooks(page, (h, a) => h.underFire((a as { view: string }).view, (a as { hours: number }).hours, 6), { view, hours });
+      if (r.gpu === null) test.skip(true, 'no GPU timestamps');
+      const g = r.gpu!;
+      const line =
+        `${view} ${label}: GPU p95 ${g.p95.toFixed(2)} ms, median ${g.median.toFixed(2)}, worst ${g.max.toFixed(2)}; ` +
+        `main thread p99 ${r.main.p99.toFixed(1)} ms, worst ${r.main.max.toFixed(1)}; ${r.frames} frames, ${r.shots} shots, ${r.shells} shells (${r.skipped} skipped), ${r.voices} voices`;
+      lines.push(line);
+      if (g.p95 > BUDGET_MS || r.main.p99 > 8 || r.main.max > 20 || r.shots < 50 || r.shells < 5 || r.voices === 0) over.push(line);
+    }
+  }
+  console.log(`Peak combat:\n${lines.join('\n')}`);
+  expect(over, lines.join('\n')).toEqual([]);
+  expect(errors).toEqual([]);
+});
