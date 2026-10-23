@@ -28,16 +28,37 @@ test('a 3 m shell on the parapet is in the world within 0.5 s, as in-process det
   await hooks(page, (h) => h.play());
   const crest = await crestAhead(page);
   const landed = await hooks(page, (h, at) => h.shellCheck(at as [number, number, number], 3), crest);
-  console.log(`A 3 m shell on the parapet: in the world in ${landed.ms.toFixed(0)} ms, ${landed.bricks} bricks changed`);
+  console.log(`A 3 m shell on the parapet: cut into the world in ${landed.cutMs.toFixed(0)} ms, settled in ${landed.ms.toFixed(0)} ms, ${landed.bricks} bricks`);
   expect(landed.equal).toBe(true);
   expect(landed.bricks).toBeGreaterThan(50);
-  expect(landed.ms, JSON.stringify(landed)).toBeLessThan(500);
+  expect(landed.cutMs, JSON.stringify(landed)).toBeLessThan(500);
   // The crest it landed on is gone.
   const top = await hooks(page, (h, at) => {
     const [x, y, z] = at as number[];
     return h.world.map.get(Math.floor(x / 0.1), Math.round(y / 0.1) - 1, Math.floor(z / 0.1));
   }, crest);
   expect(top).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('a 3.4 m shell on open ground is in the world within 0.5 s, and settled within 3 s', async ({ page }) => {
+  // The review's case: the slump of a large shell in the open took 0.7–1.0 s to settle, and on an
+  // old crater up to 2.1 s; its cut is in first.
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.play());
+  const landed = await hooks(page, async (h) => {
+    const v = h.views.step;
+    const yaw = (v.yaw * Math.PI) / 180;
+    const out: { ms: number; cutMs: number; bricks: number }[] = [];
+    // Out in no man's land, ahead of the step: twice on the same spot, the second on the first's crater.
+    for (let k = 0; k < 2; k++) out.push(await h.shell([v.position[0] + Math.sin(yaw) * 35, 0, v.position[2] + Math.cos(yaw) * 35], 3.4));
+    return out;
+  });
+  console.log(`A 3.4 m shell in the open, twice: cut in ${landed.map((l) => l.cutMs.toFixed(0)).join(' and ')} ms, settled in ${landed.map((l) => l.ms.toFixed(0)).join(' and ')} ms`);
+  for (const l of landed) {
+    expect(l.cutMs, JSON.stringify(landed)).toBeLessThan(500);
+    expect(l.ms, JSON.stringify(landed)).toBeLessThan(3000);
+  }
   expect(errors).toEqual([]);
 });
 

@@ -128,4 +128,29 @@ describe('a crater cut on a copy of its region', () => {
     expect(groundTop(map, -1, 10)).toBeNull();
     expect(groundTop(map, 10, 256)).toBeNull();
   });
+
+  it("the job lands in two stages, its cut and then all of it settled: in turn they are detonate's in place, and so is the last alone", () => {
+    // The review's case: a crater waited for its whole slump, 0.7–2.1 s off the parapets. Its cut
+    // (carve, core, rind) is tens of milliseconds and goes first.
+    const inPlace = trench();
+    detonate(inPlace, 128, 76, 150, 30, Rng.root(11), options());
+    const map = trench();
+    const box = detonationRegion(map.dims, [128, 76, 150], 30, options().loosen)!;
+    const stages: DetonationResult[] = [];
+    const last = runDetonation({ id: 1, centre: [128, 76, 150], radius: 30, seed: 11, options: options(), copy: copyRegion(map, box), world: map.dims }, (cut) => stages.push(cut));
+    stages.push(last);
+    expect(stages.map((r) => ('stage' in r ? r.stage : 'wider'))).toEqual(['cut', 'settled']);
+    const [cut, settled] = stages as Extract<DetonationResult, { stage: string }>[];
+    const alone = trench();
+    for (const p of cut.patches) applyPatch(map, p);
+    // The cut alone: the crest is gone, and nothing has slumped onto the trench's floor yet.
+    expect(map.get(128, 75, 150)).toBe(P.AIR);
+    let slumped = 0;
+    for (let z = 126; z < 136; z++) for (let x = 96; x < 160; x++) if (isLoose(map.get(x, 44, z))) slumped++;
+    expect(slumped).toBe(0);
+    for (const p of settled.patches) applyPatch(map, p);
+    expect(sameWorld(inPlace, map)).toBe(true);
+    for (const p of settled.patches) applyPatch(alone, p);
+    expect(sameWorld(inPlace, alone)).toBe(true);
+  });
 });

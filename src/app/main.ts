@@ -177,8 +177,9 @@ async function start(): Promise<void> {
   const views = standardViews(world.plan, world.spawn);
   // Craters are cut in a worker, off the frame.
   const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn, runner: workerRunner() }, tun, SEED, views.bay.yaw);
-  // Shells the tests drop: each one's waiter, told its crater's bricks when it lands.
+  // Shells the tests drop: each one's waiter, told its crater's bricks when it settles, and when its cut was in.
   const craterWaiters = new Map<number, (bricks: number) => void>();
+  const cutsIn = new Map<number, number>();
   let cratersLanded = 0;
   let shellsDropped = 0;
   const voxelM = world.plan.params.voxel;
@@ -196,7 +197,13 @@ async function start(): Promise<void> {
     const t0 = performance.now();
     const id = session.land(at[0], at[2], radiusM, seed);
     if (id === null) throw new Error(`no ground at ${at[0]}, ${at[2]}`);
-    const landed = new Promise<{ ms: number; bricks: number }>((resolve) => craterWaiters.set(id, (bricks) => resolve({ ms: performance.now() - t0, bricks })));
+    const landed = new Promise<{ ms: number; bricks: number; cutMs: number }>((resolve) =>
+      craterWaiters.set(id, (bricks) => {
+        const now = performance.now();
+        resolve({ ms: now - t0, bricks, cutMs: (cutsIn.get(id) ?? now) - t0 });
+        cutsIn.delete(id);
+      }),
+    );
     return { id, centre, radius, seed, copy, landed };
   };
   const rig = new CameraRig(rigTunables(tun));
@@ -471,6 +478,7 @@ async function start(): Promise<void> {
     const events = session.drainEvents();
     // A crater of more than 64 bricks: the key's shadow map is traced outright once they are up.
     if (events.craters.some((c) => c.bricks > 64)) renderer.largeEdit();
+    for (const c of events.cuts) if (craterWaiters.has(c.id)) cutsIn.set(c.id, performance.now());
     for (const c of events.craters) {
       cratersLanded++;
       craterWaiters.get(c.id)?.(c.bricks);
@@ -662,11 +670,11 @@ async function start(): Promise<void> {
     shell: (at: [number, number, number], radiusM: number) => dropShell(at, radiusM, false).landed,
     shellCheck: async (at: [number, number, number], radiusM: number) => {
       const drop = dropShell(at, radiusM, true);
-      const { ms, bricks } = await drop.landed;
+      const { ms, bricks, cutMs } = await drop.landed;
       const copy = drop.copy!;
       const map = session.map;
       const r = runDetonation({ id: drop.id, centre: drop.centre, radius: drop.radius, seed: drop.seed, options: session.destruction.t.options, copy, world: map.dims });
-      if (!('patches' in r)) return { ms, bricks, equal: false };
+      if (!('patches' in r)) return { ms, bricks, cutMs, equal: false };
       // Over the copy's region: the bricks the job changed as it left them, the rest as they were.
       const changed = new Map(r.patches.map((p) => [map.brickIndex(p.at[0], p.at[1], p.at[2]), p]));
       const got = new Uint8Array(512);
@@ -687,7 +695,7 @@ async function start(): Promise<void> {
         else want.set(copy.dense.subarray((e - 1) * 512, e * 512));
         for (let v = 0; v < 512 && equal; v++) equal = got[v] === want[v];
       }
-      return { ms, bricks, equal };
+      return { ms, bricks, cutMs, equal };
     },
     craters: () => cratersLanded,
     mainMs: () => {

@@ -32,7 +32,8 @@ export function workerRunner(): DetonationRunner & { terminate(): void } {
     worker.onmessage = (event: MessageEvent<{ type: 'result'; result: DetonationResult } | { type: 'failed'; id: number; message: string }>) => {
       const m = event.data;
       if (m.type === 'result') {
-        out.delete(m.result.id);
+        // A cut comes first; the job is out with the worker until its settled crater, or a wider region, comes back.
+        if (!('stage' in m.result) || m.result.stage === 'settled') out.delete(m.result.id);
         done.push(m.result);
       } else fallBack(`a job failed in the worker: ${m.message}`);
     };

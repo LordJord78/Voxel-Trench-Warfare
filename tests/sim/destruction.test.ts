@@ -194,4 +194,31 @@ describe('the destruction queue', () => {
     expect(bricks).toBeGreaterThan(100);
     expect(Math.max(...times)).toBeLessThan(4);
   });
+
+  it("a crater's cut lands at once and its settling after; the region is out, and marks held, until both are in", () => {
+    const inPlace = trenchArena();
+    detonate(inPlace, ...CREST, 30, Rng.root(11), shellOptions());
+    chip(inPlace, 60, 50, 119, 1e6, CHIP);
+    const map = trenchArena();
+    const cuts: DetonationResult[] = [];
+    const rest: DetonationResult[] = [];
+    const done: DetonationResult[] = [];
+    const runner: DetonationRunner = {
+      post: (req) => rest.push(runDetonation(req, (cut) => cuts.push(cut))),
+      take: () => done.splice(0),
+    };
+    const d = new Destruction(map, runner, t());
+    const id = d.shell(CREST, 30, 11);
+    d.tick();
+    done.push(...cuts.splice(0));
+    expect(d.tick()).toEqual([]);
+    expect(d.cuts.map((c) => c.id)).toEqual([id]);
+    expect(map.get(128, 75, 150)).toBe(P.AIR);
+    expect(d.out.length).toBe(1);
+    expect(d.mark(60, 50, 119, 1e6, CHIP)).toBe('held');
+    done.push(...rest.splice(0));
+    expect(land(d).craters.map((c) => c.id)).toEqual([id]);
+    expect(d.cuts).toEqual([]);
+    expect(sameWorld(inPlace, map)).toBe(true);
+  });
 });

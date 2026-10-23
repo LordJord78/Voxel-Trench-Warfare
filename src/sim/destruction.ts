@@ -2,11 +2,13 @@
  * The session's craters, cut off the main thread (the spec's §3): each shell's
  * region is copied out (world/region-copy.ts) and posted to a runner — the
  * destruction worker in play, in-process in tests, the same job either way
- * (world/detonation.ts) — which hands back the bricks it changed. Those are
- * written into the world `bricks_per_tick` a tick, oldest crater first, so a
- * crater costs a frame about a millisecond however large it is.
+ * (world/detonation.ts) — which hands back the bricks it changed: its cut as
+ * soon as it is made, then everything settled. Those are written into the
+ * world `bricks_per_tick` a tick, oldest crater first, so a crater costs a
+ * frame about a millisecond however large it is, and its cut is in the world
+ * within a few ticks of the shell, its slump when it has settled.
  *
- * A region is out from its copy to its last brick's return. A round's mark
+ * A region is out from its copy to its settled bricks' return. A round's mark
  * inside one is held, and made again once its bricks are back, so the
  * write-back cannot undo it. A shell whose region overlaps one that is out
  * waits for it, and so does every shell behind it: they are served in order,
@@ -29,11 +31,11 @@ export interface DetonationRunner {
   take(): DetonationResult[];
 }
 
-/** The job run at once, in-process, its result handed to the next take: in step with the ticks. */
+/** The job run at once, in-process, its cut and its settled crater handed to the next take: in step with the ticks. */
 export function inProcessRunner(): DetonationRunner {
   const done: DetonationResult[] = [];
   return {
-    post: (req) => done.push(runDetonation(req)),
+    post: (req) => done.push(runDetonation(req, (cut) => done.push(cut))),
     take: () => done.splice(0),
   };
 }
@@ -78,9 +80,14 @@ interface Job {
   radius: number;
   seed: number;
   box: Box;
+  /** Queued; out (posted, its settled bricks not yet back); or landing (they are). */
   state: 'queued' | 'out' | 'landing';
+  /** Its bricks as they came back, cut then settled, and how many are written. */
   patches: BrickPatch[];
   applied: number;
+  /** Where its cut's bricks end in `patches`, once its cut has come back; and whether they are all in. */
+  cutEnd: number | null;
+  cutIn: boolean;
   held: Mark[];
 }
 
@@ -92,6 +99,8 @@ export class Destruction {
   private readonly jobs: Job[] = [];
   /** Bricks the last tick wrote into the world. */
   written = 0;
+  /** The craters whose cuts the last tick finished writing (their settling still to come). */
+  cuts: Crater[] = [];
   private nextId = 1;
 
   constructor(
@@ -114,7 +123,7 @@ export class Destruction {
   shell(centre: readonly [number, number, number], radius: number, seed: number): number {
     const id = this.nextId++;
     const box = detonationRegion(this.map.dims, centre, radius, this.t.options.loosen);
-    if (box) this.jobs.push({ id, centre: [centre[0], centre[1], centre[2]], radius, seed, box, state: 'queued', patches: [], applied: 0, held: [] });
+    if (box) this.jobs.push({ id, centre: [centre[0], centre[1], centre[2]], radius, seed, box, state: 'queued', patches: [], applied: 0, cutEnd: null, cutIn: false, held: [] });
     return id;
   }
 
@@ -128,8 +137,9 @@ export class Destruction {
     return chip(this.map, x, y, z, energyJ, chipEnergyJ);
   }
 
-  /** One tick: what has come back, the write-back's budget of it, and the shells now free to go out; the craters that landed. */
+  /** One tick: what has come back, the write-back's budget of it, and the shells now free to go out; the craters that settled (their cuts in `cuts`). */
   tick(): Crater[] {
+    this.cuts = [];
     for (const r of this.runner.take()) {
       const j = this.jobs.find((o) => o.id === r.id);
       if (!j || j.state !== 'out') continue;
@@ -141,22 +151,28 @@ export class Destruction {
         } else this.post(j);
         continue;
       }
-      j.patches = r.patches;
-      j.state = 'landing';
+      j.patches.push(...r.patches);
+      if (r.stage === 'cut') j.cutEnd ??= j.patches.length;
+      else j.state = 'landing';
     }
     const landed: Crater[] = [];
     let budget = this.t.bricksPerTick;
     this.written = 0;
     for (const j of this.jobs) {
-      if (j.state !== 'landing') continue;
+      if (j.state === 'queued') continue;
       while (budget > 0 && j.applied < j.patches.length) {
         applyPatch(this.map, j.patches[j.applied++]);
         budget--;
         this.written++;
       }
+      if (j.cutEnd !== null && !j.cutIn && j.applied >= j.cutEnd) {
+        j.cutIn = true;
+        this.cuts.push({ id: j.id, centre: j.centre, radius: j.radius, bricks: j.cutEnd });
+      }
       if (j.applied < j.patches.length) break;
+      if (j.state !== 'landing') continue;
       this.makeHeld(j);
-      landed.push({ id: j.id, centre: j.centre, radius: j.radius, bricks: j.patches.length });
+      landed.push({ id: j.id, centre: j.centre, radius: j.radius, bricks: j.patches.length - (j.cutEnd ?? 0) });
     }
     for (const c of landed) this.jobs.splice(this.jobs.findIndex((j) => j.id === c.id), 1);
     // In order: the first that would overlap a region out waits, and every one behind it.

@@ -112,12 +112,12 @@ export interface Hooks {
   rifleLuminance(): Promise<number>;
   /**
    * A shell landing at `at` (metres; its y is ignored, the ground's top is used) of `radiusM`: it
-   * resolves once its crater is written back into the world, with the time from the drop and the
-   * bricks it changed.
+   * resolves once its crater has settled in the world, with the times from the drop until its cut
+   * was in (`cutMs`) and until it settled (`ms`), and the bricks its settling wrote.
    */
-  shell(at: [number, number, number], radiusM: number): Promise<{ ms: number; bricks: number }>;
-  /** As shell, and once it lands, whether the world's bricks over its region are what an in-process detonate on a copy taken at the drop cuts. */
-  shellCheck(at: [number, number, number], radiusM: number): Promise<{ ms: number; bricks: number; equal: boolean }>;
+  shell(at: [number, number, number], radiusM: number): Promise<{ ms: number; bricks: number; cutMs: number }>;
+  /** As shell, and once it settles, whether the world's bricks over its region are what an in-process detonate on a copy taken at the drop cuts. */
+  shellCheck(at: [number, number, number], radiusM: number): Promise<{ ms: number; bricks: number; cutMs: number; equal: boolean }>;
   /** Craters landed. */
   craters(): number;
   /** Each of the last 600 frames' main-thread time, ms, from the frame's start to its render's return. */

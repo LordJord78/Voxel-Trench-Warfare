@@ -210,8 +210,16 @@ export interface DetonateOptions {
  * A shell landing, ported from Python's `detonate`: cut the crater (concrete
  * and masonry give way only in the core), shake the rind around it loose,
  * let everything settle, and let it flood. Returns the box it worked over.
+ * The cut (cutCrater) is tens of milliseconds; the settling (settleCrater)
+ * can be seconds, so a job off the main thread lands the cut first.
  */
 export function detonate(map: BrickMap, cx: number, cy: number, cz: number, radius: number, rng: Rng, o: DetonateOptions): Box | null {
+  const box = cutCrater(map, cx, cy, cz, radius, rng, o);
+  return box && settleCrater(map, box, o);
+}
+
+/** detonate's cut: the crater carved and its rind shaken loose. The box its settling starts from, or null if it missed the world. */
+export function cutCrater(map: BrickMap, cx: number, cy: number, cz: number, radius: number, rng: Rng, o: DetonateOptions): Box | null {
   if (!(radius > 0)) return null;
   const protect = Uint8Array.from({ length: 256 }, (_, p) => (hardness(p) > o.hardLimit ? 1 : 0));
   if (!carveSphere(map, cx, cy, cz, radius, rng, { protect })) return null;
@@ -219,10 +227,14 @@ export function detonate(map: BrickMap, cx: number, cy: number, cz: number, radi
   loosenRim(map, cx, cy, cz, radius * o.loosen, radius);
   const reach = radius * Math.max(o.loosen, 1) + 2;
   const fall = radius * 2 + 4;
-  const box: Box = {
+  return {
     x0: Math.floor(cx - reach), y0: Math.floor(cy - fall), z0: Math.floor(cz - reach),
     x1: Math.ceil(cx + reach) + 1, y1: Math.ceil(cy + reach) + 1, z1: Math.ceil(cz + reach) + 1,
   };
+}
+
+/** detonate's settling: everything in and around `box` (cutCrater's) comes to rest, and it floods. The box it worked over. */
+export function settleCrater(map: BrickMap, box: Box, o: DetonateOptions): Box | null {
   // Flood over everything the collapse touched: slumps displace water out past the blast box.
   const worked = { ...box };
   collapseRegion(map, box, {

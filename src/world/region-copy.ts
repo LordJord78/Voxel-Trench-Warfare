@@ -96,15 +96,20 @@ export function regionMap(copy: RegionCopy): BrickMap {
 }
 
 /**
- * The bricks of `map` (regionMap's, then worked on) written since it was made whose voxels differ
- * from the copy's, ascending z, y, x: a uniform one by its entry, any other by its bytes.
+ * The bricks of `map` (regionMap's, then worked on) written since it was last asked whose voxels
+ * differ from the copy's, ascending z, y, x: a uniform one by its entry, any other by its bytes.
+ * Bricks in `also` (local indices an earlier stage sent) are sent as they are now whatever they
+ * hold, so a brick an earlier stage changed and a later one put back is put back in the world too.
+ * Each brick sent is added to `sent` if given.
  */
-export function changedBricks(copy: RegionCopy, map: BrickMap): BrickPatch[] {
+export function changedBricks(copy: RegionCopy, map: BrickMap, also?: ReadonlySet<number>, sent?: Set<number>): BrickPatch[] {
   const out: BrickPatch[] = [];
   const was = new Uint8Array(512);
   const now = new Uint8Array(512);
   const [sx, sy] = copy.size;
-  for (const i of map.takeDirty()) {
+  const bricks = new Set(map.takeDirty());
+  for (const i of also ?? []) bricks.add(i);
+  for (const i of [...bricks].sort((a, b) => a - b)) {
     const e = copy.entries[i];
     if (e === 0) was.fill(0);
     else if (e & UNIFORM) was.fill(e & 0xff);
@@ -112,7 +117,8 @@ export function changedBricks(copy: RegionCopy, map: BrickMap): BrickPatch[] {
     map.readBrick(i, now);
     let same = true;
     for (let v = 0; v < 512 && same; v++) same = was[v] === now[v];
-    if (same) continue;
+    if (same && !also?.has(i)) continue;
+    sent?.add(i);
     const bx = i % sx;
     const by = ((i - bx) / sx) % sy;
     const bz = (i - bx - by * sx) / (sx * sy);

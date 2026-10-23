@@ -74,7 +74,8 @@ export interface CombatEvents {
   impacts: (Impact & { tick: number })[];
   /** Rounds past the player's head, one each: how near, and where it passed nearest. */
   cracks: { tick: number; missM: number; at: [number, number, number] }[];
-  /** Craters written back into the world (voxels), with how many bricks each changed. */
+  /** Craters cut into the world (their slump still to come), and craters settled (voxels), with how many bricks each wrote. */
+  cuts: (Crater & { tick: number })[];
   craters: (Crater & { tick: number })[];
   /** Shells announced (their whistle): where each will land (metres), and in how long. */
   incoming: { tick: number; at: [number, number, number]; landsInS: number }[];
@@ -83,7 +84,7 @@ export interface CombatEvents {
 }
 
 function noEvents(): CombatEvents {
-  return { shots: [], frontShots: [], impacts: [], cracks: [], craters: [], incoming: [], blasts: [] };
+  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [] };
 }
 
 export interface SessionWorld {
@@ -229,6 +230,7 @@ export class Session {
     this.raised += (raise - this.raised) * (1 - exp(-this.clock.dt / this.viewmodel.raiseS));
     this.combat(this.clock.dt);
     for (const c of this.destruction.tick()) this.events.craters.push({ ...c, tick: this.ticks });
+    for (const c of this.destruction.cuts) this.events.cuts.push({ ...c, tick: this.ticks });
     if (this.destruction.written > 0) this.liftOut();
     this.particles.step(this.clock.dt);
   }

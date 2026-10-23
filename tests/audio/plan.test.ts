@@ -9,7 +9,7 @@ import { P } from '../../src/world/materials';
 // placed where it happened, late by its distance at the speed of sound, quieter and duller with it.
 const t = audioTunables(loadTunables());
 const ear: [number, number, number] = [10, 2, 10];
-const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], craters: [], incoming: [], blasts: [] });
+const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [] });
 const shot = (at: [number, number, number]): ShotEvent => ({ tick: 1, origin: at, dir: [0, 0, 1], tracer: false, muzzle: at });
 const impact = (at: [number, number, number], material: number, owner = 0): Impact & { tick: number } => ({
   tick: 1,
@@ -76,6 +76,7 @@ describe('the sound of a frame', () => {
       frontShots: [shot([10, 2, 60])],
       impacts: [impact([12, 2, 30], P.SOD), impact([9, 2, 15], P.TIMBER), impact([10, 3, 20], P.PICKET, 1)],
       cracks: [{ tick: 1, missM: 1, at: [11, 2, 10] }],
+      cuts: [],
       craters: [],
       incoming: [],
       blasts: [],
