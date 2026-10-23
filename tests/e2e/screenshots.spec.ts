@@ -178,3 +178,51 @@ test('row 5: the church at dusk, and over the parapet at night under a flare', a
   await page.keyboard.up('KeyD');
   if (errors.length) throw new Error(errors.join('\n'));
 });
+
+// Row 5's flare where the froxels can resolve its shaft (a stump or a post is a froxel column wide at
+// most): the church at night from the hamlet's view, a flare hung 12 m beyond the tower and 10 m to
+// its right, at three fifths of its height, so the tower's shadow crosses the view through the
+// flare's glow in the haze. For the user to judge the flares' strength in the haze
+// (sky.haze_lights). Written to artifacts/l6.
+test('row 5: a flare beyond the church tower at night', async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  await hooks(page, (h) => {
+    const w = h.world as unknown as {
+      plan: { params: { voxel: number }; props: { kind: string; x: number; z: number }[] };
+      map: { dims: { y: number }; get(x: number, y: number, z: number): number };
+    };
+    const voxel = w.plan.params.voxel;
+    const church = w.plan.props.find((q) => q.kind === 'church');
+    if (!church) throw new Error('no church in the plan');
+    // The tower's top: the highest solid voxel within a metre of its middle.
+    let top = 0;
+    for (let dz = -10; dz <= 10; dz += 2) {
+      for (let dx = -10; dx <= 10; dx += 2) {
+        for (let y = w.map.dims.y - 1; y > top; y--) {
+          if (w.map.get(church.x + dx, y, church.z + dz) !== 0) {
+            top = y;
+            break;
+          }
+        }
+      }
+    }
+    const v = h.views.hamlet;
+    const ax = church.x * voxel - v.position[0];
+    const az = church.z * voxel - v.position[2];
+    const d = Math.hypot(ax, az);
+    const flare = h.lights().find((l) => l.kind === 'flare');
+    if (!flare) throw new Error('no flare in the scene');
+    // Beyond the tower along the view, and to its right (the view's right, square to it in plan).
+    const at: [number, number, number] = [church.x * voxel + (ax / d) * 12 + (az / d) * 10, top * voxel * 0.6, church.z * voxel + (az / d) * 12 - (ax / d) * 10];
+    h.useLights([...h.lights(), { ...flare, position: at }]);
+    h.holdLights();
+    h.view('hamlet');
+    h.setTimeOfDay(21);
+  });
+  await hooks(page, (h) => h.waitConverged());
+  await hooks(page, (h) => h.waitFrames(60));
+  await page.screenshot({ path: 'artifacts/l6/church-flare-night.png' });
+  if (errors.length) throw new Error(errors.join('\n'));
+});

@@ -89,7 +89,9 @@ const GAP_MS = 500;
 
 export interface RenderStats {
   gpuMs: number | null;
+  /** Each pass's share of the frame, and its own time (timing.ts's passTimes), smoothed. */
   passes: Record<string, number>;
+  own: Record<string, number>;
   /** The internal image this frame, the size its textures hold, and the canvas (device pixels). */
   res: [number, number];
   alloc: [number, number];
@@ -276,7 +278,7 @@ export class Renderer {
   flags = 0;
   /** What the frame is lit by. */
   sky: FrameSky = PROBE_DUSK;
-  stats: RenderStats = { gpuMs: null, passes: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
+  stats: RenderStats = { gpuMs: null, passes: {}, own: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
 
   private readonly canvas: HTMLCanvasElement | null;
   private readonly context: GPUCanvasContext | null;
@@ -712,6 +714,7 @@ export class Renderer {
     this.stats = {
       gpuMs: this.timer.gpuMs,
       passes: { ...this.timer.passes },
+      own: { ...this.timer.own },
       res: [...this.res],
       alloc: [...this.alloc],
       canvas: [...this.canvasSize],

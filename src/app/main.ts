@@ -582,6 +582,7 @@ async function start(): Promise<void> {
         fingerprint: () => fingerprint(world.map),
         shot: () => new Promise((resolve) => (shot = resolve)),
         submittedWork: (count) => new Promise((resolve) => (work = { count, left: count, samples: [], done: resolve })),
+        gpuErrors: () => gpu.errors,
       },
       reporter(checkRun),
     );

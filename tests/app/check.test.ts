@@ -6,7 +6,7 @@ import type { RenderStats } from '../../src/render/renderer';
 
 /** A game for the check; `seen` gathers where it is sent, a view and then its hour. */
 function game(over: Partial<CheckGame> = {}, seen: string[] = []): CheckGame {
-  const stats = { gpuMs: 9.5, res: [1549, 968], canvas: [1600, 1000], passes: { primary: 4.5, lighting: 1.5 } } as unknown as RenderStats;
+  const stats = { gpuMs: 9.5, res: [1549, 968], canvas: [1600, 1000], passes: { primary: 4.5, lighting: 1.5 }, own: { primary: 4.6, lighting: 1.5 } } as unknown as RenderStats;
   return {
     timestamps: true,
     promptMs: 3500,
@@ -20,6 +20,7 @@ function game(over: Partial<CheckGame> = {}, seen: string[] = []): CheckGame {
     fingerprint: async () => 'abc',
     shot: async () => ({ png: new Blob(['png']), spread: 0.2 }),
     submittedWork: async (count) => Array.from({ length: count }, (_, i) => (i % 3 === 0 ? 30 : 11)),
+    gpuErrors: () => [],
     ...over,
   };
 }
@@ -49,10 +50,13 @@ describe('the check', () => {
   });
   it("carries each view's and hour's passes, with timestamps, and the canvas each view was drawn to", async () => {
     const { report } = await run(game());
-    for (const x of [...report.views, ...report.day]) expect(x.passes).toEqual({ primary: 4.5, lighting: 1.5 });
+    for (const x of [...report.views, ...report.day]) {
+      expect(x.passes).toEqual({ primary: 4.5, lighting: 1.5 });
+      expect(x.own).toEqual({ primary: 4.6, lighting: 1.5 });
+    }
     expect(report.views.every((v) => v.canvas[0] === 1600 && v.canvas[1] === 1000)).toBe(true);
     const { report: untimed } = await run(game({ timestamps: false }));
-    for (const x of [...untimed.views, ...untimed.day]) expect(x.passes).toEqual({});
+    for (const x of [...untimed.views, ...untimed.day]) expect([x.passes, x.own]).toEqual([{}, {}]);
   });
   it('sends the game to each view and then sets its hour, the view setting its own first', async () => {
     const seen: string[] = [];
@@ -66,6 +70,11 @@ describe('the check', () => {
     // A third of the samples are 30 ms stalls; the median is the 11 ms the work takes.
     expect(report.views.every((v) => v.gpuMs === 11)).toBe(true);
     expect(report.day.every((d) => d.gpuMs === 11)).toBe(true);
+  });
+  it("reports the GPU's uncaptured errors as errors, so a format a browser refuses is not measured as a pass", async () => {
+    const { report } = await run(game({ gpuErrors: () => ["Texture format 'rg11b10ufloat' is not supported for storage"] }));
+    expect(report.errors).toEqual(["GPU: Texture format 'rg11b10ufloat' is not supported for storage"]);
+    expect(report.views.length).toBeGreaterThan(0);
   });
   it('still reports, with the error, when a step fails', async () => {
     const { report, posted } = await run(game({ fingerprint: async () => Promise.reject(new Error('crypto.subtle is unavailable')) }));

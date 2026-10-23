@@ -37,6 +37,25 @@ describe('pass times', () => {
     expect(t.passes.present).toBe(1);
     expect(t.frameMs).toBe(8);
   });
+  it('charge a pass the GPU ran beside an earlier one, ending under it, nothing of the frame: never a negative share', () => {
+    // Safari runs the light cells beside the primary pass: they begin after it and end before it.
+    const t = passTimes([
+      { name: 'primary', begin: 0, end: 6 * ms },
+      { name: 'cells', begin: 0.5 * ms, end: 1 * ms },
+      { name: 'restir', begin: 6 * ms, end: 7 * ms },
+    ]);
+    expect(t.passes).toEqual({ primary: 6, cells: 0, restir: 1 });
+    expect(t.frameMs).toBe(7);
+  });
+  it("also give each pass's own time, its end less its start, whatever ran beside or before it", () => {
+    const t = passTimes([
+      { name: 'primary', begin: 0, end: 6 * ms },
+      { name: 'cells', begin: 0.5 * ms, end: 1 * ms },
+      { name: 'present', begin: 2 * ms, end: 8 * ms },
+    ]);
+    expect(t.own).toEqual({ primary: 6, cells: 0.5, present: 6 });
+    expect(t.passes.present).toBe(2);
+  });
   it('skip a pass whose timestamps are missing', () => {
     const t = passTimes([
       { name: 'primary', begin: 0, end: 3 * ms },

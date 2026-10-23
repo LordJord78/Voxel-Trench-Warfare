@@ -123,8 +123,9 @@ function sample(page: import('@playwright/test').Page, from: number | null) {
         if (start !== null) h.setTimeOfDay(start + k / 360);
         await h.waitFrames(1);
         const s = h.stats();
-        // The flares' maps in a pass of their own, on a frame the key's has nothing to trace.
-        if (k >= settle && s.gpuMs !== null) out.push({ gpu: s.gpuMs, primary: s.passes.primary, froxels: s.passes.froxels, lighting: s.passes.lighting, maps: s.passes.maps ?? 0 });
+        // Each pass's own time (not its share of the frame, which a pass run beside another hides);
+        // the flares' maps in a pass of their own, on a frame the key's has nothing to trace.
+        if (k >= settle && s.gpuMs !== null) out.push({ gpu: s.gpuMs, primary: s.own.primary, froxels: s.own.froxels, lighting: s.own.lighting, maps: s.own.maps ?? 0 });
       }
       const median = (key: 'gpu' | 'primary' | 'froxels' | 'lighting' | 'maps') => out.map((o) => o[key]).sort((x, y) => x - y)[out.length >> 1];
       return { gpu: median('gpu'), primary: median('primary'), froxels: median('froxels'), lighting: median('lighting'), maps: median('maps'), count: out.length };

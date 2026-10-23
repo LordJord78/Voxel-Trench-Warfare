@@ -32,6 +32,7 @@ export interface Hooks {
   stats(): {
     gpuMs: number | null;
     passes: Record<string, number>;
+    own: Record<string, number>;
     res: [number, number];
     alloc: [number, number];
     canvas: [number, number];

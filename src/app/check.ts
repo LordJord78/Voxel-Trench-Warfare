@@ -31,14 +31,17 @@ export interface CheckGame {
   shot(): Promise<{ png: Blob; spread: number }>;
   /** Milliseconds from each of the next `count` frames' submit to its work finishing. */
   submittedWork(count: number): Promise<number[]>;
+  /** The GPU's uncaptured errors so far (a format or binding a browser refuses only logs one). */
+  gpuErrors(): readonly string[];
 }
 
 export interface CheckView {
   name: ViewName;
   hours: number;
   gpuMs: number;
-  /** Each pass's GPU time (ms), by timestamps; none by submitted work. */
+  /** Each pass's share of the frame and its own time (ms; timing.ts's passTimes), by timestamps; none by submitted work. */
   passes: Record<string, number>;
+  own: Record<string, number>;
   res: [number, number];
   /** The canvas the internal image is presented to, in pixels. */
   canvas: [number, number];
@@ -51,6 +54,7 @@ export interface CheckHour {
   hours: number;
   gpuMs: number;
   passes: Record<string, number>;
+  own: Record<string, number>;
 }
 
 export interface CheckReport {
@@ -121,9 +125,9 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
     game.setTimeOfDay(hours);
     await game.waitConverged();
     await game.waitFrames(30);
-    if (!game.timestamps) return { gpuMs: median(await game.submittedWork(30)), passes: {} };
+    if (!game.timestamps) return { gpuMs: median(await game.submittedWork(30)), passes: {}, own: {} };
     const s = game.stats();
-    return { gpuMs: s.gpuMs ?? 0, passes: { ...s.passes } };
+    return { gpuMs: s.gpuMs ?? 0, passes: { ...s.passes }, own: { ...s.own } };
   };
   try {
     await progress('fingerprint');
@@ -133,12 +137,12 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
       for (const key of CHECK_KEYS) {
         await progress(`view ${name} at ${key}`);
         const hours = CLOCK_KEYS[key];
-        const { gpuMs, passes } = await measure(name, hours);
+        const { gpuMs, passes, own } = await measure(name, hours);
         const { png, spread } = await game.shot();
         const shot = `${name}-${clockName(hours)}.png`;
         await post(shot, png);
         const { res, canvas } = game.stats();
-        report.views.push({ name, hours, gpuMs, passes, res, canvas, shot, spread });
+        report.views.push({ name, hours, gpuMs, passes, own, res, canvas, shot, spread });
       }
     }
     for (const hours of DAY_HOURS) {
@@ -149,6 +153,7 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
   } catch (e) {
     report.errors.push(e instanceof Error ? e.message : String(e));
   }
+  report.errors.push(...game.gpuErrors().map((e) => `GPU: ${e}`));
   await post('report.json', JSON.stringify(report, null, 2));
   return report;
 }

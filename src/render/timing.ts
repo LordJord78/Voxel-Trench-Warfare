@@ -31,21 +31,28 @@ export interface PassStamps {
 
 /**
  * Milliseconds per pass, in submission order, and for the frame (first start
- * to last end). A pass is timed from the later of its own start and the
- * previous pass's end: on a tile-based GPU a render pass's vertex work starts
- * while the compute passes it waits on still run, and that wait is theirs.
+ * to last end). `passes` is each pass's share of the frame: from the later of
+ * its own start and the previous passes' end to its own end, never less than
+ * nothing. On a tile-based GPU a render pass's vertex work starts while the
+ * compute passes it waits on still run, and that wait is theirs; a pass the GPU
+ * runs beside an earlier one (Safari's light cells beside the primary pass)
+ * costs the frame only what it runs past it. The shares add up to the time the
+ * GPU was busy. `own` is each pass's end less its start, whatever ran beside or
+ * before it: its cost, at most.
  */
-export function passTimes(stamps: readonly PassStamps[]): { passes: Record<string, number>; frameMs: number | null } {
+export function passTimes(stamps: readonly PassStamps[]): { passes: Record<string, number>; own: Record<string, number>; frameMs: number | null } {
   const passes: Record<string, number> = {};
+  const own: Record<string, number> = {};
   let first = Infinity;
   let last = -Infinity;
   for (const { name, begin, end } of stamps) {
     if (!(end > begin)) continue;
-    passes[name] = (end - Math.max(begin, last)) / 1e6;
+    passes[name] = Math.max(0, end - Math.max(begin, last)) / 1e6;
+    own[name] = (end - begin) / 1e6;
     first = Math.min(first, begin);
     last = Math.max(last, end);
   }
-  return { passes, frameMs: last > first ? (last - first) / 1e6 : null };
+  return { passes, own, frameMs: last > first ? (last - first) / 1e6 : null };
 }
 
 /**
@@ -61,8 +68,9 @@ export function smoothPasses(before: Readonly<Record<string, number>>, frame: Re
 
 export class GpuTimer {
   readonly enabled: boolean;
-  /** Smoothed milliseconds per pass, and for the whole frame. */
+  /** Smoothed milliseconds per pass, each its share of the frame and its own time (passTimes), and for the whole frame. */
   passes: Record<string, number> = {};
+  own: Record<string, number> = {};
   gpuMs: number | null = null;
   /** The latest measured frame, unsmoothed, and how many frames have been measured. */
   lastMs: number | null = null;
@@ -120,13 +128,14 @@ export class GpuTimer {
     slot.buffer.mapAsync(GPUMapMode.READ).then(
       () => {
         const t = new BigUint64Array(slot.buffer.getMappedRange());
-        const { passes, frameMs } = passTimes(
+        const { passes, own, frameMs } = passTimes(
           slot.used.map((name) => {
             const i = this.names.indexOf(name);
             return { name, begin: Number(t[2 * i]), end: Number(t[2 * i + 1]) };
           }),
         );
         this.passes = smoothPasses(this.passes, passes);
+        this.own = smoothPasses(this.own, own);
         if (frameMs !== null) {
           this.gpuMs = this.gpuMs === null ? frameMs : this.gpuMs * 0.9 + frameMs * 0.1;
           this.lastMs = frameMs;

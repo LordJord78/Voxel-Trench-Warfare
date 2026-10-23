@@ -15,10 +15,10 @@ const GPU_BUDGET_MS = 14;
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 const golden = JSON.parse(readFileSync('tests/fixtures/golden.json', 'utf8')).fingerprint;
-/** A measurement's passes, by timestamps: their sum (the frame's span less its gaps), and the four longest. */
+/** A measurement's passes, by timestamps: their shares' sum (the time the GPU was busy), and the four longest by their own time. */
 const passSum = (passes) => Object.values(passes ?? {}).reduce((a, b) => a + b, 0);
-const longest = (passes) =>
-  Object.entries(passes ?? {})
+const longest = (own) =>
+  Object.entries(own ?? {})
     .sort((a, b) => b[1] - a[1])
     .slice(0, 4)
     .map(([name, ms]) => `${name} ${ms.toFixed(2)}`)
@@ -64,7 +64,7 @@ try {
     check(report.fingerprint === golden, `world bytes ${report.fingerprint.slice(0, 12)}… ${report.fingerprint === golden ? 'match' : 'differ from'} Chrome's golden`);
     console.log(`GPU time by ${report.timer}${report.timer === 'submitted-work' ? ' (an overestimate: it includes submitting and completing)' : ''}; the canvas ${report.views[0]?.canvas?.join('×')}`);
     // With timestamps, each line's passes: their sum, and the longest where the line fails.
-    const passes = (x, ok) => (report.timer === 'timestamps' ? ` (passes ${passSum(x.passes).toFixed(2)}${ok ? '' : `: ${longest(x.passes)}`})` : '');
+    const passes = (x, ok) => (report.timer === 'timestamps' ? ` (busy ${passSum(x.passes).toFixed(2)}${ok ? '' : `: ${longest(x.own)}`})` : '');
     for (const v of report.views) {
       const mp = (v.res[0] * v.res[1]) / 1e6;
       const ok = v.gpuMs <= GPU_BUDGET_MS && mp >= 1.48 && v.spread > 4 / 255;
