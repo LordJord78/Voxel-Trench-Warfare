@@ -34,6 +34,7 @@ import { defaultSettings, loadSettings, saveSettings, type Settings } from '../u
 import { fingerprint } from '../world/fingerprint';
 import { CameraRig, rigTunables } from './camera-rig';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
+import { EffectsFrameBuilder, effectsTunables, type BuiltEffects, type DebugQuad } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
@@ -164,6 +165,8 @@ async function start(): Promise<void> {
   const views = standardViews(world.plan, world.spawn);
   const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn }, tun, SEED, views.bay.yaw);
   const rig = new CameraRig(rigTunables(tun));
+  const effects = new EffectsFrameBuilder(effectsTunables(tun));
+  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0 };
   const input = new Input();
   const fly = new FlyCam(views.bay);
   const pitchLimit = tun.f('player.pitch_limit');
@@ -408,6 +411,10 @@ async function start(): Promise<void> {
       pose = rig.pose(session, dt, settings.fov);
       periscope.set((1 - rig.fovScale) / (1 - periscopeScale));
     }
+    // What this frame's ticks did, once: the effects take it (and from Task 8, the sound).
+    const frameEffects = effects.build(session, session.drainEvents());
+    renderer.setEffects(frameEffects.frame);
+    built = frameEffects.counts;
     light(dt);
     renderer.render(pose, timeOfDay, now);
     lastPose = pose;
@@ -515,6 +522,12 @@ async function start(): Promise<void> {
     setIntensity(i: 'off' | 'light' | 'heavy') {
       session.front.intensity = i;
     },
+    effects: () => built,
+    debugQuads(quads: DebugQuad[]) {
+      effects.debug = quads;
+    },
+    depthAt: (points: [number, number][]) => renderer.readDepth(points),
+    gpuErrors: () => gpu.errors,
     play: () => play(false),
     teleport(at: { position: [number, number, number]; yaw: number; pitch: number }) {
       session.teleport(at.position, at.yaw, at.pitch);

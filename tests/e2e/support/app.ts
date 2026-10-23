@@ -65,6 +65,14 @@ export interface Hooks {
   session: { weapon: { rounds: number }; suppression: { level: number }; front: { intensity: 'off' | 'light' | 'heavy' } };
   /** The front's fire, for this visit (the pause menu's choice is what is kept). */
   setIntensity(i: 'off' | 'light' | 'heavy'): void;
+  /** What the last frame's effects held: particles' billboards, tracers, flash stars, transient lights. */
+  effects(): { billboards: number; tracers: number; stars: number; lights: number };
+  /** Emissive test quads (metres, metres across, linear colour) drawn with the effects from the next frame; [] for none. */
+  debugQuads(quads: { position: [number, number, number]; size: number; colour: [number, number, number] }[]): void;
+  /** The G-buffer's depth at pixels of the internal image, in metres along each pixel's ray. */
+  depthAt(points: [number, number][]): Promise<number[]>;
+  /** GPU validation errors so far. */
+  gpuErrors(): string[];
 }
 
 export async function openGame(page: Page): Promise<string[]> {

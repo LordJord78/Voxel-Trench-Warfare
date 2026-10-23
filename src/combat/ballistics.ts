@@ -101,7 +101,8 @@ export class Rounds {
   private readonly specIndex: Int32Array;
   private readonly owner: Int8Array;
   private readonly tracer: Uint8Array;
-  /** Where each round's tracer is drawn from: the muzzle for the player's, which leave from the eye. */
+  /** Where each round left, and where its tracer is drawn from: the muzzle for the player's, which leave from the eye. */
+  private readonly origin: Float64Array;
   private readonly from: Float64Array;
   private readonly specs: ProjectileSpec[] = [];
   private readonly size: [number, number, number];
@@ -119,6 +120,7 @@ export class Rounds {
     this.specIndex = new Int32Array(n);
     this.owner = new Int8Array(n);
     this.tracer = new Uint8Array(n);
+    this.origin = new Float64Array(n * 3);
     this.from = new Float64Array(n * 3);
     this.size = [map.dims.x * voxel, map.dims.y * voxel, map.dims.z * voxel];
   }
@@ -140,6 +142,7 @@ export class Rounds {
     this.specIndex[i] = s;
     this.owner[i] = owner;
     this.tracer[i] = tracer ? 1 : 0;
+    this.origin.set(origin, i * 3);
     this.from.set(from, i * 3);
     return i;
   }
@@ -177,14 +180,15 @@ export class Rounds {
 
   /**
    * Each tracer round's head and its tail, up to `lengthM` back along its path (no further than it
-   * has flown), as [x, y, z] triples in metres; where its tracer is drawn from, how far it has
-   * flown (m), and whose it is.
+   * has flown), as [x, y, z] triples in metres; where it left and where its tracer is drawn from,
+   * how far it has flown (m), and whose it is.
    */
-  tracerSegments(lengthM: number): { head: Float32Array; tail: Float32Array; from: Float32Array; flown: Float32Array; owner: Int8Array } {
+  tracerSegments(lengthM: number): { head: Float32Array; tail: Float32Array; origin: Float32Array; from: Float32Array; flown: Float32Array; owner: Int8Array } {
     let n = 0;
     for (let i = 0; i < this.count; i++) n += this.tracer[i];
     const head = new Float32Array(n * 3);
     const tail = new Float32Array(n * 3);
+    const origin = new Float32Array(n * 3);
     const from = new Float32Array(n * 3);
     const flown = new Float32Array(n);
     const owner = new Int8Array(n);
@@ -197,13 +201,14 @@ export class Rounds {
       for (let k = 0; k < 3; k++) {
         head[o * 3 + k] = this.pos[i * 3 + k];
         tail[o * 3 + k] = this.pos[i * 3 + k] - v[k] * back;
+        origin[o * 3 + k] = this.origin[i * 3 + k];
         from[o * 3 + k] = this.from[i * 3 + k];
       }
       flown[o] = this.distance[i];
       owner[o] = this.owner[i];
       o++;
     }
-    return { head, tail, from, flown, owner };
+    return { head, tail, origin, from, flown, owner };
   }
 
   /** One substep of round `i`: whether it is to be retired. */
@@ -285,6 +290,7 @@ export class Rounds {
     this.specIndex[i] = this.specIndex[last];
     this.owner[i] = this.owner[last];
     this.tracer[i] = this.tracer[last];
+    this.origin.copyWithin(i * 3, last * 3, last * 3 + 3);
     this.from.copyWithin(i * 3, last * 3, last * 3 + 3);
   }
 }

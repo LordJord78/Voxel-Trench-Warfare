@@ -46,12 +46,14 @@ export interface ViewOffsets {
   fov: number;
 }
 
-/** A shot, from where it left along its direction (unit), and whether it is a tracer; `tick` is the session's tick that fired it. */
+/** A shot, from where it left along its direction (unit), whether it is a tracer, and the muzzle it flashed at; `tick` is the session's tick that fired it. */
 export interface ShotEvent {
   tick: number;
   origin: [number, number, number];
   dir: [number, number, number];
   tracer: boolean;
+  /** The player's: the drawn rifle's (they leave from the eye); the front's: the origin. */
+  muzzle: [number, number, number];
 }
 
 /** What combat did between drains, oldest first. */
@@ -216,7 +218,7 @@ export class Session {
         this.recoil.shot(this.recoilRng);
         this.viewKick.shot(this.recoil.kickPitch - kick, this.viewKickRng);
         this.shots.push({ origin: eye, dir, aim, tracer });
-        this.events.shots.push({ tick: this.ticks, origin: eye, dir, tracer });
+        this.events.shots.push({ tick: this.ticks, origin: eye, dir, tracer, muzzle });
       }
     }
     this.rounds.listen(eye, this.suppression.t.crackRadiusM);
@@ -236,7 +238,8 @@ export class Session {
     for (let slot = this.rounds.count - fired; slot < this.rounds.count; slot++) {
       const v = this.rounds.velocity(slot);
       const speed = hypot(v[0], v[1], v[2]);
-      this.events.frontShots.push({ tick: this.ticks, origin: this.rounds.position(slot), dir: [v[0] / speed, v[1] / speed, v[2] / speed], tracer: this.rounds.isTracer(slot) });
+      const origin = this.rounds.position(slot);
+      this.events.frontShots.push({ tick: this.ticks, origin, dir: [v[0] / speed, v[1] / speed, v[2] / speed], tracer: this.rounds.isTracer(slot), muzzle: origin });
     }
   }
 

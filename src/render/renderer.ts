@@ -55,6 +55,7 @@ import { Bloom, type BloomPipelines } from './bloom';
 import { copyPose, jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
+import { Effects, effectsLook, type EffectsFrame, type EffectsPipelines } from './effects';
 import { FarFieldGpu } from './farfield-gpu';
 import { FlareShadows } from './flare-shadows';
 import { froxelLayouts, Froxels, type FroxelPipelines } from './froxels';
@@ -80,7 +81,7 @@ import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['sky', 'beam', 'maps', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'froxels', 'shade', 'taa', 'cas', 'bloom', 'expose', 'present'] as const;
+const PASSES = ['sky', 'beam', 'maps', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'froxels', 'shade', 'taa', 'cas', 'effects-light', 'effects', 'bloom', 'expose', 'present'] as const;
 type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas' | 'exposure';
 type Timed = (typeof PASSES)[number];
 
@@ -171,6 +172,7 @@ export interface CompiledFrame {
   restir: RestirPipelines;
   keyShadow: KeyShadowPipelines;
   froxels: FroxelPipelines;
+  effects: EffectsPipelines;
   lights: GPUBuffer;
   noise: GPUTexture;
   /** Empty sky LUTs, for scenes built without an atmosphere. */
@@ -241,7 +243,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels] = await Promise.all([
+  const [beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'primary keyed', primarySrc, [scene, layouts.primary, keyLayouts.write], 'keyed'),
@@ -266,8 +268,9 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     Restir.compile(device),
     KeyShadow.compile(device, scene, keyLayouts),
     Froxels.compile(device, scene, keyLayouts, froxelLayout),
+    Effects.compile(device, scene, keyLayouts.read),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects, ...sceneExtras(device) };
 }
 
 export class Renderer {
@@ -303,6 +306,8 @@ export class Renderer {
   private readonly flareShadows: FlareShadows;
   private readonly keyShadow: KeyShadow;
   private readonly froxels: Froxels;
+  /** Tracers, the flash's star and the particles, over the sharpened image. */
+  private readonly effects: Effects;
   private sceneGroup: GPUBindGroup | null = null;
   private sceneGeneration = -1;
   /** Bind groups by frame parity: histories ping-pong between two sets of textures. */
@@ -368,6 +373,7 @@ export class Renderer {
     this.flareShadows = FlareShadows.create(device);
     this.keyShadow = KeyShadow.create(device, compiled.keyShadow, world.map.dims, this.voxelSize(), this.flareShadows);
     this.froxels = Froxels.create(device, compiled.froxels, this.cells, this.keyShadow, FROXEL_COLUMNS[this.preset]);
+    this.effects = Effects.create(device, compiled.effects, this.frameBuffer, this.keyShadow.group, effectsLook(loadTunables()));
     this.lightScale = LIGHT_SCALE[this.preset];
     this.budgetMs = options.budgetMs ?? 14;
     if (options.dynres) this.dynres = new DynamicResolution(frameBudget(this.timer.enabled, this.budgetMs));
@@ -423,6 +429,25 @@ export class Renderer {
     this.flareShadows.setFlares(lights, flares, this.voxelSize());
   }
 
+  /** This frame's tracers, flash stars and particles (effects.ts). */
+  setEffects(frame: EffectsFrame): void {
+    this.effects.set(frame);
+  }
+
+  /** The G-buffer's depth the last frame left at pixels of the internal image, in metres along each pixel's ray. */
+  async readDepth(points: readonly [number, number][]): Promise<number[]> {
+    const staging = this.device.createBuffer({ size: Math.max(1, points.length) * 256, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const encoder = this.device.createCommandEncoder();
+    points.forEach(([x, y], i) => {
+      encoder.copyTextureToBuffer({ texture: this.textures.gDepth, origin: { x, y } }, { buffer: staging, offset: i * 256, bytesPerRow: 256 }, { width: 1, height: 1 });
+    });
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const data = new Float32Array(staging.getMappedRange().slice(0));
+    staging.destroy();
+    return points.map((_, i) => data[i * 64] * this.voxelSize());
+  }
+
   /** Size the canvas (device pixels) and reallocate the internal images to match. */
   resize(width: number, height: number): void {
     const w = Math.max(1, Math.floor(width));
@@ -443,12 +468,12 @@ export class Renderer {
   private allocate(): void {
     for (const t of Object.values(this.textures)) t.destroy();
     this.textures = {};
-    const make = (name: string, format: GPUTextureFormat, size: [number, number]) => {
+    const make = (name: string, format: GPUTextureFormat, size: [number, number], more = 0) => {
       this.textures[name] = this.device.createTexture({
         label: name,
         size,
         format,
-        usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+        usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC | more,
       });
     };
     make('beam', 'r32float', [Math.ceil(this.alloc[0] / 8), Math.ceil(this.alloc[1] / 8)]);
@@ -458,7 +483,9 @@ export class Renderer {
     make('colour', 'rgba16float', this.alloc);
     make('taa0', 'rgba16float', this.alloc);
     make('taa1', 'rgba16float', this.alloc);
-    make('sharp', 'rgba16float', this.alloc);
+    // The effects are drawn into it, by a render pass.
+    make('sharp', 'rgba16float', this.alloc, GPUTextureUsage.RENDER_ATTACHMENT);
+    this.effects.bind(this.textures.sharp, this.textures.gDepth);
     this.bloom.resize(this.alloc, this.textures.sharp.createView());
     this.autoExposure.bind(this.textures.sharp.createView());
     const light = this.lightSize(this.alloc);
@@ -670,6 +697,8 @@ export class Renderer {
     pass('shade', 'shade', this.res, [this.froxels.none, this.froxels.group]);
     pass('taa', 'taa', this.res);
     pass('cas', 'cas', this.res);
+    // Timed only when they run (a slot not written this frame would hold another frame's times).
+    this.effects.encode(encoder, this.sceneGroup!, this.res, (name) => this.timer.writes(name));
     this.bloom.encode(encoder, this.res, this.options.bloomMax ?? 999, this.timer.writes('bloom'));
     // Without settings (tests), the zone is wide enough that nothing is ever corrected.
     this.autoExposure.encode(
