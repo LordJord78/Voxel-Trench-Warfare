@@ -26,6 +26,7 @@ import { throughPose, type RifleDrawn, type RiflePose } from '../render/rifle';
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
 import { FarFieldGpu } from '../render/farfield-gpu';
 import { GpuWorld } from '../render/gpu-world';
+import { KEY_MAP_SIZE, KEY_SLOTS } from '../render/key-shadow';
 import { lightMotion, lightsAt } from '../render/light-motion';
 import { sceneLights, type SceneLight } from '../render/lights';
 import { rendererTunables } from '../render/quality';
@@ -468,6 +469,8 @@ async function start(): Promise<void> {
     renderer.setRifle(rifle);
     // What this frame's ticks did, once: seen, from the rifle as it is drawn, and heard.
     const events = session.drainEvents();
+    // A crater of more than 64 bricks: the key's shadow map is traced outright once they are up.
+    if (events.craters.some((c) => c.bricks > 64)) renderer.largeEdit();
     for (const c of events.craters) {
       cratersLanded++;
       craterWaiters.get(c.id)?.(c.bricks);
@@ -630,6 +633,7 @@ async function start(): Promise<void> {
     debugSmoke(puffs: SmokePuff[]) {
       effects.debugSmoke = puffs;
     },
+    keyTexels: () => ({ traced: renderer.keyTraced(), all: KEY_MAP_SIZE * KEY_MAP_SIZE, slots: KEY_SLOTS }),
     debugRibbons(ribbons: DebugRibbon[]) {
       effects.debugRibbons = ribbons;
     },

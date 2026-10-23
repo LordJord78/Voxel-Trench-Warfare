@@ -71,6 +71,8 @@ export interface Hooks {
   debugQuads(quads: { position: [number, number, number]; size: number; colour: [number, number, number]; lit?: boolean; square?: boolean }[]): void;
   /** Emissive test ribbons (metres; metres across; linear colour), as tracers are drawn, from the next frame; [] for none. */
   debugRibbons(ribbons: { tail: [number, number, number]; head: [number, number, number]; width: number; colour: [number, number, number] }[]): void;
+  /** The key light's map texels the last frame traced (all of them, a sixteenth, or none), the map's texels, and the slots it is traced in by turns. */
+  keyTexels(): { traced: number; all: number; slots: number };
   /** Puffs of smoke in the haze (metres; density per metre), added to the next frames' own; [] for none. */
   debugSmoke(puffs: { centre: number[]; radiusM: number; density: number }[]): void;
   /** Shells' blast lights, added to the next frames' own (as a blast's, shadowed, outside the denoiser); [] for none. */

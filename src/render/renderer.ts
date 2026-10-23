@@ -347,6 +347,8 @@ export class Renderer {
   private blasts: TransientLight[] = [];
   /** This frame's puffs of shells' smoke in the haze. */
   private puffs: SmokePuff[] = [];
+  /** A large edit waits for its bricks to be up before the key's map is traced outright. */
+  private largeEditPending = false;
 
   static async create(gpu: Gpu, canvas: HTMLCanvasElement | null, world: GpuWorld, plan: WorldPlan | null, options: RendererOptions = {}): Promise<Renderer> {
     const compiled = options.compiled ?? (await compileFrame(gpu.device));
@@ -502,6 +504,19 @@ export class Renderer {
     };
     for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) for (let c = 0; c < 3; c++) out[(j * w + i) * 3 + c] = half(halves[(j * row) / 2 + i * 4 + c]);
     return out;
+  }
+
+  /**
+   * A large edit (a crater of more than 64 bricks) has been made: once its bricks are up (the upload
+   * queue empty), the key light's map is traced outright, in one frame.
+   */
+  largeEdit(): void {
+    this.largeEditPending = true;
+  }
+
+  /** The key light's map texels the last frame traced. */
+  keyTraced(): number {
+    return this.keyShadow.texelsTraced;
   }
 
   /** This frame's puffs of shells' smoke (metres), the first MAX_PUFFS of them. */
@@ -685,6 +700,10 @@ export class Renderer {
     if (this.world.flush(this.options.uploadBudget ?? 1 << 20, eye) > 0) {
       this.keyShadow.worldChanged();
       this.flareShadows.worldChanged();
+    }
+    if (this.largeEditPending && this.world.queue.pending === 0) {
+      this.keyShadow.worldChanged(true);
+      this.largeEditPending = false;
     }
     // A grown heap is a new buffer: the scene group follows it.
     if (this.world.generation !== this.sceneGeneration || !this.sceneGroup) {

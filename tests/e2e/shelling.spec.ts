@@ -188,3 +188,40 @@ test("the haze is denser inside a blast's smoke", async ({ page }) => {
   expect(Math.abs(smoky.corner - clear.corner) / clear.corner, seen).toBeLessThan(0.01);
   expect(errors).toEqual([]);
 });
+
+test("a crater of more than 64 bricks retraces the key map outright once its bricks are up, and a round's mark only a sixteenth", async ({ page }) => {
+  // The light spec's §3 left this here: after a large edit the key's map is traced in one frame, so
+  // a crater's shadow is right at once.
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.play());
+  const seen = await hooks(page, async (h) => {
+    const frames = async (n: number) => {
+      const out: number[] = [];
+      for (let k = 0; k < n; k++) {
+        await h.waitFrames(1);
+        out.push(h.keyTexels().traced);
+      }
+      return out;
+    };
+    await h.waitFrames(60);
+    const still = await frames(20);
+    // One round into the parapet: a mark, a brick or so.
+    h.trigger(true);
+    await h.waitFrames(1);
+    h.trigger(false);
+    const marked = await frames(40);
+    const p = h.player().position;
+    const landed = await h.shell([p[0] + 20, 0, p[2] + 12], 3);
+    const cratered = [h.keyTexels().traced, ...(await frames(20))];
+    const { all, slots } = h.keyTexels();
+    return { still, marked, landed, cratered, all, slots };
+  });
+  const { all, slots } = seen;
+  const max = (v: number[]) => Math.max(...v);
+  const summary = JSON.stringify({ still: max(seen.still), marked: max(seen.marked), cratered: seen.cratered, bricks: seen.landed.bricks });
+  expect(seen.landed.bricks, summary).toBeGreaterThan(64);
+  expect(max(seen.still), summary).toBe(0);
+  expect(max(seen.marked), summary).toBe(all / slots);
+  expect(seen.cratered.filter((n) => n === all).length, summary).toBe(1);
+  expect(errors).toEqual([]);
+});

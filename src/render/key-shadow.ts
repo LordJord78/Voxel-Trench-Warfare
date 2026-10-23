@@ -135,6 +135,10 @@ export class KeyShadow {
   private count = 0;
   /** The flares' texels share() left to a pass of their own (traceAlone), this frame. */
   private aloneTexels = 0;
+  /** The key's texels this frame's update or share traced. */
+  private lastTexels = 0;
+  /** A large edit asked for the whole map to be traced at the next update or share. */
+  private outright = false;
 
   /** The build's own pipeline, over the scene's group 0 (`scene`, scene.ts), with the map's groups' layouts. */
   static async compile(device: GPUDevice, scene: GPUBindGroupLayout, layouts: KeyShadowLayouts = keyShadowLayouts(device)): Promise<KeyShadowPipelines> {
@@ -192,9 +196,14 @@ export class KeyShadow {
     this.none = device.createBindGroup({ label: 'key shadow none', layout: pipelines.none, entries: [] });
   }
 
-  /** The world changed (an edit was uploaded): every sixteenth is to be traced again. */
-  worldChanged(): void {
+  /**
+   * The world changed (an edit was uploaded): every sixteenth is to be traced again, a sixteenth a
+   * frame, or, after a large edit (`outright`, a crater), all of them in the next frame, so its
+   * shadow is right at once.
+   */
+  worldChanged(outright = false): void {
     this.world++;
+    if (outright) this.outright = true;
   }
 
   /**
@@ -236,6 +245,11 @@ export class KeyShadow {
     return rows;
   }
 
+  /** The key's texels the last update or share traced: all of them, a sixteenth, or none. */
+  get texelsTraced(): number {
+    return this.lastTexels;
+  }
+
   /** Whether share() left the flares' texels this frame to traceAlone. */
   get alone(): boolean {
     return this.aloneTexels > 0;
@@ -258,7 +272,8 @@ export class KeyShadow {
     const info = keyShadowInfo(this.dims, this.voxel, keyDir);
     const toward: Vec3 = [-info.along[0], -info.along[1], -info.along[2]];
     const dot = (a: Vec3) => a[0] * toward[0] + a[1] * toward[1] + a[2] * toward[2];
-    const outright = key !== this.key || this.traced.some((d) => dot(d) < TURN_MAX);
+    const outright = this.outright || key !== this.key || this.traced.some((d) => dot(d) < TURN_MAX);
+    this.outright = false;
     let texels: Texels = { step: 1, offset: [0, 0], count: KEY_MAP_SIZE * KEY_MAP_SIZE };
     if (outright) {
       this.key = key;
@@ -282,6 +297,7 @@ export class KeyShadow {
         this.tracedWorld[k] = this.world;
       }
     }
+    this.lastTexels = texels.count;
     const data = new Float32Array(16);
     data.set(info.u, 0);
     data[3] = info.texel;
