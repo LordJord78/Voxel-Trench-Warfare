@@ -72,8 +72,25 @@ export interface Hooks {
     front: { intensity: 'off' | 'light' | 'heavy' };
     entrenching: { cleared: number; inReach: boolean };
     digging: boolean;
+    intent: { fire: boolean };
+    destruction: { pending: number };
     player: { position: { x: number; y: number; z: number }; yaw: number };
   };
+  /** The camera held at `pose` while the session runs as if playing; null to play again. */
+  spectate(pose: { position: [number, number, number]; yaw: number; pitch: number } | null): void;
+  /** A standard view at `hours` under peak combat for `seconds`, measured (src/app/peak-combat.ts). */
+  underFire(view: string, hours: number, seconds: number): Promise<{
+    view: string;
+    hours: number;
+    frames: number;
+    gpu: { p95: number; median: number; max: number } | null;
+    submitted: { p95: number; median: number } | null;
+    main: { p99: number; max: number };
+    shots: number;
+    shells: number;
+    skipped: number;
+    voices: number;
+  }>;
   /** The HUD as drawn: whether it shows, whether its crosshair does, and its words. */
   hud(): { visible: boolean; crosshair: boolean; text: string };
   /** The front's shells alone, for a test: the rifle fire is left as it is. */

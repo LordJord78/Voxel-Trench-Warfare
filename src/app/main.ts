@@ -37,6 +37,7 @@ import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
 import { Hud } from '../ui/hud';
+import { underFire, type PeakGame } from './peak-combat';
 import { PeriscopeFrame } from '../ui/periscope';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from '../ui/settings';
 import { UNIFORM } from '../world/bricks';
@@ -225,6 +226,8 @@ async function start(): Promise<void> {
   session.artillery.intensity = session.front.intensity;
   renderer.setQuality({ preset: settings.preset });
   let mode: Mode = 'loading';
+  /** For the peak-combat driver (peak-combat.ts): the camera held in fly mode while the session runs as if playing. */
+  let spectating = false;
   /** The mode a pause returns to. */
   let resumeTo: 'playing' | 'fly' = 'playing';
   /** The clock, in hours; it opens at dusk. */
@@ -463,6 +466,10 @@ async function start(): Promise<void> {
       look[1] = 0;
       pose = { ...fly.pose, fov: settings.fov };
       periscope.set(0);
+      if (spectating) {
+        session.intent = input.intent();
+        if (session.advance(ms / 1000) > 0) input.ticked();
+      }
     } else {
       if (mode === 'playing') {
         input.look(session.player, settings.sensitivity, pitchLimit);
@@ -649,11 +656,68 @@ async function start(): Promise<void> {
     }
     return { visible: true, samples };
   };
+  const lastMainMs = () => {
+    const n = Math.min(mainFrames, MAIN_FRAMES);
+    return Array.from({ length: n }, (_, k) => mainMs[(mainFrames - n + k) % MAIN_FRAMES]);
+  };
+  const submittedWork = (count: number) => new Promise<number[]>((resolve) => (work = { count, left: count, samples: [], done: resolve }));
+  const eyeM = world.plan.params.eye.standing * voxelM;
+  const peakGame: PeakGame = {
+    views,
+    standAt: (pose) => {
+      session.teleport([pose.position[0], pose.position[1] - eyeM, pose.position[2]], pose.yaw, pose.pitch);
+      renderer.resetHistory();
+      // Playing without the click that starts play, so without sound (as the check has no click).
+      if (!spectating && mode !== 'playing') {
+        loading.hide();
+        mode = 'playing';
+      }
+    },
+    spectate: (pose) => {
+      if (pose) {
+        enterFly(pose);
+        spectating = true;
+      } else {
+        spectating = false;
+        if (mode === 'fly') mode = 'playing';
+      }
+    },
+    setTimeOfDay: (hours) => {
+      timeOfDay = hours;
+    },
+    setFront: (intensity) => {
+      session.front.intensity = intensity;
+      session.artillery.intensity = 'off';
+    },
+    trigger: (held) => input.trigger(held),
+    rounds: () => session.weapon.rounds,
+    refill: () => {
+      session.weapon.rounds = session.weapon.spec.magazine;
+    },
+    shotsFired: () => session.weapon.shotsFired,
+    feet: () => session.player.position.toArray(),
+    onMap: (x, z) => groundTop(session.map, x / voxelM, z / voxelM) !== null,
+    shell: (x, z, radiusM) => dropShell([x, 0, z], radiusM, false).landed,
+    pending: () => session.destruction.pending,
+    waitFrames,
+    frames: () => frames,
+    stats: () => renderer.stats,
+    mainMs: lastMainMs,
+    timestamps: gpu.timestamps,
+    submittedWork,
+    voices: () => audio.voices,
+  };
   Object.assign(hooks, {
     world,
     renderer,
     session,
     views,
+    /** The camera held at `pose` while the session runs (null: play again); peak-combat.ts's. */
+    spectate(pose: CameraPose | null) {
+      peakGame.spectate(pose);
+    },
+    /** `view` at `hours` under peak combat for `seconds`, measured (peak-combat.ts). */
+    underFire: (view: ViewName, hours: number, seconds: number) => underFire(peakGame, view, hours, seconds),
     timings: world.timings,
     view(name: ViewName) {
       if (!VIEW_NAMES.includes(name)) throw new Error(`no view '${name}'`);
@@ -745,10 +809,7 @@ async function start(): Promise<void> {
       return { ms, bricks, cutMs, equal };
     },
     craters: () => cratersLanded,
-    mainMs: () => {
-      const n = Math.min(mainFrames, MAIN_FRAMES);
-      return Array.from({ length: n }, (_, k) => mainMs[(mainFrames - n + k) % MAIN_FRAMES]);
-    },
+    mainMs: lastMainMs,
     rifleVisible: () => renderer.rifleState().visible,
     showRifle(on: boolean) {
       rifleHeld = on;
@@ -863,7 +924,7 @@ async function start(): Promise<void> {
         stats: () => renderer.stats,
         fingerprint: () => fingerprint(world.map),
         shot: () => new Promise((resolve) => (shot = resolve)),
-        submittedWork: (count) => new Promise((resolve) => (work = { count, left: count, samples: [], done: resolve })),
+        submittedWork,
         gpuErrors: () => gpu.errors,
       },
       reporter(checkRun),
