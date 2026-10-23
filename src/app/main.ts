@@ -193,7 +193,8 @@ async function start(): Promise<void> {
     const wide = keep ? detonationRegion(session.map.dims, centre, radius, session.destruction.t.options.loosen, DETONATION_MARGIN + 2 * DETONATION_WIDEN) : null;
     const copy: RegionCopy | null = wide ? copyRegion(session.map, wide) : null;
     const t0 = performance.now();
-    const id = session.destruction.shell(centre, radius, seed);
+    const id = session.land(at[0], at[2], radiusM, seed);
+    if (id === null) throw new Error(`no ground at ${at[0]}, ${at[2]}`);
     const landed = new Promise<{ ms: number; bricks: number }>((resolve) => craterWaiters.set(id, (bricks) => resolve({ ms: performance.now() - t0, bricks })));
     return { id, centre, radius, seed, copy, landed };
   };
@@ -211,6 +212,7 @@ async function start(): Promise<void> {
   let settings: Settings = loadSettings(storage, defaultSettings(tun));
   // The front fires as the visitor chose; a check measures without it.
   session.front.intensity = checkRun ? 'off' : settings.intensity;
+  session.artillery.intensity = session.front.intensity;
   renderer.setQuality({ preset: settings.preset });
   let mode: Mode = 'loading';
   /** The mode a pause returns to. */
@@ -244,6 +246,7 @@ async function start(): Promise<void> {
   const changeSettings = (next: Settings) => {
     if (next.preset !== settings.preset) renderer.setQuality({ preset: next.preset });
     session.front.intensity = next.intensity;
+    session.artillery.intensity = next.intensity;
     settings = next;
     saveSettings(storage, settings);
   };
@@ -610,6 +613,7 @@ async function start(): Promise<void> {
     /** The front's fire, for this visit (the pause menu's choice is what is kept). */
     setIntensity(i: 'off' | 'light' | 'heavy') {
       session.front.intensity = i;
+      session.artillery.intensity = i;
     },
     effects: () => built,
     debugQuads(quads: DebugQuad[]) {

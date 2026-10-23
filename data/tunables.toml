@@ -297,6 +297,23 @@ jitter_yaw_deg      = 0.055
 # (machine-gun bursts that pin a man on the step within seconds at 22 m).
 # ---------------------------------------------------------------------------
 
+[artillery]
+# The front's shells (the spec's §3): a scheduler with no gun behind it. Each
+# is announced whistle_s before it lands (its whistle); light, the visitor's
+# default, lands one every light_mean_s or so and none nearer than 15 m; heavy,
+# the perf gate's peak, about one a second, some of them close.
+light_mean_s        = 9.0
+light_gap_s         = 3.0      # never two nearer than this
+heavy_mean_s        = 1.0
+heavy_gap_s         = 0.3
+whistle_s           = 1.5      # heard about 1.5 s before impact (the spec)
+radius_m            = [2.2, 3.4] # drawn uniform, from the stream combat.shells
+light_sector_share  = 0.2      # the share that lands in the player's sector;
+heavy_sector_share  = 0.5      # the rest in no man's land and along both lines
+light_sector_m      = [15.0, 40.0] # from the player, in their sector
+heavy_sector_m      = [8.0, 50.0]
+reach_m             = 120.0    # along the front, either side of the player
+
 [front]
 light_rpm           = 40.0     # aimed single shots, on average
 light_gap_s         = 1.0      # never two nearer than this; the rest of each gap

@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { standardViews } from '../../src/app/views';
+import { Artillery, artilleryTunables, planShellSource } from '../../src/combat/artillery';
+import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
 import { Stance } from '../../src/physics/character';
 import { Session } from '../../src/sim/session';
@@ -99,4 +101,31 @@ describe('the front over the generated world', () => {
       expect(s.suppression.cracks, `seed ${seed}`).toBeGreaterThan(20);
     }
   }, 300_000);
+});
+
+describe("the front's shells over the generated world", () => {
+  it("the plan's shells land on the map, most of them away from the player, none nearer than 15 m on light and some nearer on heavy", () => {
+    const v = standardViews(world.plan, world.spawn).step;
+    const target: [number, number, number] = [v.position[0], v.position[1], v.position[2]];
+    const size = [world.map.dims.x * params.voxel, world.map.dims.z * params.voxel];
+    const landed = (intensity: 'light' | 'heavy') => {
+      const a = new Artillery(artilleryTunables(tun), planShellSource(world.plan), Rng.root(5).derive('combat.shells'));
+      a.intensity = intensity;
+      const d: number[] = [];
+      for (let k = 0; k < 10 * 3600; k++) {
+        for (const s of a.tick(1 / 60, target).landed) {
+          expect(s.x >= 0 && s.x < size[0] && s.z >= 0 && s.z < size[1], `${s.x}, ${s.z}`).toBe(true);
+          d.push(Math.hypot(s.x - target[0], s.z - target[2]));
+        }
+      }
+      return d;
+    };
+    const light = landed('light');
+    const heavy = landed('heavy');
+    expect(light.length).toBeGreaterThan(40);
+    expect(Math.min(...light)).toBeGreaterThanOrEqual(15);
+    expect(light.filter((d) => d > 40).length / light.length).toBeGreaterThan(0.6);
+    expect(heavy.length).toBeGreaterThan(400);
+    expect(heavy.filter((d) => d < 15).length).toBeGreaterThan(0);
+  });
 });

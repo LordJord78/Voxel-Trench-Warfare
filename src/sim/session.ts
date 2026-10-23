@@ -10,6 +10,7 @@
  * offsets before the last tick so the camera can interpolate between the two.
  */
 
+import { Artillery, artilleryTunables, planShellSource, type ShellSource } from '../combat/artillery';
 import { ballisticsTunables, Rounds, type Impact } from '../combat/ballistics';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
 import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
@@ -29,6 +30,7 @@ import { Vec3, ZERO } from '../physics/vec';
 import type { BrickMap } from '../world/bricks';
 import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, paletteData } from '../world/materials';
+import { groundTop } from '../world/raycast';
 import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from './destruction';
 
 /** Kinds that throw sparks when struck. */
@@ -70,10 +72,14 @@ export interface CombatEvents {
   cracks: { tick: number; missM: number; at: [number, number, number] }[];
   /** Craters written back into the world (voxels), with how many bricks each changed. */
   craters: (Crater & { tick: number })[];
+  /** Shells announced (their whistle): where each will land (metres), and in how long. */
+  incoming: { tick: number; at: [number, number, number]; landsInS: number }[];
+  /** Shells landed: where (metres, the top of the ground), how big, and what they struck. */
+  blasts: { tick: number; at: [number, number, number]; radiusM: number; material: number }[];
 }
 
 function noEvents(): CombatEvents {
-  return { shots: [], frontShots: [], impacts: [], cracks: [], craters: [] };
+  return { shots: [], frontShots: [], impacts: [], cracks: [], craters: [], incoming: [], blasts: [] };
 }
 
 export interface SessionWorld {
@@ -84,6 +90,8 @@ export interface SessionWorld {
   runner?: DetonationRunner;
   /** Voxels: below it a crater floods. The plan's; with no plan, none unless given. */
   waterTable?: number;
+  /** Where the front's shells land; by default the plan's lines, sector and no man's land, and nowhere without a plan. */
+  shells?: ShellSource;
   /** Foot centre, in metres. */
   spawn: { position: readonly [number, number, number] };
   /** Where the front fires from; by default the plan's enemy line, and nowhere without a plan. */
@@ -119,6 +127,10 @@ export class Session {
   readonly front: Front;
   /** Craters cut off the main thread and written back a budget a tick; rounds' marks go through it. */
   readonly destruction: Destruction;
+  /** The front's shells: their intensity is set beside the front's (the pause menu sets both). */
+  readonly artillery: Artillery;
+  /** Metres a voxel. */
+  readonly voxel: number;
   /** The flash, brass, dust and sparks: cosmetic, and as deterministic as the rest. */
   readonly particles: Particles;
   /** Times suppression has taken the player off the firing step. */
@@ -146,6 +158,7 @@ export class Session {
     this.map = world.map;
     this.plan = world.plan;
     const voxel = world.plan?.params.voxel ?? tun.f('world.voxel_size');
+    this.voxel = voxel;
     this.controller = new CharacterController(brickGrid(world.map, voxel), controllerTunables(tun));
     this.player = newCharacter(new Vec3(...world.spawn.position), yaw, 0);
     this.prevPosition = this.player.position;
@@ -173,6 +186,7 @@ export class Session {
     this.tints = Array.from({ length: 256 }, (_, id) => [palette[id * 8], palette[id * 8 + 1], palette[id * 8 + 2]]);
     const waterTable = world.waterTable ?? world.plan?.params.waterTable ?? -1;
     this.destruction = new Destruction(world.map, world.runner ?? inProcessRunner(), destructionTunables(tun, waterTable));
+    this.artillery = new Artillery(artilleryTunables(tun), world.shells ?? (plan ? planShellSource(plan) : () => null), this.streams.derive('combat.shells'));
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -262,6 +276,28 @@ export class Session {
       const origin = this.rounds.position(slot);
       this.events.frontShots.push({ tick: this.ticks, origin, dir: [v[0] / speed, v[1] / speed, v[2] / speed], tracer: this.rounds.isTracer(slot), muzzle: origin });
     }
+    // The front's shells: heard coming in whistle_s before they land.
+    const shells = this.artillery.tick(dt, eye);
+    for (const sh of shells.announced) {
+      const top = groundTop(this.map, sh.x / this.voxel, sh.z / this.voxel);
+      if (top !== null) this.events.incoming.push({ tick: this.ticks, at: [sh.x, top * this.voxel, sh.z], landsInS: this.artillery.t.whistleS });
+    }
+    for (const sh of shells.landed) this.land(sh.x, sh.z, sh.radiusM, sh.seed);
+  }
+
+  /**
+   * A shell of `radiusM` landing at (x, z) (metres) on the top of the ground there, its crater cut
+   * with `seed`: its blast now, its crater queued (an event once it is in the world). Its id, or null
+   * where there is no ground (off the map).
+   */
+  land(x: number, z: number, radiusM: number, seed: number): number | null {
+    const v = this.voxel;
+    const top = groundTop(this.map, x / v, z / v);
+    if (top === null) return null;
+    const material = this.map.get(Math.floor(x / v), top - 1, Math.floor(z / v));
+    const id = this.destruction.shell([x / v, top, z / v], radiusM / v, seed);
+    this.events.blasts.push({ tick: this.ticks, at: [x, top * v, z], radiusM, material });
+    return id;
   }
 
   /** A shot's flash out along the bore from the muzzle, and its brass out of the port, to the right and up (the reference's view kick). */
