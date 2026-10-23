@@ -294,13 +294,23 @@ jitter_yaw_deg      = 0.055
 # ---------------------------------------------------------------------------
 
 [front]
-light_rpm           = 40.0     # single shots, on average
+light_rpm           = 40.0     # aimed single shots, on average
+light_gap_s         = 1.0      # never two nearer than this; the rest of each gap
+                               # is drawn, so they come at light_rpm on average
+light_miss_m        = 2.0      # light's rounds pass the head no nearer than this,
+                               # and no further than spread_m past it: they crack
+                               # by and strike the parapet, but cannot pin. One as
+                               # near as it may (two cracks and its strike) adds
+                               # ~0.17, and a gap bleeds off more than that
 heavy_rpm           = 500.0    # rounds a minute on average, in bursts
 burst_rounds        = 8        # a machine gun's burst
-burst_rpm           = 600.0    # its cyclic rate within a burst
+burst_rpm           = 600.0    # its cyclic rate within a burst; the pause after
+                               # each is drawn about the mean that brings the
+                               # rate to heavy_rpm
 tracer_every        = 5        # every fifth of a burst a tracer
-spread_m            = 1.6      # aim scatter about the player's head, sideways;
-                               # 0.6 of it up and down (the reference's rig)
+spread_m            = 1.6      # heavy's aim scatter about the head, sideways,
+spread_vertical     = 0.6      # and this much of it up and down (the reference's
+                               # rig); both across the line of fire
 reach_m             = 30.0     # enemy bays within this, along the line, fire
 
 # ---------------------------------------------------------------------------

@@ -32,7 +32,18 @@ function run(intensity: 'off' | 'light' | 'heavy', seconds: number, seed = 7) {
 
 describe('the front', () => {
   it('reads [front]', () => {
-    expect(T).toEqual({ lightRpm: 40, heavyRpm: 500, burstRounds: 8, burstRpm: 600, tracerEvery: 5, spreadM: 1.6, reachM: 30 });
+    expect(T).toEqual({
+      lightRpm: 40,
+      lightGapS: 1.0,
+      lightMissM: 2.0,
+      heavyRpm: 500,
+      burstRounds: 8,
+      burstRpm: 600,
+      tracerEvery: 5,
+      spreadM: 1.6,
+      spreadVertical: 0.6,
+      reachM: 30,
+    });
   });
 
   it('is off unless asked for', () => {
@@ -41,13 +52,84 @@ describe('the front', () => {
 
   it('light fires 40 a minute, heavy 500 in bursts of 8 at 600', () => {
     const count = (f: [number, number][]) => f.reduce((a, [, n]) => a + n, 0);
-    expect(Math.abs(count(run('light', 60)) / 40 - 1)).toBeLessThanOrEqual(0.1);
+    expect(Math.abs(count(run('light', 600)) / 400 - 1)).toBeLessThanOrEqual(0.05);
+    expect(Math.abs(count(run('heavy', 600)) / 5000 - 1)).toBeLessThanOrEqual(0.05);
     const heavy = run('heavy', 60);
-    expect(Math.abs(count(heavy) / 500 - 1)).toBeLessThanOrEqual(0.1);
     // Within a burst, 6 ticks apart (600 a minute); between bursts, longer.
     const gaps = heavy.slice(1).map(([k], i) => k - heavy[i][0]);
     expect(gaps.filter((g) => g === 6).length).toBeGreaterThan(gaps.length * 0.8);
     expect(Math.min(...gaps)).toBe(6);
+  });
+
+  it('light is sporadic: never two shots within light_gap_s, the rest of each gap drawn', () => {
+    const light = run('light', 600);
+    const gaps = light.slice(1).map(([k], i) => (k - light[i][0]) * TICK);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(T.lightGapS - TICK);
+    const mean = gaps.reduce((a, g) => a + g, 0) / gaps.length;
+    const sd = Math.sqrt(gaps.reduce((a, g) => a + (g - mean) ** 2, 0) / gaps.length);
+    expect(Math.abs(mean / (60 / T.lightRpm) - 1)).toBeLessThanOrEqual(0.05);
+    // An exponential's spread over a 1.5 s mean less its 1.0 s floor: sd/mean 1/3.
+    expect(sd / mean).toBeGreaterThan(0.25);
+    expect(sd / mean).toBeLessThan(0.45);
+  });
+
+  it('heavy pauses between bursts for a drawn time, not a fixed one', () => {
+    const heavy = run('heavy', 60);
+    const pauses = heavy.slice(1).map(([k], i) => k - heavy[i][0]).filter((g) => g > 6);
+    expect(pauses.length).toBeGreaterThan(20);
+    expect(new Set(pauses).size).toBeGreaterThanOrEqual(5);
+  });
+
+  it('light passes the head no nearer than light_miss_m, nor further than spread_m past it', () => {
+    const front = new Front(T, lineSource(38, 0.4), Rng.root(7).derive('front'));
+    front.intensity = 'light';
+    const rounds = field();
+    rounds.listen(TARGET, 3.2);
+    const cracks: number[] = [];
+    let checked = 0;
+    for (let k = 0; k < 600 / TICK; k++) {
+      const n = front.tick(TICK, TARGET, rounds, SPEC);
+      for (let s = rounds.count - n; s < rounds.count; s++) {
+        const o = rounds.position(s);
+        const v = rounds.velocity(s);
+        const far = [o[0] + v[0], o[1] + v[1], o[2] + v[2]];
+        const miss = segmentDistance(o, far, TARGET);
+        expect(miss).toBeGreaterThanOrEqual(T.lightMissM - 0.01);
+        expect(miss).toBeLessThanOrEqual(T.lightMissM + T.spreadM + 0.01);
+        checked++;
+      }
+      rounds.step(TICK);
+      cracks.push(...rounds.cracks);
+    }
+    expect(checked).toBeGreaterThan(300);
+    // Flown, with the drop: still no nearer, and most of them heard.
+    expect(Math.min(...cracks)).toBeGreaterThanOrEqual(T.lightMissM - 0.05);
+    expect(cracks.length).toBeGreaterThan(checked / 2);
+  });
+
+  it('scatters across the line of fire, wherever along the line the bay is', () => {
+    // A bay 30 m along the line at 38 m: heavy's scatter is about the head as the shooter sees it.
+    const origin: [number, number, number] = [TARGET[0] + 30, 1, TARGET[2] + 38];
+    for (const intensity of ['light', 'heavy'] as const) {
+      const front = new Front(T, () => origin, Rng.root(5).derive('front'));
+      front.intensity = intensity;
+      const rounds = field();
+      let widest = 0;
+      for (let k = 0; k < 6000; k++) {
+        const n = front.tick(TICK, TARGET, rounds, SPEC);
+        for (let s = rounds.count - n; s < rounds.count; s++) {
+          const v = rounds.velocity(s);
+          const far = [origin[0] + v[0], origin[1] + v[1], origin[2] + v[2]];
+          const miss = segmentDistance(origin, far, TARGET);
+          widest = Math.max(widest, miss);
+          if (intensity === 'light') expect(miss).toBeGreaterThanOrEqual(T.lightMissM - 0.01);
+          else expect(miss).toBeLessThanOrEqual(Math.hypot(T.spreadM, T.spreadVertical * T.spreadM) + 0.01);
+        }
+        rounds.step(TICK);
+      }
+      // Scattered along world x instead, a third of the sideways spread would run along the line of fire.
+      if (intensity === 'heavy') expect(widest).toBeGreaterThan(1.7);
+    }
   });
 
   it('its rounds come from the line and pass by the target', () => {
