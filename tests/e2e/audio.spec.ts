@@ -22,6 +22,34 @@ test('sound starts with the click that starts play, and a shot is heard', async 
   expect(errors).toEqual([]);
 });
 
+test('a browser that refuses sound still starts play, takes the pointer and resumes, silent', async ({ page }) => {
+  // The review's case: a context that throws threw out of the click that starts play, before the
+  // pointer was locked.
+  await page.addInitScript(() => {
+    const refuse = function () {
+      throw new DOMException('sound refused', 'NotSupportedError');
+    };
+    Object.defineProperty(window, 'AudioContext', { value: refuse, configurable: true, writable: true });
+  });
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  await page.waitForFunction(() => document.pointerLockElement !== null, null, { timeout: 5000 });
+  expect(await hooks(page, (h) => h.mode())).toBe('playing');
+  await hooks(page, async (h) => {
+    h.trigger(true);
+    await h.waitFrames(3);
+    h.trigger(false);
+    await h.waitFrames(3);
+  });
+  expect(await hooks(page, (h) => h.audio())).toEqual({ state: 'none', voices: 0 });
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#pause')).toBeVisible();
+  await page.locator('#resume').click();
+  await page.waitForFunction(() => document.pointerLockElement !== null, null, { timeout: 5000 });
+  expect(await hooks(page, (h) => h.mode())).toBe('playing');
+  expect(errors).toEqual([]);
+});
+
 test('paused, the sound is suspended, and comes back on resuming', async ({ page }) => {
   const errors = await openGame(page);
   await page.locator('#play').click();

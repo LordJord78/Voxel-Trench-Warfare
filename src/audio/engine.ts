@@ -29,22 +29,35 @@ export class AudioEngine {
     return this.ctx?.state ?? 'none';
   }
 
-  /** In the click that starts or resumes play: make the context the first time, and start it. */
+  /**
+   * In the click that starts or resumes play: make the context the first time, and start it. A
+   * browser that refuses sound leaves the game silent, never stopped: the click goes on to lock the
+   * pointer.
+   */
   start(): void {
     if (!this.ctx) {
-      const ctx = new AudioContext({ latencyHint: 'interactive' });
-      this.mix = new GainNode(ctx, { gain: this.t.masterGain });
-      this.mix.connect(new DynamicsCompressorNode(ctx, { threshold: -14, knee: 12, ratio: 6, attack: 0.002, release: 0.15 })).connect(ctx.destination);
-      this.noise = ctx.createBuffer(1, Math.round(ctx.sampleRate * NOISE_S), ctx.sampleRate);
-      const data = this.noise.getChannelData(0);
-      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-      this.ctx = ctx;
+      let ctx: AudioContext | null = null;
+      try {
+        ctx = new AudioContext({ latencyHint: 'interactive' });
+        const mix = new GainNode(ctx, { gain: this.t.masterGain });
+        mix.connect(new DynamicsCompressorNode(ctx, { threshold: -14, knee: 12, ratio: 6, attack: 0.002, release: 0.15 })).connect(ctx.destination);
+        const noise = ctx.createBuffer(1, Math.round(ctx.sampleRate * NOISE_S), ctx.sampleRate);
+        const data = noise.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+        this.mix = mix;
+        this.noise = noise;
+        this.ctx = ctx;
+      } catch (e) {
+        void ctx?.close().catch(() => {});
+        console.warn(`[audio] no sound: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
     }
-    void this.ctx.resume();
+    this.ctx.resume().catch(() => {});
   }
 
   suspend(): void {
-    void this.ctx?.suspend();
+    this.ctx?.suspend().catch(() => {});
   }
 
   /** Hear from the camera: where it is, which way it faces, which way is up. */
