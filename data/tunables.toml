@@ -158,6 +158,10 @@ eye_height_periscope = 2.20    # the mirror head, not your eye. 0.58 m over a
                                # over the crest against standing's 0.12 m
 radius              = 0.30
 step_up             = 0.55     # one voxel plus tolerance: climb the firing step
+climb_m             = 2.50     # firing-step timber this high over your feet is
+                               # climbed when walked into from the step: a bench
+                               # stands 1.0-2.2 m over the treads that lead to it
+climb_speed         = 1.60     # m/s up the bench's face
 gravity             = -19.6    # 2 g — arcade-leaning, keeps jumps snappy
 jump_speed          = 5.0
 ground_accel        = 62.0

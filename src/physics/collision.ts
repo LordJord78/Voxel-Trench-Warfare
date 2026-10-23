@@ -62,6 +62,27 @@ export function supportIs(g: VoxelGrid, centre: Vec3, halfX: number, kind: numbe
   return false;
 }
 
+/** Of the solid voxels a body would stand on at `centre`, the share that are of `kind` (0 if it would stand on nothing). */
+export function supportShare(g: VoxelGrid, centre: Vec3, halfX: number, kind: number): number {
+  const s = g.voxel;
+  const x0 = Math.floor((centre.x - halfX + EPS) / s);
+  const x1 = Math.floor((centre.x + halfX - EPS) / s) + 1;
+  const z0 = Math.floor((centre.z - halfX + EPS) / s);
+  const z1 = Math.floor((centre.z + halfX - EPS) / s) + 1;
+  const y = Math.floor((centre.y - s * 0.5) / s);
+  let solid = 0;
+  let of = 0;
+  for (let x = x0; x < x1; x++) {
+    for (let z = z0; z < z1; z++) {
+      const k = g.kindAt(x, y, z);
+      if (!KIND_SOLID[k]) continue;
+      solid++;
+      if (k === kind) of++;
+    }
+  }
+  return solid === 0 ? 0 : of / solid;
+}
+
 /** How much of an upright body is in water, in metres: its highest wet sample, at voxel centres. */
 export function submergedDepth(g: VoxelGrid, centre: Vec3, height: number): number {
   const s = g.voxel;

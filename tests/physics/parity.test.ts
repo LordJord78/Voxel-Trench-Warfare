@@ -79,7 +79,11 @@ describe('movement parity with the Python controller', () => {
   }
 
   it('walks the game with the numbers Python was checked with', () => {
-    const game = controllerTunables(loadTunables());
+    // The climb onto the firing step is the port's own (Python's controller has none, and its
+    // fixtures, without these keys, never climb).
+    const { climbM, climbSpeed, ...game } = controllerTunables(loadTunables());
+    expect(climbM).toBeGreaterThan(game.stepUp);
+    expect(climbSpeed).toBeGreaterThan(0);
     for (const fx of fixtures) expect(game).toEqual(fx.controller);
   });
 });

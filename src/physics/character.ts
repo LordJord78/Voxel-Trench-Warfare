@@ -16,7 +16,7 @@
 import { copysign, TAU } from '../core/dmath';
 import type { Tunables } from '../core/tunables';
 import { K } from '../world/materials';
-import { boxHitsSolid, groundHeightUnder, submergedDepth, supportIs } from './collision';
+import { boxHitsSolid, groundHeightUnder, submergedDepth, supportIs, supportShare } from './collision';
 import type { VoxelGrid } from './grid';
 import { Vec3, ZERO, yawBasis } from './vec';
 
@@ -48,6 +48,10 @@ export interface ControllerTunables {
   friction: number;
   maxFall: number;
   headBobHz: number;
+  /** Firing-step timber this high over the feet is climbed when walked into from the step (0, or absent as in Python's, climbs nothing). */
+  climbM: number;
+  /** Metres a second up a ledge's face. */
+  climbSpeed: number;
   /** By Stance. */
   stances: StanceProfile[];
 }
@@ -65,6 +69,8 @@ export function controllerTunables(tun: Tunables): ControllerTunables {
     friction: tun.f('player.ground_friction'),
     maxFall: tun.f('player.max_fall_speed'),
     headBobHz: tun.f('camera.head_bob_hz'),
+    climbM: tun.f('player.climb_m'),
+    climbSpeed: tun.f('player.climb_speed'),
     stances: STANCE_KEYS.map((key, i) => {
       const s = `stance.${key}`;
       return {
@@ -116,6 +122,8 @@ export interface CharacterState {
   speedScale: number;
   /** Too much incoming to keep your head over the parapet: refuses the step and the periscope. */
   pinned: boolean;
+  /** While climbing onto a ledge, its top (metres); null otherwise. */
+  climbTo: number | null;
 }
 
 export function newCharacter(position: Vec3, yaw = 0, pitch = 0): CharacterState {
@@ -134,6 +142,7 @@ export function newCharacter(position: Vec3, yaw = 0, pitch = 0): CharacterState
     blockedStance: false,
     speedScale: 1,
     pinned: false,
+    climbTo: null,
   };
 }
 
@@ -164,11 +173,71 @@ export class CharacterController {
   tick(state: CharacterState, intent: MoveIntent, dt: number): void {
     this.resolveStance(state, intent, dt);
     const profile = this.t.stances[state.stance];
+    if (this.climb(state, intent, dt)) {
+      this.postMove(state, profile, dt);
+      return;
+    }
     const wish = this.wishVelocity(state, intent, profile);
     this.accelerate(state, wish, dt);
     this.applyGravity(state, intent, dt);
     this.integrate(state, dt);
     this.postMove(state, profile, dt);
+  }
+
+  /**
+   * The climb onto a firing step's bench: out of a step-up's reach from the treads (1.0–2.2 m
+   * over them), so a player standing on the step who walks into firing-step timber within
+   * `climbM` climbs it — straight up its face at `climbSpeed`, then forward at that speed, held
+   * at the ledge's height, until the ledge bears the body. Letting go of forward, being pinned,
+   * crouching or going prone, or meeting anything on the way lets go of the ledge. Whether this
+   * tick was spent climbing.
+   */
+  private climb(state: CharacterState, intent: MoveIntent, dt: number): boolean {
+    const letGo = intent.forward <= 0 || state.pinned || intent.stance === Stance.CROUCHED || intent.stance === Stance.PRONE;
+    if (state.climbTo === null) {
+      if (letGo || !state.onGround || !state.onFiringStep || state.stance !== Stance.FIRING_STEP) return false;
+      state.climbTo = this.ledgeAhead(state);
+      if (state.climbTo === null) return false;
+    } else if (letGo) {
+      state.climbTo = null;
+      return false;
+    }
+    const pos = state.position;
+    const step = this.t.climbSpeed * dt;
+    const next = pos.y < state.climbTo ? pos.withY(Math.min(state.climbTo, pos.y + step)) : pos.add(yawBasis(state.yaw)[0].mul(step));
+    if (boxHitsSolid(this.grid, next, this.t.radius, state.height)) {
+      state.climbTo = null;
+      return false;
+    }
+    state.position = next;
+    state.velocity = ZERO;
+    state.onGround = false;
+    // Over the edge: the ledge bears the body once any of it stands on the ledge's top.
+    if (next.y >= state.climbTo && boxHitsSolid(this.grid, next.withY(next.y - 0.06), this.t.radius, 0.05)) {
+      state.climbTo = null;
+      state.onGround = true;
+    }
+    return true;
+  }
+
+  /** The top of firing-step timber the body is walking into, within reach and with room to stand on it and to rise to it; or null. */
+  private ledgeAhead(state: CharacterState): number | null {
+    if (!(this.t.climbM > this.t.stepUp)) return null;
+    const [forward] = yawBasis(state.yaw);
+    const pos = state.position;
+    const v = this.grid.voxel;
+    // A voxel ahead: only a body already against the ledge's face climbs it.
+    const probe = pos.add(forward.mul(v));
+    if (!boxHitsSolid(this.grid, probe, this.t.radius, state.height)) return null;
+    const top = groundHeightUnder(this.grid, probe.withY(pos.y + this.t.climbM + v), this.t.radius, this.t.climbM + v);
+    if (top === null || top - pos.y <= this.t.stepUp || top - pos.y > this.t.climbM) return null;
+    // A bench's top, three voxels in: mostly timber, with room to stand. A parapet faced with a
+    // voxel of wattle is not one: its crest is sandbags and spoil behind the facing.
+    const on = pos.add(forward.mul(3 * v)).withY(top);
+    if (supportShare(this.grid, on, this.t.radius, K.TIMBER) <= 0.5) return null;
+    if (boxHitsSolid(this.grid, on, this.t.radius, state.height)) return null;
+    if (boxHitsSolid(this.grid, pos, this.t.radius, top - pos.y + state.height)) return null;
+    return top;
   }
 
   private resolveStance(state: CharacterState, intent: MoveIntent, dt: number): void {
