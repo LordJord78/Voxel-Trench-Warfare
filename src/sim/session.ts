@@ -10,7 +10,7 @@
  * offsets before the last tick so the camera can interpolate between the two.
  */
 
-import { ballisticsTunables, Rounds } from '../combat/ballistics';
+import { ballisticsTunables, Rounds, type Impact } from '../combat/ballistics';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
 import { Recoil, recoilProfile } from '../combat/recoil';
 import { Suppression, suppressionTunables } from '../combat/suppression';
@@ -37,6 +37,29 @@ export interface ViewOffsets {
   pitch: number;
   roll: number;
   fov: number;
+}
+
+/** A shot, from where it left along its direction (unit), and whether it is a tracer; `tick` is the session's tick that fired it. */
+export interface ShotEvent {
+  tick: number;
+  origin: [number, number, number];
+  dir: [number, number, number];
+  tracer: boolean;
+}
+
+/** What combat did between drains, oldest first. */
+export interface CombatEvents {
+  /** The player's shots, from the eye. */
+  shots: ShotEvent[];
+  /** The front's, from its muzzles. */
+  frontShots: ShotEvent[];
+  impacts: (Impact & { tick: number })[];
+  /** Near misses of the player's head: how near, and where the round passed. */
+  cracks: { tick: number; missM: number; at: [number, number, number] }[];
+}
+
+function noEvents(): CombatEvents {
+  return { shots: [], frontShots: [], impacts: [], cracks: [] };
 }
 
 export interface SessionWorld {
@@ -72,6 +95,8 @@ export class Session {
   readonly front: Front;
   /** Times suppression has taken the player off the firing step. */
   ejected = 0;
+  /** Ticks run. */
+  ticks = 0;
   /** The last tick's shots: from the eye, their direction, the aim (yaw, pitch) before the cone, and whether each is a tracer. */
   readonly shots: { origin: [number, number, number]; dir: [number, number, number]; aim: [number, number]; tracer: boolean }[] = [];
   private readonly dispersion: Rng;
@@ -79,6 +104,7 @@ export class Session {
   private readonly viewKickRng: Rng;
   private readonly suppressionRng: Rng;
   private readonly chipEnergyJ: number;
+  private events: CombatEvents = noEvents();
 
   static create(world: SessionWorld, tun: Tunables, seed: number, yaw = 0): Session {
     return new Session(world, tun, seed, yaw);
@@ -116,6 +142,7 @@ export class Session {
   }
 
   tick(): void {
+    this.ticks++;
     const p = this.player;
     // Suppression as the last tick left it slows the feet and pins the player off the step.
     p.speedScale = this.suppression.speedScale;
@@ -160,16 +187,34 @@ export class Session {
         this.recoil.shot(this.recoilRng);
         this.viewKick.shot(this.recoil.kickPitch - kick, this.viewKickRng);
         this.shots.push({ origin: eye, dir, aim, tracer });
+        this.events.shots.push({ tick: this.ticks, origin: eye, dir, tracer });
       }
     }
     this.rounds.listen(eye, this.suppression.t.crackRadiusM);
     this.rounds.step(dt);
-    for (const miss of this.rounds.cracks) this.suppression.crack(miss, this.suppressionRng);
+    for (const c of this.rounds.cracks) {
+      this.suppression.crack(c.missM, this.suppressionRng);
+      this.events.cracks.push({ tick: this.ticks, missM: c.missM, at: c.at });
+    }
     for (const hit of this.rounds.impacts) {
       chip(this.map, hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
       if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
+      this.events.impacts.push({ ...hit, tick: this.ticks });
     }
-    this.front.tick(dt, eye, this.rounds, w.spec.projectile);
+    // The front's rounds are the ones its tick adds to the pool, the last in it.
+    const fired = this.front.tick(dt, eye, this.rounds, w.spec.projectile);
+    for (let slot = this.rounds.count - fired; slot < this.rounds.count; slot++) {
+      const v = this.rounds.velocity(slot);
+      const speed = hypot(v[0], v[1], v[2]);
+      this.events.frontShots.push({ tick: this.ticks, origin: this.rounds.position(slot), dir: [v[0] / speed, v[1] / speed, v[2] / speed], tracer: this.rounds.isTracer(slot) });
+    }
+  }
+
+  /** What combat did since the last drain, oldest first; the session's own start afresh. */
+  drainEvents(): CombatEvents {
+    const out = this.events;
+    this.events = noEvents();
+    return out;
   }
 
   /** The foot between the last two ticks, `alpha` of the way to the latest. */

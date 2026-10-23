@@ -23,7 +23,6 @@ import { hypot } from '../core/dmath';
 import type { Tunables } from '../core/tunables';
 import type { BrickMap } from '../world/bricks';
 import { raycast } from '../world/raycast';
-import { segmentDistance } from './suppression';
 
 /** What flies, as opposed to what fired it. */
 export interface ProjectileSpec {
@@ -91,8 +90,8 @@ export class Rounds {
   dropped = 0;
   /** The last step's impacts, in slot order. */
   readonly impacts: Impact[] = [];
-  /** The last step's near misses of the listener, in metres: one per substep a round not the player's passed within its radius. */
-  readonly cracks: number[] = [];
+  /** The last step's near misses of the listener: one per substep a round not the player's passed within its radius, how near (m) and where. */
+  readonly cracks: { missM: number; at: [number, number, number] }[] = [];
   private listener: readonly [number, number, number] | null = null;
   private listenRadius = 0;
   private readonly pos: Float64Array;
@@ -102,6 +101,8 @@ export class Rounds {
   private readonly specIndex: Int32Array;
   private readonly owner: Int8Array;
   private readonly tracer: Uint8Array;
+  /** Where each round's tracer is drawn from: the muzzle for the player's, which leave from the eye. */
+  private readonly from: Float64Array;
   private readonly specs: ProjectileSpec[] = [];
   private readonly size: [number, number, number];
 
@@ -118,11 +119,12 @@ export class Rounds {
     this.specIndex = new Int32Array(n);
     this.owner = new Int8Array(n);
     this.tracer = new Uint8Array(n);
+    this.from = new Float64Array(n * 3);
     this.size = [map.dims.x * voxel, map.dims.y * voxel, map.dims.z * voxel];
   }
 
-  /** A round leaving `origin` (m) at `velocity` (m/s): its slot, or −1 if the pool is full or the velocity is zero. */
-  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean): number {
+  /** A round leaving `origin` (m) at `velocity` (m/s), its tracer drawn from `from` (the origin unless given): its slot, or −1 if the pool is full or the velocity is zero. */
+  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean, from: readonly [number, number, number] = origin): number {
     if (velocity[0] === 0 && velocity[1] === 0 && velocity[2] === 0) return -1;
     if (this.count >= this.t.capacity) {
       this.dropped++;
@@ -138,7 +140,12 @@ export class Rounds {
     this.specIndex[i] = s;
     this.owner[i] = owner;
     this.tracer[i] = tracer ? 1 : 0;
+    this.from.set(from, i * 3);
     return i;
+  }
+
+  isTracer(slot: number): boolean {
+    return this.tracer[slot] === 1;
   }
 
   /** Who hears near misses: the player's eye (metres), within `radiusM`; null, no one. */
@@ -168,12 +175,19 @@ export class Rounds {
     return [this.vel[slot * 3], this.vel[slot * 3 + 1], this.vel[slot * 3 + 2]];
   }
 
-  /** Each tracer round's head and its tail, up to `lengthM` back along its path (no further than it has flown), as [x, y, z] triples in metres. */
-  tracerSegments(lengthM: number): { head: Float32Array; tail: Float32Array } {
+  /**
+   * Each tracer round's head and its tail, up to `lengthM` back along its path (no further than it
+   * has flown), as [x, y, z] triples in metres; where its tracer is drawn from, how far it has
+   * flown (m), and whose it is.
+   */
+  tracerSegments(lengthM: number): { head: Float32Array; tail: Float32Array; from: Float32Array; flown: Float32Array; owner: Int8Array } {
     let n = 0;
     for (let i = 0; i < this.count; i++) n += this.tracer[i];
     const head = new Float32Array(n * 3);
     const tail = new Float32Array(n * 3);
+    const from = new Float32Array(n * 3);
+    const flown = new Float32Array(n);
+    const owner = new Int8Array(n);
     let o = 0;
     for (let i = 0; i < this.count; i++) {
       if (!this.tracer[i]) continue;
@@ -181,12 +195,15 @@ export class Rounds {
       const speed = hypot(v[0], v[1], v[2]);
       const back = speed > 0 ? Math.min(lengthM, this.distance[i]) / speed : 0;
       for (let k = 0; k < 3; k++) {
-        head[o + k] = this.pos[i * 3 + k];
-        tail[o + k] = this.pos[i * 3 + k] - v[k] * back;
+        head[o * 3 + k] = this.pos[i * 3 + k];
+        tail[o * 3 + k] = this.pos[i * 3 + k] - v[k] * back;
+        from[o * 3 + k] = this.from[i * 3 + k];
       }
-      o += 3;
+      flown[o] = this.distance[i];
+      owner[o] = this.owner[i];
+      o++;
     }
-    return { head, tail };
+    return { head, tail, from, flown, owner };
   }
 
   /** One substep of round `i`: whether it is to be retired. */
@@ -212,9 +229,17 @@ export class Rounds {
     // A crack is measured along the substep's whole segment, as the reference does, even where it
     // strikes partway: a round covers metres a substep, and either end alone would miss most.
     if (this.owner[i] !== 0 && this.listener) {
-      const end = [this.pos[p] + tx, this.pos[p + 1] + ty, this.pos[p + 2] + tz];
-      const miss = segmentDistance([this.pos[p], this.pos[p + 1], this.pos[p + 2]], end, this.listener);
-      if (miss <= this.listenRadius) this.cracks.push(miss);
+      const [lx, ly, lz] = this.listener;
+      const ax = this.pos[p];
+      const ay = this.pos[p + 1];
+      const az = this.pos[p + 2];
+      const lengthSq = tx * tx + ty * ty + tz * tz;
+      const u = lengthSq >= 1e-12 ? Math.max(0, Math.min(1, ((lx - ax) * tx + (ly - ay) * ty + (lz - az) * tz) / lengthSq)) : 0;
+      const cx = ax + tx * u;
+      const cy = ay + ty * u;
+      const cz = az + tz * u;
+      const miss = Math.sqrt((cx - lx) * (cx - lx) + (cy - ly) * (cy - ly) + (cz - lz) * (cz - lz));
+      if (miss <= this.listenRadius) this.cracks.push({ missM: miss, at: [cx, cy, cz] });
     }
     if (len > 0) {
       const dir: [number, number, number] = [tx / len, ty / len, tz / len];
@@ -260,5 +285,6 @@ export class Rounds {
     this.specIndex[i] = this.specIndex[last];
     this.owner[i] = this.owner[last];
     this.tracer[i] = this.tracer[last];
+    this.from.copyWithin(i * 3, last * 3, last * 3 + 3);
   }
 }

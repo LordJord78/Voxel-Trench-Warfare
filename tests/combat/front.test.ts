@@ -99,7 +99,7 @@ describe('the front', () => {
         checked++;
       }
       rounds.step(TICK);
-      cracks.push(...rounds.cracks);
+      cracks.push(...rounds.cracks.map((c) => c.missM));
     }
     expect(checked).toBeGreaterThan(300);
     // Flown, with the drop: still no nearer, and most of them heard.

@@ -202,6 +202,22 @@ describe('rounds in flight', () => {
     expect(head[0]).toBeCloseTo(6.4, 5);
     expect(tail[2]).toBeLessThan(head[2]);
     expect(Math.hypot(head[0] - tail[0], head[1] - tail[1], head[2] - tail[2])).toBeLessThanOrEqual(7 + 1e-5);
+    expect(r.isTracer(0)).toBe(true);
+    expect(r.isTracer(1)).toBe(false);
+  });
+
+  it("a tracer's segment carries where it is drawn from, how far it has flown and whose it is", () => {
+    const r = new Rounds(T, world(), VOXEL);
+    r.fire([6.4, 3, 0.5], [0, 0, 880], RIFLE, 1, true);
+    r.fire([3.2, 3, 0.5], [0, 0, 880], RIFLE, 0, true, [3.4, 2.9, 1.2]);
+    for (let k = 0; k < 3; k++) r.step(TICK);
+    const { head, from, flown, owner } = r.tracerSegments(7);
+    expect(Array.from(owner)).toEqual([1, 0]);
+    expect(Array.from(from.slice(0, 3))).toEqual(Array.from(new Float32Array([6.4, 3, 0.5])));
+    expect(Array.from(from.slice(3, 6))).toEqual(Array.from(new Float32Array([3.4, 2.9, 1.2])));
+    // Straight down the range: what it has flown is how far its head is from where it left.
+    expect(flown[0]).toBeCloseTo(Math.hypot(head[0] - 6.4, head[1] - 3, head[2] - 0.5), 3);
+    expect(flown[1]).toBeCloseTo(Math.hypot(head[3] - 3.2, head[4] - 3, head[5] - 0.5), 3);
   });
 });
 
@@ -213,7 +229,7 @@ describe('cracks', () => {
     const cracks: number[] = [];
     for (let k = 0; k < 6; k++) {
       r.step(TICK);
-      cracks.push(...r.cracks);
+      cracks.push(...r.cracks.map((c) => c.missM));
     }
     expect(cracks.length).toBeGreaterThanOrEqual(1);
     expect(cracks.length).toBeLessThanOrEqual(3);
@@ -226,5 +242,26 @@ describe('cracks', () => {
       own.step(TICK);
       expect(own.cracks).toEqual([]);
     }
+  });
+
+  it('a crack carries where the round passed', () => {
+    const r = new Rounds(T, world(), VOXEL);
+    const ear: [number, number, number] = [6.4, 3, 30];
+    r.listen(ear, 3.2);
+    r.fire([7.4, 3.3, 0.5], [0, 0, 880], RIFLE, 1, false);
+    let checked = 0;
+    for (let k = 0; k < 6; k++) {
+      const before = r.count ? r.position(0) : null;
+      r.step(TICK);
+      for (const c of r.cracks) {
+        // On the round's line (x 7.4, y about 3.3), beside the ear, and missM from it.
+        expect(c.at[0]).toBeCloseTo(7.4, 6);
+        expect(Math.abs(c.at[1] - 3.3)).toBeLessThan(0.01);
+        expect(Math.hypot(c.at[0] - ear[0], c.at[1] - ear[1], c.at[2] - ear[2])).toBeCloseTo(c.missM, 9);
+        expect(before).not.toBeNull();
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(1);
   });
 });
