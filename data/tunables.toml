@@ -236,6 +236,7 @@ dispersion_moa      = 3.2      # cone half-angle, scaled by stance sway
 reload_time_s       = 2.4
 automatic           = true
 tracer              = true
+tracer_every        = 5        # every fifth round a tracer
 
 # ---------------------------------------------------------------------------
 # RECOIL
