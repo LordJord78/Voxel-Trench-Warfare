@@ -204,3 +204,27 @@ describe('rounds in flight', () => {
     expect(Math.hypot(head[0] - tail[0], head[1] - tail[1], head[2] - tail[2])).toBeLessThanOrEqual(7 + 1e-5);
   });
 });
+
+describe('cracks', () => {
+  it("a round passing within 3.2 m of the listener cracks, each substep it is near; the player's own does not", () => {
+    const r = new Rounds(T, world(), VOXEL);
+    r.listen([6.4, 3, 30], 3.2);
+    r.fire([7.4, 3, 0.5], [0, 0, 880], RIFLE, 1, false);
+    const cracks: number[] = [];
+    for (let k = 0; k < 6; k++) {
+      r.step(TICK);
+      cracks.push(...r.cracks);
+    }
+    expect(cracks.length).toBeGreaterThanOrEqual(1);
+    expect(cracks.length).toBeLessThanOrEqual(3);
+    expect(Math.min(...cracks)).toBeCloseTo(1.0, 2);
+    for (const c of cracks) expect(c).toBeLessThanOrEqual(3.2);
+    const own = new Rounds(T, world(), VOXEL);
+    own.listen([6.4, 3, 30], 3.2);
+    own.fire([7.4, 3, 0.5], [0, 0, 880], RIFLE, 0, false);
+    for (let k = 0; k < 6; k++) {
+      own.step(TICK);
+      expect(own.cracks).toEqual([]);
+    }
+  });
+});

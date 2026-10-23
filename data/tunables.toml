@@ -285,6 +285,25 @@ jitter_pitch_deg    = 0.035
 jitter_yaw_deg      = 0.055
 
 # ---------------------------------------------------------------------------
+# THE FRONT
+#
+# Incoming fire from the enemy line, with no squad behind it: a scheduler that
+# fires rounds from the enemy's front-line bays at the player, so near misses
+# suppress. Off, light (a visitor's default: sporadic sniping) or heavy
+# (machine-gun bursts that pin a man on the step within seconds at 22 m).
+# ---------------------------------------------------------------------------
+
+[front]
+light_rpm           = 40.0     # single shots, on average
+heavy_rpm           = 500.0    # rounds a minute on average, in bursts
+burst_rounds        = 8        # a machine gun's burst
+burst_rpm           = 600.0    # its cyclic rate within a burst
+tracer_every        = 5        # every fifth of a burst a tracer
+spread_m            = 1.6      # aim scatter about the player's head, sideways;
+                               # 0.6 of it up and down (the reference's rig)
+reach_m             = 30.0     # enemy bays within this, along the line, fire
+
+# ---------------------------------------------------------------------------
 # DESTRUCTION
 #
 # Every carve is followed by a collapse. A crater that leaves its spoil hanging

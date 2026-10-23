@@ -23,6 +23,7 @@ import { hypot } from '../core/dmath';
 import type { Tunables } from '../core/tunables';
 import type { BrickMap } from '../world/bricks';
 import { raycast } from '../world/raycast';
+import { segmentDistance } from './suppression';
 
 /** What flies, as opposed to what fired it. */
 export interface ProjectileSpec {
@@ -90,6 +91,10 @@ export class Rounds {
   dropped = 0;
   /** The last step's impacts, in slot order. */
   readonly impacts: Impact[] = [];
+  /** The last step's near misses of the listener, in metres: one per substep a round not the player's passed within its radius. */
+  readonly cracks: number[] = [];
+  private listener: readonly [number, number, number] | null = null;
+  private listenRadius = 0;
   private readonly pos: Float64Array;
   private readonly vel: Float64Array;
   private readonly distance: Float64Array;
@@ -136,9 +141,16 @@ export class Rounds {
     return i;
   }
 
-  /** One tick of `dt` seconds in substeps: this step's impacts, and rounds retired by range, age or the world's edge. */
+  /** Who hears near misses: the player's eye (metres), within `radiusM`; null, no one. */
+  listen(eye: readonly [number, number, number] | null, radiusM: number): void {
+    this.listener = eye;
+    this.listenRadius = radiusM;
+  }
+
+  /** One tick of `dt` seconds in substeps: this step's impacts and cracks, and rounds retired by range, age or the world's edge. */
   step(dt: number): void {
     this.impacts.length = 0;
+    this.cracks.length = 0;
     const h = dt / this.t.substeps;
     const retire: number[] = [];
     for (let s = 0; s < this.t.substeps; s++) {
@@ -197,6 +209,13 @@ export class Rounds {
     const tz = vz * h;
     const len = hypot(tx, ty, tz);
     this.age[i] += h;
+    // A crack is measured along the substep's whole segment, as the reference does, even where it
+    // strikes partway: a round covers metres a substep, and either end alone would miss most.
+    if (this.owner[i] !== 0 && this.listener) {
+      const end = [this.pos[p] + tx, this.pos[p + 1] + ty, this.pos[p + 2] + tz];
+      const miss = segmentDistance([this.pos[p], this.pos[p + 1], this.pos[p + 2]], end, this.listener);
+      if (miss <= this.listenRadius) this.cracks.push(miss);
+    }
     if (len > 0) {
       const dir: [number, number, number] = [tx / len, ty / len, tz / len];
       const v = this.voxel;
