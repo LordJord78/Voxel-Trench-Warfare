@@ -52,7 +52,7 @@ import type { WorldPlan } from '../world/generation/plan';
 import { Atmosphere, atmosphereModel, type AtmospherePipelines } from './atmosphere';
 import { AutoExposure, type AutoExposurePipelines, type ExposureState } from './auto-exposure';
 import { Bloom, type BloomPipelines } from './bloom';
-import { jitter, type CameraPose } from './camera';
+import { copyPose, jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
 import { FarFieldGpu } from './farfield-gpu';
@@ -707,7 +707,7 @@ export class Renderer {
     device.queue.submit([encoder.finish()]);
     this.timer.collect();
 
-    this.prevPose = { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch, fov: pose.fov };
+    this.prevPose = copyPose(pose);
     this.prevJitter = applied;
     this.prevRes = [...this.res];
     this.frameIndex++;

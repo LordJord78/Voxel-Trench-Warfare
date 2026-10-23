@@ -22,6 +22,11 @@ export interface CameraPose {
 
 const RAD = Math.PI / 180;
 
+/** A pose to keep past the frame that drew it: its own position, and every other field. */
+export function copyPose(pose: CameraPose): CameraPose {
+  return { ...pose, position: [...pose.position] };
+}
+
 /** Tangent of half the horizontal field of view: the image's half-width at unit depth. */
 export function tanHalf(pose: CameraPose): number {
   return pose.fov === undefined || pose.fov === 90 ? 1 : Math.tan((pose.fov * RAD) / 2);

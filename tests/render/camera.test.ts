@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/core/rng';
-import { cameraBasis, halton, jitter, projectToPixel, rayDir, type CameraPose } from '../../src/render/camera';
+import { cameraBasis, copyPose, halton, jitter, projectToPixel, rayDir, type CameraPose } from '../../src/render/camera';
 
 const close = (a: readonly number[], b: readonly number[], eps = 1e-12) => a.every((v, i) => Math.abs(v - b[i]) <= eps);
 
@@ -33,6 +33,14 @@ describe('the camera', () => {
       expect(dot(b.forward, b.up)).toBeCloseTo(0, 12);
       expect(dot(b.right, b.up)).toBeCloseTo(0, 12);
     }
+  });
+  it("keeps every field of a pose it remembers, the shake's roll among them", () => {
+    // The renderer remembers each frame's pose for the next frame's motion vectors and reprojection:
+    // a roll it forgot would read as the whole roll's worth of motion every frame the view shakes.
+    const pose: Required<CameraPose> = { position: [1, 2, 3], yaw: 37, pitch: -12, roll: 0.6, fov: 84 };
+    const kept = copyPose(pose);
+    expect(kept).toEqual(pose);
+    expect(kept.position).not.toBe(pose.position);
   });
   it('projects through a rolled pose and back', () => {
     const pose: CameraPose = { position: [10, 2, 30], yaw: 37, pitch: -12, roll: 8 };
