@@ -519,9 +519,9 @@ spread              = 3.0
 speed_jitter        = 0.35
 
 [particles.debris]
-life_s              = 2.40
-gravity             = -9.81
-drag                = 0.4
+life_s              = 4.00     # long enough to come back down: under the ground the
+gravity             = -9.81    # depth test hides it (at 2.4 s and 18 m/s, most of it
+drag                = 0.4      # vanished in mid-air, 6 m up)
 size_start_m        = 0.09
 size_end_m          = 0.09
 colour_start        = [1.0, 1.0, 1.0, 1.0] # the struck ground's colour
@@ -529,10 +529,10 @@ colour_end          = [1.0, 1.0, 1.0, 1.0]
 emissive            = false
 square              = true
 count               = 24
-speed               = 11.0
-lift                = 7.0
-spread              = 4.0
-speed_jitter        = 0.35
+speed               = 6.0      # up about 5 m on average
+lift                = 4.0
+spread              = 2.5
+speed_jitter        = 0.25
 
 # The sound (src/audio): every voice made in WebAudio, nothing loaded. A sound is
 # late by its distance at the speed of sound, quieter past reference_m, and duller

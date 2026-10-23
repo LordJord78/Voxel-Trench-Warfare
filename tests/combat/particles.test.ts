@@ -162,4 +162,25 @@ describe('particles', () => {
       [0, 1, 0],
     ]);
   });
+
+  it("a shell's debris comes back down before it is gone", () => {
+    // The review's case: thrown up at about 18 m/s and opaque for 2.4 s, debris ended its life
+    // mid-air (median 6.3 m up). Thrown as the session throws it (speed and lift, straight up), a
+    // piece ends its life at or under where it was thrown from: there the ground hides it.
+    const debris = particleSpec(tun, 'debris');
+    const rng = Rng.root(5).derive('effects.particles');
+    let down = 0;
+    const trials = 400;
+    for (let k = 0; k < trials; k++) {
+      const p = new Particles(1);
+      p.emit([0, 0, 0], [0, debris.speed + debris.lift, 0], debris, 1, rng);
+      let y = 0;
+      while (p.count > 0) {
+        y = billboards(p)[0][1];
+        p.step(DT);
+      }
+      if (y <= 0) down++;
+    }
+    expect(down / trials).toBeGreaterThanOrEqual(0.95);
+  });
 });
