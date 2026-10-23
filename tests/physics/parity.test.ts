@@ -70,7 +70,7 @@ describe('movement parity with the Python controller', () => {
       fx.ticks.forEach((t, i) => {
         s.yaw = t.yaw;
         s.pitch = t.pitch;
-        controller.tick(s, { forward: t.forward, strafe: t.strafe, jump: t.jump, sprint: t.sprint, stance: t.stance as Stance, periscope: t.periscope }, fx.dt);
+        controller.tick(s, { forward: t.forward, strafe: t.strafe, jump: t.jump, sprint: t.sprint, stance: t.stance as Stance, periscope: t.periscope, fire: false, reload: false }, fx.dt);
         const problems = differences(s, fx.states[i]);
         if (problems.length) throw new Error(`${fx.scenario} tick ${i}: ${problems.join('; ')}`);
       });

@@ -7,7 +7,7 @@ import { BrickMap } from '../../src/world/bricks';
 import { P } from '../../src/world/materials';
 
 const DT = 1 / 60;
-const intent = (stance: Stance): MoveIntent => ({ forward: 0, strafe: 0, jump: false, sprint: false, stance, periscope: false });
+const intent = (stance: Stance): MoveIntent => ({ forward: 0, strafe: 0, jump: false, sprint: false, stance, periscope: false, fire: false, reload: false });
 
 describe('the controller at 10 cm', () => {
   it('lands a prone body falling at full speed on a one-voxel duckboard floor over air', () => {

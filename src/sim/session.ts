@@ -10,6 +10,8 @@
  * last tick so the camera can interpolate between the two.
  */
 
+import { ballisticsTunables, Rounds } from '../combat/ballistics';
+import { Weapon, weaponSpec } from '../combat/weapon';
 import { FixedClock } from '../core/clock';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
@@ -17,10 +19,11 @@ import { CharacterController, controllerTunables, newCharacter, Stance, type Cha
 import { brickGrid } from '../physics/grid';
 import { Vec3, ZERO } from '../physics/vec';
 import type { BrickMap } from '../world/bricks';
+import { chip } from '../world/destruction';
 import type { WorldPlan } from '../world/generation/plan';
 
 export function idleIntent(): MoveIntent {
-  return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false };
+  return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false };
 }
 
 export interface SessionWorld {
@@ -41,6 +44,13 @@ export class Session {
   intent: MoveIntent = idleIntent();
   /** The player's foot before the last tick. */
   prevPosition: Vec3;
+  /** The player's rifle, and the rounds in the air. */
+  readonly weapon: Weapon;
+  readonly rounds: Rounds;
+  /** The last tick's shots: from the eye, along their aim, and whether each is a tracer. */
+  readonly shots: { origin: [number, number, number]; dir: [number, number, number]; tracer: boolean }[] = [];
+  private readonly dispersion: Rng;
+  private readonly chipEnergyJ: number;
 
   static create(world: SessionWorld, tun: Tunables, seed: number, yaw = 0): Session {
     return new Session(world, tun, seed, yaw);
@@ -54,6 +64,10 @@ export class Session {
     this.player = newCharacter(new Vec3(...world.spawn.position), yaw, 0);
     this.prevPosition = this.player.position;
     this.streams = Rng.root(seed).derive('session');
+    this.weapon = new Weapon(weaponSpec(tun, 'assault_rifle'));
+    this.rounds = new Rounds(ballisticsTunables(tun), world.map, voxel);
+    this.dispersion = this.streams.derive('combat.dispersion');
+    this.chipEnergyJ = tun.f('destruction.chip_energy_j');
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -66,6 +80,32 @@ export class Session {
   tick(): void {
     this.prevPosition = this.player.position;
     this.controller.tick(this.player, this.intent, this.clock.dt);
+    this.combat(this.clock.dt);
+  }
+
+  /**
+   * The rifle after the player has moved: a reload asked for, a shot from the eye along the view
+   * (none through the periscope: its holder is not holding the rifle), then every round's flight,
+   * and a mark wherever one struck.
+   */
+  private combat(dt: number): void {
+    this.shots.length = 0;
+    const w = this.weapon;
+    const p = this.player;
+    w.tick(dt);
+    if (this.intent.reload) w.beginReload();
+    if (w.wants(this.intent.fire && p.stance !== Stance.PERISCOPE)) {
+      const eye: [number, number, number] = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
+      const dir = w.aim(p.yaw, p.pitch, this.controller.t.stances[p.stance].swayScale, this.dispersion);
+      const v = w.spec.projectile.muzzleVelocity;
+      const tracer = w.tracer();
+      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], w.spec.projectile, 0, tracer) >= 0) {
+        w.shot();
+        this.shots.push({ origin: eye, dir, tracer });
+      }
+    }
+    this.rounds.step(dt);
+    for (const hit of this.rounds.impacts) chip(this.map, hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
   }
 
   /** The foot between the last two ticks, `alpha` of the way to the latest. */

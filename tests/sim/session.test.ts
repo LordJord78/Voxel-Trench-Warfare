@@ -11,7 +11,7 @@ const ground = () => {
   map.fillBox(0, 0, 0, 64, 20, 64, P.SOD);
   return map;
 };
-const walk: MoveIntent = { forward: 1, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false };
+const walk: MoveIntent = { forward: 1, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false };
 const create = () => Session.create({ map: ground(), plan: null, spawn: { position: [3.2, 2.5, 1.0] } }, tun, 7);
 
 describe('the session', () => {

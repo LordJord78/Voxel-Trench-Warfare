@@ -53,6 +53,8 @@ export class Input {
       sprint: this.held.has('ShiftLeft') || this.held.has('ShiftRight'),
       stance: this.posture,
       periscope: this.periscope,
+      fire: false,
+      reload: false,
     };
   }
 

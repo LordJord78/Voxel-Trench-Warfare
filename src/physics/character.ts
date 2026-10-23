@@ -91,6 +91,10 @@ export interface MoveIntent {
   stance: Stance;
   /** Raise the periscope: only means anything on a firing step. */
   periscope: boolean;
+  /** The trigger, held. */
+  fire: boolean;
+  /** Begin a reload. */
+  reload: boolean;
 }
 
 export interface CharacterState {
