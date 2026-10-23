@@ -104,6 +104,8 @@ export interface MoveIntent {
   fire: boolean;
   /** Begin a reload. */
   reload: boolean;
+  /** Dig out loose earth in front of the feet, held. */
+  dig: boolean;
 }
 
 export interface CharacterState {

@@ -119,6 +119,11 @@ export class Destruction {
     return this.jobs.filter((j) => j.state !== 'queued').map((j) => j.box);
   }
 
+  /** Whether `box` reaches into a region out now: an edit there would be undone when its bricks come back. */
+  overlapsOut(box: Box): boolean {
+    return this.jobs.some((j) => j.state !== 'queued' && overlap(j.box, box));
+  }
+
   /** A shell of `radius` at `centre` (voxels), its crater cut with `seed`: queued, and its id. One off the map cuts nothing. */
   shell(centre: readonly [number, number, number], radius: number, seed: number): number {
     const id = this.nextId++;

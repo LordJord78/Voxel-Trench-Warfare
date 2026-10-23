@@ -17,7 +17,7 @@ import { P } from '../../src/world/materials';
 // the drawn rifle.
 const tun = loadTunables();
 const t = effectsTunables(tun);
-const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [] });
+const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [] });
 type V3 = [number, number, number];
 const sub = (a: readonly number[], b: readonly number[]): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const unit = (a: readonly number[]): V3 => {

@@ -135,4 +135,19 @@ describe('input', () => {
     i.blur();
     expect(i.intent().fire).toBe(false);
   });
+
+  it('F held digs, and a blur lets go of it', () => {
+    const i = new Input();
+    expect(i.intent().dig).toBe(false);
+    i.keyDown('KeyF', false);
+    expect(i.intent().dig).toBe(true);
+    i.keyDown('KeyF', true);
+    i.ticked();
+    expect(i.intent().dig).toBe(true);
+    i.keyUp('KeyF');
+    expect(i.intent().dig).toBe(false);
+    i.keyDown('KeyF', false);
+    i.blur();
+    expect(i.intent().dig).toBe(false);
+  });
 });

@@ -5,7 +5,7 @@
  * step, so the app lowers it again when the player steps off one). The
  * trigger is held while the left button is (the app passes it on only with
  * the pointer locked) and a press stands until a tick takes it, as R's
- * request for a reload does.
+ * request for a reload does. F, held, digs.
  * Losing focus lets go of every held key and the trigger, so nobody walks on
  * with W stuck down or empties a magazine into the wall.
  */
@@ -77,6 +77,7 @@ export class Input {
       periscope: this.periscope,
       fire: this.triggerHeld || this.triggerPressed,
       reload: this.reloadAsked,
+      dig: this.held.has('KeyF'),
     };
   }
 

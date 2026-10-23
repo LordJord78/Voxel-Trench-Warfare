@@ -9,7 +9,7 @@ import { P } from '../../src/world/materials';
 // placed where it happened, late by its distance at the speed of sound, quieter and duller with it.
 const t = audioTunables(loadTunables());
 const ear: [number, number, number] = [10, 2, 10];
-const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [] });
+const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [] });
 const shot = (at: [number, number, number]): ShotEvent => ({ tick: 1, origin: at, dir: [0, 0, 1], tracer: false, muzzle: at });
 const impact = (at: [number, number, number], material: number, owner = 0): Impact & { tick: number } => ({
   tick: 1,
@@ -80,6 +80,7 @@ describe('the sound of a frame', () => {
       craters: [],
       incoming: [],
       blasts: [],
+      scoops: [],
     };
     expect(planVoices(t, events, ear).map((v) => v.kind).sort()).toEqual(['crack', 'impact-metal', 'impact-soil', 'impact-timber', 'report', 'report', 'report']);
   });

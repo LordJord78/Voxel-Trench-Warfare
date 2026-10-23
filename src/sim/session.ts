@@ -13,6 +13,7 @@
 import { Artillery, artilleryTunables, planShellSource, type ShellSource } from '../combat/artillery';
 import { ballisticsTunables, Rounds, type Impact } from '../combat/ballistics';
 import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
+import { Entrenching, entrenchingTunables, type Scoop } from '../combat/entrenching';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
 import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
 import { Recoil, recoilProfile } from '../combat/recoil';
@@ -44,7 +45,7 @@ export const MUZZLE_ANCHOR = 1;
 export const PORT_ANCHOR = 2;
 
 export function idleIntent(): MoveIntent {
-  return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false };
+  return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false, dig: false };
 }
 
 /** How the rifle and suppression turn the view, in degrees: recoil and the flinch (yaw, pitch), the shake (pitch, roll), and the view kick's pulse of the field of view. */
@@ -81,10 +82,12 @@ export interface CombatEvents {
   incoming: { tick: number; at: [number, number, number]; landsInS: number }[];
   /** Shells landed: where (metres, the top of the ground), how big, and what they struck. */
   blasts: { tick: number; at: [number, number, number]; radiusM: number; material: number }[];
+  /** Each scoop the player dug: how many voxels, and where (metres). */
+  scoops: (Scoop & { tick: number })[];
 }
 
 function noEvents(): CombatEvents {
-  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [] };
+  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [] };
 }
 
 export interface SessionWorld {
@@ -136,6 +139,9 @@ export class Session {
   readonly artillery: Artillery;
   /** The view's shake from shells landing near. */
   readonly blastShake: BlastShake;
+  /** The entrenching tool; `digging` while F is held and the player can dig. */
+  readonly entrenching: Entrenching;
+  digging = false;
   /** Metres a voxel. */
   readonly voxel: number;
   /** The flash, brass, dust and sparks: cosmetic, and as deterministic as the rest. */
@@ -202,6 +208,7 @@ export class Session {
     this.tints = Array.from({ length: 256 }, (_, id) => [palette[id * 8], palette[id * 8 + 1], palette[id * 8 + 2]]);
     const waterTable = world.waterTable ?? world.plan?.params.waterTable ?? -1;
     this.destruction = new Destruction(world.map, world.runner ?? inProcessRunner(), destructionTunables(tun, waterTable));
+    this.entrenching = new Entrenching(world.map, entrenchingTunables(tun), voxel, waterTable);
     this.artillery = new Artillery(artilleryTunables(tun), world.shells ?? (plan ? planShellSource(plan) : () => null), this.streams.derive('combat.shells'));
   }
 
@@ -228,11 +235,33 @@ export class Session {
     // To the shoulder on the firing step, over the parapet; down off it.
     const raise = p.stance === Stance.FIRING_STEP ? 1 : 0;
     this.raised += (raise - this.raised) * (1 - exp(-this.clock.dt / this.viewmodel.raiseS));
+    this.dig(this.clock.dt);
     this.combat(this.clock.dt);
     for (const c of this.destruction.tick()) this.events.craters.push({ ...c, tick: this.ticks });
     for (const c of this.destruction.cuts) this.events.cuts.push({ ...c, tick: this.ticks });
     if (this.destruction.written > 0) this.liftOut();
     this.particles.step(this.clock.dt);
+  }
+
+  /**
+   * Shovel work (the reference's _tick_dig), after the player has moved: F held, on the ground, not
+   * lying down and not at the periscope. A scoop waits, banked, while a crater's region it would
+   * touch is out (its bricks would undo it); the ground a scoop settles may slump into the body,
+   * which is lifted out as a crater's slump is.
+   */
+  private dig(dt: number): void {
+    const p = this.player;
+    this.digging = this.intent.dig && p.onGround && p.climbTo === null && p.stance !== Stance.PRONE && p.stance !== Stance.PERISCOPE;
+    if (!this.digging) return;
+    const scoop = this.entrenching.work(p.position.toArray(), p.yaw, dt, (box) => !this.destruction.overlapsOut(box));
+    if (!scoop) return;
+    this.events.scoops.push({ ...scoop, tick: this.ticks });
+    this.liftOut();
+  }
+
+  /** How exposed the player stands (the stance's), and more while digging. Nothing hits the player yet: it is shown only. */
+  exposure(): number {
+    return this.controller.t.stances[this.player.stance].exposure * (this.digging ? this.entrenching.t.exposureScale : 1);
   }
 
   /**
@@ -248,7 +277,8 @@ export class Session {
     this.shots.length = 0;
     const w = this.weapon;
     const p = this.player;
-    const sway = this.controller.t.stances[p.stance].swayScale;
+    // A shovel in the hands is not a rifle: the cone, and the recoil, are wider while digging.
+    const sway = this.controller.t.stances[p.stance].swayScale * (this.digging ? this.entrenching.t.swayScale : 1);
     w.tick(dt);
     this.recoil.scale = sway;
     this.recoil.tick(dt);

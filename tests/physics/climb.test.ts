@@ -12,7 +12,7 @@ import { P } from '../../src/world/materials';
 const DT = 1 / 60;
 const tun = loadTunables();
 const T = controllerTunables(tun);
-const intent = (over: Partial<MoveIntent> = {}): MoveIntent => ({ forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false, ...over });
+const intent = (over: Partial<MoveIntent> = {}): MoveIntent => ({ forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false, dig: false, ...over });
 
 /** A timber tread 0.4 m deep, a bench `rise` m over it at z 3.0–3.5 m (timber, or clay), and a clay parapet behind it to 2.8 m. */
 function bay(rise = 1.0, bench: number = P.TIMBER) {
