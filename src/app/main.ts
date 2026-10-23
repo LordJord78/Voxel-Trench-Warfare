@@ -504,7 +504,7 @@ async function start(): Promise<void> {
     walk() {
       if (mode === 'fly') mode = 'playing';
     },
-    /** The trigger, as the left button sets it with the pointer locked (headless Chrome refuses the lock). */
+    /** The trigger, as the left button sets it with the pointer locked; for tests that play without the lock. */
     trigger(held: boolean) {
       input.trigger(held);
     },

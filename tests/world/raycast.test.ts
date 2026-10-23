@@ -105,7 +105,7 @@ describe('the CPU raycast', () => {
     expect(raycast(map, [-5, 5.5, 5.5], [1, 0, 0], 1000)).toEqual({ t: 13, cell: [8, 5, 5], face: 0, material: P.TIMBER });
   });
 
-  it('crosses empty sectors and bricks without walking their voxels', () => {
+  it('steps across empty bricks quickly, without reading their voxels', () => {
     const map = new BrickMap({ x: 512, y: 64, z: 512 });
     map.fillBox(0, 0, 0, 512, 4, 512, P.SUBSOIL);
     const rng = Rng.root(5).derive('skim');

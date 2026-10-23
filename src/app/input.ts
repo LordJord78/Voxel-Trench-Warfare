@@ -4,7 +4,8 @@
  * prone and stands, Q raises and lowers the periscope (which needs a firing
  * step, so the app lowers it again when the player steps off one). The
  * trigger is held while the left button is (the app passes it on only with
- * the pointer locked); R asks for a reload, which stands until a tick takes it.
+ * the pointer locked) and a press stands until a tick takes it, as R's
+ * request for a reload does.
  * Losing focus lets go of every held key and the trigger, so nobody walks on
  * with W stuck down or empties a magazine into the wall.
  */
@@ -16,6 +17,7 @@ export class Input {
   private posture: Stance = Stance.STANDING;
   private periscope = false;
   private triggerHeld = false;
+  private triggerPressed = false;
   private reloadAsked = false;
   private dx = 0;
   private dy = 0;
@@ -31,8 +33,13 @@ export class Input {
     else if (code === 'KeyR') this.reloadAsked = true;
   }
 
-  /** The trigger: the left mouse button, while the pointer is locked to the game. */
+  /**
+   * The trigger: the left mouse button, while the pointer is locked to the game. A press stands
+   * until a tick has run with it, as R does, so a tap (a trackpad's down and up together) between
+   * two frames still fires.
+   */
   trigger(held: boolean): void {
+    if (held && !this.triggerHeld) this.triggerPressed = true;
     this.triggerHeld = held;
   }
 
@@ -44,6 +51,7 @@ export class Input {
   blur(): void {
     this.held.clear();
     this.triggerHeld = false;
+    this.triggerPressed = false;
     this.dx = 0;
     this.dy = 0;
   }
@@ -67,14 +75,15 @@ export class Input {
       sprint: this.held.has('ShiftLeft') || this.held.has('ShiftRight'),
       stance: this.posture,
       periscope: this.periscope,
-      fire: this.triggerHeld,
+      fire: this.triggerHeld || this.triggerPressed,
       reload: this.reloadAsked,
     };
   }
 
-  /** A tick has run with the last intent: a reload asked for is taken. */
+  /** A tick has run with the last intent: a reload asked for, and a press, are taken. */
   ticked(): void {
     this.reloadAsked = false;
+    this.triggerPressed = false;
   }
 
   /** Turn by the gathered mouse movement: `sensitivity` degrees a pixel, moving up looks up. */

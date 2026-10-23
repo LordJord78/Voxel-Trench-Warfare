@@ -55,4 +55,9 @@ describe("a round's mark", () => {
     chip(clay, 4, 4, 4, 900, CHIP_J);
     expect(clay.takeDirty()).toEqual([clay.brickIndex(0, 0, 0)]);
   });
+  it("a lantern's glow is not marked: its light cannot be put out yet", () => {
+    const lantern = cell(P.LANTERN_GLOW);
+    expect(chip(lantern, 4, 4, 4, 1328, CHIP_J)).toBe(false);
+    expect(lantern.get(4, 4, 4)).toBe(P.LANTERN_GLOW);
+  });
 });

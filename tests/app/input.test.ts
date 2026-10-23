@@ -101,6 +101,7 @@ describe('input', () => {
     i.trigger(true);
     expect(i.intent().fire).toBe(true);
     i.trigger(false);
+    i.ticked();
     expect(i.intent().fire).toBe(false);
     press(i, 'KeyR');
     expect(i.intent().reload).toBe(true);
@@ -112,6 +113,24 @@ describe('input', () => {
 
   it('blur lets go of the trigger', () => {
     const i = new Input();
+    i.trigger(true);
+    i.blur();
+    expect(i.intent().fire).toBe(false);
+  });
+  it('a tap between two frames still fires once: the press stands until a tick has taken it', () => {
+    const i = new Input();
+    i.trigger(true);
+    i.trigger(false);
+    expect(i.intent().fire).toBe(true);
+    // A frame too short for a tick.
+    expect(i.intent().fire).toBe(true);
+    i.ticked();
+    expect(i.intent().fire).toBe(false);
+    // Held, it stays held across ticks; blur lets go of a press not yet taken, too.
+    i.trigger(true);
+    i.ticked();
+    expect(i.intent().fire).toBe(true);
+    i.trigger(false);
     i.trigger(true);
     i.blur();
     expect(i.intent().fire).toBe(false);

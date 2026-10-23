@@ -60,7 +60,7 @@ export interface Hooks {
     spawn: { position: [number, number, number]; bay: { longAxis: 0 | 2; facing: 1 | -1 } };
     map: { get(x: number, y: number, z: number): number };
   };
-  /** The trigger, as the left mouse button sets it with the pointer locked (headless Chrome refuses the lock). */
+  /** The trigger, as the left mouse button sets it with the pointer locked; for tests that play without the lock. */
   trigger(held: boolean): void;
   session: { weapon: { rounds: number } };
 }

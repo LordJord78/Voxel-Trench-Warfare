@@ -33,7 +33,7 @@ This sub-project does two things:
 
 | # | Criterion | Measured by |
 |---|---|---|
-| 1 | The rifle fires at 650 rounds a minute, 30 to a magazine, with a 2.4 s reload. Each round flies with the reference's drag and drop: at 100 m it has flown 0.125 s, slowed to 773 m/s and dropped 7.6 cm, each within 2%. It stops at the first solid voxel and marks soil and timber at 10 cm. Every reference ballistics test passes, ported. | unit tests |
+| 1 | The rifle fires at 650 rounds a minute, 30 to a magazine, with a 2.4 s reload. Each round flies with the reference's drag and drop, matching its flight table (at 0.125 s: 103 m, 773 m/s and 7.6 cm of drop) and the flat-fire closed form (100 m in 0.121 s, at 776 m/s), each within 2%. It stops at the first solid voxel and marks soil and timber at 10 cm. Every reference ballistics test passes, ported. | unit tests |
 | 2 | Recoil and view kick behave as the reference's tests pin them. Near misses suppress: they pin the player, push them off the firing step, and slow their aim and feet. The reference's suppression tests pass, with its dead sway multiplier wired. | unit tests; e2e |
 | 3 | A 3 m shell on a parapet cuts a crater at 10 cm. Its rim slumps into the trench and settles, and water floods below the table. The crater is deterministic (same seed, same voxels). It is in the world within 0.5 s, and no frame's main-thread work exceeds 20 ms while shells land. | unit tests; e2e |
 | 4 | **Effects:** a shot's flash lights the trench (a light in the light buffer). Tracers fly. Impacts throw dust coloured by what they hit. A shell throws a flash, smoke and dust into the haze, debris and a shake. The rifle is drawn in the world's light: the key's shadows, the sky and the point lights, its own flash among them. | e2e; screenshot review |
@@ -59,7 +59,7 @@ The reference's `weapons.py` and `ballistics.py` are ported as they are. Their t
 - The pool is struct-of-arrays, with live rounds a prefix and retirement by swap-with-last.
 - A full pool refuses the shot and says so; the round is not consumed (see below).
 
-**Hits.** A new CPU raycast through the brick map (`world/raycast.ts`) finds hits. It is an Amanatides–Woo walk in voxels that skips empty sectors and bricks as the GPU does.
+**Hits.** A new CPU raycast through the brick map (`world/raycast.ts`) finds hits. It is an Amanatides–Woo walk in voxels that steps across an empty brick without reading its voxels, so it keeps the reference walk's cells and ties exactly. A round's segment is 37 voxels a substep, so stepping costs little.
 - The first solid voxel along each substep's segment stops the round.
 - Water, wire and air let it through.
 - A hit records position, normal, voxel, material, speed, distance and energy.

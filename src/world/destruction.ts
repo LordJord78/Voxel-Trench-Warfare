@@ -8,7 +8,7 @@
 
 import type { Rng } from '../core/rng';
 import type { BrickMap } from './bricks';
-import { K, P, hardness, isGranular, isLoose, isSolid, kindOf, spoilOf } from './materials';
+import { K, P, PALETTE, hardness, isGranular, isLoose, isSolid, kindOf, spoilOf } from './materials';
 import { Region, clampBox, type Box } from './region';
 import type { Clip, VoxelSink } from './sink';
 
@@ -181,10 +181,13 @@ export function loosenRim(map: BrickMap, cx: number, cy: number, cz: number, out
  * `chipEnergyJ` × its hardness, a voxel becomes its spoil — soil to spoil,
  * timber to rubble, a branch to air. Spoil and rubble are their own spoil, so
  * a second round in the same place does nothing, and air and water have no
- * hardness to mark. True if the voxel changed.
+ * hardness to mark. A glowing voxel (a lantern's glass, an ember) is left: its
+ * light is the plan's, and nothing can put it out yet. True if the voxel
+ * changed.
  */
 export function chip(map: BrickMap, x: number, y: number, z: number, energyJ: number, chipEnergyJ: number): boolean {
   const p = map.get(x, y, z);
+  if (PALETTE[p]?.emission > 0) return false;
   const h = hardness(p);
   if (!(h > 0) || energyJ < chipEnergyJ * h) return false;
   const q = spoilOf(p);

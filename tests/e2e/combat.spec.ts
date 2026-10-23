@@ -93,3 +93,15 @@ test('the click that starts play, the pause menu and fly mode fire nothing', asy
   expect(await rounds()).toBe(30);
   expect(errors).toEqual([]);
 });
+
+test('a click, through the mouse with the pointer locked, fires one round', async ({ page }) => {
+  const errors = await openGame(page);
+  // Clicking the prompt takes the pointer lock, as a visitor's click does.
+  await page.locator('#play').click();
+  await faceTheWall(page);
+  await hooks(page, (h) => h.waitFrames(10));
+  await page.mouse.click(800, 500);
+  await hooks(page, (h) => h.waitFrames(10));
+  expect(await hooks(page, (h) => h.session.weapon.rounds)).toBe(29);
+  expect(errors).toEqual([]);
+});
