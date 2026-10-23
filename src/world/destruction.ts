@@ -235,6 +235,11 @@ export function cutCrater(map: BrickMap, cx: number, cy: number, cz: number, rad
 
 /** detonate's settling: everything in and around `box` (cutCrater's) comes to rest, and it floods. The box it worked over. */
 export function settleCrater(map: BrickMap, box: Box, o: DetonateOptions): Box | null {
+  return settleRegion(map, box, o.waterTable);
+}
+
+/** Everything in and around `box` comes to rest (collapseRegion), and, given the water table, floods. The box it worked over. */
+export function settleRegion(map: BrickMap, box: Box, waterTable?: number): Box | null {
   // Flood over everything the collapse touched: slumps displace water out past the blast box.
   const worked = { ...box };
   collapseRegion(map, box, {
@@ -247,7 +252,7 @@ export function settleCrater(map: BrickMap, box: Box, o: DetonateOptions): Box |
       worked.z1 = Math.max(worked.z1, w.z1);
     },
   });
-  floodRegion(map, worked, o.waterTable);
+  if (waterTable !== undefined) floodRegion(map, worked, waterTable);
   return clampBox(worked, map.dims);
 }
 

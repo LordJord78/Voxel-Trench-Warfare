@@ -624,12 +624,14 @@ fov_scale           = 0.42     # the tunnel you are looking down
 # spoil ramps over a shelled traverse — and this is the counter. Priced in time
 # spent standing up in a trench that no longer has a traverse.
 #
-# seconds_per_voxel is set from the measured fill: the worst blocked bay across
-# seeds 7/21/99 holds 13-16 loose voxels, so 1.35 s each puts clearing it at
-# about twenty seconds of continuous work.
+# The rate is the reference's, 0.125 m³ (its 0.5 m voxel) per 1.35 s, set there
+# from the measured fill: the worst blocked bay across seeds 7/21/99 held 13-16
+# loose voxels, so clearing it took about twenty seconds of continuous work. At
+# 10 cm that is 93 voxels a second, cleared a scoop at a time.
 [entrenching]
 reach_m             = 1.60
-seconds_per_voxel   = 1.35
+m3_per_s            = 0.0926   # 0.125 m³ per 1.35 s
+scoop_voxels        = 24       # a shovelful: 0.26 s of work, thrown at once
 exposure_scale      = 1.25     # you are up, and side-on, and not watching
 sway_scale          = 1.60     # a shovel in your hands is not a rifle
 
