@@ -30,6 +30,8 @@ export interface ParticleSpec {
   colourEnd: [number, number, number, number];
   /** Light of its own (the flash, sparks), or lit by the world (brass, dust). */
   emissive: boolean;
+  /** Drawn square (a shell's debris), not round; lit, unless emissive. */
+  square: boolean;
   /** How it is thrown: how many; speed along its direction, plus lift upward; spread and jitter. */
   count: number;
   speed: number;
@@ -51,6 +53,8 @@ export function particleSpec(tun: Tunables, kind: string): ParticleSpec {
   const k = `particles.${kind}`;
   const emissive = tun.get(`${k}.emissive`);
   if (typeof emissive !== 'boolean') throw new TypeError(`tunable '${k}.emissive' is not true or false`);
+  const square = tun.get(`${k}.square`);
+  if (typeof square !== 'boolean') throw new TypeError(`tunable '${k}.square' is not true or false`);
   return {
     lifeS: tun.f(`${k}.life_s`),
     gravity: tun.f(`${k}.gravity`),
@@ -60,6 +64,7 @@ export function particleSpec(tun: Tunables, kind: string): ParticleSpec {
     colourStart: rgba(tun, `${k}.colour_start`),
     colourEnd: rgba(tun, `${k}.colour_end`),
     emissive,
+    square,
     count: tun.i(`${k}.count`),
     speed: tun.f(`${k}.speed`),
     lift: tun.f(`${k}.lift`),
@@ -68,7 +73,7 @@ export function particleSpec(tun: Tunables, kind: string): ParticleSpec {
   };
 }
 
-/** A billboard's floats: centre (3), half its size (1), colour premultiplied by its alpha (4), emissive (1, or 0). */
+/** A billboard's floats: centre (3), half its size (1), colour premultiplied by its alpha (4), and its kind: 0 a lit disc, 1 emissive, 2 a lit square. */
 export const BILLBOARD_FLOATS = 9;
 
 export class Particles {
@@ -85,7 +90,8 @@ export class Particles {
   private readonly sizeEnd: Float64Array;
   private readonly colourStart: Float64Array;
   private readonly colourEnd: Float64Array;
-  private readonly emissive: Uint8Array;
+  /** 0 lit, 1 emissive, 2 lit and square: the billboard's kind. */
+  private readonly kind: Uint8Array;
   private readonly anchor: Uint8Array;
 
   constructor(readonly capacity: number) {
@@ -100,7 +106,7 @@ export class Particles {
     this.sizeEnd = new Float64Array(n);
     this.colourStart = new Float64Array(n * 4);
     this.colourEnd = new Float64Array(n * 4);
-    this.emissive = new Uint8Array(n);
+    this.kind = new Uint8Array(n);
     this.anchor = new Uint8Array(n);
   }
 
@@ -140,7 +146,7 @@ export class Particles {
         this.colourStart[i * 4 + c] = spec.colourStart[c] * t;
         this.colourEnd[i * 4 + c] = spec.colourEnd[c] * t;
       }
-      this.emissive[i] = spec.emissive ? 1 : 0;
+      this.kind[i] = spec.emissive ? 1 : spec.square ? 2 : 0;
       this.anchor[i] = anchor;
     }
     return n;
@@ -177,7 +183,7 @@ export class Particles {
       const alpha = this.colourStart[i * 4 + 3] + (this.colourEnd[i * 4 + 3] - this.colourStart[i * 4 + 3]) * t;
       for (let c = 0; c < 3; c++) out[o + 4 + c] = (this.colourStart[i * 4 + c] + (this.colourEnd[i * 4 + c] - this.colourStart[i * 4 + c]) * t) * alpha;
       out[o + 7] = alpha;
-      out[o + 8] = this.emissive[i];
+      out[o + 8] = this.kind[i];
     }
     return n;
   }
@@ -194,7 +200,7 @@ export class Particles {
     this.sizeEnd[to] = this.sizeEnd[from];
     this.colourStart.copyWithin(to * 4, from * 4, from * 4 + 4);
     this.colourEnd.copyWithin(to * 4, from * 4, from * 4 + 4);
-    this.emissive[to] = this.emissive[from];
+    this.kind[to] = this.kind[from];
     this.anchor[to] = this.anchor[from];
   }
 }

@@ -129,3 +129,26 @@ describe("the front's shells over the generated world", () => {
     expect(heavy.filter((d) => d < 15).length).toBeGreaterThan(0);
   });
 });
+
+// Last in the file: its shells cut craters into the world the tests above share.
+describe("the visitor's default over the generated world", () => {
+  it('light fire and light shelling together never pin a player on the firing step', () => {
+    const v = standardViews(world.plan, world.spawn).step;
+    const eye = tun.f('player.eye_height_standing');
+    const s = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn }, tun, 3, 0);
+    s.teleport([v.position[0], v.position[1] - eye, v.position[2]], v.yaw, 0);
+    for (let k = 0; k < 30; k++) s.tick();
+    s.front.intensity = 'light';
+    s.artillery.intensity = 'light';
+    let peak = 0;
+    let blasts = 0;
+    for (let k = 0; k < 5 * 60 * 60; k++) {
+      s.tick();
+      peak = Math.max(peak, s.suppression.level);
+      blasts += s.drainEvents().blasts.length;
+    }
+    expect(blasts).toBeGreaterThan(20);
+    expect(peak).toBeLessThan(tun.f('suppression.eject_from_step_at'));
+    expect(s.ejected).toBe(0);
+  }, 300_000);
+});

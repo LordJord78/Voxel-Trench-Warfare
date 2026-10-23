@@ -12,6 +12,7 @@
 
 import { Artillery, artilleryTunables, planShellSource, type ShellSource } from '../combat/artillery';
 import { ballisticsTunables, Rounds, type Impact } from '../combat/ballistics';
+import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
 import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
 import { Recoil, recoilProfile } from '../combat/recoil';
@@ -129,6 +130,8 @@ export class Session {
   readonly destruction: Destruction;
   /** The front's shells: their intensity is set beside the front's (the pause menu sets both). */
   readonly artillery: Artillery;
+  /** The view's shake from shells landing near. */
+  readonly blastShake: BlastShake;
   /** Metres a voxel. */
   readonly voxel: number;
   /** The flash, brass, dust and sparks: cosmetic, and as deterministic as the rest. */
@@ -146,7 +149,7 @@ export class Session {
   private readonly chipEnergyJ: number;
   private events: CombatEvents = noEvents();
   private readonly particleRng: Rng;
-  private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark', ParticleSpec>;
+  private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris', ParticleSpec>;
   /** Each palette entry's linear colour, for the dust it throws. */
   private readonly tints: [number, number, number][];
 
@@ -173,6 +176,7 @@ export class Session {
     this.recoil = new Recoil(recoilProfile(tun, 'assault_rifle'));
     this.viewKick = new ViewKick(viewKickProfile(tun, 'assault_rifle'));
     this.suppression = new Suppression(suppressionTunables(tun));
+    this.blastShake = new BlastShake(blastShakeTunables(tun));
     const front = frontTunables(tun);
     const plan = world.plan;
     this.front = new Front(front, world.front ?? (plan ? planSource(plan, front.reachM) : () => null), this.streams.derive('front'));
@@ -181,7 +185,15 @@ export class Session {
     this.prevKick = this.kick();
     this.particles = new Particles(tun.i('particles.pool_capacity'));
     this.particleRng = this.streams.derive('effects.particles');
-    this.kinds = { flash: particleSpec(tun, 'muzzle_flash'), brass: particleSpec(tun, 'brass'), dust: particleSpec(tun, 'dust'), spark: particleSpec(tun, 'spark') };
+    this.kinds = {
+      flash: particleSpec(tun, 'muzzle_flash'),
+      brass: particleSpec(tun, 'brass'),
+      dust: particleSpec(tun, 'dust'),
+      spark: particleSpec(tun, 'spark'),
+      blastFlash: particleSpec(tun, 'blast_flash'),
+      soil: particleSpec(tun, 'shell_soil'),
+      debris: particleSpec(tun, 'debris'),
+    };
     const palette = paletteData();
     this.tints = Array.from({ length: 256 }, (_, id) => [palette[id * 8], palette[id * 8 + 1], palette[id * 8 + 2]]);
     const waterTable = world.waterTable ?? world.plan?.params.waterTable ?? -1;
@@ -235,6 +247,7 @@ export class Session {
     this.recoil.scale = sway;
     this.recoil.tick(dt);
     this.suppression.tick(dt);
+    this.blastShake.tick(dt);
     this.viewKick.tick(dt);
     if (this.intent.reload) w.beginReload();
     const eye: [number, number, number] = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
@@ -296,8 +309,23 @@ export class Session {
     if (top === null) return null;
     const material = this.map.get(Math.floor(x / v), top - 1, Math.floor(z / v));
     const id = this.destruction.shell([x / v, top, z / v], radiusM / v, seed);
-    this.events.blasts.push({ tick: this.ticks, at: [x, top * v, z], radiusM, material });
+    const at: [number, number, number] = [x, top * v, z];
+    this.events.blasts.push({ tick: this.ticks, at, radiusM, material });
+    this.throwBlast(at, material);
+    const p = this.player;
+    const d = hypot(at[0] - p.position.x, at[1] - (p.position.y + this.controller.eyeHeight(p)), at[2] - p.position.z);
+    this.blastShake.kick(d);
+    this.suppression.blast(d);
     return id;
+  }
+
+  /** What a shell throws up out of its crater: its flash, and soil and debris of the ground it struck. */
+  private throwBlast(at: readonly number[], material: number): void {
+    const { blastFlash, soil, debris } = this.kinds;
+    const up = (spec: ParticleSpec) => [0, spec.speed + spec.lift, 0];
+    this.particles.emit(at, up(blastFlash), blastFlash, blastFlash.count, this.particleRng);
+    this.particles.emit(at, up(soil), soil, soil.count, this.particleRng, this.tints[material]);
+    this.particles.emit(at, up(debris), debris, debris.count, this.particleRng, this.tints[material]);
   }
 
   /** A shot's flash out along the bore from the muzzle, and its brass out of the port, to the right and up (the reference's view kick). */
@@ -386,8 +414,8 @@ export class Session {
     const shake = this.suppression.shake;
     return {
       yaw: this.recoil.yaw + this.suppression.flinchYaw,
-      pitch: this.recoil.pitch + this.suppression.flinchPitch + shake.pitch,
-      roll: shake.roll,
+      pitch: this.recoil.pitch + this.suppression.flinchPitch + shake.pitch + this.blastShake.pitch,
+      roll: shake.roll + this.blastShake.roll,
       fov: this.viewKick.fovOffset,
     };
   }

@@ -27,6 +27,8 @@ export interface SuppressionTunables {
   crackAmount: number;
   impactRadiusM: number;
   impactAmount: number;
+  blastRadiusM: number;
+  blastAmount: number;
   decayPerS: number;
   holdS: number;
   maxLevel: number;
@@ -48,6 +50,8 @@ export function suppressionTunables(tun: Tunables): SuppressionTunables {
     crackAmount: f('crack_amount'),
     impactRadiusM: f('impact_radius_m'),
     impactAmount: f('impact_amount'),
+    blastRadiusM: f('blast_radius_m'),
+    blastAmount: f('blast_amount'),
     decayPerS: f('decay_per_s'),
     holdS: f('hold_s'),
     maxLevel: f('max_level'),
@@ -81,6 +85,7 @@ export class Suppression {
   flinchYaw = 0;
   cracks = 0;
   impacts = 0;
+  blasts = 0;
   private sinceEvent = Infinity;
   private shakePhase = 0;
 
@@ -104,6 +109,14 @@ export class Suppression {
     const nearness = 1 - distanceM / this.t.impactRadiusM;
     this.add(this.t.impactAmount * nearness * nearness);
     this.impacts++;
+  }
+
+  /** A shell landed `distanceM` metres from the head. */
+  blast(distanceM: number): void {
+    if (distanceM > this.t.blastRadiusM) return;
+    const nearness = 1 - distanceM / this.t.blastRadiusM;
+    this.add(this.t.blastAmount * nearness * nearness);
+    this.blasts++;
   }
 
   tick(dt: number): void {

@@ -5,7 +5,8 @@
 // the open, the sky from all round and the lights of its cell, whole and unshadowed as they light
 // the haze (a flare through its map) — and the emissive (the flash, sparks) by their own glow. Then
 // each is seen through the haze between it and the eye, as shade sees the world: the wall behind a
-// mote has it, and a mote without it reads as soot. One thread a billboard.
+// mote has it, and a mote without it reads as soot. One thread a billboard. A square (a shell's
+// debris, kind 2) is lit as a mote is, and handed on with its half size negative.
 #include "scene.wgsl"
 #include "sky.wgsl"
 #include "camera.wgsl"
@@ -131,7 +132,8 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let centre = vec3f(billboards[o], billboards[o + 1u], billboards[o + 2u]);
   let colour = vec4f(billboards[o + 4u], billboards[o + 5u], billboards[o + 6u], billboards[o + 7u]);
   var out = vec4f(colour.rgb * look.glow, 0.0);
-  if (billboards[o + 8u] == 0.0) {
+  let kind = billboards[o + 8u];
+  if (kind != 1.0) {
     let p = centre / frame.voxel;
     let near = nearLight(p);
     let around = skyAround() * look.dustSky + cellLightsAt(p);
@@ -140,5 +142,6 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   }
   // Premultiplied: what covers adds the haze before it as much as it covers.
   let haze = hazeBefore(centre / frame.voxel);
-  lit[i] = Lit(centre, billboards[o + 3u], vec4f(out.rgb * haze.a + haze.rgb * out.a, out.a));
+  let half = billboards[o + 3u];
+  lit[i] = Lit(centre, select(half, -half, kind == 2.0), vec4f(out.rgb * haze.a + haze.rgb * out.a, out.a));
 }

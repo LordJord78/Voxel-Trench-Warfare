@@ -313,6 +313,10 @@ heavy_sector_share  = 0.5      # the rest in no man's land and along both lines
 light_sector_m      = [15.0, 40.0] # from the player, in their sector
 heavy_sector_m      = [8.0, 50.0]
 reach_m             = 120.0    # along the front, either side of the player
+shake_deg           = 2.5      # the view's shake from a blast at the head, falling
+shake_radius_m      = 60.0     # as (1 - d / this)^2 to nothing here
+shake_decay_s       = 0.35
+shake_hz            = 11.0
 
 [front]
 light_rpm           = 40.0     # aimed single shots, on average
@@ -422,6 +426,7 @@ size_end_m          = 0.04     # disc 16 degrees across; a 5.45's flash is a han
 colour_start        = [1.0, 0.90, 0.55, 0.95]
 colour_end          = [1.0, 0.45, 0.12, 0.0]
 emissive            = true
+square              = false
 count               = 1
 speed               = 2.0      # out along the bore
 lift                = 0.0
@@ -437,6 +442,7 @@ size_end_m          = 0.028
 colour_start        = [0.86, 0.68, 0.30, 1.0]
 colour_end          = [0.70, 0.55, 0.24, 0.0]
 emissive            = false
+square              = false
 count               = 1
 speed               = 2.6      # to the right
 lift                = 1.5
@@ -455,6 +461,7 @@ colour_end          = [2.0, 2.0, 2.0, 0.0]  # is about twice as pale as the face
                                             # lit as the face is and seen through the same
                                             # haze, a puff did not show against it
 emissive            = false
+square              = false
 count               = 7
 speed               = 2.2      # off the struck face
 lift                = 0.0
@@ -470,11 +477,62 @@ size_end_m          = 0.006
 colour_start        = [1.0, 0.78, 0.40, 1.0]
 colour_end          = [1.0, 0.40, 0.10, 0.0]
 emissive            = true
+square              = false
 count               = 6        # off pickets, hulls, corrugated iron and wire
 speed               = 7.0
 lift                = 0.0
 spread              = 2.5
 speed_jitter        = 0.3
+
+# A shell's: its flash, the soil it throws (the struck ground's colour, paler as
+# dust is), and debris, drawn square.
+[particles.blast_flash]
+life_s              = 0.20
+gravity             = 0.0
+drag                = 0.0
+size_start_m        = 2.0
+size_end_m          = 4.0
+colour_start        = [1.0, 0.75, 0.40, 1.0]
+colour_end          = [1.0, 0.40, 0.10, 0.0]
+emissive            = true
+square              = false
+count               = 1
+speed               = 0.0
+lift                = 1.0      # it rises
+spread              = 0.0
+speed_jitter        = 0.0
+
+[particles.shell_soil]
+life_s              = 1.60
+gravity             = -3.0
+drag                = 2.5
+size_start_m        = 0.25
+size_end_m          = 0.90
+colour_start        = [2.0, 2.0, 2.0, 0.70] # times the struck ground's colour,
+colour_end          = [2.0, 2.0, 2.0, 0.0]  # as dust is
+emissive            = false
+square              = false
+count               = 48
+speed               = 7.0      # up out of the crater
+lift                = 5.0
+spread              = 3.0
+speed_jitter        = 0.35
+
+[particles.debris]
+life_s              = 2.40
+gravity             = -9.81
+drag                = 0.4
+size_start_m        = 0.09
+size_end_m          = 0.09
+colour_start        = [1.0, 1.0, 1.0, 1.0] # the struck ground's colour
+colour_end          = [1.0, 1.0, 1.0, 1.0]
+emissive            = false
+square              = true
+count               = 24
+speed               = 11.0
+lift                = 7.0
+spread              = 4.0
+speed_jitter        = 0.35
 
 # The sound (src/audio): every voice made in WebAudio, nothing loaded. A sound is
 # late by its distance at the speed of sound, quieter past reference_m, and duller
@@ -579,6 +637,8 @@ crack_amount        = 0.34     # at nil miss distance; falls off as the square
 impact_radius_m     = 4.50     # dirt kicking up beside you
 impact_amount       = 0.16     # frightening, but it does not mean they have
                                # your range the way a crack does
+blast_radius_m      = 25.0     # a shell landing inside this; light's nearest, at
+blast_amount        = 0.60     # 15 m, adds 0.10, and does not pin alone
 decay_per_s         = 0.42
 hold_s              = 0.55
 max_level           = 1.00

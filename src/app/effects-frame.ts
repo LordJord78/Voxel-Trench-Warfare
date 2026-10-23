@@ -67,12 +67,13 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
   };
 }
 
-/** A test's quad, square to the camera: emissive, or lit as dust is. */
+/** A test's quad, square to the camera: emissive, or lit as dust is, and drawn round or, lit, square as debris is. */
 export interface DebugQuad {
   position: V3;
   size: number;
   colour: V3;
   lit?: boolean;
+  square?: boolean;
 }
 
 /** A test's ribbon: emissive, as a tracer is, as bright at its tail as its head. */
@@ -139,7 +140,7 @@ export class EffectsFrameBuilder {
     this.debugAt = billboards;
     for (const q of this.debug) {
       if (billboards >= MAX_BILLBOARDS) break;
-      this.billboards.set([...q.position, q.size / 2, ...q.colour, 1, q.lit ? 0 : 1], billboards * BILLBOARD_FLOATS);
+      this.billboards.set([...q.position, q.size / 2, ...q.colour, 1, q.lit ? (q.square ? 2 : 0) : 1], billboards * BILLBOARD_FLOATS);
       billboards++;
     }
 

@@ -19,6 +19,7 @@ const spec = (over: Partial<ParticleSpec> = {}): ParticleSpec => ({
   colourStart: [1, 0, 0, 1],
   colourEnd: [0, 0, 1, 0],
   emissive: false,
+  square: false,
   count: 1,
   speed: 0,
   lift: 0,
@@ -91,6 +92,17 @@ describe('particles', () => {
     p.emit([0, 0, 0], [0, 0, 0], spec({ colourStart: [1, 1, 1, 0.5], colourEnd: [1, 1, 1, 0.5] }), 1, undefined, [0.2, 0.4, 0.6]);
     const [b] = billboards(p);
     expect(Array.from(b.slice(4, 8)).map((v) => +v.toFixed(6))).toEqual([0.1, 0.2, 0.3, 0.5]);
+  });
+
+  it("square particles are drawn lit as kind 2, the flash's kind 1 and the rest 0", () => {
+    const p = new Particles(8);
+    p.emit([0, 1, 0], [0, 0, 0], spec(), 1);
+    p.emit([0, 1, 0], [0, 0, 0], spec({ emissive: true }), 1);
+    p.emit([0, 1, 0], [0, 0, 0], spec({ square: true }), 1);
+    expect(billboards(p).map((b) => b[8])).toEqual([0, 1, 2]);
+    expect(particleSpec(tun, 'debris').square).toBe(true);
+    expect(particleSpec(tun, 'shell_soil').square).toBe(false);
+    expect(particleSpec(tun, 'blast_flash').emissive).toBe(true);
   });
 
   it('the same seed throws the same brass', () => {

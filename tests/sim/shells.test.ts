@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { loadTunables } from '../../src/core/tunables';
+import { BILLBOARD_FLOATS } from '../../src/combat/particles';
 import { boxHitsSolid } from '../../src/physics/collision';
 import { Session } from '../../src/sim/session';
-import { P } from '../../src/world/materials';
+import { P, paletteData } from '../../src/world/materials';
 import { trenchArena } from '../support/worlds';
 
 // A shell landing in the session: at the top of the ground under it, its blast an event at once and
@@ -32,6 +33,25 @@ describe('a shell landing', () => {
     }
     expect(craters.map((c) => [c.id, c.centre, c.radius])).toEqual([[id, [128, 76, 150], 30]]);
     expect(s.map.get(128, 75, 150)).toBe(P.AIR);
+  });
+
+  it('a landing throws a flash, and soil and debris of the struck material, and shakes and suppresses a player near it', () => {
+    const s = session([12.8, 4.4, 13.0]);
+    expect(s.blastShake.amplitude).toBe(0);
+    expect(s.suppression.level).toBe(0);
+    s.land(20.8, 15.0, 2.5, 3);
+    const out = new Float32Array(s.particles.capacity * BILLBOARD_FLOATS);
+    const all = Array.from({ length: s.particles.billboards(out) }, (_, i) => out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS));
+    const kind = (k: number) => all.filter((b) => b[8] === k);
+    expect(kind(1).length).toBe(tun.i('particles.blast_flash.count'));
+    expect(kind(2).length).toBe(tun.i('particles.debris.count'));
+    expect(kind(0).length).toBe(tun.i('particles.shell_soil.count'));
+    // Of the struck spoil's colour: its hue, whatever its alpha.
+    const palette = paletteData();
+    const tint = [palette[P.SPOIL * 8], palette[P.SPOIL * 8 + 1]];
+    for (const b of [...kind(0), ...kind(2)]) expect(b[4] / b[5]).toBeCloseTo(tint[0] / tint[1], 3);
+    expect(s.blastShake.amplitude).toBeGreaterThan(0);
+    expect(s.suppression.level).toBeGreaterThan(0);
   });
 
   it('a shell with no ground under it lands nowhere', () => {

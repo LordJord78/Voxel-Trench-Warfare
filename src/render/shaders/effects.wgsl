@@ -70,12 +70,13 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
   var f: Fragment;
   if (i < draw.billboards) {
     let b = lit[i];
-    let p = (b.centre + (frame.cam.right * corner.x + frame.cam.up * corner.y) * b.half) * toVoxels;
+    let p = (b.centre + (frame.cam.right * corner.x + frame.cam.up * corner.y) * abs(b.half)) * toVoxels;
     f.clip = toClip(p);
     f.world = p;
     f.uv = corner;
     f.colour = b.colour;
-    f.alphas = vec2f(-1.0);
+    // A disc (-1), or a square (-2: its half size came negative).
+    f.alphas = vec2f(select(-1.0, -2.0, b.half < 0.0));
     return f;
   }
   let r = ribbons[i - draw.billboards];
@@ -110,6 +111,9 @@ fn fs(f: Fragment) -> @location(0) vec4f {
     // Soft across, fading from the head back to the tail.
     let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.uv.x * f.uv.x);
     return vec4f(f.colour.rgb * a, 0.0);
+  }
+  if (f.alphas.x < -1.5) {
+    return f.colour;
   }
   return f.colour * (1.0 - smoothstep(0.5, 1.0, length(f.uv)));
 }

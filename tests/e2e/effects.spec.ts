@@ -374,3 +374,49 @@ test('a far tracer stays an unbroken line, at least two pixels across, its light
   expect(mean / expected, seen).toBeLessThan(1.4);
   expect(errors).toEqual([]);
 });
+
+test('a lit square shows as a square, where a lit disc leaves its corners', async ({ page }) => {
+  // Debris is drawn as lit squares (milestone 4's plan, ruling 7).
+  const errors = await openGame(page);
+  const at = await hooks(page, async (h) => {
+    h.view('bay');
+    h.setTimeOfDay(21);
+    h.jitter(false);
+    h.freeze();
+    await h.stepFrames(40);
+    const c = h.camera();
+    const y = (c.yaw * Math.PI) / 180;
+    const p = (c.pitch * Math.PI) / 180;
+    return { position: c.position, forward: [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)], res: h.stats().res };
+  });
+  const centre = at.position.map((v, k) => v + at.forward[k] * 3) as [number, number, number];
+  // The same light for all three reads, 0.6 m in front of the quad: it lights the quad and the wall.
+  const lamp = centre.map((v, k) => v - at.forward[k] * 0.6) as [number, number, number];
+  // A metre across, 3 m out: its corner's pixels at 0.85 of its half-width right and up (a disc's
+  // edge has fallen to nothing by then, 1.2 of its radius out).
+  const half = (0.5 / 3) * (at.res[0] / 2);
+  const corner: [number, number, number, number] = [Math.round(at.res[0] / 2 + 0.85 * half) - 1, Math.round(at.res[1] / 2 - 0.85 * half) - 1, 3, 3];
+  const read = (quads: unknown[]) =>
+    hooks(
+      page,
+      async (h, arg) => {
+        const { quads, corner, lamp } = arg as { quads: never[]; corner: [number, number, number, number]; lamp: [number, number, number] };
+        h.debugQuads(quads);
+        h.debugLights([{ position: lamp, radiusM: 6, colour: [1, 1, 1], intensity: 20 }]);
+        await h.stepFrames(2);
+        const rgb = await h.sharpAt(corner);
+        let sum = 0;
+        for (let i = 0; i < rgb.length; i += 3) sum += 0.2126 * rgb[i] + 0.7152 * rgb[i + 1] + 0.0722 * rgb[i + 2];
+        return sum / (rgb.length / 3);
+      },
+      { quads, corner, lamp },
+    );
+  const quad = (square: boolean) => [{ position: centre, size: 1, colour: [0.8, 0.8, 0.8], lit: true, square }];
+  const none = await read([]);
+  const disc = await read(quad(false));
+  const square = await read(quad(true));
+  const seen = JSON.stringify({ none, disc, square });
+  expect(square / none, seen).toBeGreaterThan(1.5);
+  expect(Math.abs(disc - none) / none, seen).toBeLessThan(0.02);
+  expect(errors).toEqual([]);
+});
