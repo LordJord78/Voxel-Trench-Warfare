@@ -3,6 +3,7 @@ import { loadTunables } from '../../src/core/tunables';
 import { CameraRig, rigTunables } from '../../src/app/camera-rig';
 import { Stance } from '../../src/physics/character';
 import { Vec3 } from '../../src/physics/vec';
+import { Rng } from '../../src/core/rng';
 import { Session } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
 import { P } from '../../src/world/materials';
@@ -19,6 +20,22 @@ function standing(): Session {
 }
 
 describe('the camera rig', () => {
+  it('carries recoil, flinch, shake and the FOV pulse in the pose', () => {
+    const s = standing();
+    s.intent = { ...s.intent, fire: true };
+    for (let t = 0; t < 12; t++) s.tick();
+    s.suppression.crack(0.5, Rng.root(1).derive('crack'));
+    s.tick();
+    expect(Math.abs(s.recoil.pitch)).toBeGreaterThan(0);
+    expect(Math.abs(s.suppression.flinchPitch)).toBeGreaterThan(0);
+    expect(Math.abs(s.suppression.shake.roll)).toBeGreaterThan(0);
+    const pose = new CameraRig(rigTunables(tun)).pose(s, 1 / 60);
+    expect(pose.yaw).toBeCloseTo(s.player.yaw + s.recoil.yaw + s.suppression.flinchYaw, 9);
+    expect(pose.pitch).toBeCloseTo(s.player.pitch + s.recoil.pitch + s.suppression.flinchPitch + s.suppression.shake.pitch, 9);
+    expect(pose.roll).toBeCloseTo(s.suppression.shake.roll, 9);
+    expect(pose.fov).toBeCloseTo(tun.f('camera.fov') + s.viewKick.fovOffset, 9);
+  });
+
   it('puts the eye 1.62 m over a standing player and 1.10 m over a crouched one', () => {
     const s = standing();
     expect(new CameraRig(rigTunables(tun)).pose(s, 1 / 60).position[1]).toBeCloseTo(2.0 + 1.62, 9);

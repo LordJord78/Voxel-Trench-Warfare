@@ -14,6 +14,8 @@ export interface CameraPose {
   position: Vec3;
   yaw: number;
   pitch: number;
+  /** Degrees about the view's forward, turning its right toward its up (a suppressed camera's shake); 0 if absent. */
+  roll?: number;
   /** Horizontal field of view in degrees; 90 if absent. */
   fov?: number;
 }
@@ -25,7 +27,7 @@ export function tanHalf(pose: CameraPose): number {
   return pose.fov === undefined || pose.fov === 90 ? 1 : Math.tan((pose.fov * RAD) / 2);
 }
 
-export function cameraBasis(yaw: number, pitch: number): { forward: Vec3; right: Vec3; up: Vec3 } {
+export function cameraBasis(yaw: number, pitch: number, roll = 0): { forward: Vec3; right: Vec3; up: Vec3 } {
   const y = yaw * RAD;
   const p = pitch * RAD;
   const forward: Vec3 = [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)];
@@ -35,7 +37,13 @@ export function cameraBasis(yaw: number, pitch: number): { forward: Vec3; right:
     forward[2] * right[0] - forward[0] * right[2],
     forward[0] * right[1] - forward[1] * right[0],
   ];
-  return { forward, right, up };
+  if (roll === 0) return { forward, right, up };
+  // Right turned toward up about forward, and up with it.
+  const c = Math.cos(roll * RAD);
+  const s = Math.sin(roll * RAD);
+  const rolledRight: Vec3 = [right[0] * c + up[0] * s, right[1] * c + up[1] * s, right[2] * c + up[2] * s];
+  const rolledUp: Vec3 = [up[0] * c - right[0] * s, up[1] * c - right[1] * s, up[2] * c - right[2] * s];
+  return { forward, right: rolledRight, up: rolledUp };
 }
 
 /** The radical inverse of `index` in `base`. */
@@ -57,7 +65,7 @@ export function jitter(frame: number): [number, number] {
 
 /** The unit ray through continuous pixel coordinates (px, py) of a `res` image. */
 export function rayDir(pose: CameraPose, res: readonly [number, number], px: number, py: number): Vec3 {
-  const { forward, right, up } = cameraBasis(pose.yaw, pose.pitch);
+  const { forward, right, up } = cameraBasis(pose.yaw, pose.pitch, pose.roll ?? 0);
   const aspect = res[0] / res[1];
   const t = tanHalf(pose);
   const x = ((2 * px) / res[0] - 1) * t;
@@ -69,7 +77,7 @@ export function rayDir(pose: CameraPose, res: readonly [number, number], px: num
 
 /** Where a point (metres) lands on a `res` image, or null behind the camera. */
 export function projectToPixel(pose: CameraPose, res: readonly [number, number], point: readonly [number, number, number]): [number, number] | null {
-  const { forward, right, up } = cameraBasis(pose.yaw, pose.pitch);
+  const { forward, right, up } = cameraBasis(pose.yaw, pose.pitch, pose.roll ?? 0);
   const d = [point[0] - pose.position[0], point[1] - pose.position[1], point[2] - pose.position[2]];
   const depth = d[0] * forward[0] + d[1] * forward[1] + d[2] * forward[2];
   if (depth <= 0) return null;

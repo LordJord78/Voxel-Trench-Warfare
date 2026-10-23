@@ -191,7 +191,7 @@ export function writeWorldInfo(w: StructWriter, world: { map: { dims: { x: numbe
 
 /** A pose as the shaders take it: voxels, its basis, and a jitter in pixels. */
 export function writeCamera(w: StructWriter, path: 'cam' | 'prev', pose: CameraPose, voxel: number, jitter: readonly [number, number]): void {
-  const { forward, right, up } = cameraBasis(pose.yaw, pose.pitch);
+  const { forward, right, up } = cameraBasis(pose.yaw, pose.pitch, pose.roll ?? 0);
   w.set(`${path}.origin`, pose.position.map((m) => m / voxel));
   w.set(`${path}.tanHalf`, tanHalf(pose));
   w.set(`${path}.forward`, forward);

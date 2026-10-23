@@ -16,6 +16,32 @@ describe('the camera', () => {
     expect(close(b.forward, [1, 0, 0])).toBe(true);
     expect(close(b.right, [0, 0, -1])).toBe(true);
   });
+  it('roll 0 is the old basis exactly', () => {
+    for (const [y, p] of [[0, 0], [37, -12], [200, 60]]) expect(cameraBasis(y, p, 0)).toEqual(cameraBasis(y, p));
+  });
+  it('a rolled pose turns right toward up about forward and stays orthonormal, at pitch ±88° too', () => {
+    const dot = (a: readonly number[], c: readonly number[]) => a[0] * c[0] + a[1] * c[1] + a[2] * c[2];
+    const r = (10 * Math.PI) / 180;
+    for (const pitch of [-88, -12, 0, 30, 88]) {
+      const b0 = cameraBasis(37, pitch);
+      const b = cameraBasis(37, pitch, 10);
+      expect(close(b.forward, b0.forward)).toBe(true);
+      expect(dot(b.right, b0.right)).toBeCloseTo(Math.cos(r), 12);
+      expect(dot(b.right, b0.up)).toBeCloseTo(Math.sin(r), 12);
+      for (const v of [b.forward, b.right, b.up]) expect(Math.hypot(v[0], v[1], v[2])).toBeCloseTo(1, 12);
+      expect(dot(b.forward, b.right)).toBeCloseTo(0, 12);
+      expect(dot(b.forward, b.up)).toBeCloseTo(0, 12);
+      expect(dot(b.right, b.up)).toBeCloseTo(0, 12);
+    }
+  });
+  it('projects through a rolled pose and back', () => {
+    const pose: CameraPose = { position: [10, 2, 30], yaw: 37, pitch: -12, roll: 8 };
+    const res: [number, number] = [1600, 900];
+    const d = rayDir(pose, res, 400.5, 200.5);
+    const back = projectToPixel(pose, res, [pose.position[0] + d[0] * 20, pose.position[1] + d[1] * 20, pose.position[2] + d[2] * 20])!;
+    expect(back[0]).toBeCloseTo(400.5, 6);
+    expect(back[1]).toBeCloseTo(200.5, 6);
+  });
   it('jitters by the Halton (2, 3) sequence', () => {
     expect([halton(1, 2), halton(2, 2), halton(3, 2)]).toEqual([0.5, 0.25, 0.75]);
     expect(halton(1, 3)).toBeCloseTo(1 / 3, 15);

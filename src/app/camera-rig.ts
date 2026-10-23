@@ -82,11 +82,16 @@ export class CameraRig {
     // The sway leans along the camera's right, a few millimetres each stride.
     const yaw = player.yaw * RAD;
     const lean = sway * 0.4;
+    // The view as the rifle sees it: its recoil and the flinch, with the shake of suppression and
+    // the view kick's pulse of the field of view (the round leaves before the shake: it is the
+    // camera's alone).
+    const shake = session.suppression.shake;
     return {
       position: [foot.x + Math.cos(yaw) * lean, body + this.trail + bob + dip, foot.z - Math.sin(yaw) * lean],
-      yaw: player.yaw,
-      pitch: player.pitch,
-      fov: baseFov * this.fovScale,
+      yaw: player.yaw + session.recoil.yaw + session.suppression.flinchYaw,
+      pitch: player.pitch + session.recoil.pitch + session.suppression.flinchPitch + shake.pitch,
+      roll: shake.roll,
+      fov: baseFov * this.fovScale + session.viewKick.fovOffset,
     };
   }
 }
