@@ -62,7 +62,9 @@ export interface Hooks {
   };
   /** The trigger, as the left mouse button sets it with the pointer locked; for tests that play without the lock. */
   trigger(held: boolean): void;
-  session: { weapon: { rounds: number } };
+  session: { weapon: { rounds: number }; suppression: { level: number }; front: { intensity: 'off' | 'light' | 'heavy' } };
+  /** The front's fire, for this visit (the pause menu's choice is what is kept). */
+  setIntensity(i: 'off' | 'light' | 'heavy'): void;
 }
 
 export async function openGame(page: Page): Promise<string[]> {
@@ -78,6 +80,8 @@ export async function openGame(page: Page): Promise<string[]> {
   await hooks(page, async (h) => {
     if (h.error !== undefined) return;
     h.holdLights();
+    // The front holds its fire unless a test asks for it (a visitor's default is light).
+    h.setIntensity('off');
     await h.waitFrames(1);
   });
   return errors;

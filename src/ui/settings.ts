@@ -5,6 +5,7 @@
  * The time of day is not kept: every visit starts at dusk.
  */
 
+import type { Intensity } from '../combat/front';
 import type { Tunables } from '../core/tunables';
 import type { Preset } from '../render/quality';
 
@@ -14,6 +15,8 @@ export interface Settings {
   sensitivity: number;
   /** Horizontal field of view, degrees. */
   fov: number;
+  /** The front's incoming fire: light by default, so a visitor hears the front without being pinned. */
+  intensity: Intensity;
 }
 
 export const SETTING_RANGES = { sensitivity: [0.02, 0.6], fov: [60, 110] } as const;
@@ -21,7 +24,7 @@ export const SETTING_RANGES = { sensitivity: [0.02, 0.6], fov: [60, 110] } as co
 const KEY = 'trenchline.settings';
 
 export function defaultSettings(tun: Tunables): Settings {
-  return { preset: 'high', sensitivity: tun.f('player.mouse_sensitivity'), fov: tun.f('camera.fov') };
+  return { preset: 'high', sensitivity: tun.f('player.mouse_sensitivity'), fov: tun.f('camera.fov'), intensity: 'light' };
 }
 
 export function loadSettings(storage: Pick<Storage, 'getItem'> | null, defaults: Settings): Settings {
@@ -42,6 +45,7 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> | null, defaults:
     preset: r.preset === 'high' || r.preset === 'low' ? r.preset : defaults.preset,
     sensitivity: number('sensitivity'),
     fov: number('fov'),
+    intensity: r.intensity === 'off' || r.intensity === 'light' || r.intensity === 'heavy' ? r.intensity : defaults.intensity,
   };
 }
 

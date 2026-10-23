@@ -105,3 +105,50 @@ test('a click, through the mouse with the pointer locked, fires one round', asyn
   expect(await hooks(page, (h) => h.session.weapon.rounds)).toBe(29);
   expect(errors).toEqual([]);
 });
+
+/** Stand on the step view's firing step. */
+async function onTheStep(page: import('@playwright/test').Page) {
+  await hooks(page, (h) => {
+    const v = h.views.step;
+    h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: 0 });
+  });
+  await hooks(page, (h) => h.waitFrames(30));
+}
+
+test('heavy fire from the front pins the player on the firing step and pushes them off', async ({ page }) => {
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.play());
+  await onTheStep(page);
+  expect((await hooks(page, (h) => h.player())).stance).toBe(3);
+  await hooks(page, (h) => h.setIntensity('heavy'));
+  await page.waitForFunction(() => {
+    const h = (window as unknown as { __trenchline: Hooks }).__trenchline;
+    return h.session.suppression.level > 0.55 && h.player().stance !== 3;
+  }, null, { timeout: 8000 });
+  expect(errors).toEqual([]);
+});
+
+test('the pause menu sets the front, and keeps the choice', async ({ page }) => {
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.play());
+  await page.keyboard.press('Escape');
+  await page.locator('input[name="intensity"][value="heavy"]').check();
+  expect(await hooks(page, (h) => h.session.front.intensity)).toBe('heavy');
+  const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('trenchline.settings') ?? '{}').intensity);
+  expect(kept).toBe('heavy');
+  expect(errors).toEqual([]);
+});
+
+test('paused or flying, the front does not suppress', async ({ page }) => {
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.play());
+  await onTheStep(page);
+  await page.keyboard.press('Escape');
+  await hooks(page, (h) => h.setIntensity('heavy'));
+  await page.waitForTimeout(2000);
+  expect(await hooks(page, (h) => h.session.suppression.level)).toBe(0);
+  await hooks(page, (h) => h.view('step'));
+  await page.waitForTimeout(2000);
+  expect(await hooks(page, (h) => h.session.suppression.level)).toBe(0);
+  expect(errors).toEqual([]);
+});

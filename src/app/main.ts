@@ -169,6 +169,8 @@ async function start(): Promise<void> {
   const pitchLimit = tun.f('player.pitch_limit');
   const periscopeScale = session.controller.t.stances[Stance.PERISCOPE].fovScale;
   let settings: Settings = loadSettings(storage, defaultSettings(tun));
+  // The front fires as the visitor chose; a check measures without it.
+  session.front.intensity = checkRun ? 'off' : settings.intensity;
   renderer.setQuality({ preset: settings.preset });
   let mode: Mode = 'loading';
   /** The mode a pause returns to. */
@@ -201,6 +203,7 @@ async function start(): Promise<void> {
 
   const changeSettings = (next: Settings) => {
     if (next.preset !== settings.preset) renderer.setQuality({ preset: next.preset });
+    session.front.intensity = next.intensity;
     settings = next;
     saveSettings(storage, settings);
   };
@@ -507,6 +510,10 @@ async function start(): Promise<void> {
     /** The trigger, as the left button sets it with the pointer locked; for tests that play without the lock. */
     trigger(held: boolean) {
       input.trigger(held);
+    },
+    /** The front's fire, for this visit (the pause menu's choice is what is kept). */
+    setIntensity(i: 'off' | 'light' | 'heavy') {
+      session.front.intensity = i;
     },
     play: () => play(false),
     teleport(at: { position: [number, number, number]; yaw: number; pitch: number }) {

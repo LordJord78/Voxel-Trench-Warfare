@@ -62,6 +62,8 @@ export class PauseMenu {
   open(settings: Settings, hours: number, lapse: number): void {
     const preset = this.form.querySelector<HTMLInputElement>(`input[name="preset"][value="${settings.preset}"]`);
     if (preset) preset.checked = true;
+    const intensity = this.form.querySelector<HTMLInputElement>(`input[name="intensity"][value="${settings.intensity}"]`);
+    if (intensity) intensity.checked = true;
     this.sensitivity.value = String(settings.sensitivity);
     this.fov.value = String(settings.fov);
     this.time.value = String(hours);
@@ -78,7 +80,9 @@ export class PauseMenu {
 
   private read(): Settings {
     const preset = this.form.querySelector<HTMLInputElement>('input[name="preset"]:checked')?.value === 'low' ? 'low' : 'high';
-    return { preset, sensitivity: Number(this.sensitivity.value), fov: Number(this.fov.value) };
+    const chosen = this.form.querySelector<HTMLInputElement>('input[name="intensity"]:checked')?.value;
+    const intensity = chosen === 'off' || chosen === 'heavy' ? chosen : 'light';
+    return { preset, sensitivity: Number(this.sensitivity.value), fov: Number(this.fov.value), intensity };
   }
 
   private label(): void {
