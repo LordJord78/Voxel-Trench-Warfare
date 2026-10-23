@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { BILLBOARD_FLOATS } from '../../src/combat/particles';
 import { lineSource, type FrontSource } from '../../src/combat/front';
 import { loadTunables } from '../../src/core/tunables';
 import { Session } from '../../src/sim/session';
@@ -10,16 +11,16 @@ import { P } from '../../src/world/materials';
 // tick's only).
 const tun = loadTunables();
 
-/** 25.6 × 6.4 × 51.2 m: a floor 0.4 m deep and a clay wall at z 3–6 m. */
-function arena(): BrickMap {
+/** 25.6 × 6.4 × 51.2 m: a floor 0.4 m deep and a wall at z 5–8 m, clay unless asked. */
+function arena(wall: number = P.CLAY): BrickMap {
   const map = new BrickMap({ x: 256, y: 64, z: 512 });
   map.fillBox(0, 0, 0, 256, 4, 512, P.SOD);
-  map.fillBox(0, 4, 50, 256, 64, 80, P.CLAY);
+  map.fillBox(0, 4, 50, 256, 64, 80, wall);
   return map;
 }
 
-function stand(seed = 7, front?: FrontSource): Session {
-  const s = Session.create({ map: arena(), plan: null, spawn: { position: [12.8, 0.4, 2] }, front }, tun, seed, 0);
+function stand(seed = 7, front?: FrontSource, wall?: number): Session {
+  const s = Session.create({ map: arena(wall), plan: null, spawn: { position: [12.8, 0.4, 2] }, front }, tun, seed, 0);
   for (let k = 0; k < 40; k++) s.tick();
   s.drainEvents();
   return s;
@@ -79,4 +80,49 @@ describe("a frame's combat events", () => {
     const eye = [s.player.position.x, s.player.position.y + s.controller.eyeHeight(s.player), s.player.position.z];
     for (const c of e.cracks) expect(Math.hypot(c.at[0] - eye[0], c.at[1] - eye[1], c.at[2] - eye[2])).toBeCloseTo(c.missM, 6);
   });
+
+  it('a shot throws one flash at the muzzle and one brass from the port', () => {
+    // No wall: the round's own dust would land in the same tick.
+    const s = stand(7, undefined, P.AIR);
+    s.intent = { ...s.intent, fire: true };
+    const muzzle = s.muzzle();
+    const port = s.port();
+    s.tick();
+    expect(s.drainEvents().shots.length).toBe(1);
+    const out = new Float32Array(s.particles.capacity * BILLBOARD_FLOATS);
+    const n = s.particles.billboards(out);
+    const all = Array.from({ length: n }, (_, i) => out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS));
+    const flashes = all.filter((b) => b[8] === 1);
+    const brass = all.filter((b) => b[8] === 0);
+    expect([flashes.length, brass.length]).toEqual([1, 1]);
+    const near = (b: Float32Array, p: number[], within: number) => expect(Math.hypot(b[0] - p[0], b[1] - p[1], b[2] - p[2])).toBeLessThan(within);
+    near(flashes[0], muzzle, 0.05);
+    near(brass[0], port, 0.1);
+  });
+
+  it('an impact on soil throws dust of its colour, and on a picket sparks too', () => {
+    const count = (s: Session) => {
+      const out = new Float32Array(s.particles.capacity * BILLBOARD_FLOATS);
+      const n = s.particles.billboards(out);
+      let dust = 0;
+      let sparks = 0;
+      for (let i = 0; i < n; i++) {
+        const b = out.subarray(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS);
+        if (b[8] === 1 && b[1] > 0.4 && Math.abs(b[2] - 5) < 1) sparks++;
+        else if (b[8] === 0 && Math.abs(b[2] - 5) < 1) dust++;
+      }
+      return { dust, sparks };
+    };
+    for (const [wall, wantSparks] of [[P.CLAY, false], [P.PICKET, true]] as const) {
+      const s = stand(7, undefined, wall);
+      s.intent = { ...s.intent, fire: true };
+      s.tick();
+      const hit = s.drainEvents().impacts;
+      expect(hit.length).toBe(1);
+      const { dust, sparks } = count(s);
+      expect(dust).toBeGreaterThan(3);
+      expect(sparks > 0).toBe(wantSparks);
+    }
+  });
 });
+

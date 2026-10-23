@@ -365,10 +365,6 @@ damping_ratio       = 0.85     # overshoot: the mass settling back
 fov_pulse_deg       = -0.55    # a snap in, not a zoom out
 fov_settle_s        = 0.16
 fov_damping_ratio   = 1.00     # no bounce on the lens; it reads as a wobble
-brass_count         = 1.0
-brass_speed         = 2.6      # to the right
-brass_up            = 1.5
-brass_spread        = 0.55
 report_peak_db      = 158.0    # 5.45 at the shooter's ear
 report_low_hz       = 70.0     # where the body of the transient sits
 report_length_s     = 0.18
@@ -390,7 +386,13 @@ fov_pulse_deg       = -0.60
 # ---------------------------------------------------------------------------
 
 [particles]
-pool_capacity       = 1024
+pool_capacity       = 4096     # the spec's (the reference's was 1024): heavy fire's
+                               # dust and a magazine's brass at once
+
+# Each kind: how it lives (life, gravity, drag, size and colour from start to end,
+# emissive or lit by the world), and how it is thrown (count; speed along its
+# direction, plus lift upward; a normal spread and a share of speed jitter, as
+# the reference's emit draws them).
 
 [particles.muzzle_flash]
 life_s              = 0.045    # two or three frames: a stab, not a flare
@@ -400,6 +402,12 @@ size_start_m        = 0.34
 size_end_m          = 0.08
 colour_start        = [1.0, 0.90, 0.55, 0.95]
 colour_end          = [1.0, 0.45, 0.12, 0.0]
+emissive            = true
+count               = 1
+speed               = 2.0      # out along the bore
+lift                = 0.0
+spread              = 0.0
+speed_jitter        = 0.0
 
 [particles.brass]
 life_s              = 1.30
@@ -409,6 +417,42 @@ size_start_m        = 0.028
 size_end_m          = 0.028
 colour_start        = [0.86, 0.68, 0.30, 1.0]
 colour_end          = [0.70, 0.55, 0.24, 0.0]
+emissive            = false
+count               = 1
+speed               = 2.6      # to the right
+lift                = 1.5
+spread              = 0.55
+speed_jitter        = 0.2
+
+[particles.dust]
+life_s              = 0.90
+gravity             = -1.5     # it hangs, then settles
+drag                = 3.5
+size_start_m        = 0.05
+size_end_m          = 0.32
+colour_start        = [1.0, 1.0, 1.0, 0.55] # times the struck material's colour
+colour_end          = [1.0, 1.0, 1.0, 0.0]
+emissive            = false
+count               = 7
+speed               = 2.2      # off the struck face
+lift                = 0.0
+spread              = 0.9
+speed_jitter        = 0.35
+
+[particles.spark]
+life_s              = 0.22
+gravity             = -9.81
+drag                = 1.5
+size_start_m        = 0.014
+size_end_m          = 0.006
+colour_start        = [1.0, 0.78, 0.40, 1.0]
+colour_end          = [1.0, 0.40, 0.10, 0.0]
+emissive            = true
+count               = 6        # off pickets, hulls, corrugated iron and wire
+speed               = 7.0
+lift                = 0.0
+spread              = 2.5
+speed_jitter        = 0.3
 
 [viewmodel]
 rest_right_m        = 0.175    # where the rifle sits when nothing is happening

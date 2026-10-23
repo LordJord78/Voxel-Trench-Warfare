@@ -12,6 +12,7 @@
 
 import { ballisticsTunables, Rounds, type Impact } from '../combat/ballistics';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
+import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
 import { Recoil, recoilProfile } from '../combat/recoil';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../combat/rifle-model';
 import { Suppression, suppressionTunables } from '../combat/suppression';
@@ -28,6 +29,10 @@ import { Vec3, ZERO } from '../physics/vec';
 import type { BrickMap } from '../world/bricks';
 import { chip } from '../world/destruction';
 import type { WorldPlan } from '../world/generation/plan';
+import { K, kindOf, paletteData } from '../world/materials';
+
+/** Kinds that throw sparks when struck. */
+const METAL = new Set<number>([K.PICKET, K.HULL, K.CORRUGATE, K.WIRE]);
 
 export function idleIntent(): MoveIntent {
   return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false };
@@ -98,6 +103,8 @@ export class Session {
   readonly suppression: Suppression;
   /** The enemy line's incoming fire. */
   readonly front: Front;
+  /** The flash, brass, dust and sparks: cosmetic, and as deterministic as the rest. */
+  readonly particles: Particles;
   /** Times suppression has taken the player off the firing step. */
   ejected = 0;
   /** Ticks run. */
@@ -110,6 +117,10 @@ export class Session {
   private readonly suppressionRng: Rng;
   private readonly chipEnergyJ: number;
   private events: CombatEvents = noEvents();
+  private readonly particleRng: Rng;
+  private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark', ParticleSpec>;
+  /** Each palette entry's linear colour, for the dust it throws. */
+  private readonly tints: [number, number, number][];
 
   static create(world: SessionWorld, tun: Tunables, seed: number, yaw = 0): Session {
     return new Session(world, tun, seed, yaw);
@@ -139,6 +150,11 @@ export class Session {
     this.prevView = this.view();
     this.viewmodel = viewmodelTunables(tun);
     this.prevKick = this.kick();
+    this.particles = new Particles(tun.i('particles.pool_capacity'));
+    this.particleRng = this.streams.derive('effects.particles');
+    this.kinds = { flash: particleSpec(tun, 'muzzle_flash'), brass: particleSpec(tun, 'brass'), dust: particleSpec(tun, 'dust'), spark: particleSpec(tun, 'spark') };
+    const palette = paletteData();
+    this.tints = Array.from({ length: 256 }, (_, id) => [palette[id * 8], palette[id * 8 + 1], palette[id * 8 + 2]]);
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -161,6 +177,7 @@ export class Session {
     this.controller.tick(p, this.intent, this.clock.dt);
     if (wasOnStep && p.pinned && p.stance !== Stance.FIRING_STEP) this.ejected++;
     this.combat(this.clock.dt);
+    this.particles.step(this.clock.dt);
   }
 
   /**
@@ -189,8 +206,12 @@ export class Session {
       const dir = w.aim(aim[0], aim[1], sway * this.suppression.swayScale, this.dispersion);
       const v = w.spec.projectile.muzzleVelocity;
       const tracer = w.tracer();
-      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], w.spec.projectile, 0, tracer) >= 0) {
+      // The round leaves the eye, so the reticle tells the truth; its tracer, flash and brass the
+      // drawn rifle, as it stands before this shot kicks it.
+      const muzzle = this.muzzle();
+      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], w.spec.projectile, 0, tracer, muzzle) >= 0) {
         w.shot();
+        this.throwShot(muzzle);
         const kick = this.recoil.kickPitch;
         this.recoil.shot(this.recoilRng);
         this.viewKick.shot(this.recoil.kickPitch - kick, this.viewKickRng);
@@ -208,6 +229,7 @@ export class Session {
       chip(this.map, hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
       if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
       this.events.impacts.push({ ...hit, tick: this.ticks });
+      this.throwImpact(hit);
     }
     // The front's rounds are the ones its tick adds to the pool, the last in it.
     const fired = this.front.tick(dt, eye, this.rounds, w.spec.projectile);
@@ -216,6 +238,25 @@ export class Session {
       const speed = hypot(v[0], v[1], v[2]);
       this.events.frontShots.push({ tick: this.ticks, origin: this.rounds.position(slot), dir: [v[0] / speed, v[1] / speed, v[2] / speed], tracer: this.rounds.isTracer(slot) });
     }
+  }
+
+  /** A shot's flash out along the bore from the muzzle, and its brass out of the port, to the right and up (the reference's view kick). */
+  private throwShot(muzzle: readonly number[]): void {
+    const p = this.player;
+    const view = this.view();
+    const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
+    const along = (spec: ParticleSpec, d: readonly number[]) => [0, 1, 2].map((k) => d[k] * spec.speed + up[k] * spec.lift);
+    const { flash, brass } = this.kinds;
+    this.particles.emit(muzzle, along(flash, forward), flash, flash.count, this.particleRng);
+    this.particles.emit(this.port(), along(brass, right), brass, brass.count, this.particleRng);
+  }
+
+  /** What a round throws where it strikes: dust of the struck material off its face, and sparks off metal. */
+  private throwImpact(hit: Impact): void {
+    const n = hit.normal[0] === 0 && hit.normal[1] === 0 && hit.normal[2] === 0 ? [0, 1, 0] : hit.normal;
+    const { dust, spark } = this.kinds;
+    this.particles.emit(hit.position, [n[0] * dust.speed, n[1] * dust.speed + dust.lift, n[2] * dust.speed], dust, dust.count, this.particleRng, this.tints[hit.material]);
+    if (METAL.has(kindOf(hit.material))) this.particles.emit(hit.position, [n[0] * spark.speed, n[1] * spark.speed + spark.lift, n[2] * spark.speed], spark, spark.count, this.particleRng);
   }
 
   /** What combat did since the last drain, oldest first; the session's own start afresh. */
