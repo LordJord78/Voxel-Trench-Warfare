@@ -102,6 +102,16 @@ describe('the sound of a frame', () => {
     });
   });
 
+  it('a scoop is a scrape where it was dug, at scrape_gain', () => {
+    expect(t.scrapeGain).toBe(0.5);
+    const scoop = { tick: 1, voxels: 24, at: [10.6, 1.4, 10.8] as [number, number, number] };
+    const v = planVoices(t, { ...none(), scoops: [scoop, { ...scoop, voxels: 3 }] }, ear);
+    expect(v.map((x) => x.kind)).toEqual(['scrape', 'scrape']);
+    expect(v[0].at).toEqual(scoop.at);
+    expect(v[0].gain).toBeCloseTo(t.scrapeGain, 9);
+    expect(v[0].delayS).toBeCloseTo(Math.hypot(0.6, 0.6, 0.8) / 343, 9);
+  });
+
   it('a blast is late by its distance at 343 m/s, quieter and duller with it, and heard past impact_within_m', () => {
     const blast = (z: number) => ({ tick: 1, at: [10, 2, 10 + z] as [number, number, number], radiusM: 3, material: P.SOD });
     const v = planVoices(t, { ...none(), blasts: [blast(20), blast(200)] }, ear);

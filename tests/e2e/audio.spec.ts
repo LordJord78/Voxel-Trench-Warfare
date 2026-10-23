@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { P } from '../../src/world/materials';
 import { hooks, openGame } from './support/app';
 
 // Sound starts with the click that starts play (no context before: the browser would refuse it),
@@ -76,5 +77,34 @@ test('shells are heard: their whistles, then their blasts', async ({ page }) => 
   });
   const after = (await hooks(page, (h) => h.audio())).voices;
   expect(after - before).toBeGreaterThanOrEqual(2);
+  expect(errors).toEqual([]);
+});
+
+test('digging is heard: a scrape a scoop', async ({ page }) => {
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  await hooks(page, (h) => {
+    h.setIntensity('off');
+    h.setShelling('off');
+    const p = h.world.spawn.position;
+    h.teleport({ position: [p[0], p[1], p[2]], yaw: h.views.bay.yaw, pitch: 0 });
+  });
+  await hooks(page, (h) => h.waitFrames(30));
+  // A heap of spoil a metre ahead of the feet, and F held for a second and a half: five or six scoops.
+  await hooks(page, (h, spoil) => {
+    const p = h.session.player.position;
+    const yaw = (h.session.player.yaw * Math.PI) / 180;
+    const [cx, cz] = [(p.x + Math.sin(yaw) * 1.0) / 0.1, (p.z + Math.cos(yaw) * 1.0) / 0.1];
+    const y = Math.round(p.y / 0.1);
+    h.world.map.fillBox(Math.floor(cx - 3), y, Math.floor(cz - 3), Math.floor(cx + 3), y + 4, Math.floor(cz + 3), spoil as number);
+  }, P.SPOIL);
+  const before = await hooks(page, (h) => ({ voices: h.audio().voices, cleared: h.session.entrenching.cleared }));
+  await page.keyboard.down('KeyF');
+  await hooks(page, (h) => h.waitFrames(90));
+  await page.keyboard.up('KeyF');
+  const after = await hooks(page, (h) => ({ voices: h.audio().voices, cleared: h.session.entrenching.cleared }));
+  const scoops = (after.cleared - before.cleared) / 24;
+  expect(scoops).toBeGreaterThanOrEqual(3);
+  expect(after.voices - before.voices).toBeGreaterThanOrEqual(Math.floor(scoops));
   expect(errors).toEqual([]);
 });

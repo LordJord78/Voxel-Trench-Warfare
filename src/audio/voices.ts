@@ -10,6 +10,7 @@
  *   inharmonic partial over a tick of noise.
  * - A shell's whistle: a tone and a band of noise falling in pitch until it
  *   lands; its blast: a sub-bass thump, a rumble, and soil raining down.
+ * - A scoop: the blade's scrape, a band of noise, and the shovelful landing.
  */
 
 import type { VoicePlan } from './plan';
@@ -104,6 +105,11 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       tone(ctx, dull, when, 'sine', 60, 30, g, 0.4);
       burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 200 }, 0.8 * g, 0.01, v.lengthS ?? 1.8);
       for (let k = 0; k < 8; k++) burst(ctx, noise, dull, when + 0.3 + k * 0.12 + Math.random() * 0.08, { type: 'highpass', frequency: 2500 }, 0.12 * g, 0.002, 0.05);
+      break;
+    case 'scrape':
+      // The blade into the earth, rising for 0.04 s and falling over 0.18 s; then the shovelful thrown, landing low.
+      burst(ctx, noise, dull, when, { type: 'bandpass', frequency: 1200, Q: 2 }, 0.7 * g, 0.04, 0.18);
+      burst(ctx, noise, dull, when + 0.24, { type: 'lowpass', frequency: 300 }, 0.5 * g, 0.004, 0.08);
       break;
   }
 }

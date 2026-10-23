@@ -555,6 +555,7 @@ whistle_from_hz     = 1400.0   # whistle_to_hz over its last whistle_s
 whistle_to_hz       = 450.0
 blast_gain          = 1.0      # a shell landing, heard at any distance
 blast_rumble_s      = 1.8
+scrape_gain         = 0.5      # a scoop dug: the blade's scrape and the spoil landing
 
 # What is drawn over the world after sharpening (render/effects.ts): tracers, each
 # shot's flash star and light, and how the particles take the world's light. The
