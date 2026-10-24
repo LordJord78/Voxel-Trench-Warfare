@@ -134,9 +134,12 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
     }
     if (game.rounds() < TOP_UP_BELOW) game.refill();
     await game.waitFrames(1);
-    const s = game.stats();
-    if (s.gpuSamples > seen && s.gpuLastMs !== null) gpu.push(s.gpuLastMs);
-    seen = s.gpuSamples;
+    // By the game's timer: without timestamps (or told not to use them), by submitted work alone.
+    if (game.timestamps) {
+      const s = game.stats();
+      if (s.gpuSamples > seen && s.gpuLastMs !== null) gpu.push(s.gpuLastMs);
+      seen = s.gpuSamples;
+    }
   }
   const frames = game.frames() - from;
   const main = game.mainMs().slice(-frames);

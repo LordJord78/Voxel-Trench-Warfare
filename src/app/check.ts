@@ -1,8 +1,9 @@
 /**
  * The check (`?check=<run>`): once the game is ready, measure and photograph
  * the six standard views at each of the clock's four keys, then measure the
- * overview through the day, at the high preset's full resolution with dynamic
- * resolution off, and post a report and the PNGs to the dev server
+ * overview through the day, then the overview and the bay under peak combat
+ * (peak-combat.ts) at dusk and at night, at the high preset's full resolution
+ * with dynamic resolution off, and post a report and the PNGs to the dev server
  * (tools/vite-plugin-report.ts). Chrome runs it in the e2e
  * suite and Safari through `npm run safari`; whoever reads the report judges
  * it, against the golden fingerprint among other things.
@@ -13,6 +14,7 @@
 
 import { CLOCK_KEYS, clockText } from '../core/sky-clock';
 import type { RenderStats } from '../render/renderer';
+import type { PeakResult } from './peak-combat';
 import { VIEW_NAMES, type ViewName } from './views';
 
 export interface CheckGame {
@@ -33,6 +35,8 @@ export interface CheckGame {
   submittedWork(count: number): Promise<number[]>;
   /** The GPU's uncaptured errors so far (a format or binding a browser refuses only logs one). */
   gpuErrors(): readonly string[];
+  /** A view at an hour under peak combat for `seconds`, measured (peak-combat.ts). */
+  underFire(view: ViewName, hours: number, seconds: number): Promise<PeakResult>;
 }
 
 export interface CheckView {
@@ -66,6 +70,8 @@ export interface CheckReport {
   fingerprint: string;
   views: CheckView[];
   day: CheckHour[];
+  /** The overview and the bay under peak combat, at dusk and at night. */
+  peak: PeakResult[];
   errors: string[];
 }
 
@@ -83,6 +89,13 @@ export const CHECK_KEYS = ['dusk', 'night', 'noon', 'dawn'] as const;
  * sunset, where the sun 0-2° up makes the key light's rays skim the ground (07:10 0.1°, 17:55 1.4°).
  */
 export const DAY_HOURS: readonly number[] = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 6 + 40 / 60, 7 + 10 / 60, 17 + 50 / 60, 17 + 55 / 60];
+
+/**
+ * Peak combat in the check: the overview (the farthest field) and the bay (the nearest walls), which
+ * bound its cost, at dusk and at night, each for PEAK_S seconds; Chrome's perf gate measures all six views.
+ */
+export const CHECK_PEAK: readonly (readonly [ViewName, 'dusk' | 'night'])[] = [['overview', 'dusk'], ['overview', 'night'], ['bay', 'dusk'], ['bay', 'night']];
+export const PEAK_S = 6;
 
 export type Post = (file: string, body: Blob | string) => Promise<void>;
 
@@ -115,6 +128,7 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
     fingerprint: '',
     views: [],
     day: [],
+    peak: [],
     errors: [],
   };
   // Where the check has got to, so a run that stalls says where.
@@ -148,6 +162,10 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
     for (const hours of DAY_HOURS) {
       await progress(`the overview at ${clockText(hours)}`);
       report.day.push({ hours, ...(await measure('overview', hours)) });
+    }
+    for (const [name, key] of CHECK_PEAK) {
+      await progress(`peak combat at ${name} at ${key}`);
+      report.peak.push(await game.underFire(name, CLOCK_KEYS[key], PEAK_S));
     }
     await progress('done');
   } catch (e) {

@@ -907,11 +907,12 @@ async function start(): Promise<void> {
   if (checkRun) {
     // After the first frame, so the prompt's time is known.
     await waitFrames(1);
+    // `&timer=submitted-work` times by submitted work even where timestamps exist, as Safari may have to.
+    const timestamps = gpu.timestamps && new URLSearchParams(location.search).get('timer') !== 'submitted-work';
     hooks.checkReport = await runCheck(
       checkRun,
       {
-        // `&timer=submitted-work` times by submitted work even where timestamps exist, as Safari may have to.
-        timestamps: gpu.timestamps && new URLSearchParams(location.search).get('timer') !== 'submitted-work',
+        timestamps,
         promptMs: hooks.promptMs as number,
         timings: world.timings,
         setQuality: (q) => renderer.setQuality(q),
@@ -926,6 +927,7 @@ async function start(): Promise<void> {
         shot: () => new Promise((resolve) => (shot = resolve)),
         submittedWork,
         gpuErrors: () => gpu.errors,
+        underFire: (view, hours, seconds) => underFire({ ...peakGame, timestamps }, view, hours, seconds),
       },
       reporter(checkRun),
     );
