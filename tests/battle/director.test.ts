@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { HORIZON_FLASHES } from '../../src/battle/barrages';
-import { battleDarkness, Director, type BattleInputs, type DistantShell } from '../../src/battle/director';
+import { battleDarkness, Director, type BattleEvents, type BattleInputs, type DistantShell } from '../../src/battle/director';
+import { tracerAt, tracerTunables } from '../../src/battle/tracers';
 import { flareTunables } from '../../src/battle/flares';
 import { loadTunables, Tunables } from '../../src/core/tunables';
 import { sceneLights } from '../../src/render/lights';
@@ -263,5 +264,104 @@ describe('the distant fire', () => {
     expect(stepped.smoke().length).toBeGreaterThan(0);
     expect(stepped.smoke()).toEqual(sought.smoke());
     expect(stepped.flashes()).toEqual(sought.flashes());
+  });
+});
+
+// The machine guns (the battle spec's §4): bursts from guns on both lines beyond the player's stretch,
+// at night, their tracers streaming over the field; none passing near the player; seeking stepping.
+describe('the machine guns', () => {
+  const tt = tracerTunables(tun);
+  /** `seconds` at `inputs`, each step's events to `each`. */
+  const runFor = (d: Director, inputs: BattleInputs, seconds: number, each?: (e: BattleEvents, k: number) => void) => {
+    for (let k = 0; k < seconds * 60; k++) {
+      const e = d.tick(1 / 60, inputs);
+      each?.(e, k);
+    }
+  };
+  const meanInFlight = (intensity: BattleInputs['intensity']) => {
+    const d = new Director(plan, tun, 7);
+    let sum = 0;
+    let samples = 0;
+    runFor(d, dark(intensity), 600, (_, k) => {
+      if (k % 60 === 0 && k >= 600) {
+        sum += d.tracers().length;
+        samples++;
+      }
+    });
+    return sum / samples;
+  };
+
+  it('at light at least 20 tracers are in flight on average, two and a half times that heavy, none off', () => {
+    const light = meanInFlight('light');
+    expect(light).toBeGreaterThanOrEqual(20);
+    const heavy = meanInFlight('heavy');
+    expect(heavy / light).toBeGreaterThan(tt.heavyScale * 0.8);
+    expect(heavy / light).toBeLessThan(tt.heavyScale * 1.2);
+    expect(meanInFlight('off')).toBe(0);
+  });
+
+  it('tracers are fired only in the dark: when it lifts, those in flight finish', () => {
+    const lit = new Director(plan, tun, 7);
+    let bursts = 0;
+    runFor(lit, { ...dark('heavy'), darkness: 0 }, 60, (e) => (bursts += e.bursts.length));
+    expect(bursts).toBe(0);
+    const d = new Director(plan, tun, 7);
+    runFor(d, dark('heavy'), 60);
+    expect(d.tracers().length).toBeGreaterThan(0);
+    let after = 0;
+    runFor(d, { ...dark('heavy'), darkness: 0 }, 0.2, (e) => (after += e.bursts.length));
+    expect(after).toBe(0);
+    // A burst begun before it lifted finishes its rounds, each burning burn_s.
+    runFor(d, { ...dark('heavy'), darkness: 0 }, tt.burnS + ((tt.rounds[1] - 1) * 60) / tt.rpm + 0.1);
+    expect(d.tracers()).toEqual([]);
+  });
+
+  it('none passes within 30 m of the player, wherever they stand along the front', () => {
+    for (const k of [1, 6, 13, 19, 24]) {
+      const b = front.bays[k];
+      const at: [number, number, number] = [((b.a0 + b.a1) / 2) * v, b.crestY * v, ((b.b0 + b.b1) / 2) * v];
+      const d = new Director(plan, tun, 7);
+      let legs = 0;
+      runFor(d, { intensity: 'heavy', darkness: 1, player: at }, 120, (_, step) => {
+        if (step % 30 !== 0) return;
+        for (const shot of d.shots()) {
+          for (const leg of shot.legs) {
+            const end = tracerAt({ id: 0, legs: [leg] }, leg.t1, tt)!.position;
+            // The leg's line across the ground, and the player's nearest point on it.
+            const dx = end[0] - leg.from[0];
+            const dz = end[2] - leg.from[2];
+            const s = Math.max(0, Math.min(1, ((at[0] - leg.from[0]) * dx + (at[2] - leg.from[2]) * dz) / Math.max(dx * dx + dz * dz, 1e-9)));
+            expect(Math.hypot(leg.from[0] + dx * s - at[0], leg.from[2] + dz * s - at[2]), `bay ${k}`).toBeGreaterThanOrEqual(tt.missM);
+            legs++;
+          }
+        }
+      });
+      expect(legs, `bay ${k}`).toBeGreaterThan(0);
+    }
+  });
+
+  it("from guns on both lines, none within clear_m of the player's stretch", () => {
+    const d = new Director(plan, tun, 7);
+    const zs = new Set<number>();
+    let bursts = 0;
+    runFor(d, dark('heavy'), 300, (e) => {
+      for (const b of e.bursts) {
+        bursts++;
+        expect(Math.abs(b.gun[0] - player[0])).toBeGreaterThan(tt.clearM);
+        zs.add(b.gun[2] > 135 ? 1 : 0);
+        expect(b.rounds).toBeGreaterThanOrEqual(tt.rounds[0]);
+        expect(b.rounds).toBeLessThanOrEqual(tt.rounds[1]);
+      }
+    });
+    expect(bursts).toBeGreaterThan(100);
+    expect(zs.size).toBe(2);
+  });
+
+  it('seeking is stepping, for the guns too', () => {
+    const sought = Director.at(150, plan, tun, 11, dark('light'));
+    const stepped = new Director(plan, tun, 11);
+    for (let k = 0; k < 150 * 30; k++) stepped.tick(1 / 30, dark('light'));
+    expect(stepped.tracers().length).toBeGreaterThan(0);
+    expect(stepped.tracers()).toEqual(sought.tracers());
   });
 });

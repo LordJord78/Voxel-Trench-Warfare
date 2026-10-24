@@ -17,9 +17,14 @@
  * landing at their times, dropped when the front falls quiet; and shells into
  * the far field (far-shells.ts), each standing on the ground there with its
  * column of smoke. Every shell landed is a flash; the sky takes the newest.
+ *
+ * And the machine guns (§4): at night, bursts from guns on both lines further than `clear_m` along
+ * them from the player, every fifth round a tracer (tracers.ts) swept across a bearing over no man's
+ * land and the field, ending on the field's undisturbed ground; a burst whose fire would pass within
+ * `miss_m` of the player is not fired.
  */
 
-import { radians } from '../core/dmath';
+import { cos, radians, sin } from '../core/dmath';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import type { WorldPlan } from '../world/generation/plan';
@@ -27,6 +32,8 @@ import type { Intensity } from '../combat/front';
 import { barrageTunables, flashTunables, HORIZON_FLASHES, planBarrage, type BarrageTunables, type FlashTunables, type PlannedShell } from './barrages';
 import { columnPuffs, farShellTunables, planFarShell, type ColumnPuff, type FarShellTunables } from './far-shells';
 import { flareAt, flareTunables, type FlareState, type FlareTunables, type Launch } from './flares';
+import { planShot, tracerAt, tracerTunables, type Shot, type TracerState, type TracerTunables } from './tracers';
+import { fieldHeight } from '../world/generation/terrain';
 import { Wind, windTunables } from './wind';
 
 export interface BattleInputs {
@@ -47,10 +54,21 @@ export interface DistantShell {
   far: boolean;
 }
 
+/** A machine gun's burst as it starts: where the gun is (metres), when, its rounds and their rate. */
+export interface Burst {
+  id: number;
+  gun: [number, number, number];
+  t: number;
+  rounds: number;
+  rpm: number;
+}
+
 export interface BattleEvents {
   launches: Launch[];
   /** Each distant shell as it lands. */
   distant: DistantShell[];
+  /** Each machine gun's burst as it starts. */
+  bursts: Burst[];
 }
 
 /** How dark the battle takes it to be: the sky's flares key while the sun is below `sun_below_deg`, and none once it is up (no flare by day). */
@@ -96,6 +114,14 @@ export class Director {
   private recent: DistantShell[] = [];
   private columns: DistantShell[] = [];
   private nextShell = 1;
+  private readonly tt: TracerTunables;
+  private readonly gunRng: Rng;
+  /** The field's undisturbed height (metres) under a point: where a tracer ends. */
+  private readonly field: (xM: number, zM: number) => number;
+  /** Tracers fired and not yet out. */
+  private alive: Shot[] = [];
+  private nextTracer = 1;
+  private nextBurst = 1;
 
   /** `ground`: the height (metres) a far shell stands at, at (x, z) metres; the plan's ground level if not given. */
   constructor(plan: WorldPlan | null, tun: Tunables, seed: number, ground?: (xM: number, zM: number) => number) {
@@ -108,6 +134,9 @@ export class Director {
     this.flashT = flashTunables(tun);
     this.barrageRng = root.derive('battle.barrages');
     this.farRng = root.derive('battle.far');
+    this.tt = tracerTunables(tun);
+    this.gunRng = root.derive('battle.guns');
+    this.field = plan ? (x, z) => fieldHeight(plan.terrain, plan.params, x / plan.params.voxel, z / plan.params.voxel) * plan.params.voxel : () => -Infinity;
     const v = plan?.params.voxel ?? 0;
     this.centre = [((plan?.params.dims.x ?? 0) / 2) * v, ((plan?.params.dims.z ?? 0) / 2) * v];
     const level = (plan?.params.ground ?? 0) * v;
@@ -135,7 +164,7 @@ export class Director {
   /** `seconds` of the lights' clock, at `inputs`: what was fired. */
   tick(seconds: number, inputs: BattleInputs): BattleEvents {
     this.given += seconds;
-    const events: BattleEvents = { launches: [], distant: [] };
+    const events: BattleEvents = { launches: [], distant: [], bursts: [] };
     const target = Math.floor(this.given * HZ + 1e-6);
     while (this.ticks < target) this.step(inputs, events);
     return events;
@@ -162,6 +191,22 @@ export class Director {
     return this.columns.flatMap((s) => columnPuffs(s, now, this.wind, this.fs));
   }
 
+  /** The battle's tracers in flight now. */
+  tracers(): TracerState[] {
+    const now = this.seconds;
+    const out: TracerState[] = [];
+    for (const s of this.alive) {
+      const at = tracerAt(s, now, this.tt);
+      if (at) out.push(at);
+    }
+    return out;
+  }
+
+  /** The tracers fired and not yet out, as planned (their flights, for tests). */
+  shots(): readonly Shot[] {
+    return this.alive;
+  }
+
   /** Barrages started since the start, and those in progress. */
   get barrages(): { started: number; running: number } {
     return { started: this.started, running: this.running.length };
@@ -171,7 +216,7 @@ export class Director {
   static at(seconds: number, plan: WorldPlan | null, tun: Tunables, seed: number, inputs: BattleInputs, ground?: (xM: number, zM: number) => number): Director {
     const d = new Director(plan, tun, seed, ground);
     d.given = seconds;
-    const events: BattleEvents = { launches: [], distant: [] };
+    const events: BattleEvents = { launches: [], distant: [], bursts: [] };
     const target = Math.round(seconds * HZ);
     while (d.ticks < target) d.step(inputs, events);
     return d;
@@ -191,6 +236,51 @@ export class Director {
     const now = this.ticks / HZ;
     this.alight = this.alight.filter((l) => now <= l.t0 + Math.sqrt((2 * l.burstM) / ft.gravity) + ft.burnS);
     this.fireDistant(t, now, inputs, events);
+    this.fireGuns(t, now, inputs, events);
+  }
+
+  /** A step of the machine guns, from `t` to `now`: maybe a burst, in the dark and with the front firing; the tracers out dropped. */
+  private fireGuns(t: number, now: number, inputs: BattleInputs, events: BattleEvents): void {
+    const tt = this.tt;
+    if (inputs.intensity !== 'off' && inputs.darkness > this.ft.darkAbove && this.posts.length > 0) {
+      const rate = tt.burstsLight * (inputs.intensity === 'heavy' ? tt.heavyScale : 1);
+      if (this.gunRng.float() < rate / HZ) this.burst(t, inputs.player, events);
+    }
+    this.alive = this.alive.filter((s) => now <= s.legs[s.legs.length - 1].t1);
+  }
+
+  /** A burst from a gun away from the player: its tracers planned as it starts, every draw made whether or not it is fired. */
+  private burst(t: number, player: readonly number[], events: BattleEvents): void {
+    const tt = this.tt;
+    const r = this.gunRng;
+    const guns = this.posts.filter((p) => Math.abs(p.along - (p.longAxis === 0 ? player[0] : player[2])) > tt.clearM);
+    const post = guns.length > 0 ? guns[r.randint(0, guns.length)] : null;
+    const rounds = r.randint(tt.rounds[0], tt.rounds[1] + 1);
+    const bearing = post ? post.across : 0;
+    const from = bearing + radians(r.uniform(-tt.spreadDeg, tt.spreadDeg));
+    const sweep = radians(r.uniform(-tt.sweepDeg, tt.sweepDeg));
+    const elevation = radians(r.uniform(tt.elevationDeg[0], tt.elevationDeg[1]));
+    const gun: [number, number, number] = post ? [post.at[0], post.at[1] + 0.5, post.at[2]] : [0, 0, 0];
+    const shots: Shot[] = [];
+    for (let k = 0; k < rounds; k += tt.tracerEvery) {
+      const b = from + (rounds > 1 ? (sweep * k) / (rounds - 1) : 0);
+      const dir = [sin(b) * cos(elevation), sin(elevation), cos(b) * cos(elevation)];
+      shots.push(planShot(this.nextTracer++, gun, dir, t + (k * 60) / tt.rpm, this.field, r, tt));
+    }
+    if (!post || shots.some((s) => s.legs.some((leg) => this.passes(leg, player)))) return;
+    this.alive.push(...shots);
+    events.bursts.push({ id: this.nextBurst++, gun, t, rounds, rpm: tt.rpm });
+  }
+
+  /** Whether a tracer's flight passes within miss_m of the player across the ground. */
+  private passes(leg: Shot['legs'][number], player: readonly number[]): boolean {
+    const end = tracerAt({ id: 0, legs: [leg] }, leg.t1, this.tt)!.position;
+    const dx = end[0] - leg.from[0];
+    const dz = end[2] - leg.from[2];
+    const s = Math.max(0, Math.min(1, ((player[0] - leg.from[0]) * dx + (player[2] - leg.from[2]) * dz) / Math.max(dx * dx + dz * dz, 1e-9)));
+    const ox = leg.from[0] + dx * s - player[0];
+    const oz = leg.from[2] + dz * s - player[2];
+    return ox * ox + oz * oz < this.tt.missM * this.tt.missM;
   }
 
   /** A step of the distant fire, from `t` to `now`: maybe a barrage started and a far shell landed; the barrages' shells due landed; nothing while off. */

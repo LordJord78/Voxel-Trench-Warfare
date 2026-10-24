@@ -291,7 +291,7 @@ async function start(): Promise<void> {
     const off = Math.abs(timeOfDay - crept);
     return ranAt.darkness <= flareT.darkAbove && Math.min(off, 24 - off) > 1e-6;
   };
-  let battleEvents: BattleEvents = { launches: [], distant: [] };
+  let battleEvents: BattleEvents = { launches: [], distant: [], bursts: [] };
   let shownBattle: Director = battle;
   let sought: { at: number; inputs: string; d: Director } | null = null;
   const battleAt = (t: number) => {
@@ -302,7 +302,7 @@ async function start(): Promise<void> {
   };
   const light = (dt: number, eye: readonly number[]) => {
     skyNow();
-    battleEvents = { launches: [], distant: [] };
+    battleEvents = { launches: [], distant: [], bursts: [] };
     if (mode !== 'paused') {
       lightSeconds += dt;
       if (lightsHeld === null) {
