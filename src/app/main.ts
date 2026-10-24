@@ -325,7 +325,7 @@ async function start(): Promise<void> {
       lit = [...lightsAt(lights.filter((l) => l.kind !== 'flare'), lightsHeld ?? lightSeconds, motion), ...battleFlareLights(flares, flareT)];
       renderer.setFlareGlow(Math.min(2, flares.reduce((sum, f) => sum + f.glow, 0) / flareT.meanLight));
       const now = shownBattle.seconds;
-      horizon = shownBattle.flashes().map((f) => ({ position: f.position, power: flashPower(f, now, flashT) }));
+      horizon = shownBattle.flashes().map((f) => ({ position: f.position, power: flashPower(f, now, flashT), glow: !f.far }));
     }
     renderer.setLights(lit, sky.flares, eye);
     renderer.setHorizon(horizon);

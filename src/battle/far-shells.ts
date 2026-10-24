@@ -1,10 +1,12 @@
 /**
  * Shells into the far field (the battle spec's §3): falling `distance_m` from the map's middle, within
  * `arc_deg` of toward the enemy (+z), so beyond the map's edge. Each is a flash (its light on the far
- * field and the haze, and a disc), a thump after its distance, and a column of smoke: `puffs` let out
- * one every `puff_every_s`, each rising `rise_mps` and slowing by e over `rise_s`, carried by the wind
- * from its release, growing over `puff_radius_m`, the whole column thinning away over `smoke_s`.
- * A column is a pure function of its shell, the time and the wind.
+ * field and the haze, and a disc), a thump after its distance, and a column of smoke standing from the
+ * crater up: `puffs` let out one every `puff_every_s`, the first rising highest (to `rise_mps ×
+ * rise_s`, slowing by e over `rise_s`) and each after to a share less, each carried that share of the
+ * wind since it was let out, so the base stays at the crater and the top leans downwind; growing over
+ * `puff_radius_m`, the whole column thinning away over `smoke_s`. A column is a pure function of its
+ * shell, the time and the wind.
  */
 
 import { cos, exp, radians, sin } from '../core/dmath';
@@ -82,9 +84,11 @@ export function columnPuffs(shell: { t: number; position: readonly number[] }, n
     const release = shell.t + k * ft.puffEveryS;
     if (release > now) break;
     const age = now - release;
+    // Its share of the column's height, and of the wind's carrying.
+    const share = 1 - k / ft.puffs;
     const [dx, dz] = wind.drift(release, now);
     puffs.push({
-      centre: [shell.position[0] + dx, shell.position[1] + ft.riseMps * ft.riseS * (1 - exp(-age / ft.riseS)), shell.position[2] + dz],
+      centre: [shell.position[0] + dx * share, shell.position[1] + ft.riseMps * ft.riseS * share * (1 - exp(-age / ft.riseS)), shell.position[2] + dz * share],
       radiusM: r0 + (r1 - r0) * Math.min(1, age / ft.smokeS),
       alpha,
     });

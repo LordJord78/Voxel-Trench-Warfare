@@ -29,17 +29,20 @@ describe('shells into the far field', () => {
     expect([ft.everyLightS, ft.everyHeavyS, ft.arcDeg, ft.smokeS, ft.puffs, ft.puffEveryS, ft.riseMps, ft.riseS]).toEqual([30, 5, 110, 60, 8, 0.5, 6, 8]);
   });
 
-  it('its column rises, leans downwind, grows and thins over a minute', () => {
+  it('its column stands from the crater up, leans downwind, grows and thins over a minute', () => {
     const now = 120;
     const puffs = columnPuffs(shell, now, wind, ft);
     expect(puffs).toHaveLength(8);
+    const top = ft.riseMps * ft.riseS;
     for (let k = 0; k < puffs.length; k++) {
+      // Puff k rises to (1 − k/8) of the column's height, and is carried as much of the wind's drift
+      // since it was let out: the base stays at the crater, the top leans downwind.
+      const share = 1 - k / ft.puffs;
       const release = shell.t + k * ft.puffEveryS;
       const drift = wind.drift(release, now);
-      expect(puffs[k].centre[0] - shell.position[0]).toBeCloseTo(drift[0], 6);
-      expect(puffs[k].centre[2] - shell.position[2]).toBeCloseTo(drift[1], 6);
-      expect(puffs[k].centre[1] - shell.position[1]).toBeGreaterThan(0);
-      expect(puffs[k].centre[1] - shell.position[1]).toBeLessThan(ft.riseMps * ft.riseS);
+      expect(puffs[k].centre[0] - shell.position[0]).toBeCloseTo(drift[0] * share, 6);
+      expect(puffs[k].centre[2] - shell.position[2]).toBeCloseTo(drift[1] * share, 6);
+      expect(puffs[k].centre[1] - shell.position[1]).toBeCloseTo(top * share * (1 - Math.exp(-(now - release) / ft.riseS)), 6);
       // The first let out is the highest, and the biggest.
       if (k > 0) {
         expect(puffs[k].centre[1]).toBeLessThan(puffs[k - 1].centre[1]);

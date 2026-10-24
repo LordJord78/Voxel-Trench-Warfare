@@ -410,21 +410,69 @@ test("a heavy night's flares render within the budget at the overview and in no 
       const gpu: number[] = [];
       let seen = h.stats().gpuSamples;
       let lit = 0;
+      let flashes = 0;
       for (let k = 0; k < 300; k++) {
         await h.waitFrames(1);
         const s = h.stats();
         if (s.gpuSamples > seen && s.gpuLastMs !== null) gpu.push(s.gpuLastMs);
         seen = s.gpuSamples;
         lit = Math.max(lit, h.lights().filter((l) => l.kind === 'flare').length);
+        flashes = Math.max(flashes, h.horizon().length);
       }
       gpu.sort((a, b) => a - b);
-      return { at, count: gpu.length, p95: gpu[Math.floor(0.95 * gpu.length)], median: gpu[gpu.length >> 1], max: gpu[gpu.length - 1], lit };
+      return { at, count: gpu.length, p95: gpu[Math.floor(0.95 * gpu.length)], median: gpu[gpu.length >> 1], max: gpu[gpu.length - 1], lit, flashes };
     }, view);
     if (r.count === 0) test.skip(true, 'no GPU timestamps');
-    lines.push(`${view}: GPU p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, worst ${r.max.toFixed(2)}; ${r.lit} flares alight at most, from ${r.at} s in`);
+    lines.push(`${view}: GPU p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, worst ${r.max.toFixed(2)}; ${r.lit} flares alight at most, from ${r.at} s in; ${r.flashes} distant flashes at most`);
     expect(r.lit, lines.join('; ')).toBeGreaterThanOrEqual(15);
     expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
   }
   console.log(`A heavy night's flares: ${lines.join('; ')}`);
+  expect(errors).toEqual([]);
+});
+
+test("a heavy dusk's barrages render within the budget at the overview and in no man's land", async ({ page }) => {
+  // Done-table row 2 at the heavy intensity, at dusk (no flares yet): barrages beyond the map and far
+  // shells landing, their flashes glowing in the sky and the haze, the far shells' smoke standing; each
+  // frame's own GPU time within 14 ms at the 95th percentile, two minutes into the battle.
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  const lines: string[] = [];
+  for (const view of ['overview', 'nml-night'] as const) {
+    const r = await hooks(page, async (h, v) => {
+      h.setQuality({ preset: 'high', dynres: false });
+      h.view(v as string);
+      h.setTimeOfDay(17 + 35 / 60);
+      h.setIntensity('heavy');
+      // From two minutes in, a moment a barrage's shell has just landed: one in progress.
+      let at = 120;
+      for (; at < 900; at += 5) {
+        h.runLights(at);
+        await h.waitFrames(1);
+        if (h.battle().flashes.some((f) => !f.far)) break;
+      }
+      await h.waitFrames(30);
+      const gpu: number[] = [];
+      let seen = h.stats().gpuSamples;
+      let flashes = 0;
+      let smoke = 0;
+      for (let k = 0; k < 300; k++) {
+        await h.waitFrames(1);
+        const s = h.stats();
+        if (s.gpuSamples > seen && s.gpuLastMs !== null) gpu.push(s.gpuLastMs);
+        seen = s.gpuSamples;
+        flashes = Math.max(flashes, h.horizon().length);
+        smoke = Math.max(smoke, h.battle().smoke.length);
+      }
+      gpu.sort((a, b) => a - b);
+      return { at, count: gpu.length, p95: gpu[Math.floor(0.95 * gpu.length)], median: gpu[gpu.length >> 1], max: gpu[gpu.length - 1], flashes, smoke };
+    }, view);
+    if (r.count === 0) test.skip(true, 'no GPU timestamps');
+    lines.push(`${view}: GPU p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, worst ${r.max.toFixed(2)}; ${r.flashes} distant flashes and ${r.smoke} puffs of smoke at most, from ${r.at} s in`);
+    expect(r.flashes, lines.join('; ')).toBeGreaterThan(0);
+    expect(r.smoke, lines.join('; ')).toBeGreaterThan(0);
+    expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
+  }
+  console.log(`A heavy dusk's barrages: ${lines.join('; ')}`);
   expect(errors).toEqual([]);
 });

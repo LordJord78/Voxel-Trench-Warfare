@@ -188,7 +188,8 @@ export const FRAME: StructDef = {
     // radiance of the haze lit over one at full power and the haze's share of it, the far field's
     // light from one within horizonNear metres; the lit patch's width and height (metres), the least
     // height its glow takes (radians), the metres the air dims it by e over; and each, where it fell
-    // (voxels) and its power now.
+    // (voxels) and its power now, the first horizonGlowCount glowing (a barrage's), all lighting the
+    // far field.
     ['horizonColour', 'vec3f'],
     ['horizonSky', 'f32'],
     ['horizonSpread', 'vec2f'],
@@ -198,6 +199,9 @@ export const FRAME: StructDef = {
     ['horizonMinEl', 'f32'],
     ['horizonReach', 'f32'],
     ['horizonCount', 'u32'],
+    ['horizonGlowCount', 'u32'],
+    // Metres above where a shell fell that its light on the far field comes from: its fireball and the dust it lights.
+    ['horizonLift', 'f32'],
     ['horizon', { element: 'vec4f', count: MAX_HORIZON }],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
@@ -267,9 +271,10 @@ export interface HorizonTerms {
   sky: number;
   /** The haze's share of that glow (the sky's is whole). */
   haze: number;
-  /** The far field's light from a flash at full power, within nearM. */
+  /** The far field's light from a flash at full power, within nearM, from liftM above where it fell. */
   far: number;
   nearM: number;
+  liftM: number;
   /** The patch of haze a flash lights: across, and high (metres). */
   spreadM: [number, number];
   /** The least height its glow takes, in degrees. */
@@ -291,30 +296,38 @@ export function horizonTerms(tun: Tunables): HorizonTerms {
     haze: f('haze'),
     far: f('far'),
     nearM: f('near_m'),
+    liftM: f('lift_m'),
     spreadM: [spread[0], spread[1]],
     minDeg: f('min_deg'),
     reachM: f('reach_m'),
   };
 }
 
-/** A distant shell's flash as the frame takes it: where it fell (metres) and its power now. */
+/**
+ * A distant shell's flash as the frame takes it: where it fell (metres), its power now, and whether it
+ * glows in the sky and the haze (a barrage's shell, lighting its smoke) or only lights the far field
+ * near it (a single far shell, whose flash is its disc).
+ */
 export interface HorizonFlash {
   position: readonly [number, number, number];
   power: number;
+  glow: boolean;
 }
 
-/** The terms, and the first MAX_HORIZON of `flashes`. */
+/** The terms, and the first MAX_HORIZON of `flashes`, those that glow first. */
 export function writeHorizon(w: StructWriter, terms: HorizonTerms, flashes: readonly HorizonFlash[], voxel: number): void {
   w.set('horizonColour', terms.colour);
   w.set('horizonSky', terms.sky);
   w.set('horizonHaze', terms.haze);
   w.set('horizonFar', terms.far);
   w.set('horizonNear', terms.nearM);
+  w.set('horizonLift', terms.liftM);
   w.set('horizonSpread', terms.spreadM);
   w.set('horizonMinEl', (terms.minDeg * Math.PI) / 180);
   w.set('horizonReach', terms.reachM);
-  const shown = flashes.slice(0, MAX_HORIZON);
+  const shown = [...flashes.filter((f) => f.glow), ...flashes.filter((f) => !f.glow)].slice(0, MAX_HORIZON);
   w.set('horizonCount', shown.length);
+  w.set('horizonGlowCount', shown.filter((f) => f.glow).length);
   shown.forEach((f, k) => w.set(`horizon.${k}`, [f.position[0] / voxel, f.position[1] / voxel, f.position[2] / voxel, f.power]));
 }
 

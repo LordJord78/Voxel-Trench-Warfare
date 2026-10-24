@@ -200,14 +200,14 @@ export const cases = {
    * the sky with its bodies and the haze's glow along `dirs`, and the far field's light at each of
    * `points` (metres) facing its normal in `normals`.
    */
-  async skyHorizon(args: { hours: number; eyeM: number[]; flashes: { position: number[]; power: number }[]; dirs: number[][]; points: number[][]; normals: number[][] }) {
+  async skyHorizon(args: { hours: number; eyeM: number[]; flashes: { position: number[]; power: number; glow: boolean }[]; dirs: number[][]; points: number[][]; normals: number[][] }) {
     const tun = loadTunables();
     const sky = frameSky(skyState(tun, args.hours), tun);
     const voxel = 0.1;
     const extra = (frame: StructWriter) => {
       frame.set('voxel', voxel);
       writeCamera(frame, 'cam', { position: [args.eyeM[0], args.eyeM[1], args.eyeM[2]], yaw: 0, pitch: 0 }, voxel, [0, 0]);
-      writeHorizon(frame, horizonTerms(tun), args.flashes.map((f) => ({ position: [f.position[0], f.position[1], f.position[2]] as const, power: f.power })), voxel);
+      writeHorizon(frame, horizonTerms(tun), args.flashes.map((f) => ({ position: [f.position[0], f.position[1], f.position[2]] as const, power: f.power, glow: f.glow })), voxel);
     };
     const bodies = await sample('bodies', args.dirs, sky, args.eyeM[1], extra);
     const fog = await sample('fog', args.dirs, sky, args.eyeM[1], extra);

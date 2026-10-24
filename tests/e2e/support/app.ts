@@ -87,7 +87,7 @@ export interface Hooks {
     smoke: { centre: [number, number, number]; radiusM: number; alpha: number }[];
   };
   /** The distant shells' flashes the frame was last given (metres, their power then). */
-  horizon(): { position: [number, number, number]; power: number }[];
+  horizon(): { position: [number, number, number]; power: number; glow: boolean }[];
   /** The camera held at `pose` while the session runs as if playing; null to play again. */
   spectate(pose: { position: [number, number, number]; yaw: number; pitch: number } | null): void;
   /** Stand the player at a standard view, their body clear of solid. */

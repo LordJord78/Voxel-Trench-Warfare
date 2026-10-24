@@ -381,8 +381,8 @@ test('the stars: a field fixed in the sky at night, a few hundred pixels in a 60
 // fell, low on the horizon, wider the nearer and dimmer the farther; and a light on the far field
 // toward it. At night, the eye 2 m up at the map's corner (the origin), unless said.
 type Horizon = { compileErrors: string[]; bodies: number[][]; fog: number[][]; far: number[][]; errors: string[] };
-const flashAt = (bearingDeg: number, metres: number, y = 0) => ({ position: [Math.sin((bearingDeg * Math.PI) / 180) * metres, y, Math.cos((bearingDeg * Math.PI) / 180) * metres], power: 1 });
-async function horizon(page: Parameters<typeof runCase>[0], flashes: { position: number[]; power: number }[], dirs: V3[], eyeM = [0, 2, 0], points: number[][] = [], normals: number[][] = []) {
+const flashAt = (bearingDeg: number, metres: number, y = 0, glow = true) => ({ position: [Math.sin((bearingDeg * Math.PI) / 180) * metres, y, Math.cos((bearingDeg * Math.PI) / 180) * metres], power: 1, glow });
+async function horizon(page: Parameters<typeof runCase>[0], flashes: { position: number[]; power: number; glow: boolean }[], dirs: V3[], eyeM = [0, 2, 0], points: number[][] = [], normals: number[][] = []) {
   const r = await runCase<Horizon>(page, 'skyHorizon', { hours: 21, eyeM, flashes, dirs, points, normals });
   expect(r.compileErrors).toEqual([]);
   expect(r.errors).toEqual([]);
@@ -435,4 +435,34 @@ test('the far field is lit by a flash toward it, falling with distance, never fa
   expect(lum(r.far[0])).toBeGreaterThan(50 * lum(r.far[1]));
   expect(lum(r.far[1])).toBeGreaterThan(0);
   expect(lum(r.far[2])).toBe(0);
+});
+
+test("a far shell's flash lights the far field near it, and does not glow in the sky", async ({ page }) => {
+  await openHarness(page);
+  // The glow is a barrage's lit smoke; a single shell 600 m off is a disc and the ground lit round it.
+  const f = flashAt(40, 600, 0, false);
+  const dirs = [direction(40, 0.5), direction(40, 5)];
+  const without = await horizon(page, [], dirs);
+  const near = [f.position[0] - Math.sin((40 * Math.PI) / 180) * 30, 0, f.position[2] - Math.cos((40 * Math.PI) / 180) * 30];
+  const lit = await horizon(page, [f], dirs, [0, 2, 0], [near], [[Math.sin((40 * Math.PI) / 180), 0, Math.cos((40 * Math.PI) / 180)]]);
+  for (let i = 0; i < dirs.length; i++) expect(Math.abs(lum(lit.bodies[i]) / lum(without.bodies[i]) - 1)).toBeLessThan(0.001);
+  expect(lum(lit.far[0])).toBeGreaterThan(0);
+  // And the flat ground round it: its fireball and the dust it lights stand above the ground.
+  const flat = await horizon(page, [f], dirs, [0, 2, 0], [near], [[0, 1, 0]]);
+  expect(lum(flat.far[0])).toBeGreaterThan(0.2 * lum(lit.far[0]));
+});
+
+test('a glow stands on the horizon over its flash, not under it over the nearer ground', async ({ page }) => {
+  await openHarness(page);
+  // From 150 m up, a flash 2 km off is 4.3° under the eye's level: 2° under that, its glow is all but
+  // gone; 1° over it, it glows.
+  const under = (Math.atan2(-150, 2000) * 180) / Math.PI;
+  const dirs = [direction(40, under - 2), direction(40, under + 1)];
+  const eye = [0, 150, 0];
+  const without = await horizon(page, [], dirs, eye);
+  const lit = await horizon(page, [flashAt(40, 2000)], dirs, eye);
+  const below = lum(lit.bodies[0]) - lum(without.bodies[0]);
+  const above = lum(lit.bodies[1]) - lum(without.bodies[1]);
+  expect(above).toBeGreaterThan(0);
+  expect(below).toBeLessThan(0.05 * above);
 });

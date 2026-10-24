@@ -894,8 +894,8 @@ puffs               = 8        # the column's puffs, let out one by one
 puff_every_s        = 0.5
 rise_mps            = 6.0      # each rises this fast at first, slowing by e over rise_s: to some 48 m
 rise_s              = 8.0
-puff_radius_m       = [3.0, 12.0]   # each grows over the column's life
-smoke_alpha         = 0.6      # how much it covers at first
+puff_radius_m       = [6.0, 18.0]   # each grows over the column's life
+smoke_alpha         = 0.75     # how much it covers at first
 smoke_colour        = [0.2, 0.18, 0.16]
 
 # A distant shell's flash (barrages.ts), as the sky and the far field take it (sky.wgsl's horizonGlow
@@ -906,10 +906,11 @@ smoke_colour        = [0.2, 0.18, 0.16]
 window_s            = 1.0      # seen this long after it lands
 decay_s             = 0.15     # its power falls by e over this
 colour              = [1.0, 0.72, 0.45]
-sky                 = 0.065    # the radiance of the haze lit over one at full power: one at 2 km some five times the night sky on the horizon
+sky                 = 0.4      # the radiance of the haze lit over one at full power: one at 5 km a third over dusk's haze on the horizon, six times the night's
 haze                = 1.0      # the haze's share of that glow toward it
 far                 = 0.5      # its light on the far field within near_m, at full power
 near_m              = 60.0
+lift_m              = 10.0     # its light on the far field comes from this far over where it fell: its fireball and the dust it lights
 spread_m            = [300.0, 150.0]   # the lit patch: across, and high
 min_deg             = 1.5      # the least height its glow takes on the horizon
 reach_m             = 6000.0   # the air dims a glow by e over this
