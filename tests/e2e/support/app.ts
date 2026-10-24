@@ -78,7 +78,14 @@ export interface Hooks {
     player: { position: { x: number; y: number; z: number }; yaw: number };
   };
   /** The battle's director as the lights show it: its clock, and its flares climbing and burning. */
-  battle(): { seconds: number; flares: { id: number; position: [number, number, number]; glow: number; stage: 'climb' | 'burning' | 'out' }[] };
+  battle(): {
+    seconds: number;
+    flares: { id: number; position: [number, number, number]; glow: number; stage: 'climb' | 'burning' | 'out' }[];
+    /** The newest distant shells' flashes, newest first. */
+    flashes: { id: number; position: [number, number, number]; t: number; power: number; far: boolean }[];
+  };
+  /** The distant shells' flashes the frame was last given (metres, their power then). */
+  horizon(): { position: [number, number, number]; power: number }[];
   /** The camera held at `pose` while the session runs as if playing; null to play again. */
   spectate(pose: { position: [number, number, number]; yaw: number; pitch: number } | null): void;
   /** Stand the player at a standard view, their body clear of solid. */

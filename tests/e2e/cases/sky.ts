@@ -2,7 +2,7 @@ import { loadTunables } from '../../../src/core/tunables';
 import { HeapMirror } from '../../../src/world/encode';
 import { Atmosphere, atmosphereModel } from '../../../src/render/atmosphere';
 import { FarFieldGpu } from '../../../src/render/farfield-gpu';
-import { FRAME, PROBE_DUSK, writeSky, writeWorldInfo, type FrameSky } from '../../../src/render/frame-uniforms';
+import { FRAME, horizonTerms, PROBE_DUSK, writeCamera, writeHorizon, writeSky, writeWorldInfo, type FrameSky } from '../../../src/render/frame-uniforms';
 import { CLOCK_KEYS } from '../../../src/core/sky-clock';
 import { BrickMap } from '../../../src/world/bricks';
 import { P } from '../../../src/world/materials';
@@ -27,7 +27,7 @@ async function lutValues(texture: GPUTexture): Promise<number[]> {
 const bad = (values: number[], logs = false) => values.filter((v) => !Number.isFinite(v) || (!logs && v < 0)).length;
 
 /** Run sky-test.wgsl's `entry` over `dirs` with the frame's sky lit by `sky`'s lights, the sky views built for them. */
-async function sample(entry: 'main' | 'fog' | 'bodies', dirs: number[][], sky: Partial<FrameSky> & { sunDir: readonly number[]; moonDir: readonly number[] }, heightM: number) {
+async function sample(entry: 'main' | 'fog' | 'bodies' | 'farLight', dirs: number[][], sky: Partial<FrameSky> & { sunDir: readonly number[]; moonDir: readonly number[] }, heightM: number, extra?: (frame: StructWriter) => void) {
   const g = await gpu();
   const device = g.device;
   const atmosphere = Atmosphere.create(device, await Atmosphere.compile(device), atmosphereModel(loadTunables()));
@@ -43,6 +43,7 @@ async function sample(entry: 'main' | 'fog' | 'bodies', dirs: number[][], sky: P
   const frame = new StructWriter(FRAME);
   writeWorldInfo(frame, world);
   writeSky(frame, { ...PROBE_DUSK, ...sky });
+  extra?.(frame);
   const frameBuffer = device.createBuffer({ size: frame.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const scene = sceneLayout(device);
   const local = device.createBindGroupLayout({
@@ -194,6 +195,33 @@ export const cases = {
   },
 
   /** The sky with its discs and stars along each of `dirs`, lit as `sky` says (unit lights unless set), from 2 m. */
+  /**
+   * Distant shells' flashes as the app sets them, at the clock's `hours`, the eye at `eyeM` (metres):
+   * the sky with its bodies and the haze's glow along `dirs`, and the far field's light at each of
+   * `points` (metres) facing its normal in `normals`.
+   */
+  async skyHorizon(args: { hours: number; eyeM: number[]; flashes: { position: number[]; power: number }[]; dirs: number[][]; points: number[][]; normals: number[][] }) {
+    const tun = loadTunables();
+    const sky = frameSky(skyState(tun, args.hours), tun);
+    const voxel = 0.1;
+    const extra = (frame: StructWriter) => {
+      frame.set('voxel', voxel);
+      writeCamera(frame, 'cam', { position: [args.eyeM[0], args.eyeM[1], args.eyeM[2]], yaw: 0, pitch: 0 }, voxel, [0, 0]);
+      writeHorizon(frame, horizonTerms(tun), args.flashes.map((f) => ({ position: [f.position[0], f.position[1], f.position[2]] as const, power: f.power })), voxel);
+    };
+    const bodies = await sample('bodies', args.dirs, sky, args.eyeM[1], extra);
+    const fog = await sample('fog', args.dirs, sky, args.eyeM[1], extra);
+    const pairs = args.points.flatMap((p, i) => [p.map((m) => m / voxel), args.normals[i]]);
+    const far = pairs.length > 0 ? await sample('farLight', pairs, sky, args.eyeM[1], extra) : { compileErrors: [], values: [] as number[][], errors: [] as string[] };
+    return {
+      compileErrors: [...bodies.compileErrors, ...fog.compileErrors, ...far.compileErrors],
+      bodies: bodies.values,
+      fog: fog.values,
+      far: far.values.slice(0, args.points.length),
+      errors: [...bodies.errors, ...fog.errors, ...far.errors],
+    };
+  },
+
   async skyBodies(args: { dirs: number[][]; sky: Partial<FrameSky> & { sunDir: number[]; moonDir: number[] } }) {
     return sample('bodies', args.dirs, { sunLight: [0, 0, 0], moonLight: [0, 0, 0], moonFull: [1, 1, 1], ...args.sky }, 2);
   },

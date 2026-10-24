@@ -6,6 +6,7 @@
  */
 
 import { cameraBasis, tanHalf, type CameraPose } from './camera';
+import type { Tunables } from '../core/tunables';
 import type { StructDef, StructWriter } from './layout';
 import type { PyramidLevel } from './pyramid';
 
@@ -100,6 +101,9 @@ export const PUFF: StructDef = {
 /** The most puffs of smoke a frame's haze holds. */
 export const MAX_PUFFS = 16;
 
+/** The most distant shells' flashes a frame's sky takes (sky.wgsl's horizonGlow loops to it). */
+export const MAX_HORIZON = 16;
+
 export const FRAME: StructDef = {
   name: 'Frame',
   fields: [
@@ -180,6 +184,21 @@ export const FRAME: StructDef = {
     // Shells' smoke in the froxels' haze: its puffs this frame.
     ['puffCount', 'u32'],
     ['puffs', { element: PUFF, count: MAX_PUFFS }],
+    // Distant shells' flashes (sky.wgsl's horizonGlow and horizonLight): the colour they glow, the
+    // radiance of the haze lit over one at full power and the haze's share of it, the far field's
+    // light from one within horizonNear metres; the lit patch's width and height (metres), the least
+    // height its glow takes (radians), the metres the air dims it by e over; and each, where it fell
+    // (voxels) and its power now.
+    ['horizonColour', 'vec3f'],
+    ['horizonSky', 'f32'],
+    ['horizonSpread', 'vec2f'],
+    ['horizonHaze', 'f32'],
+    ['horizonFar', 'f32'],
+    ['horizonNear', 'f32'],
+    ['horizonMinEl', 'f32'],
+    ['horizonReach', 'f32'],
+    ['horizonCount', 'u32'],
+    ['horizon', { element: 'vec4f', count: MAX_HORIZON }],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
     // The atmosphere as this frame's sky view was built.
@@ -239,6 +258,64 @@ export function writeCamera(w: StructWriter, path: 'cam' | 'prev', pose: CameraP
   w.set(`${path}.right`, right);
   w.set(`${path}.up`, up);
   w.set(`${path}.jitter`, jitter);
+}
+
+/** How distant shells' flashes light the sky, the haze and the far field (the battle spec's §3; [battle.flashes]). */
+export interface HorizonTerms {
+  colour: [number, number, number];
+  /** The radiance of the haze lit over a flash at full power. */
+  sky: number;
+  /** The haze's share of that glow (the sky's is whole). */
+  haze: number;
+  /** The far field's light from a flash at full power, within nearM. */
+  far: number;
+  nearM: number;
+  /** The patch of haze a flash lights: across, and high (metres). */
+  spreadM: [number, number];
+  /** The least height its glow takes, in degrees. */
+  minDeg: number;
+  /** Metres the air dims a glow by e over. */
+  reachM: number;
+}
+
+export function horizonTerms(tun: Tunables): HorizonTerms {
+  const f = (k: string) => tun.f(`battle.flashes.${k}`);
+  // Across and high: two numbers, not a range.
+  const spread = tun.get('battle.flashes.spread_m');
+  if (!Array.isArray(spread) || spread.length !== 2 || !spread.every((v) => typeof v === 'number' && Number.isFinite(v))) {
+    throw new TypeError(`tunable 'battle.flashes.spread_m' is not two finite numbers: ${JSON.stringify(spread)}`);
+  }
+  return {
+    colour: tun.triple('battle.flashes.colour'),
+    sky: f('sky'),
+    haze: f('haze'),
+    far: f('far'),
+    nearM: f('near_m'),
+    spreadM: [spread[0], spread[1]],
+    minDeg: f('min_deg'),
+    reachM: f('reach_m'),
+  };
+}
+
+/** A distant shell's flash as the frame takes it: where it fell (metres) and its power now. */
+export interface HorizonFlash {
+  position: readonly [number, number, number];
+  power: number;
+}
+
+/** The terms, and the first MAX_HORIZON of `flashes`. */
+export function writeHorizon(w: StructWriter, terms: HorizonTerms, flashes: readonly HorizonFlash[], voxel: number): void {
+  w.set('horizonColour', terms.colour);
+  w.set('horizonSky', terms.sky);
+  w.set('horizonHaze', terms.haze);
+  w.set('horizonFar', terms.far);
+  w.set('horizonNear', terms.nearM);
+  w.set('horizonSpread', terms.spreadM);
+  w.set('horizonMinEl', (terms.minDeg * Math.PI) / 180);
+  w.set('horizonReach', terms.reachM);
+  const shown = flashes.slice(0, MAX_HORIZON);
+  w.set('horizonCount', shown.length);
+  shown.forEach((f, k) => w.set(`horizon.${k}`, [f.position[0] / voxel, f.position[1] / voxel, f.position[2] / voxel, f.power]));
 }
 
 export function writeSky(w: StructWriter, sky: FrameSky): void {

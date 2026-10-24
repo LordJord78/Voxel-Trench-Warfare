@@ -26,10 +26,57 @@ fn hazePhase(c: f32) -> f32 {
   return frame.hazeKey + frame.hazeForward * (k * k) * (k * k);
 }
 
-// fogColour where only `lit` (0 to 1) of the key light reaches the haze.
+// fogColour where only `lit` (0 to 1) of the key light reaches the haze; with the distant shells'
+// flashes' glow toward them.
 fn hazeGlow(rd: vec3f, lit: f32) -> vec3f {
   let above = frame.sunLight * skyLight[3].rgb + frame.moonLight * skyLight[9].rgb;
-  return frame.keyColour * (hazePhase(dot(rd, frame.keyDir)) * lit) + frame.hazeSky / PI_ATM * above + frame.frontGlow;
+  return frame.keyColour * (hazePhase(dot(rd, frame.keyDir)) * lit) + frame.hazeSky / PI_ATM * above + frame.frontGlow + frame.horizonHaze * horizonGlow(rd);
+}
+
+// Distant shells' flashes (the battle spec's §3): each lights the haze over where it fell, a patch
+// frame.horizonSpread.x metres across and .y high, seen from the eye as a glow in azimuth (half-width
+// the patch's half across) and in elevation about the flash's own (half-height the patch's height, at
+// least frame.horizonMinEl): a broad swath for a near shell, a flicker on the skyline for a far one,
+// dimmed by e every frame.horizonReach metres of air. The azimuth's square is 2(1 − cos), and nothing
+// where rd is vertical. Loops to frame_uniforms' MAX_HORIZON.
+fn horizonGlow(rd: vec3f) -> vec3f {
+  let count = min(frame.horizonCount, 16u);
+  if (count == 0u) {
+    return vec3f(0.0);
+  }
+  let eye = frame.cam.origin * frame.voxel;
+  let flat = length(rd.xz);
+  let el = asin(clamp(rd.y, -1.0, 1.0));
+  var sum = 0.0;
+  for (var i = 0u; i < count; i++) {
+    let f = frame.horizon[i];
+    let to = f.xz * frame.voxel - eye.xz;
+    let d = max(length(to), 1.0);
+    var az2 = 0.0;
+    if (flat > 1e-4) {
+      az2 = 2.0 * (1.0 - dot(rd.xz / flat, to / d));
+    }
+    let w = atan(0.5 * frame.horizonSpread.x / d);
+    let h = max(atan(frame.horizonSpread.y / d), frame.horizonMinEl);
+    let de = el - atan2(f.y * frame.voxel - eye.y, d);
+    sum += f.w * exp(-d / frame.horizonReach - az2 / (w * w) - de * de / (h * h));
+  }
+  return frame.horizonColour * (frame.horizonSky * sum);
+}
+
+// The far field lit by distant shells' flashes, at p (voxels) facing n: each a light where it fell,
+// whole within frame.horizonNear metres and falling as the square of the distance past it.
+fn horizonLight(p: vec3f, n: vec3f) -> vec3f {
+  let count = min(frame.horizonCount, 16u);
+  var sum = 0.0;
+  for (var i = 0u; i < count; i++) {
+    let f = frame.horizon[i];
+    let to = (f.xyz - p) * frame.voxel;
+    let dist = max(length(to), 1e-3);
+    let near = frame.horizonNear / max(dist, frame.horizonNear);
+    sum += f.w * near * near * max(dot(n, to / dist), 0.0);
+  }
+  return frame.horizonColour * (frame.horizonFar * sum);
 }
 
 // Light from the sky arriving on a face with normal n, before occlusion: the six faces' irradiance,
@@ -215,5 +262,5 @@ fn aureole(rd: vec3f) -> vec3f {
 
 fn skyWithBodies(rd: vec3f) -> vec3f {
   let sky = skyColour(rd);
-  return sky + aureole(rd) + sunDisc(rd) + moonDisc(rd) + stars(rd, sky);
+  return sky + aureole(rd) + sunDisc(rd) + moonDisc(rd) + stars(rd, sky) + horizonGlow(rd);
 }

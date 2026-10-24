@@ -23,6 +23,17 @@ fn fog(@builtin(global_invocation_id) g: vec3u) {
   radiance[g.x] = vec4f(fogColour(dirs[g.x].xyz), 0.0);
 }
 
+// The far field's light from distant shells' flashes: at each point (voxels, the even entries) facing
+// its normal (the odd entries).
+@compute @workgroup_size(64)
+fn farLight(@builtin(global_invocation_id) g: vec3u) {
+  let n = arrayLength(&dirs) / 2u;
+  if (g.x >= n) {
+    return;
+  }
+  radiance[g.x] = vec4f(horizonLight(dirs[2u * g.x].xyz, dirs[2u * g.x + 1u].xyz), 0.0);
+}
+
 // The sky with the sun's and moon's discs and the stars, along each direction.
 @compute @workgroup_size(64)
 fn bodies(@builtin(global_invocation_id) g: vec3u) {

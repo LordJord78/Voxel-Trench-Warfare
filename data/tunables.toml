@@ -889,7 +889,18 @@ puff_radius_m       = [3.0, 12.0]   # each grows over the column's life
 smoke_alpha         = 0.6      # how much it covers at first
 smoke_colour        = [0.2, 0.18, 0.16]
 
-# A distant shell's flash (barrages.ts), as the sky and the far field take it.
+# A distant shell's flash (barrages.ts), as the sky and the far field take it (sky.wgsl's horizonGlow
+# and horizonLight): the haze over where it fell lit, a patch spread_m across and high seen from the
+# eye, its glow added to the sky and (by haze) to the haze toward it, dimmed by the air over reach_m;
+# and a light on the far field toward it, whole within near_m, falling as the square of the distance.
 [battle.flashes]
 window_s            = 1.0      # seen this long after it lands
 decay_s             = 0.15     # its power falls by e over this
+colour              = [1.0, 0.72, 0.45]
+sky                 = 0.065    # the radiance of the haze lit over one at full power: one at 2 km some five times the night sky on the horizon
+haze                = 1.0      # the haze's share of that glow toward it
+far                 = 0.5      # its light on the far field within near_m, at full power
+near_m              = 60.0
+spread_m            = [300.0, 150.0]   # the lit patch: across, and high
+min_deg             = 1.5      # the least height its glow takes on the horizon
+reach_m             = 6000.0   # the air dims a glow by e over this

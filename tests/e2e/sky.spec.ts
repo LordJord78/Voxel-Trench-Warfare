@@ -376,3 +376,63 @@ test('the stars: a field fixed in the sky at night, a few hundred pixels in a 60
   expect(r.night.tracked).toBeGreaterThan(10);
   expect(r.night.shift).toBeLessThanOrEqual(1);
 });
+
+// Distant shells' flashes (the battle spec's §3): each a glow of the sky and the haze toward where it
+// fell, low on the horizon, wider the nearer and dimmer the farther; and a light on the far field
+// toward it. At night, the eye 2 m up at the map's corner (the origin), unless said.
+type Horizon = { compileErrors: string[]; bodies: number[][]; fog: number[][]; far: number[][]; errors: string[] };
+const flashAt = (bearingDeg: number, metres: number, y = 0) => ({ position: [Math.sin((bearingDeg * Math.PI) / 180) * metres, y, Math.cos((bearingDeg * Math.PI) / 180) * metres], power: 1 });
+async function horizon(page: Parameters<typeof runCase>[0], flashes: { position: number[]; power: number }[], dirs: V3[], eyeM = [0, 2, 0], points: number[][] = [], normals: number[][] = []) {
+  const r = await runCase<Horizon>(page, 'skyHorizon', { hours: 21, eyeM, flashes, dirs, points, normals });
+  expect(r.compileErrors).toEqual([]);
+  expect(r.errors).toEqual([]);
+  return r;
+}
+
+test('a flash glows in the sky and the haze toward it, low on the horizon, and not opposite', async ({ page }) => {
+  await openHarness(page);
+  const dirs = [direction(40, 0.5), direction(40, 30), direction(220, 0.5)];
+  const without = await horizon(page, [], dirs);
+  const lit = await horizon(page, [flashAt(40, 2000)], dirs);
+  console.log(`a flash 2 km off at night: sky ${without.bodies.map((c) => lum(c).toFixed(5)).join('/')} → ${lit.bodies.map((c) => lum(c).toFixed(5)).join('/')}, haze ${without.fog.map((c) => lum(c).toFixed(5)).join('/')} → ${lit.fog.map((c) => lum(c).toFixed(5)).join('/')} (toward, 30° up, opposite)`);
+  for (const key of ['bodies', 'fog'] as const) {
+    expect(lum(lit[key][0]) / lum(without[key][0]), key).toBeGreaterThan(1.5);
+    expect(Math.abs(lum(lit[key][1]) / lum(without[key][1]) - 1), key).toBeLessThan(0.02);
+    expect(Math.abs(lum(lit[key][2]) / lum(without[key][2]) - 1), key).toBeLessThan(0.001);
+  }
+});
+
+test('a nearer flash glows wider: 10° aside, one at 1 km raises the sky, one at 8 km hardly', async ({ page }) => {
+  await openHarness(page);
+  const dirs = [direction(50, 0.5)];
+  const without = lum((await horizon(page, [], dirs)).bodies[0]);
+  const near = lum((await horizon(page, [flashAt(40, 1000)], dirs)).bodies[0]);
+  const far = lum((await horizon(page, [flashAt(40, 8000)], dirs)).bodies[0]);
+  expect(near / without).toBeGreaterThan(1.1);
+  expect(far / without).toBeLessThan(1.01);
+});
+
+test('from high above, a flash glows on the far horizon, not level with the eye', async ({ page }) => {
+  await openHarness(page);
+  const dirs = [direction(40, -4), direction(40, 4)];
+  const eye = [0, 150, 0];
+  const without = await horizon(page, [], dirs, eye);
+  const lit = await horizon(page, [flashAt(40, 2000)], dirs, eye);
+  const below = lum(lit.bodies[0]) - lum(without.bodies[0]);
+  const above = lum(lit.bodies[1]) - lum(without.bodies[1]);
+  expect(below).toBeGreaterThan(0);
+  expect(below).toBeGreaterThan(above);
+});
+
+test('the far field is lit by a flash toward it, falling with distance, never facing away', async ({ page }) => {
+  await openHarness(page);
+  const f = flashAt(40, 1000, 20);
+  const toward = (d: number) => [f.position[0] - Math.sin((40 * Math.PI) / 180) * d, 20, f.position[2] - Math.cos((40 * Math.PI) / 180) * d];
+  const facing = [Math.sin((40 * Math.PI) / 180), 0, Math.cos((40 * Math.PI) / 180)];
+  const away = facing.map((c) => -c);
+  const r = await horizon(page, [f], [direction(0, 10)], [0, 2, 0], [toward(30), toward(600), toward(30)], [facing, facing, away]);
+  console.log(`the far field lit by a flash: at 30 m ${lum(r.far[0]).toFixed(5)}, at 600 m ${lum(r.far[1]).toFixed(7)}, facing away ${lum(r.far[2])}`);
+  expect(lum(r.far[0])).toBeGreaterThan(50 * lum(r.far[1]));
+  expect(lum(r.far[1])).toBeGreaterThan(0);
+  expect(lum(r.far[2])).toBe(0);
+});

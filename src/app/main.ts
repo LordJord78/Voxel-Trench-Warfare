@@ -21,7 +21,7 @@ import { audioTunables, planVoices } from '../audio/plan';
 import { rifleModel, traceRifle } from '../combat/rifle-model';
 import { rayDir, type CameraPose } from '../render/camera';
 import type { SmokePuff, TransientLight } from '../render/effects';
-import { FLAGS } from '../render/frame-uniforms';
+import { FLAGS, horizonTerms, type HorizonFlash } from '../render/frame-uniforms';
 import { throughPose, type RifleDrawn, type RiflePose } from '../render/rifle';
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
 import { FarFieldGpu } from '../render/farfield-gpu';
@@ -41,6 +41,8 @@ import { boxHitsSolid } from '../physics/collision';
 import { Vec3 } from '../physics/vec';
 import { battleDarkness, Director, type BattleEvents, type BattleInputs } from '../battle/director';
 import { flareTunables } from '../battle/flares';
+import { flashPower, flashTunables } from '../battle/barrages';
+import { farHeightM } from '../world/generation/farfield';
 import { clearOf, underFire, type PeakGame } from './peak-combat';
 import { PeriscopeFrame } from '../ui/periscope';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from '../ui/settings';
@@ -255,7 +257,13 @@ async function start(): Promise<void> {
   let sky = skyState(tun, timeOfDay);
   // The battle around the player (src/battle): on the lights' clock, so every view sees it. At rest
   // the six planned flares hang instead; held at a moment, the director is sought to it.
-  let battle = new Director(world.plan, tun, SEED);
+  // Where a far shell stands: the far field's ground under it.
+  const ground = (x: number, z: number) => farHeightM(world.farField, x, z, world.plan.params.voxel);
+  let battle = new Director(world.plan, tun, SEED, ground);
+  const flashT = flashTunables(tun);
+  renderer.horizonTerms = horizonTerms(tun);
+  /** The distant shells' flashes the frame was last given. */
+  let horizon: HorizonFlash[] = [];
   const flareT = flareTunables(tun);
   /** The sky at the time of day, worked out again whenever the clock has been set since it was last asked. */
   const skyNow = () => {
@@ -289,7 +297,7 @@ async function start(): Promise<void> {
   const battleAt = (t: number) => {
     const inputs = battleInputs();
     const key = JSON.stringify([inputs.intensity, inputs.darkness]);
-    if (!sought || sought.at !== t || sought.inputs !== key) sought = { at: t, inputs: key, d: Director.at(t, world.plan, tun, SEED, inputs) };
+    if (!sought || sought.at !== t || sought.inputs !== key) sought = { at: t, inputs: key, d: Director.at(t, world.plan, tun, SEED, inputs, ground) };
     return sought.d;
   };
   const light = (dt: number, eye: readonly number[]) => {
@@ -304,6 +312,7 @@ async function start(): Promise<void> {
         ranAt = { hours: timeOfDay, darkness: inputs.darkness };
       }
     }
+    horizon = [];
     if (lightsHeld === 'rest') {
       lit = lights;
       renderer.setFlareGlow(1);
@@ -315,8 +324,11 @@ async function start(): Promise<void> {
       const flares = shownBattle.flares();
       lit = [...lightsAt(lights.filter((l) => l.kind !== 'flare'), lightsHeld ?? lightSeconds, motion), ...battleFlareLights(flares, flareT)];
       renderer.setFlareGlow(Math.min(2, flares.reduce((sum, f) => sum + f.glow, 0) / flareT.meanLight));
+      const now = shownBattle.seconds;
+      horizon = shownBattle.flashes().map((f) => ({ position: f.position, power: flashPower(f, now, flashT) }));
     }
     renderer.setLights(lit, sky.flares, eye);
+    renderer.setHorizon(horizon);
   };
 
   const changeSettings = (next: Settings) => {
@@ -937,7 +949,8 @@ async function start(): Promise<void> {
     exposure: () => renderer.exposure(),
     exposureState: () => renderer.exposureState(),
     lights: () => lit,
-    battle: () => ({ seconds: shownBattle.seconds, flares: shownBattle.flares() }),
+    battle: () => ({ seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes() }),
+    horizon: () => horizon,
     holdLights(seconds?: number) {
       lightsHeld = seconds ?? 'rest';
     },
@@ -945,7 +958,7 @@ async function start(): Promise<void> {
     runLights(seconds?: number) {
       if (seconds !== undefined) {
         const inputs = battleInputs();
-        battle = Director.at(seconds, world.plan, tun, SEED, inputs);
+        battle = Director.at(seconds, world.plan, tun, SEED, inputs, ground);
         ranAt = { hours: timeOfDay, darkness: inputs.darkness };
       }
       lightsHeld = null;

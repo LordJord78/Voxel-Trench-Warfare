@@ -126,7 +126,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
     if (face == 6u) {
       let p = frame.cam.origin + rd * depth;
       let n = farNormalAt(p);
-      let lit = frame.keyColour * farLit(p, n) * max(dot(n, frame.keyDir), 0.0) + skyIrradiance(n);
+      let lit = frame.keyColour * farLit(p, n) * max(dot(n, frame.keyDir), 0.0) + skyIrradiance(n) + horizonLight(p, n);
       colour = albedoOf(mat) * lit;
     } else {
       let cell = vec3i(i32(hit.x & 0xfffu), i32(hit.y & 0xffffu), i32((hit.x >> 12u) & 0xfffu));

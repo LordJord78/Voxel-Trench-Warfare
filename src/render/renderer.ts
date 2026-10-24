@@ -61,7 +61,7 @@ import { Rifle, type RifleDrawn, type RiflePipelines, type RiflePose } from './r
 import { FarFieldGpu } from './farfield-gpu';
 import { FlareShadows } from './flare-shadows';
 import { froxelLayouts, Froxels, type FroxelPipelines } from './froxels';
-import { FLAGS, FRAME, MAX_BLASTS, MAX_FLASHES, MAX_PUFFS, PROBE_DUSK, writeCamera, writeSky, writeWorldInfo, type FrameSky } from './frame-uniforms';
+import { FLAGS, FRAME, MAX_BLASTS, MAX_FLASHES, MAX_PUFFS, PROBE_DUSK, writeCamera, writeHorizon, writeSky, writeWorldInfo, type FrameSky, type HorizonFlash, type HorizonTerms } from './frame-uniforms';
 import type { GpuWorld } from './gpu-world';
 import { StructWriter } from './layout';
 import { KeyShadow, keyShadowLayouts, type Key, type KeyShadowPipelines } from './key-shadow';
@@ -293,6 +293,10 @@ export class Renderer {
   sky: FrameSky = PROBE_DUSK;
   /** setFlareGlow's. */
   private flareGlow = 1;
+  /** How distant shells' flashes light the sky, the haze and the far field (horizonTerms); none until set. */
+  horizonTerms: HorizonTerms = { colour: [0, 0, 0], sky: 0, haze: 0, far: 0, nearM: 1, spreadM: [1, 1], minDeg: 1, reachM: 1 };
+  /** setHorizon's. */
+  private horizon: readonly HorizonFlash[] = [];
   stats: RenderStats = { gpuMs: null, gpuLastMs: null, gpuSamples: 0, passes: {}, own: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
 
   private readonly canvas: HTMLCanvasElement | null;
@@ -458,6 +462,11 @@ export class Renderer {
   /** The front's glow on the haze, as a share of its keyed colour: the flares burning over the field (1 as planned). */
   setFlareGlow(scale: number): void {
     this.flareGlow = scale;
+  }
+
+  /** Distant shells' flashes this frame, the newest first (the sky takes MAX_HORIZON). */
+  setHorizon(flashes: readonly HorizonFlash[]): void {
+    this.horizon = flashes;
   }
 
   /** This frame's tracers, flash stars and particles (effects.ts). */
@@ -784,6 +793,7 @@ export class Renderer {
       w.set(`blasts.${k}.colour`, f.colour);
       w.set(`blasts.${k}.intensity`, f.intensity);
     });
+    writeHorizon(w, this.horizonTerms, this.horizon, voxel);
     w.set('far', this.far.info);
     const encoder = device.createCommandEncoder({ label: `frame ${this.frameIndex}` });
     // The sky views for this frame's sun and moon (the moon's while its light counts), from the
