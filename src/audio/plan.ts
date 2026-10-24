@@ -17,7 +17,7 @@ import type { Tunables } from '../core/tunables';
 import type { CombatEvents } from '../sim/session';
 import { K, kindOf } from '../world/materials';
 
-export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare' | 'rumble' | 'thump';
+export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare' | 'rumble' | 'thump' | 'chatter';
 
 export interface VoicePlan {
   kind: VoiceKind;
@@ -33,6 +33,9 @@ export interface VoicePlan {
   /** A whistle's pitch, falling from and to. */
   fromHz?: number;
   toHz?: number;
+  /** A machine gun's burst: its rounds and their rate. */
+  rounds?: number;
+  rpm?: number;
 }
 
 export interface AudioTunables {
@@ -58,6 +61,10 @@ export interface AudioTunables {
   /** A distant shell heard: its gain at the near end of its shells' range (metres), its lowpass and length over that range. */
   rumble: DistantVoice;
   thump: DistantVoice;
+  /** A machine gun's burst heard: its gain at the near end of its range (metres), its lowpass over that range. */
+  chatter: { gain: number; rangeM: [number, number]; lowpassHz: [number, number] };
+  /** The most voices sounding or waiting to (cap.ts). */
+  maxVoices: number;
 }
 
 export interface DistantVoice {
@@ -92,6 +99,8 @@ export function audioTunables(tun: Tunables): AudioTunables {
     flareGain: f('flare_gain'),
     rumble: { gain: f('rumble_gain'), rangeM: tun.pair('battle.barrages.distance_m'), lowpassHz: tun.pair('audio.rumble_lowpass_hz'), lengthS: tun.pair('audio.rumble_length_s') },
     thump: { gain: f('thump_gain'), rangeM: tun.pair('battle.far_shells.distance_m'), lowpassHz: tun.pair('audio.thump_lowpass_hz'), lengthS: tun.pair('audio.thump_length_s') },
+    chatter: { gain: f('chatter_gain'), rangeM: tun.pair('audio.chatter_range_m'), lowpassHz: tun.pair('audio.chatter_lowpass_hz') },
+    maxVoices: tun.i('audio.max_voices'),
   };
 }
 
@@ -149,5 +158,22 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
     };
   };
   for (const s of battle?.distant ?? []) out.push(s.far ? distant(s.position, 'thump', t.thump) : distant(s.position, 'rumble', t.rumble));
+  // A machine gun's burst, its rounds rattling at its rate: late by its distance, quieter as the near
+  // end of its range over the distance, duller across the range.
+  for (const b of battle?.bursts ?? []) {
+    const c = t.chatter;
+    const d = distance(b.gun);
+    const share = Math.min(1, Math.max(0, (d - c.rangeM[0]) / (c.rangeM[1] - c.rangeM[0])));
+    out.push({
+      kind: 'chatter',
+      at: b.gun,
+      delayS: d / t.speedOfSound,
+      gain: (c.gain * c.rangeM[0]) / Math.max(c.rangeM[0], d),
+      lowpassHz: c.lowpassHz[1] * Math.pow(c.lowpassHz[0] / c.lowpassHz[1], share),
+      lengthS: ((b.rounds - 1) * 60) / b.rpm,
+      rounds: b.rounds,
+      rpm: b.rpm,
+    });
+  }
   return out;
 }

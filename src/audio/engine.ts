@@ -8,8 +8,9 @@
  */
 
 import { cameraBasis, type CameraPose } from '../render/camera';
+import { VoiceCap } from './cap';
 import type { AudioTunables, VoiceKind, VoicePlan } from './plan';
-import { playVoice, type ReportShape } from './voices';
+import { playVoice, voiceLength, type ReportShape, type VoiceHandle } from './voices';
 
 const NOISE_S = 2;
 
@@ -18,6 +19,11 @@ export class AudioEngine {
   voices = 0;
   /** Voices started, by kind. */
   readonly kinds: Partial<Record<VoiceKind, number>> = {};
+  /** Voices the cap did not play: farther than all it held. */
+  dropped = 0;
+  private readonly cap: VoiceCap<VoiceHandle>;
+  /** Where the listener stands (metres): a voice's distance, for the cap. */
+  private ear: readonly number[] = [0, 0, 0];
   private ctx: AudioContext | null = null;
   private mix: GainNode | null = null;
   private noise: AudioBuffer | null = null;
@@ -25,7 +31,14 @@ export class AudioEngine {
   constructor(
     private readonly t: AudioTunables,
     private readonly report: ReportShape,
-  ) {}
+  ) {
+    this.cap = new VoiceCap(t.maxVoices);
+  }
+
+  /** The voices sounding or waiting to. */
+  get held(): number {
+    return this.cap.count;
+  }
 
   get state(): AudioContextState | 'none' {
     return this.ctx?.state ?? 'none';
@@ -64,6 +77,7 @@ export class AudioEngine {
 
   /** Hear from the camera: where it is, which way it faces, which way is up. */
   listen(pose: CameraPose): void {
+    this.ear = pose.position;
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running') return;
     const { forward, up } = cameraBasis(pose.yaw, pose.pitch, pose.roll ?? 0);
@@ -89,8 +103,18 @@ export class AudioEngine {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running' || !this.mix || !this.noise) return;
     const now = ctx.currentTime;
+    const mix = this.mix;
+    const noise = this.noise;
     for (const v of plans) {
-      playVoice(ctx, this.mix, this.noise, v, now + v.delayS, this.report);
+      // Under the cap: the farthest dropped first, a nearer voice cutting the farthest held.
+      const when = now + v.delayS;
+      const distance = Math.hypot(v.at[0] - this.ear[0], v.at[1] - this.ear[1], v.at[2] - this.ear[2]);
+      const r = this.cap.admit(distance, when + voiceLength(v, this.report), now, () => playVoice(ctx, mix, noise, v, when, this.report));
+      r.cut?.cut(now);
+      if (!r.play) {
+        this.dropped++;
+        continue;
+      }
       this.voices++;
       this.kinds[v.kind] = (this.kinds[v.kind] ?? 0) + 1;
     }

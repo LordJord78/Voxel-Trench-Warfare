@@ -46,6 +46,22 @@ function roll(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: 
   source.stop(when + length + 0.05);
 }
 
+/** A machine gun's burst far off: one looped noise through a lowpass, a sharp pop for each of `rounds` rounds `interval` apart. */
+function rattle(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, lowpassHz: number, peak: number, rounds: number, interval: number): void {
+  const source = new AudioBufferSourceNode(ctx, { buffer: noise, loop: true });
+  const shape = new GainNode(ctx, { gain: 0 });
+  shape.gain.setValueAtTime(0, when);
+  for (let k = 0; k < rounds; k++) {
+    const at = when + k * interval;
+    shape.gain.setValueAtTime(0, at);
+    shape.gain.linearRampToValueAtTime(peak, at + 0.003);
+    shape.gain.exponentialRampToValueAtTime(1e-4, at + Math.min(0.05, interval * 0.8));
+  }
+  source.connect(new BiquadFilterNode(ctx, { type: 'lowpass', frequency: lowpassHz })).connect(shape).connect(into);
+  source.start(when, Math.random() * noise.duration);
+  source.stop(when + (rounds - 1) * interval + 0.1);
+}
+
 /** A shell coming in: a tone and a narrow band of noise falling from `from` to `to` Hz over `length` seconds, louder as it nears, cut off as it lands. */
 function whistle(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, from: number, to: number, peak: number, length: number): void {
   const end = when + Math.max(0.05, length);
@@ -99,10 +115,46 @@ function tone(ctx: BaseAudioContext, into: AudioNode, when: number, type: Oscill
   osc.stop(when + decay + 0.05);
 }
 
-export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuffer, v: VoicePlan, when: number, report: ReportShape): void {
+/** A voice played: cut, it falls silent over 20 ms from `at` (seconds on its context's clock), whether sounding yet or not. */
+export interface VoiceHandle {
+  cut(at: number): void;
+}
+
+/** How long a voice sounds from its start, in seconds: when it frees its place under the cap (cap.ts). */
+export function voiceLength(v: VoicePlan, report: ReportShape): number {
+  switch (v.kind) {
+    case 'report':
+      return Math.max(report.lengthS, 0.47);
+    case 'crack':
+      return 0.02;
+    case 'impact-soil':
+    case 'impact-timber':
+      return 0.1;
+    case 'impact-metal':
+      return 0.4;
+    case 'whistle':
+      return v.lengthS ?? 1.5;
+    case 'blast':
+      return Math.max(v.lengthS ?? 1.8, 1.4) + 0.05;
+    case 'flare':
+      return 3.1;
+    case 'scrape':
+      return 0.35;
+    case 'rumble':
+      return v.lengthS ?? 3;
+    case 'thump':
+      return Math.max(v.lengthS ?? 1, 0.3);
+    case 'chatter':
+      return (v.lengthS ?? 1) + 0.1;
+  }
+}
+
+export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuffer, v: VoicePlan, when: number, report: ReportShape): VoiceHandle {
   const panner = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'linear', rolloffFactor: 0, positionX: v.at[0], positionY: v.at[1], positionZ: v.at[2] });
   const dull = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: v.lowpassHz });
-  dull.connect(panner).connect(out);
+  // Its own level, so the cap can cut it.
+  const level = new GainNode(ctx, { gain: 1 });
+  dull.connect(panner).connect(level).connect(out);
   const g = v.gain;
   switch (v.kind) {
     case 'report':
@@ -151,10 +203,21 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       tone(ctx, dull, when, 'sine', 90, 40, g, v.lengthS ?? 1);
       burst(ctx, noise, dull, when, { type: 'lowpass', frequency: v.lowpassHz }, 0.6 * g, 0.005, 0.25);
       break;
+    case 'chatter':
+      // A machine gun far off: its rounds popping at its rate, under the distance's lowpass.
+      rattle(ctx, noise, dull, when, 1500, g, v.rounds ?? 10, 60 / (v.rpm ?? 600));
+      break;
     case 'scrape':
       // The blade into the earth, rising for 0.04 s and falling over 0.18 s; then the shovelful thrown, landing low.
       burst(ctx, noise, dull, when, { type: 'bandpass', frequency: 1200, Q: 2 }, 0.7 * g, 0.04, 0.18);
       burst(ctx, noise, dull, when + 0.24, { type: 'lowpass', frequency: 300 }, 0.5 * g, 0.004, 0.08);
       break;
   }
+  return {
+    cut(at: number) {
+      level.gain.cancelScheduledValues(at);
+      level.gain.setValueAtTime(1, at);
+      level.gain.linearRampToValueAtTime(0, at + 0.02);
+    },
+  };
 }

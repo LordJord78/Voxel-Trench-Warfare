@@ -869,7 +869,7 @@ async function start(): Promise<void> {
     jitter(on: boolean) {
       renderer.flags = on ? renderer.flags & ~FLAGS.JITTER_OFF : renderer.flags | FLAGS.JITTER_OFF;
     },
-    audio: () => ({ state: audio.state, voices: audio.voices, kinds: { ...audio.kinds } }),
+    audio: () => ({ state: audio.state, voices: audio.voices, kinds: { ...audio.kinds }, held: audio.held, dropped: audio.dropped }),
     shell: (at: [number, number, number], radiusM: number) => dropShell(at, radiusM, false).landed,
     shellCheck: async (at: [number, number, number], radiusM: number) => {
       const drop = dropShell(at, radiusM, true);

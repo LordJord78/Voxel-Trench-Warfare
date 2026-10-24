@@ -566,6 +566,11 @@ rumble_length_s     = [1.5, 5.0]
 thump_gain          = 0.6      # at 200 m, the far shells' nearest (battle.far_shells.distance_m)
 thump_lowpass_hz    = [500.0, 1200.0]
 thump_length_s      = [0.8, 1.5]
+# A machine gun's burst at night (the battle's tracers): its rounds rattling at its rate, at its gun.
+chatter_gain        = 0.5      # at 60 m; quieter as 60 m over the distance
+chatter_range_m     = [60.0, 300.0]
+chatter_lowpass_hz  = [400.0, 2000.0]   # duller across the range, geometrically
+max_voices          = 64       # sounding or waiting to (a distant one is scheduled seconds ahead); the farthest dropped first
 
 # What is drawn over the world after sharpening (render/effects.ts): tracers, each
 # shot's flash star and light, and how the particles take the world's light. The

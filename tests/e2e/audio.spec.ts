@@ -42,7 +42,7 @@ test('a browser that refuses sound still starts play, takes the pointer and resu
     h.trigger(false);
     await h.waitFrames(3);
   });
-  expect(await hooks(page, (h) => h.audio())).toEqual({ state: 'none', voices: 0, kinds: {} });
+  expect(await hooks(page, (h) => h.audio())).toEqual({ state: 'none', voices: 0, kinds: {}, held: 0, dropped: 0 });
   await page.keyboard.press('Escape');
   await expect(page.locator('#pause')).toBeVisible();
   await page.locator('#resume').click();
@@ -150,5 +150,24 @@ test('distant artillery is heard: a barrage beyond the map rumbles, a far shell 
   expect(heard.state).toBe('running');
   expect(heard.rumble).toBeGreaterThan(0);
   expect(heard.thump).toBeGreaterThan(0);
+  expect(errors).toEqual([]);
+});
+
+test('the machine guns are heard at night', async ({ page }) => {
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  await hooks(page, (h) => h.waitFrames(10));
+  const heard = await hooks(page, async (h) => {
+    h.setTimeOfDay(21);
+    h.setIntensity('heavy');
+    h.runLights(120);
+    const before = h.audio().kinds.chatter ?? 0;
+    for (let k = 0; k < 20; k++) await h.waitFrames(60);
+    const a = h.audio();
+    return { chatter: (a.kinds.chatter ?? 0) - before, state: a.state, held: a.held };
+  });
+  expect(heard.state).toBe('running');
+  expect(heard.chatter).toBeGreaterThan(0);
+  expect(heard.held).toBeLessThanOrEqual(64);
   expect(errors).toEqual([]);
 });

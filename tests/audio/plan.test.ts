@@ -143,6 +143,20 @@ describe('the sound of a frame', () => {
     expect(far.lengthS).toBeCloseTo(1.5, 9);
   });
 
+  it('a burst chatters at its gun, late by its distance, quieter and duller the farther', () => {
+    const burst = (id: number, metres: number) => ({ id, gun: [ear[0] + metres, ear[1], ear[2]] as [number, number, number], t: 3, rounds: 12, rpm: 600 });
+    const [near, far] = planVoices(t, none(), ear, { launches: [], distant: [], bursts: [burst(1, 60), burst(2, 300)] });
+    expect([near.kind, far.kind]).toEqual(['chatter', 'chatter']);
+    expect(near.delayS).toBeCloseTo(60 / 343, 9);
+    expect(far.delayS).toBeCloseTo(300 / 343, 9);
+    expect(near.gain).toBeCloseTo(t.chatter.gain, 9);
+    expect(far.gain / near.gain).toBeCloseTo(1 / 5, 9);
+    expect(near.lowpassHz).toBeCloseTo(2000, 6);
+    expect(far.lowpassHz).toBeCloseTo(400, 6);
+    expect([near.rounds, near.rpm]).toEqual([12, 600]);
+    expect(near.lengthS).toBeCloseTo((11 * 60) / 600, 9);
+  });
+
   it('a scoop is a scrape where it was dug, at scrape_gain', () => {
     expect(t.scrapeGain).toBe(0.5);
     const scoop = { tick: 1, voxels: 24, at: [10.6, 1.4, 10.8] as [number, number, number] };

@@ -168,7 +168,7 @@ export interface Hooks {
   /** Each of the last 600 frames' main-thread time, ms, from the frame's start to its render's return. */
   mainMs(): number[];
   /** The sound: its context's state ('none' before the click that starts play) and how many voices have started. */
-  audio(): { state: 'none' | 'suspended' | 'running' | 'closed'; voices: number; kinds: Record<string, number> };
+  audio(): { state: 'none' | 'suspended' | 'running' | 'closed'; voices: number; kinds: Record<string, number>; held: number; dropped: number };
 }
 
 export async function openGame(page: Page): Promise<string[]> {
