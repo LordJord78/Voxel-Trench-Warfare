@@ -231,11 +231,11 @@ export class Director {
 
   /**
    * A frame's step on a jump into the dark: `preRollS` of the battle first, as if it had been going
-   * on (its launches, flashes and pops left unheard), then the frame's `seconds` with its strikes,
-   * which happened now. The frame's events, with the pre-roll's chars: those change the world.
+   * on (its launches, flashes and pops left unheard), then the frame's `seconds` with its strikes
+   * and splashes, which happened now. The frame's events, with the pre-roll's chars: those change the world.
    */
   preRoll(preRollS: number, seconds: number, inputs: BattleInputs): BattleEvents {
-    const before = this.tick(preRollS, { ...inputs, strikes: [] });
+    const before = this.tick(preRollS, { ...inputs, strikes: [], splashes: [] });
     const events = this.tick(seconds, inputs);
     events.chars.unshift(...before.chars);
     return events;

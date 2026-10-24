@@ -42,6 +42,8 @@ import { Vec3 } from '../physics/vec';
 import { battleDarkness, Director, noBattleEvents, type BattleEvents, type BattleInputs, type Strike } from '../battle/director';
 import { fireChance, fireTunables } from '../battle/fires';
 import { CharQueue, fuelNear } from '../world/char';
+import { waterTunables } from '../battle/water';
+import { STILL_WATER, waterFrameTunables } from '../render/water-frame';
 import { flareTunables } from '../battle/flares';
 import { flashPower, flashTunables } from '../battle/barrages';
 import { farHeightM } from '../world/generation/farfield';
@@ -264,6 +266,7 @@ async function start(): Promise<void> {
   let battle = new Director(world.plan, tun, SEED, ground);
   const flashT = flashTunables(tun);
   renderer.horizonTerms = horizonTerms(tun);
+  renderer.waterTerms = { frame: waterFrameTunables(tun), ripples: waterTunables(tun) };
   /** The distant shells' flashes the frame was last given. */
   let horizon: HorizonFlash[] = [];
   const flareT = flareTunables(tun);
@@ -329,14 +332,14 @@ async function start(): Promise<void> {
     });
     return now;
   };
-  /** `strikes`: the session's shells landed this frame, which may start fires. */
-  const light = (dt: number, eye: readonly number[], strikes: readonly Strike[] = []) => {
+  /** `strikes`: the session's shells landed this frame, which may start fires; `splashes`: its rounds and shells into water, which ripple it. */
+  const light = (dt: number, eye: readonly number[], strikes: readonly Strike[] = [], splashes: NonNullable<BattleInputs['splashes']> = []) => {
     skyNow();
     battleEvents = noBattleEvents();
     if (mode !== 'paused') {
       lightSeconds += dt;
       if (lightsHeld === null) {
-        const inputs = { ...battleInputs(), strikes };
+        const inputs = { ...battleInputs(), strikes, splashes };
         battleEvents = jumpedIntoDark(dt, inputs.darkness) ? battle.preRoll(flareT.preRollS, dt, inputs) : battle.tick(dt, inputs);
         for (const c of battleEvents.chars) chars.add(c.at);
         ranAt = { hours: timeOfDay, darkness: inputs.darkness };
@@ -360,6 +363,8 @@ async function start(): Promise<void> {
     }
     renderer.setLights(lit, sky.flares, eye);
     renderer.setHorizon(horizon);
+    // The battle's water: its rings and the wind on it; still at rest, and under a test's own lights.
+    renderer.setWater(lightsHeld === 'rest' || lights !== planned ? STILL_WATER : { rings: shownBattle.rings(), ...shownBattle.roughness() });
   };
 
   const changeSettings = (next: Settings) => {
@@ -616,7 +621,7 @@ async function start(): Promise<void> {
     renderer.setBlasts(frameEffects.blasts);
     renderer.setSmoke(frameEffects.smoke);
     built = frameEffects.counts;
-    light(dt, pose.position, strikesFrom(events));
+    light(dt, pose.position, strikesFrom(events), events.splashes.map((w) => ({ at: w.at, energyJ: w.energyJ })));
     renderer.render(pose, timeOfDay, now);
     lastPose = pose;
     frames++;

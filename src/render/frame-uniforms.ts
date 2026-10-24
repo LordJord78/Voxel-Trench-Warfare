@@ -101,6 +101,10 @@ export const PUFF: StructDef = {
 /** The most puffs of smoke a frame's haze holds (the high preset's; quality.ts's HAZE_PUFFS). */
 export const MAX_PUFFS = 64;
 
+/** The water's rings and glints a frame takes (reflect.wgsl loops to them). */
+export const MAX_RINGS = 32;
+export const MAX_GLINTS = 32;
+
 /** The most distant shells' flashes a frame's sky takes (sky.wgsl's horizonGlow loops to it). */
 export const MAX_HORIZON = 16;
 
@@ -198,6 +202,17 @@ export const FRAME: StructDef = {
     ['horizonGlowCount', 'u32'],
     ['horizon', { element: 'vec4f', count: MAX_HORIZON }],
     ['glows', { element: 'vec4f', count: 2 * MAX_HORIZON }],
+    // The water (reflect.wgsl, water-frame.ts): its rings, the newest MAX_RINGS, each where it began
+    // and how far it has spread, then its height, its width and its waves' length (voxels); the
+    // wind's way and the slope it roughens the surface to; how far a reflection is traced (voxels);
+    // and the flares' and fires' glints, each where it is and its disc's radius (voxels), then its light.
+    ['ringCount', 'u32'],
+    ['waterSlope', 'f32'],
+    ['waterWind', 'vec2f'],
+    ['rings', { element: 'vec4f', count: 2 * MAX_RINGS }],
+    ['glintCount', 'u32'],
+    ['reflectReach', 'f32'],
+    ['glints', { element: 'vec4f', count: 2 * MAX_GLINTS }],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
     // The atmosphere as this frame's sky view was built.

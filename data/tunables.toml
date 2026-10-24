@@ -731,6 +731,12 @@ flare_burn_s        = 40.0     # a flare burns this long, then is lit again wher
 flare_sink_mps      = 0.3      # how fast it sinks under its parachute as it burns
 flare_ignite_s      = 0.5      # how long it takes to catch
 flare_fade_s        = 5.0      # how long it gutters out over, at the end of its burn
+# The water's reflection (reflect.wgsl): traced this far, the sky beyond; the flares' and fires'
+# glints, each a disc of its light (metres across its middle), and their gain.
+reflect_m           = 160.0
+glint_m             = 0.4
+glint_fire_m        = 0.6
+glint_gain          = 1.0
 
 # ---------------------------------------------------------------------------
 # ATMOSPHERE

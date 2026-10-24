@@ -56,6 +56,8 @@ import { copyPose, jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
 import { rifleModel } from '../combat/rifle-model';
+import type { WaterTunables } from '../battle/water';
+import { glintsFrom, STILL_WATER, writeWater, type FrameWater, type Glint, type WaterFrameTunables } from './water-frame';
 import { Effects, effectsLook, type EffectsFrame, type EffectsPipelines, type SmokePuff, type TransientLight } from './effects';
 import { Rifle, type RifleDrawn, type RiflePipelines, type RiflePose } from './rifle';
 import { FarFieldGpu } from './farfield-gpu';
@@ -307,6 +309,14 @@ export class Renderer {
   horizonTerms: HorizonTerms = { colour: [0, 0, 0], haze: 0, far: 0, nearM: 1, liftM: 0, spreadM: [1, 1], minDeg: 1, reachM: 1 };
   /** setHorizon's. */
   private horizon: readonly HorizonFlash[] = [];
+  /** How the water is reflected and rippled (water-frame.ts, battle/water.ts); none until set. */
+  waterTerms: { frame: WaterFrameTunables; ripples: WaterTunables } = {
+    frame: { flareM: 0.4, fireM: 0.6, gain: 1, reflectM: 160 },
+    ripples: { ringSpeedMps: 1, ringFadeS: 2, maxRings: 32, ringHeightM: 0.04, ringLogFull: 6, ringWavelengthM: 0.3, ringWidthM: 0.15, roughnessPerMps: 0 },
+  };
+  /** setWater's, and the glints of the lights setLights was last given. */
+  private water: FrameWater = STILL_WATER;
+  private glints: Glint[] = [];
   stats: RenderStats = { gpuMs: null, gpuLastMs: null, gpuSamples: 0, passes: {}, own: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
 
   private readonly canvas: HTMLCanvasElement | null;
@@ -467,6 +477,12 @@ export class Renderer {
     this.device.queue.writeBuffer(this.compiled.lights, 0, lightBuffer(lights, flares, voxel));
     this.lightCount = lights.length;
     this.flareShadows.setFlares(lights, flares, voxel, eye && [eye[0] / voxel, eye[1] / voxel, eye[2] / voxel]);
+    this.glints = glintsFrom(lights, flares, this.waterTerms.frame);
+  }
+
+  /** The battle's water this frame: its rings and roughness (STILL_WATER at rest). */
+  setWater(water: FrameWater): void {
+    this.water = water;
   }
 
   /** The front's glow on the haze, as a share of its keyed colour: the flares burning over the field (1 as planned). */
@@ -814,6 +830,7 @@ export class Renderer {
       w.set(`blasts.${k}.intensity`, f.intensity);
     });
     writeHorizon(w, this.horizonTerms, this.horizon, voxel, pose.position, this.sky.flashGlow);
+    writeWater(w, this.water, this.glints, voxel, this.waterTerms.frame, this.waterTerms.ripples);
     w.set('far', this.far.info);
     const encoder = device.createCommandEncoder({ label: `frame ${this.frameIndex}` });
     // The sky views for this frame's sun and moon (the moon's while its light counts), from the
