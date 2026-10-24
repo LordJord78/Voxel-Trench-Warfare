@@ -867,6 +867,28 @@ width_m             = 400.0    # the box its shells fall in: across the way to i
 depth_m             = 150.0    # and along it
 power               = [0.6, 1.4]   # each shell's own, over a flash's at full
 
+# Shells into the far field (src/battle/far-shells.ts): 200–800 m from the map's middle, beyond its edge,
+# within arc_deg of toward the enemy. Each flashes (a disc growing over flash_s, and its flash's light on the
+# far field and the haze), throws up a column of smoke that rises and leans with the wind for a minute,
+# and thumps after its distance. They cut no craters: the far field is a height field.
+[battle.far_shells]
+every_light_s       = 30.0     # mean seconds between them at the front's light intensity
+every_heavy_s       = 5.0
+distance_m          = [200.0, 800.0]
+arc_deg             = 110.0
+power               = [0.6, 1.4]   # each shell's own, over a flash's at full
+flash_s             = 0.2      # its disc grows and fades over this
+flash_size_m        = [6.0, 12.0]   # across, from its first frame to its last
+flash_glow          = 3.0      # its brightness, over the flash's colour
+smoke_s             = 60.0     # its column stands this long, thinning
+puffs               = 8        # the column's puffs, let out one by one
+puff_every_s        = 0.5
+rise_mps            = 6.0      # each rises this fast at first, slowing by e over rise_s: to some 48 m
+rise_s              = 8.0
+puff_radius_m       = [3.0, 12.0]   # each grows over the column's life
+smoke_alpha         = 0.6      # how much it covers at first
+smoke_colour        = [0.2, 0.18, 0.16]
+
 # A distant shell's flash (barrages.ts), as the sky and the far field take it.
 [battle.flashes]
 window_s            = 1.0      # seen this long after it lands

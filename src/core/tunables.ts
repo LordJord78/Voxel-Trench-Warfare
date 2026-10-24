@@ -57,6 +57,15 @@ export class Tunables {
     return [value[0], value[1]];
   }
 
+  /** A colour or a point: three finite numbers. */
+  triple(key: string): [number, number, number] {
+    const value = this.get(key);
+    if (!Array.isArray(value) || value.length !== 3 || !value.every((v) => typeof v === 'number' && Number.isFinite(v))) {
+      throw new TypeError(`tunable '${key}' is not three finite numbers: ${JSON.stringify(value)}`);
+    }
+    return [value[0], value[1], value[2]];
+  }
+
   /** A deep copy of the whole file, for deriving a variant (tests shrink the world this way). */
   raw(): Record<string, unknown> {
     return JSON.parse(JSON.stringify(this.rawData)) as Record<string, unknown>;

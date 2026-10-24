@@ -16,6 +16,11 @@ describe('Tunables', () => {
     expect(r.pair('g.flat')).toEqual([2, 2]);
     for (const k of ['g.back', 'g.three', 'g.word']) expect(() => r.pair(k), k).toThrow(TypeError);
   });
+  it('reads a colour or a point as three finite numbers, and refuses anything else', () => {
+    const r = new Tunables({ g: { ok: [1, 0.5, 0.25], two: [1, 2], word: 'x', nan: [1, Number.NaN, 2] } });
+    expect(r.triple('g.ok')).toEqual([1, 0.5, 0.25]);
+    for (const k of ['g.two', 'g.word', 'g.nan']) expect(() => r.triple(k), k).toThrow(TypeError);
+  });
   it('names the missing part', () => {
     expect(() => t.get('a.b.z')).toThrow("tunable 'a.b.z' not found (missing 'z')");
   });
