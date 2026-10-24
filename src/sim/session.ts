@@ -354,7 +354,10 @@ export class Session {
     const id = this.destruction.shell([x / v, top, z / v], radiusM / v, seed);
     const at: [number, number, number] = [x, top * v, z];
     this.events.blasts.push({ tick: this.ticks, at, radiusM, material, crater: id });
-    if (kindOf(material) === K.WATER) this.events.splashes.push({ tick: this.ticks, at, energyJ: this.splashEnergyJ * Math.pow(radiusM / 3, 3), kind: 'shell' });
+    if (kindOf(material) === K.WATER) {
+      const k = radiusM / 3;
+      this.events.splashes.push({ tick: this.ticks, at, energyJ: this.splashEnergyJ * k * k * k, kind: 'shell' });
+    }
     this.throwBlast(at, material);
     const p = this.player;
     const d = hypot(at[0] - p.position.x, at[1] - (p.position.y + this.controller.eyeHeight(p)), at[2] - p.position.z);
