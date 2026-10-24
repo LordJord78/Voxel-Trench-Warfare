@@ -37,7 +37,9 @@ import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
 import { Hud } from '../ui/hud';
-import { underFire, type PeakGame } from './peak-combat';
+import { boxHitsSolid } from '../physics/collision';
+import { Vec3 } from '../physics/vec';
+import { clearOf, underFire, type PeakGame } from './peak-combat';
 import { PeriscopeFrame } from '../ui/periscope';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from '../ui/settings';
 import { UNIFORM } from '../world/bricks';
@@ -665,7 +667,10 @@ async function start(): Promise<void> {
   const peakGame: PeakGame = {
     views,
     standAt: (pose) => {
-      session.teleport([pose.position[0], pose.position[1] - eyeM, pose.position[2]], pose.yaw, pose.pitch);
+      const body = session.controller.t;
+      const standing = body.stances[Stance.STANDING].height;
+      const blocked = (x: number, y: number, z: number) => boxHitsSolid(session.controller.grid, new Vec3(x, y, z), body.radius, standing);
+      session.teleport(clearOf([pose.position[0], pose.position[1] - eyeM, pose.position[2]], blocked, voxelM, 0.5), pose.yaw, pose.pitch);
       renderer.resetHistory();
       // Playing without the click that starts play, so without sound (as the check has no click).
       if (!spectating && mode !== 'playing') {
@@ -715,6 +720,10 @@ async function start(): Promise<void> {
     /** The camera held at `pose` while the session runs (null: play again); peak-combat.ts's. */
     spectate(pose: CameraPose | null) {
       peakGame.spectate(pose);
+    },
+    /** Stand the player at a standard view, their body clear of solid (peak-combat.ts's standAt). */
+    standAt(view: ViewName) {
+      peakGame.standAt(views[view]);
     },
     /** `view` at `hours` under peak combat for `seconds`, measured (peak-combat.ts). */
     underFire: (view: ViewName, hours: number, seconds: number) => underFire(peakGame, view, hours, seconds),

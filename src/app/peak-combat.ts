@@ -44,6 +44,24 @@ export function shellRadius(k: number): number {
   return PEAK_RADIUS_M[0] + (k % 5) * ((PEAK_RADIUS_M[1] - PEAK_RADIUS_M[0]) / 4);
 }
 
+/**
+ * `feet` (metres), or the nearest point to them where `blocked` says the body overlaps nothing: in
+ * rings of `step` out to `reachM` across the ground, eight bearings a ring; `feet` if none is clear.
+ * A view's eye can stand where a body cannot (the firing step's, at the bench's middle, has the body
+ * 6 cm into the parapet), and a body placed in solid is lifted out onto whatever is above it.
+ */
+export function clearOf(feet: readonly number[], blocked: (x: number, y: number, z: number) => boolean, step: number, reachM: number): [number, number, number] {
+  if (!blocked(feet[0], feet[1], feet[2])) return [feet[0], feet[1], feet[2]];
+  for (let r = step; r <= reachM + 1e-9; r += step) {
+    for (let k = 0; k < 8; k++) {
+      const x = feet[0] + Math.cos((k * Math.PI) / 4) * r;
+      const z = feet[2] + Math.sin((k * Math.PI) / 4) * r;
+      if (!blocked(x, feet[1], z)) return [x, feet[1], z];
+    }
+  }
+  return [feet[0], feet[1], feet[2]];
+}
+
 /** The q-quantile of `xs` (the sorted value at floor(q × n), the last for q = 1); NaN for none. */
 export function percentile(xs: readonly number[], q: number): number {
   if (xs.length === 0) return Number.NaN;
@@ -68,12 +86,14 @@ export interface PeakResult {
   skipped: number;
   /** Sounds started (none where sound has not started: the check has no click). */
   voices: number;
+  /** The farthest the feet strayed from where they stood while it lasted, metres: a body lifted out of a wall, or pushed off its view, shows here. */
+  drift: number;
 }
 
 /** What the driver needs of the game. */
 export interface PeakGame {
   views: Record<ViewName, CameraPose>;
-  /** Stand the player playing, their eye at `pose`. */
+  /** Stand the player playing, their eye at `pose`, or as near it as their body stands clear of solid. */
   standAt(pose: CameraPose): void;
   /** Hold the camera at `pose` with the session running; null to stop, and play again. */
   spectate(pose: CameraPose | null): void;
@@ -123,6 +143,7 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
   const landings: Promise<unknown>[] = [];
   let skipped = 0;
   let k = 0;
+  let drift = 0;
   game.trigger(true);
   const t0 = performance.now();
   while (performance.now() - t0 < seconds * 1000) {
@@ -134,6 +155,8 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
     }
     if (game.rounds() < TOP_UP_BELOW) game.refill();
     await game.waitFrames(1);
+    const f = game.feet();
+    drift = Math.max(drift, Math.hypot(f[0] - feet[0], f[1] - feet[1], f[2] - feet[2]));
     // By the game's timer: without timestamps (or told not to use them), by submitted work alone.
     if (game.timestamps) {
       const s = game.stats();
@@ -164,5 +187,6 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
     shells: landings.length,
     skipped,
     voices,
+    drift,
   };
 }

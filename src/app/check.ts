@@ -1,8 +1,8 @@
 /**
  * The check (`?check=<run>`): once the game is ready, measure and photograph
  * the six standard views at each of the clock's four keys, then measure the
- * overview through the day, then the overview and the bay under peak combat
- * (peak-combat.ts) at dusk and at night, at the high preset's full resolution
+ * overview through the day, then every view under peak combat (peak-combat.ts)
+ * at dusk and at night, at the high preset's full resolution
  * with dynamic resolution off, and post a report and the PNGs to the dev server
  * (tools/vite-plugin-report.ts). Chrome runs it in the e2e
  * suite and Safari through `npm run safari`; whoever reads the report judges
@@ -70,7 +70,7 @@ export interface CheckReport {
   fingerprint: string;
   views: CheckView[];
   day: CheckHour[];
-  /** The overview and the bay under peak combat, at dusk and at night. */
+  /** Every view under peak combat, at dusk and at night. */
   peak: PeakResult[];
   errors: string[];
 }
@@ -91,10 +91,11 @@ export const CHECK_KEYS = ['dusk', 'night', 'noon', 'dawn'] as const;
 export const DAY_HOURS: readonly number[] = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 6 + 40 / 60, 7 + 10 / 60, 17 + 50 / 60, 17 + 55 / 60];
 
 /**
- * Peak combat in the check: the overview (the farthest field) and the bay (the nearest walls), which
- * bound its cost, at dusk and at night, each for PEAK_S seconds; Chrome's perf gate measures all six views.
+ * Peak combat in the check: every view, at dusk and at night, each for PEAK_S seconds, as Chrome's
+ * perf gate measures them. (Two views were planned to bound the cost; Safari's own run had no man's
+ * land at night dearer than the bay — milestone 6's review.)
  */
-export const CHECK_PEAK: readonly (readonly [ViewName, 'dusk' | 'night'])[] = [['overview', 'dusk'], ['overview', 'night'], ['bay', 'dusk'], ['bay', 'night']];
+export const CHECK_PEAK: readonly (readonly [ViewName, 'dusk' | 'night'])[] = VIEW_NAMES.flatMap((v) => [[v, 'dusk'], [v, 'night']] as const);
 export const PEAK_S = 6;
 
 export type Post = (file: string, body: Blob | string) => Promise<void>;

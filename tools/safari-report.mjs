@@ -2,8 +2,8 @@
 // endpoint, open the check page in Safari, wait for its report, and judge it by the spec's
 // "done" table: the click-to-play prompt within 8 s, the golden world bytes, every standard
 // view at each of the clock's four keys within the 14 ms GPU budget at the high preset's
-// 1.5 MP, the overview within it through the day, and the overview and the bay under peak
-// combat (the combat spec's row 6: the GPU within 14 ms at the 95th percentile, the main
+// 1.5 MP, the overview within it through the day, and every view at dusk and at night under
+// peak combat (the combat spec's row 6: the GPU within 14 ms at the 95th percentile, the main
 // thread within 8 ms at the 99th; no sound, as the check has no click).
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
@@ -76,7 +76,7 @@ try {
     check(report.views.length === 24 && report.day.length === 16, `${report.views.length} views (six at four keys) and ${report.day.length} hours of the day`);
     for (const d of report.day) check(d.gpuMs <= GPU_BUDGET_MS, `overview at ${hhmm(d.hours)}  ${d.gpuMs.toFixed(2)} ms${passes(d, d.gpuMs <= GPU_BUDGET_MS)}`);
     const peak = report.peak ?? [];
-    check(peak.length === 4, `${peak.length} peaks of combat (the overview and the bay, at dusk and at night)`);
+    check(peak.length === 12, `${peak.length} peaks of combat (every view, at dusk and at night)`);
     for (const p of peak) {
       const by = p.gpu ? p.gpu : p.submitted;
       const gpu = by ? by.p95 : Number.NaN;

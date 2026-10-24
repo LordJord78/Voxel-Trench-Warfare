@@ -78,6 +78,8 @@ export interface Hooks {
   };
   /** The camera held at `pose` while the session runs as if playing; null to play again. */
   spectate(pose: { position: [number, number, number]; yaw: number; pitch: number } | null): void;
+  /** Stand the player at a standard view, their body clear of solid. */
+  standAt(view: string): void;
   /** A standard view at `hours` under peak combat for `seconds`, measured (src/app/peak-combat.ts). */
   underFire(view: string, hours: number, seconds: number): Promise<{
     view: string;
@@ -90,6 +92,7 @@ export interface Hooks {
     shells: number;
     skipped: number;
     voices: number;
+    drift: number;
   }>;
   /** The HUD as drawn: whether it shows, whether its crosshair does, and its words. */
   hud(): { visible: boolean; crosshair: boolean; text: string };

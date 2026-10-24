@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PEAK_RADIUS_M, PEAK_RANGE_M, percentile, shellPoint, shellRadius } from '../../src/app/peak-combat';
+import { PEAK_RADIUS_M, PEAK_RANGE_M, clearOf, percentile, shellPoint, shellRadius } from '../../src/app/peak-combat';
 
 // Peak combat (the combat spec's done table, row 6): shells landing 20–50 m off at one a second,
 // each 2.2–3.4 m, on the map whatever the player's place; and the statistics a peak is judged by.
@@ -26,6 +26,18 @@ describe('peak combat', () => {
     }
     // Nowhere to land: skipped, never thrown.
     expect(shellPoint(3, from, () => false)).toBeNull();
+  });
+
+  it('a body placed in a wall is stood clear of it, nearest first; one already clear is left where it is', () => {
+    // A wall at z ≥ 10 m, and a body 0.3 m in radius: its feet at z 9.95 overlap the wall.
+    const blocked = (_x: number, _y: number, z: number) => z + 0.3 > 10;
+    const at = clearOf([2, 1, 9.95], blocked, 0.1, 0.5);
+    expect(blocked(at[0], at[1], at[2])).toBe(false);
+    expect(Math.hypot(at[0] - 2, at[2] - 9.95)).toBeCloseTo(0.3, 9);
+    expect(at[1]).toBe(1);
+    expect(clearOf([2, 1, 9.5], blocked, 0.1, 0.5)).toEqual([2, 1, 9.5]);
+    // Nowhere clear within reach: left where it is.
+    expect(clearOf([2, 1, 9.95], () => true, 0.1, 0.5)).toEqual([2, 1, 9.95]);
   });
 
   it('percentiles', () => {

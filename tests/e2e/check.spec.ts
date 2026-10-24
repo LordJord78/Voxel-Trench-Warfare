@@ -23,18 +23,19 @@ interface Report {
     shots: number;
     shells: number;
     voices: number;
+    drift: number;
   }[];
   errors: string[];
 }
 
 const VIEWS = ['bay', 'step', 'nml-night', 'overview', 'dugout', 'hamlet'];
+// The peak combat the check measures (src/app/peak-combat.ts): every view, at dusk and at night.
+const PEAK = VIEWS.flatMap((v) => [`${v} dusk`, `${v} night`]);
 const KEYS = ['dusk', 'night', 'noon', 'dawn'];
 // The overview through the day: every second hour, and round sunrise and sunset, the sun 0–2° up.
 const DAY = ['00:00', '02:00', '04:00', '06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00', '06:40', '07:10', '17:50', '17:55'];
-// The peak combat the check measures (src/app/peak-combat.ts): the overview and the bay, at dusk and at night.
-const PEAK = ['overview dusk', 'overview night', 'bay dusk', 'bay night'];
-// The check's wait for its report: 24 views and 16 hours, each settled and measured, and four peaks.
-const REPORT_MS = 460_000;
+// The check's wait for its report: 24 views and 16 hours, each settled and measured, and twelve peaks.
+const REPORT_MS = 560_000;
 
 /** An hour of the clock as HH:MM. */
 function hhmm(hours: number): string {
@@ -74,6 +75,7 @@ test('the check reports the world, its timings, every view at the four keys and 
     expect(p.shots, at).toBeGreaterThan(50);
     expect(p.shells, at).toBeGreaterThanOrEqual(5);
     expect(p.voices, at).toBe(0);
+    expect(p.drift, at).toBeLessThanOrEqual(0.2);
   }
   for (const v of report.views) {
     expect(v.gpuMs, v.name).toBeGreaterThan(0);

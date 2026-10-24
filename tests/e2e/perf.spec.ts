@@ -274,8 +274,9 @@ test('shells landing 20–50 m off at one a second, with a magazine fired, stay 
         page,
         async (h, arg) => {
           const { view, hours } = arg as { view: 'step' | 'bay'; hours: number };
-          const v = h.views[view];
-          h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: 0 });
+          // Clear of the parapet: the step view's eye has the body 6 cm into it, and the first crater
+          // written back would lift it out onto the crest (milestone 6's review).
+          h.standAt(view);
           h.setTimeOfDay(hours);
           await h.waitFrames(90);
           const from = h.frames();
@@ -371,9 +372,10 @@ test('every standard view at dusk and at night under peak combat stays within th
       const g = r.gpu!;
       const line =
         `${view} ${label}: GPU p95 ${g.p95.toFixed(2)} ms, median ${g.median.toFixed(2)}, worst ${g.max.toFixed(2)}; ` +
-        `main thread p99 ${r.main.p99.toFixed(1)} ms, worst ${r.main.max.toFixed(1)}; ${r.frames} frames, ${r.shots} shots, ${r.shells} shells (${r.skipped} skipped), ${r.voices} voices`;
+        `main thread p99 ${r.main.p99.toFixed(1)} ms, worst ${r.main.max.toFixed(1)}; ${r.frames} frames, ${r.shots} shots, ${r.shells} shells (${r.skipped} skipped), ${r.voices} voices; the feet strayed ${r.drift.toFixed(2)} m`;
       lines.push(line);
-      if (g.p95 > BUDGET_MS || r.main.p99 > 8 || r.main.max > 20 || r.shots < 50 || r.shells < 5 || r.voices === 0) over.push(line);
+      // Measured where the view stands: a body lifted onto a parapet, or pushed off, is a different view.
+      if (g.p95 > BUDGET_MS || r.main.p99 > 8 || r.main.max > 20 || r.shots < 50 || r.shells < 5 || r.voices === 0 || r.drift > 0.2) over.push(line);
     }
   }
   console.log(`Peak combat:\n${lines.join('\n')}`);
