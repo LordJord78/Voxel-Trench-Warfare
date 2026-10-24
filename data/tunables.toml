@@ -851,3 +851,23 @@ spark_size_m        = 0.15     # the spark a flare trails as it climbs (an emiss
 spark_glow          = 6.0      # its brightness, over its colour
 disc_size_m         = 0.4      # a burning flare seen: a bright disc in the sky
 disc_glow           = 12.0     # at full burn, over its colour
+
+# Barrages beyond the map (src/battle/barrages.ts): from the map's middle, 1–8 km off along the front
+# to either side and beyond the enemy's line; a run of shells over a while, each a flash on the horizon
+# and a rumble after its distance. At light a barrage every few minutes; at heavy one or two in progress
+# (a mean of 35 s each); none off. They do not wait for the dark.
+[battle.barrages]
+every_light_s       = 150.0    # mean seconds between barrages' starts
+every_heavy_s       = 20.0
+arc_deg             = 110.0    # either way of toward the enemy (+z): both flanks and beyond their line
+distance_m          = [1000.0, 8000.0]
+shells              = [6, 40]
+duration_s          = [10.0, 60.0]
+width_m             = 400.0    # the box its shells fall in: across the way to it
+depth_m             = 150.0    # and along it
+power               = [0.6, 1.4]   # each shell's own, over a flash's at full
+
+# A distant shell's flash (barrages.ts), as the sky and the far field take it.
+[battle.flashes]
+window_s            = 1.0      # seen this long after it lands
+decay_s             = 0.15     # its power falls by e over this
