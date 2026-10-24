@@ -385,3 +385,41 @@ test('every standard view at dusk and at night under peak combat stays within th
   expect(over, lines.join('\n')).toEqual([]);
   expect(errors).toEqual([]);
 });
+
+test("a heavy night's flares render within the budget at the overview and in no man's land", async ({ page }) => {
+  // Done-table row 1 at the heavy intensity: about fifteen alight, the eight nearest holding shadow
+  // maps and the rest lighting the field unshadowed; each frame's own GPU time within 14 ms at the
+  // 95th percentile. At least eight alight, so every shadow map is in use (the battle two minutes in
+  // is the same each run; how many frames the window spans is not).
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  const lines: string[] = [];
+  for (const view of ['overview', 'nml-night'] as const) {
+    const r = await hooks(page, async (h, v) => {
+      h.setQuality({ preset: 'high', dynres: false });
+      h.view(v as string);
+      h.setTimeOfDay(21);
+      h.setIntensity('heavy');
+      h.runLights(120);
+      await h.waitFrames(60);
+      const gpu: number[] = [];
+      let seen = h.stats().gpuSamples;
+      let lit = 0;
+      for (let k = 0; k < 300; k++) {
+        await h.waitFrames(1);
+        const s = h.stats();
+        if (s.gpuSamples > seen && s.gpuLastMs !== null) gpu.push(s.gpuLastMs);
+        seen = s.gpuSamples;
+        lit = Math.max(lit, h.lights().filter((l) => l.kind === 'flare').length);
+      }
+      gpu.sort((a, b) => a - b);
+      return { count: gpu.length, p95: gpu[Math.floor(0.95 * gpu.length)], median: gpu[gpu.length >> 1], max: gpu[gpu.length - 1], lit };
+    }, view);
+    if (r.count === 0) test.skip(true, 'no GPU timestamps');
+    lines.push(`${view}: GPU p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, worst ${r.max.toFixed(2)}; ${r.lit} flares alight at most`);
+    expect(r.lit, lines.join('; ')).toBeGreaterThanOrEqual(8);
+    expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
+  }
+  console.log(`A heavy night's flares: ${lines.join('; ')}`);
+  expect(errors).toEqual([]);
+});

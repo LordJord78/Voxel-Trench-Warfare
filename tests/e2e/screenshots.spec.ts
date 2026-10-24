@@ -429,3 +429,62 @@ test('suppression under heavy fire', async ({ page }) => {
   }
   if (errors.length) throw new Error(errors.join('\n'));
 });
+
+// Battle milestone 1's review: the battle's flares over no man's land at night (the front light, two
+// minutes in, and twenty seconds later); and from the firing step, a flare fired and bursting: its
+// spark climbing, its burst, and burning as it drifts. Written to artifacts/b1.
+test("flares over no man's land, and one fired and bursting", async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors = await openGame(page);
+  await hooks(page, async (h) => {
+    h.setQuality({ preset: 'high', dynres: false });
+    h.view('nml-night');
+    h.setTimeOfDay(21);
+    h.setIntensity('light');
+    h.runLights(120);
+    await h.waitFrames(90);
+  });
+  await page.screenshot({ path: 'artifacts/b1/nml-flares-a.png' });
+  await hooks(page, (h) => h.waitFrames(1200));
+  await page.screenshot({ path: 'artifacts/b1/nml-flares-b.png' });
+  // From the firing step, the front heavy: the first flare fired 50–140 m off and ahead of the step,
+  // the camera turned to it and raised toward its burst, 30–50 m up, so its climb and burst are in frame.
+  await hooks(page, async (h) => {
+    h.view('step');
+    h.setTimeOfDay(21);
+    h.setIntensity('heavy');
+    h.runLights(0);
+    await h.waitFrames(30);
+  });
+  const found = await hooks(page, async (h) => {
+    const v = h.views.step;
+    const yaw = (v.yaw * Math.PI) / 180;
+    const ahead = [Math.sin(yaw), Math.cos(yaw)];
+    for (let k = 0; k < 900; k++) {
+      await h.waitFrames(2);
+      for (const f of h.battle().flares) {
+        if (f.stage !== 'climb') continue;
+        const d = [f.position[0] - v.position[0], f.position[2] - v.position[2]];
+        const far = Math.hypot(d[0], d[1]);
+        if (far < 50 || far > 140 || (d[0] * ahead[0] + d[1] * ahead[1]) / far < Math.cos((70 * Math.PI) / 180)) continue;
+        h.flyTo({ position: v.position, yaw: (Math.atan2(d[0], d[1]) * 180) / Math.PI, pitch: ((Math.atan2(30, far) * 180) / Math.PI) * 0.8 });
+        await h.waitFrames(10);
+        return f.id;
+      }
+    }
+    return null;
+  });
+  expect(found, 'no flare fired 50–140 m ahead of the step in 30 s').not.toBeNull();
+  await page.screenshot({ path: 'artifacts/b1/flare-climbing.png' });
+  await hooks(page, async (h, id) => {
+    for (let k = 0; k < 300; k++) {
+      await h.waitFrames(1);
+      if (h.battle().flares.find((f) => f.id === id)?.stage === 'burning') break;
+    }
+    await h.waitFrames(20);
+  }, found);
+  await page.screenshot({ path: 'artifacts/b1/flare-burst.png' });
+  await hooks(page, (h) => h.waitFrames(300));
+  await page.screenshot({ path: 'artifacts/b1/flare-burning.png' });
+  if (errors.length) throw new Error(errors.join('\n'));
+});

@@ -254,7 +254,16 @@ async function start(): Promise<void> {
   // the six planned flares hang instead; held at a moment, the director is sought to it.
   let battle = new Director(world.plan, tun, SEED);
   const flareT = flareTunables(tun);
-  const battleInputs = (): BattleInputs => ({ intensity: session.front.intensity, darkness: sky.flares, player: session.player.position.toArray() });
+  /** The sky at the time of day, worked out again whenever the clock has been set since it was last asked. */
+  const skyNow = () => {
+    if (timeOfDay !== litFor) {
+      litFor = timeOfDay;
+      sky = skyState(tun, timeOfDay);
+      renderer.sky = frameSky(sky, tun);
+    }
+    return sky;
+  };
+  const battleInputs = (): BattleInputs => ({ intensity: session.front.intensity, darkness: skyNow().flares, player: session.player.position.toArray() });
   let battleEvents: BattleEvents = { launches: [] };
   let shownBattle: Director = battle;
   let sought: { at: number; inputs: string; d: Director } | null = null;
@@ -265,11 +274,7 @@ async function start(): Promise<void> {
     return sought.d;
   };
   const light = (dt: number, eye: readonly number[]) => {
-    if (timeOfDay !== litFor) {
-      litFor = timeOfDay;
-      sky = skyState(tun, timeOfDay);
-      renderer.sky = frameSky(sky, tun);
-    }
+    skyNow();
     battleEvents = { launches: [] };
     if (mode !== 'paused') {
       lightSeconds += dt;
@@ -529,7 +534,8 @@ async function start(): Promise<void> {
       craterWaiters.get(c.id)?.(c.bricks);
       craterWaiters.delete(c.id);
     }
-    const frameEffects = effects.build(session, events, rifle, pose.position);
+    // The battle's flares seen (sparks climbing, discs burning) as the lights last showed them; none at rest.
+    const frameEffects = effects.build(session, events, rifle, pose.position, lightsHeld === 'rest' ? [] : shownBattle.flares());
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
     audio.play(planVoices(hearing, events, pose.position, battleEvents));
@@ -916,7 +922,7 @@ async function start(): Promise<void> {
     useLights(next: SceneLight[]) {
       lights = next;
     },
-    sunElevation: () => sky.sunElevationDeg,
+    sunElevation: () => skyNow().sunElevationDeg,
     frames: () => frames,
     waitFrames,
     freeze() {

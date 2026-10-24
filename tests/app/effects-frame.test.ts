@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CameraRig, rigTunables } from '../../src/app/camera-rig';
 import { EffectsFrameBuilder, effectsTunables } from '../../src/app/effects-frame';
+import { flareTunables, type FlareState } from '../../src/battle/flares';
 import { projectileSpec } from '../../src/combat/ballistics';
 import { BILLBOARD_FLOATS } from '../../src/combat/particles';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../../src/combat/rifle-model';
@@ -254,5 +255,29 @@ describe('a frame of effects', () => {
     const built = new EffectsFrameBuilder(t).build(s, shoot(s));
     expect(built.counts.billboards).toBe(s.particles.count);
     expect(built.frame.billboardCount).toBe(s.particles.count);
+  });
+  it('a flare climbing is a spark where it is, a burning flare a bright disc by its glow; one out is nothing', () => {
+    const ft = flareTunables(tun);
+    const b = new EffectsFrameBuilder(t);
+    const s = stand();
+    const flares: FlareState[] = [
+      { id: 1, position: [10, 20, 30], glow: 0, stage: 'climb', colour: [1, 0.88, 0.7] },
+      { id: 2, position: [40, 35, 60], glow: 0.5, stage: 'burning', colour: [1, 0.25, 0.15] },
+      { id: 3, position: [70, 30, 90], glow: 0, stage: 'out', colour: [1, 0.88, 0.7] },
+    ];
+    const built = b.build(s, none(), null, undefined, flares);
+    const out = built.frame.billboards;
+    const all = Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS)));
+    const at = (p: readonly number[]) => all.filter((q) => q[0] === p[0] && q[1] === p[1] && q[2] === p[2]);
+    const [spark] = at(flares[0].position);
+    expect(spark[3]).toBeCloseTo(ft.sparkSizeM / 2, 6);
+    expect(spark[8]).toBe(1);
+    expect(spark[4]).toBeCloseTo(ft.sparkGlow, 6);
+    const [disc] = at(flares[1].position);
+    expect(disc[3]).toBeCloseTo(ft.discSizeM / 2, 6);
+    expect(disc[8]).toBe(1);
+    expect(disc[4]).toBeCloseTo(ft.discGlow * 0.5, 6);
+    expect(disc[5]).toBeCloseTo(ft.discGlow * 0.5 * 0.25, 6);
+    expect(at(flares[2].position)).toEqual([]);
   });
 });

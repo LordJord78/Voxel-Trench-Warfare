@@ -836,3 +836,7 @@ off_per_min         = 1.0      # a quiet night's
 dark_above          = 0.1      # fired only while the sky's flares key is above this
 near_share          = 0.25     # fired from the posts near the player
 near_m              = 60.0     # along the line
+spark_size_m        = 0.15     # the spark a flare trails as it climbs (an emissive point)
+spark_glow          = 6.0      # its brightness, over its colour
+disc_size_m         = 0.4      # a burning flare seen: a bright disc in the sky
+disc_glow           = 12.0     # at full burn, over its colour

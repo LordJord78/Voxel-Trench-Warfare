@@ -77,3 +77,19 @@ test('at rest, the six planned flares hang as before', async ({ page }) => {
   }
   expect(errors).toEqual([]);
 });
+
+test('the battle run from a moment is sought at the time of day just set, not the one drawn last', async ({ page }) => {
+  // openGame leaves the game at dusk, when no flare is fired; set to night and run from two minutes
+  // in, in the same breath, the battle is two minutes of a heavy night: about fifteen alight.
+  const errors = await openGame(page);
+  const alight = await hooks(page, async (h) => {
+    h.view('nml-night');
+    h.setTimeOfDay(21);
+    h.setIntensity('heavy');
+    h.runLights(120);
+    await h.waitFrames(2);
+    return h.battle().flares.filter((f) => f.stage === 'burning').length;
+  });
+  expect(alight).toBeGreaterThanOrEqual(8);
+  expect(errors).toEqual([]);
+});

@@ -31,6 +31,11 @@ export interface FlareTunables {
   darkAbove: number;
   nearShare: number;
   nearM: number;
+  /** How a flare is seen: the spark it trails climbing, and its disc burning (sizes in metres, brightness over its colour). */
+  sparkSizeM: number;
+  sparkGlow: number;
+  discSizeM: number;
+  discGlow: number;
   /** m/s²: the ballistics' real gravity, downward. */
   gravity: number;
 }
@@ -62,6 +67,10 @@ export function flareTunables(tun: Tunables): FlareTunables {
     darkAbove: f('dark_above'),
     nearShare: f('near_share'),
     nearM: f('near_m'),
+    sparkSizeM: f('spark_size_m'),
+    sparkGlow: f('spark_glow'),
+    discSizeM: f('disc_size_m'),
+    discGlow: f('disc_glow'),
     gravity: -tun.f('ballistics.gravity'),
   };
 }

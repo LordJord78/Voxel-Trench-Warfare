@@ -11,6 +11,7 @@
  * follows the interpolated, bobbing eye, centimetres away while walking.
  */
 
+import { flareTunables, type FlareState, type FlareTunables } from '../battle/flares';
 import { BILLBOARD_FLOATS } from '../combat/particles';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../combat/rifle-model';
 import type { Tunables } from '../core/tunables';
@@ -22,6 +23,8 @@ import { MUZZLE_ANCHOR, PORT_ANCHOR, type CombatEvents, type Session } from '../
 type V3 = [number, number, number];
 
 export interface EffectsTunables {
+  /** The battle's flares, as they are seen: their sparks climbing and discs burning. */
+  flares: FlareTunables;
   tracerLengthM: number;
   tracerWidthM: number;
   tracerColour: V3;
@@ -60,6 +63,7 @@ function rgb(tun: Tunables, key: string): V3 {
 export function effectsTunables(tun: Tunables): EffectsTunables {
   const f = (k: string) => tun.f(`effects.${k}`);
   return {
+    flares: flareTunables(tun),
     tracerLengthM: f('tracer_length_m'),
     tracerWidthM: f('tracer_width_m'),
     tracerColour: rgb(tun, 'effects.tracer_colour'),
@@ -147,7 +151,7 @@ export class EffectsFrameBuilder {
   constructor(readonly t: EffectsTunables) {}
 
   /** `rifle`: the rifle as this frame draws it, or null when it is not drawn; `eye`: the camera (metres), the player's eye if not given. */
-  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[]): BuiltEffects {
+  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battleFlares: readonly FlareState[] = []): BuiltEffects {
     const t = this.t;
     // Flashes age with the world's time as the frame shows it: none while paused.
     const shown = (session.ticks + session.clock.alpha) * session.clock.dt;
@@ -174,6 +178,14 @@ export class EffectsFrameBuilder {
     for (const q of this.debug) {
       if (billboards >= MAX_BILLBOARDS) break;
       this.billboards.set([...q.position, q.size / 2, ...q.colour, 1, q.lit ? (q.square ? 2 : 0) : 1], billboards * BILLBOARD_FLOATS);
+      billboards++;
+    }
+    // The battle's flares seen: a spark trailing each as it climbs, a bright disc each as it burns.
+    const ft = t.flares;
+    for (const fl of battleFlares) {
+      if (billboards >= MAX_BILLBOARDS || fl.stage === 'out') continue;
+      const [size, glow] = fl.stage === 'climb' ? [ft.sparkSizeM, ft.sparkGlow] : [ft.discSizeM, ft.discGlow * fl.glow];
+      this.billboards.set([...fl.position, size / 2, fl.colour[0] * glow, fl.colour[1] * glow, fl.colour[2] * glow, 1, 1], billboards * BILLBOARD_FLOATS);
       billboards++;
     }
 
