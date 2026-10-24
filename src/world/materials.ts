@@ -107,6 +107,9 @@ const DEFS: readonly Def[] = [
   ['RIFLE_STEEL', K.PICKET, 46, 46, 50, 0.45], ['RIFLE_STEEL_WORN', K.PICKET, 70, 69, 68, 0.4],
   ['RIFLE_FURNITURE', K.TIMBER, 92, 54, 40, 0.6], ['RIFLE_MAG', K.TIMBER, 132, 64, 34, 0.5],
   ['RIFLE_GRIP', K.TIMBER, 38, 32, 30, 0.65],
+  // What a fire burned (world/char.ts): each of the kind it was, so only its colour changes.
+  ['CHAR_TIMBER', K.TIMBER, 34, 28, 24], ['CHAR_DUCKBOARD', K.DUCKBOARD, 34, 28, 24],
+  ['CHAR_CLOTH', K.CLOTH, 40, 36, 32], ['CHAR_HULL', K.HULL, 44, 34, 30, 0.8],
 ];
 
 /** Palette ids by name. Kept explicit so ids are stable and greppable; checked against DEFS below. */
@@ -119,7 +122,8 @@ export const P = {
   TRUNK_BARK: 31, TRUNK_SPLINTER: 32, BRANCH: 33, WATER: 34, RUBBLE: 35, RUBBLE_BRICK: 36,
   WIRE: 37, WIRE_RUST: 38, HULL: 39, HULL_RUST: 40, PICKET: 41, PICKET_RUST: 42, CLOTH: 43,
   CLOTH_DARK: 44, LANTERN_GLOW: 45, EMBER: 46, RIFLE_STEEL: 47, RIFLE_STEEL_WORN: 48,
-  RIFLE_FURNITURE: 49, RIFLE_MAG: 50, RIFLE_GRIP: 51,
+  RIFLE_FURNITURE: 49, RIFLE_MAG: 50, RIFLE_GRIP: 51, CHAR_TIMBER: 52, CHAR_DUCKBOARD: 53,
+  CHAR_CLOTH: 54, CHAR_HULL: 55,
 } as const;
 
 export const PALETTE: readonly PaletteEntry[] = DEFS.map(([name, kind, r, g, b, roughness, emission]) => ({

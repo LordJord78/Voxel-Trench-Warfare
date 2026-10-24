@@ -41,6 +41,7 @@ import { boxHitsSolid } from '../physics/collision';
 import { Vec3 } from '../physics/vec';
 import { battleDarkness, Director, noBattleEvents, type BattleEvents, type BattleInputs, type Strike } from '../battle/director';
 import { fireTunables } from '../battle/fires';
+import { CharQueue } from '../world/char';
 import { flareTunables } from '../battle/flares';
 import { flashPower, flashTunables } from '../battle/barrages';
 import { farHeightM } from '../world/generation/farfield';
@@ -302,6 +303,8 @@ async function start(): Promise<void> {
     if (!sought || sought.at !== t || sought.inputs !== key) sought = { at: t, inputs: key, d: Director.at(t, world.plan, tun, SEED, inputs, ground) };
     return sought.d;
   };
+  /** What the fires burned, charred once no crater's region about it is out (world/char.ts). */
+  const chars = new CharQueue(fireT.charM, voxelM);
   /** `strikes`: the session's shells landed this frame, which may start fires. */
   const light = (dt: number, eye: readonly number[], strikes: readonly Strike[] = []) => {
     skyNow();
@@ -310,11 +313,12 @@ async function start(): Promise<void> {
       lightSeconds += dt;
       if (lightsHeld === null) {
         const inputs = { ...battleInputs(), strikes };
-        if (jumpedIntoDark(dt, inputs.darkness)) battle.tick(flareT.preRollS, inputs);
-        battleEvents = battle.tick(dt, inputs);
+        battleEvents = jumpedIntoDark(dt, inputs.darkness) ? battle.preRoll(flareT.preRollS, dt, inputs) : battle.tick(dt, inputs);
+        for (const c of battleEvents.chars) chars.add(c.at);
         ranAt = { hours: timeOfDay, darkness: inputs.darkness };
       }
     }
+    chars.make(session.map, (box) => session.destruction.overlapsOut(box));
     horizon = [];
     if (lightsHeld === 'rest') {
       lit = lights;
@@ -965,6 +969,10 @@ async function start(): Promise<void> {
     horizon: () => horizon,
     holdLights(seconds?: number) {
       lightsHeld = seconds ?? 'rest';
+    },
+    /** Run the battle on by `seconds` at once, as it is (its strikes' fires kept), at the inputs of the moment: its fires' chars made, the rest unheard. */
+    advanceBattle(seconds: number) {
+      for (const c of battle.tick(seconds, battleInputs()).chars) chars.add(c.at);
     },
     /** Run the lights' clock; from `seconds` into the battle (sought there at the inputs of the moment), if given. */
     runLights(seconds?: number) {

@@ -465,6 +465,32 @@ describe('the fires', () => {
     expect(pops / (10 * burning)).toBeLessThan(fireT.cracklePerS * 1.3);
   });
 
+  it("a jump into the dark pre-rolls without the frame's strikes, rolls them once in the frame's own step, and keeps the pre-roll's chars", () => {
+    const night = (strikes: ReturnType<typeof strike>[] = []): BattleInputs => ({ intensity: 'off', darkness: 1, player, strikes });
+    const struck = Array.from({ length: 30 }, (_, i) => strike(P.TIMBER, 10 + i * 8));
+    // A twin: the pre-roll as quiet as before the jump, then the frame with its strikes.
+    const twin = new Director(plan, tun, 7);
+    twin.tick(45, night());
+    const twinEvents = twin.tick(1 / 60, night(struck));
+    const d = new Director(plan, tun, 7);
+    const events = d.preRoll(45, 1 / 60, night(struck));
+    expect(events.fires).toEqual(twinEvents.fires);
+    // A second on, the same fires.
+    twin.tick(1, night());
+    d.tick(1, night());
+    expect(d.fires()).toEqual(twin.fires());
+    // Each place struck burns once at most, its fire lit a second ago, not 45 s.
+    const at = (f: { at: readonly number[] }) => f.at.join();
+    const struckFires = d.fires().filter((f) => !f.hamlet);
+    expect(struckFires.length).toBeGreaterThan(0);
+    expect(new Set(struckFires.map(at)).size).toBe(struckFires.length);
+    for (const f of struckFires) expect(f.strength).toBeLessThan(0.01);
+    // The hamlet's fires reached their full burn in the pre-roll: their chars are the frame's.
+    const hamlet = d.fires().filter((f) => f.hamlet);
+    expect(hamlet.length).toBeGreaterThan(0);
+    expect(events.chars.map((c) => c.fire).sort()).toEqual(hamlet.map((f) => f.id).sort());
+  });
+
   it("seeking replays the hamlet's fires", () => {
     const night: BattleInputs = { intensity: 'off', darkness: 1, player };
     const sought = Director.at(90, plan, tun, 7, night);
