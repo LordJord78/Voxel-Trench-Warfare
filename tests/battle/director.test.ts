@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { battleDarkness, Director, type BattleInputs } from '../../src/battle/director';
+import { HORIZON_FLASHES } from '../../src/battle/barrages';
+import { battleDarkness, Director, type BattleInputs, type DistantShell } from '../../src/battle/director';
 import { flareTunables } from '../../src/battle/flares';
-import { loadTunables } from '../../src/core/tunables';
+import { loadTunables, Tunables } from '../../src/core/tunables';
 import { sceneLights } from '../../src/render/lights';
 import { genParams } from '../../src/world/generation/params';
 import { planWorld } from '../../src/world/generation/plan';
@@ -158,5 +159,109 @@ describe('the director', () => {
     for (let k = 0; k < 150 * 30; k++) stepped.tick(1 / 30, dark('light'));
     expect(sought.seconds).toBeCloseTo(150, 6);
     expect(stepped.flares()).toEqual(sought.flares());
+  });
+});
+
+// The distant fire (the battle spec's §3): barrages beyond the map and shells into the far field, by the
+// front's intensity and not the dark; the sky sent the newest sixteen flashes; seeking still stepping.
+describe('the distant fire', () => {
+  const minutes = (d: Director, inputs: BattleInputs, n: number, each?: (k: number) => void) => {
+    const distant: DistantShell[] = [];
+    for (let k = 0; k < n * 3600; k++) {
+      distant.push(...d.tick(1 / 60, inputs).distant);
+      each?.(k);
+    }
+    return distant;
+  };
+
+  it('at light a barrage every two or three minutes, at heavy one or two in progress, none off', () => {
+    const light = new Director(plan, tun, 7);
+    minutes(light, dark('light'), 60);
+    expect(light.barrages.started).toBeGreaterThanOrEqual(12);
+    expect(light.barrages.started).toBeLessThanOrEqual(40);
+    const heavy = new Director(plan, tun, 7);
+    let running = 0;
+    minutes(heavy, dark('heavy'), 30, (k) => {
+      if (k % 60 === 0) running += heavy.barrages.running;
+    });
+    expect(running / (30 * 60)).toBeGreaterThanOrEqual(1.0);
+    expect(running / (30 * 60)).toBeLessThanOrEqual(2.6);
+    expect(minutes(new Director(plan, tun, 7), dark('off'), 10)).toEqual([]);
+  });
+
+  it('far shells: about two a minute at light, twelve at heavy, none off', () => {
+    const far = (intensity: BattleInputs['intensity']) => minutes(new Director(plan, tun, 7), dark(intensity), 30).filter((s) => s.far).length;
+    const light = far('light');
+    expect(light).toBeGreaterThanOrEqual(60 * 0.7);
+    expect(light).toBeLessThanOrEqual(60 * 1.3);
+    const heavy = far('heavy');
+    expect(heavy).toBeGreaterThanOrEqual(360 * 0.7);
+    expect(heavy).toBeLessThanOrEqual(360 * 1.3);
+    expect(far('off')).toBe(0);
+  });
+
+  it('the distant fire does not wait for the dark', () => {
+    const d = new Director(plan, tun, 7);
+    let launches = 0;
+    const distant: DistantShell[] = [];
+    for (let k = 0; k < 5 * 3600; k++) {
+      const e = d.tick(1 / 60, { ...dark('heavy'), darkness: 0 });
+      launches += e.launches.length;
+      distant.push(...e.distant);
+    }
+    expect(launches).toBe(0);
+    expect(distant.filter((s) => s.far).length).toBeGreaterThan(0);
+    expect(distant.filter((s) => !s.far).length).toBeGreaterThan(0);
+  });
+
+  it('turned off, a barrage in progress stops', () => {
+    const d = new Director(plan, tun, 7);
+    let landed = false;
+    for (let k = 0; k < 30 * 3600 && !(landed && d.barrages.running > 0); k++) landed ||= d.tick(1 / 60, dark('heavy')).distant.some((s) => !s.far);
+    expect(d.barrages.running).toBeGreaterThan(0);
+    expect(minutes(d, dark('off'), 2)).toEqual([]);
+    expect(d.barrages.running).toBe(0);
+  });
+
+  it('the sky is sent the newest sixteen, none older than the window', () => {
+    // A minute's window, so more than sixteen are within it at heavy.
+    const raw = tun.raw() as { battle: { flashes: Record<string, unknown> } };
+    raw.battle.flashes.window_s = 60;
+    const long = new Tunables(raw as Record<string, unknown>);
+    const d = new Director(plan, long, 7);
+    let most = 0;
+    minutes(d, dark('heavy'), 10, (k) => {
+      if (k % 60 !== 0) return;
+      const f = d.flashes();
+      most = Math.max(most, f.length);
+      expect(f.length).toBeLessThanOrEqual(HORIZON_FLASHES);
+      for (let i = 0; i < f.length; i++) {
+        expect(d.seconds - f[i].t).toBeGreaterThanOrEqual(0);
+        expect(d.seconds - f[i].t).toBeLessThanOrEqual(60);
+        if (i > 0) expect(f[i].t).toBeLessThanOrEqual(f[i - 1].t);
+      }
+    });
+    expect(most).toBe(HORIZON_FLASHES);
+    // And at the window's own second, none older than it.
+    const short = new Director(plan, tun, 7);
+    minutes(short, dark('heavy'), 5, (k) => {
+      if (k % 60 === 0) for (const f of short.flashes()) expect(short.seconds - f.t).toBeLessThanOrEqual(1);
+    });
+  });
+
+  it('a far shell stands on the far field', () => {
+    const ground = (x: number, z: number) => x / 100 + z / 1000;
+    const far = minutes(new Director(plan, tun, 7, ground), dark('heavy'), 5).filter((s) => s.far);
+    expect(far.length).toBeGreaterThan(0);
+    for (const s of far) expect(s.position[1]).toBe(ground(s.position[0], s.position[2]));
+  });
+
+  it('seeking is stepping, for the distant fire too', () => {
+    const sought = Director.at(150, plan, tun, 11, dark('heavy'));
+    const stepped = new Director(plan, tun, 11);
+    for (let k = 0; k < 150 * 30; k++) stepped.tick(1 / 30, dark('heavy'));
+    expect(stepped.smoke().length).toBeGreaterThan(0);
+    expect(stepped.smoke()).toEqual(sought.smoke());
+    expect(stepped.flashes()).toEqual(sought.flashes());
   });
 });

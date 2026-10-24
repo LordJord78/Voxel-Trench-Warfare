@@ -53,6 +53,13 @@ function villages(plan: WorldPlan): Village[] {
   return out;
 }
 
+/** The height (metres) of the far field's cell under (x, z) metres, the grid's edge beyond it; -Infinity inside the playable map. */
+export function farHeightM(ff: FarField, xM: number, zM: number, voxel: number): number {
+  const col = Math.min(ff.size - 1, Math.max(0, Math.floor((xM / voxel - ff.originX) / ff.cell)));
+  const row = Math.min(ff.size - 1, Math.max(0, Math.floor((zM / voxel - ff.originZ) / ff.cell)));
+  return ff.height[row * ff.size + col] * voxel;
+}
+
 export function emptyFarField(plan: WorldPlan): FarField {
   const p = plan.params;
   const size = 2048;
