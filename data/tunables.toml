@@ -815,3 +815,27 @@ veer_period_s       = [900.0, 2400.0]   # their periods: a few degrees a minute 
 speed_mps           = [1.0, 5.0]   # its bounds; it blows at their middle, and gusts
 gust_mps            = 1.5      # the two gust sines together, at most
 gust_period_s       = [20.0, 90.0]
+
+# The flares both lines fire at night (src/battle/flares.ts, director.ts): from a post on a front
+# line's parapet, out over no man's land, to burst at the top of the climb and drift on the wind.
+# They burst low enough to light the field as the approved night's flares, which hung 18–34 m up:
+# their light reaches 65 m.
+[battle.flares]
+burst_m             = [30.0, 50.0]   # above the post, at the apogee
+elevation_deg       = [70.0, 85.0]
+spread_deg          = 20.0     # either way of straight across no man's land
+sink_mps            = 0.3      # under the parachute, as it burns
+burn_s              = 40.0
+ignite_s            = 0.5
+fade_s              = 5.0      # it gutters out over the last of its burn
+radius_m            = 65.0
+intensity           = 260.0
+white               = [1.0, 0.88, 0.7]
+red                 = [1.0, 0.25, 0.15]
+red_share           = 0.25
+mean_light          = 6.0      # flares alight at once on average at the front's light intensity
+heavy_scale         = 2.5      # and at heavy, as many again and a half
+off_per_min         = 1.0      # a quiet night's
+dark_above          = 0.1      # fired only while the sky's flares key is above this
+near_share          = 0.25     # fired from the posts near the player
+near_m              = 60.0     # along the line

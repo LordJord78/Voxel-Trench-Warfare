@@ -24,7 +24,7 @@ It is built on what exists:
 
 | # | Criterion | Measured by |
 |---|---|---|
-| 1 | **Flares:** at night both lines fire flares. Each climbs from a post on its line, bursts 80–120 m up, drifts downwind on its parachute, sinks 0.3 m/s, burns 40 s and gutters out over 5 s. At the light intensity about six burn at once, as the approved night's six static flares did. Each lights the field, and the eight nearest the player cast their shadows into the haze. The same seed and inputs fire the same flares. | unit tests; e2e; review |
+| 1 | **Flares:** at night both lines fire flares. Each climbs from a post on its line, bursts 30–50 m up (low enough for its 65 m of light to reach the field, as the approved flares at 18–34 m did), drifts downwind on its parachute, sinks 0.3 m/s, burns 40 s and gutters out over 5 s. At the light intensity about six burn at once, as the approved night's six static flares did. Each lights the field, and the eight nearest the player cast their shadows into the haze. The same seed and inputs fire the same flares. | unit tests; e2e; review |
 | 2 | **Distant artillery:** barrages fall beyond the map along the front. Each shell flashes on the horizon in its own direction, lighting the sky and the haze there, and is heard distance ÷ 343 m/s later. Shells landing in the far field (200–800 m off) show a flash and a column of smoke. The tempo follows the front's intensity. | unit tests; e2e; review |
 | 3 | **Tracers across the sky:** at night, machine guns on both lines fire streams of tracers over no man's land and the field. Some ricochet upward, all fall under gravity, and the distant chatter is heard. At the light intensity at least 20 tracers are in flight on average. | unit tests; e2e; review |
 | 4 | **Fires:** a shell that strikes timber, cloth or a hull starts a fire with a set chance, and the hamlet's ruins burn at night. A fire flickers and casts shadows, throws flames and embers, and smokes into the haze, leaning downwind and visible at dusk and at night. It burns for 2–6 minutes and chars what it burned. | unit tests; e2e; review |
@@ -60,7 +60,7 @@ It is built on what exists:
 - **Launches** come from posts along both front lines: the friendly line, and the enemy's 60–120 m beyond no man's land. Each post fires a flare every so often, by a Poisson schedule with its own rate, and a quarter of launches come from the player's own bay sector.
 - **A flare's flight:**
   - It leaves its pistol at about 40 m/s at 70–85° and climbs under gravity and drag, a spark trailing it.
-  - At its apogee (80–120 m) it bursts: its light catches over 0.5 s.
+  - At its apogee (30–50 m) it bursts: its light catches over 0.5 s.
   - It drifts with the wind under its parachute, sinking 0.3 m/s. It burns 40 s, guttering over the last 5.
 - **Its light** goes into the light buffer as now: radius 65 m, intensity 260, and its warm colour.
 - **The eight flares nearest the player** hold the flare shadow maps (flare-shadows.ts), so their light in the haze is cut into shafts. A flare is a moving light, so its map is retraced as it drifts, as now.
