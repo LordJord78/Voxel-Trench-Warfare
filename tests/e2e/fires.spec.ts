@@ -148,6 +148,14 @@ test('a fire in the bay chars its timber once its crater has settled', async ({ 
           }
       return { unburnt, charred };
     }, [f.at, BURNS, burnt]);
+  // On what the crater left: on the top of fuel, in the open.
+  const stands = await hooks(page, (h, a) => {
+    const at = a as V3;
+    const [x, y, z] = at.map((m) => Math.floor(m / 0.1 + 1e-6));
+    return { under: h.world.map.get(x, y - 1, z), at: h.world.map.get(x, y, z) };
+  }, f.at);
+  expect(BURNS, JSON.stringify(stands)).toContain(stands.under);
+  expect(stands.at).toBe(P.AIR);
   const before = await count();
   // Lit, not yet at its full burn: nothing charred, and timber round it to char.
   expect(before.charred).toBe(0);

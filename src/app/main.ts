@@ -32,7 +32,7 @@ import { battleFireLights, battleFlareLights, sceneLights, type SceneLight } fro
 import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
-import { Session } from '../sim/session';
+import { Session, type CombatEvents } from '../sim/session';
 import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
@@ -40,8 +40,8 @@ import { Hud } from '../ui/hud';
 import { boxHitsSolid } from '../physics/collision';
 import { Vec3 } from '../physics/vec';
 import { battleDarkness, Director, noBattleEvents, type BattleEvents, type BattleInputs, type Strike } from '../battle/director';
-import { fireTunables } from '../battle/fires';
-import { CharQueue } from '../world/char';
+import { fireChance, fireTunables } from '../battle/fires';
+import { CharQueue, fuelNear } from '../world/char';
 import { flareTunables } from '../battle/flares';
 import { flashPower, flashTunables } from '../battle/barrages';
 import { farHeightM } from '../world/generation/farfield';
@@ -305,6 +305,30 @@ async function start(): Promise<void> {
   };
   /** What the fires burned, charred once no crater's region about it is out (world/char.ts). */
   const chars = new CharQueue(fireT.charM, voxelM);
+  /**
+   * The session's shells on what burns, held until their craters are in: a shell cuts away what it
+   * struck, so the fire it starts stands on what its crater left, the nearest fuel within its radius
+   * and char_m (world/char.ts fuelNear); none where it left nothing. A crater that never comes (a
+   * shell off the map) lets its strike go after STRIKE_WAIT_S of the world's time. Strikes on what
+   * cannot burn go to the battle at once (each strike draws its chance whatever it struck).
+   */
+  const STRIKE_WAIT_S = 20;
+  let struck: (CombatEvents['blasts'][number])[] = [];
+  const strikesFrom = (events: CombatEvents): Strike[] => {
+    const now: Strike[] = [];
+    for (const b of events.blasts) {
+      if (fireChance(b.material, fireT) > 0 && b.crater !== null) struck.push(b);
+      else now.push({ at: b.at, material: b.material, crater: b.crater });
+    }
+    const landed = new Set(events.craters.map((c) => c.id));
+    struck = struck.filter((b) => {
+      if (!landed.has(b.crater!) && (session.ticks - b.tick) * session.clock.dt < STRIKE_WAIT_S) return true;
+      const at = fuelNear(session.map, b.at, b.radiusM + fireT.charM, voxelM);
+      if (at) now.push({ at, material: b.material, crater: b.crater });
+      return false;
+    });
+    return now;
+  };
   /** `strikes`: the session's shells landed this frame, which may start fires. */
   const light = (dt: number, eye: readonly number[], strikes: readonly Strike[] = []) => {
     skyNow();
@@ -592,7 +616,7 @@ async function start(): Promise<void> {
     renderer.setBlasts(frameEffects.blasts);
     renderer.setSmoke(frameEffects.smoke);
     built = frameEffects.counts;
-    light(dt, pose.position, events.blasts.map((b) => ({ at: b.at, material: b.material, crater: b.crater })));
+    light(dt, pose.position, strikesFrom(events));
     renderer.render(pose, timeOfDay, now);
     lastPose = pose;
     frames++;

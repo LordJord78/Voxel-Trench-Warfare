@@ -241,7 +241,16 @@ export class EffectsFrameBuilder {
       this.billboards.set([...p.centre, p.radiusM, c[0] * p.alpha, c[1] * p.alpha, c[2] * p.alpha, p.alpha, 0], billboards * BILLBOARD_FLOATS);
       billboards++;
     }
-    // The fires' flames and embers seen: emissive, each its glow over the flames' colour.
+    // The fires' plumes, drawn as the far shells' smoke is (lit discs) as well as in the haze: the
+    // haze's own glow lights its smoke as it lights the haze round it, which at dusk hides it. Before
+    // the flames: a disc covers what was drawn before it.
+    for (const p of battle.plumes) {
+      if (billboards >= MAX_BILLBOARDS) break;
+      const c = fs.smokeColour;
+      this.billboards.set([...p.centre, p.radiusM, c[0] * p.alpha, c[1] * p.alpha, c[2] * p.alpha, p.alpha, 0], billboards * BILLBOARD_FLOATS);
+      billboards++;
+    }
+    // Their flames and embers: emissive, each its glow over the flames' colour.
     const fc = t.fires.flameColour;
     let flames = 0;
     for (const q of battle.flames) {
@@ -249,14 +258,6 @@ export class EffectsFrameBuilder {
       this.billboards.set([...q.centre, q.sizeM / 2, fc[0] * q.glow, fc[1] * q.glow, fc[2] * q.glow, 1, 1], billboards * BILLBOARD_FLOATS);
       billboards++;
       flames++;
-    }
-    // Their plumes, drawn as the far shells' smoke is (lit discs) as well as in the haze: the haze's
-    // own glow lights its smoke as it lights the haze round it, which at dusk hides it.
-    for (const p of battle.plumes) {
-      if (billboards >= MAX_BILLBOARDS) break;
-      const c = fs.smokeColour;
-      this.billboards.set([...p.centre, p.radiusM, c[0] * p.alpha, c[1] * p.alpha, c[2] * p.alpha, p.alpha, 0], billboards * BILLBOARD_FLOATS);
-      billboards++;
     }
 
     let ribbons = 0;

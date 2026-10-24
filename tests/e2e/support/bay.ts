@@ -6,9 +6,10 @@ import { hooks } from './app';
 export const BURNS = [P.TIMBER, P.TIMBER_WEATHERED, P.TIMBER_DARK, P.DUCKBOARD, P.DUCKBOARD_WORN, P.CLOTH, P.CLOTH_DARK, P.HULL, P.HULL_RUST];
 
 /**
- * A fire in the bay: playing, the battle running and the session's own shelling off, 0.3 m shells
- * along the bay's duckboards either side of the spawn, each let settle, until one starts a fire (a
- * third of the time). The fire, and how many shells it took; null if twenty spots gave none.
+ * A fire in the bay: playing, the battle running and the session's own shelling off, shells of the
+ * front's size (2.5 m) on the duckboards along the trench either side of the spawn, 6 m apart, each
+ * let settle, until one starts a fire (a third of the time) on what its crater left. The fire, and
+ * how many shells it took; null if ten spots gave none.
  */
 export async function fireInTheBay(page: Page): Promise<{ fire: { id: number; at: [number, number, number] } | null; shells: number }> {
   await hooks(page, (h) => {
@@ -17,19 +18,19 @@ export async function fireInTheBay(page: Page): Promise<{ fire: { id: number; at
     h.play();
   });
   let shells = 0;
-  for (let k = 0; k < 20; k++) {
+  for (let k = 0; k < 10; k++) {
     const r = await hooks(page, async (h, a) => {
       const [k, burns] = a as [number, number[]];
       const v = 0.1;
       const s = h.world.spawn;
       const at = [...s.position];
-      at[s.bay.longAxis] += (k % 2 ? 1 : -1) * (0.6 + 0.45 * k);
+      at[s.bay.longAxis] += (k % 2 ? 1 : -1) * (3 + 6 * Math.floor(k / 2));
       const x = Math.floor(at[0] / v);
       const z = Math.floor(at[2] / v);
       let y = Math.floor(at[1] / v) + 20;
       while (y > 0 && h.world.map.get(x, y - 1, z) === 0) y--;
       if (!burns.includes(h.world.map.get(x, y - 1, z))) return { shelled: false, fire: null };
-      await h.shell([at[0], 0, at[2]], 0.3);
+      await h.shell([at[0], 0, at[2]], 2.5);
       await h.waitFrames(3);
       const struck = h.battle().fires.filter((f) => !f.hamlet);
       return { shelled: true, fire: struck.length ? struck[struck.length - 1] : null };

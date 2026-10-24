@@ -8,7 +8,7 @@
 
 import type { BrickMap } from './bricks';
 import { K, P, PALETTE_KIND } from './materials';
-import { clampBox, type Box } from './region';
+import { clampBox, Region, type Box } from './region';
 
 /** Each palette shade's burnt shade, or itself for what does not burn (and what has burnt). */
 const BURNT = new Uint8Array(256).map((_, p) => {
@@ -26,6 +26,10 @@ const BURNT = new Uint8Array(256).map((_, p) => {
   }
 });
 
+/** Whether a shade burns: timber, cloth, duckboards and hull, burnt or not. */
+const BURNING_KINDS: readonly number[] = [K.TIMBER, K.DUCKBOARD, K.CLOTH, K.HULL];
+const BURNS = new Uint8Array(256).map((_, p) => (BURNING_KINDS.includes(PALETTE_KIND[p]) ? 1 : 0));
+
 /** The voxels (half-open) a char of `radiusM` about `centre` (metres) may touch. */
 export function charBox(centre: readonly number[], radiusM: number, voxel: number): Box {
   return {
@@ -36,6 +40,41 @@ export function charBox(centre: readonly number[], radiusM: number, voxel: numbe
     y1: Math.floor((centre[1] + radiusM) / voxel) + 1,
     z1: Math.floor((centre[2] + radiusM) / voxel) + 1,
   };
+}
+
+/**
+ * Where a fire a shell started stands, once its crater is in (metres): on the top of the nearest
+ * voxel of timber, cloth, duckboard or hull within `reachM` of where it struck, open to the air
+ * above; null if the crater left nothing to burn. A shell cuts away what it struck (2.2–3.4 m), so
+ * its fire burns at the crater's rim, on what is left.
+ */
+export function fuelNear(map: BrickMap, centre: readonly number[], reachM: number, voxel: number): [number, number, number] | null {
+  const want = clampBox(charBox(centre, reachM, voxel), map.dims);
+  if (!want) return null;
+  // Copied out once (a lookup a voxel through the brick table is slow), a row higher: the air over the top.
+  const r = Region.extract(map, { ...want, y1: Math.min(map.dims.y, want.y1 + 1) });
+  const b = r.box;
+  let best: [number, number, number] | null = null;
+  let bestD2 = reachM * reachM;
+  for (let z = want.z0; z < want.z1; z++) {
+    const dz = (z + 0.5) * voxel - centre[2];
+    for (let y = want.y0; y < want.y1; y++) {
+      // Its top, where the fire stands.
+      const dy = (y + 1) * voxel - centre[1];
+      const row = ((z - b.z0) * r.sy + (y - b.y0)) * r.sx - b.x0;
+      for (let x = want.x0; x < want.x1; x++) {
+        if (!BURNS[r.data[row + x]]) continue;
+        // Open to the air above (the world's top is open).
+        if (y + 1 < b.y1 && r.data[row + x + r.sx] !== P.AIR) continue;
+        const dx = (x + 0.5) * voxel - centre[0];
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > bestD2) continue;
+        bestD2 = d2;
+        best = [(x + 0.5) * voxel, (y + 1) * voxel, (z + 0.5) * voxel];
+      }
+    }
+  }
+  return best;
 }
 
 /** Char every voxel whose middle lies within `radiusM` of `centre` (metres): how many it turned. */

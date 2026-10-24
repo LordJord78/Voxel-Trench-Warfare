@@ -120,7 +120,8 @@ const frac = (x: number) => x - Math.floor(x);
 export function fireStrength(f: Fire, t: number, ft: FireTunables): number {
   if (t < f.t0) return 0;
   const down = f.out ?? (f.hamlet ? Infinity : f.t0 + ft.growS + f.burnS);
-  const grow = smooth((t - f.t0) / ft.growS);
+  // Put out while it grows, it grows no more.
+  const grow = smooth((Math.min(t, down) - f.t0) / ft.growS);
   return t <= down ? grow : grow * (1 - smooth((t - down) / ft.dieS));
 }
 

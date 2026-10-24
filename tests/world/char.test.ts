@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BrickMap } from '../../src/world/bricks';
-import { charAround, charBox, CharQueue } from '../../src/world/char';
+import { charAround, charBox, CharQueue, fuelNear } from '../../src/world/char';
 import { K, P, PALETTE, PALETTE_KIND } from '../../src/world/materials';
 import type { Box } from '../../src/world/region';
 
@@ -74,5 +74,32 @@ describe('char', () => {
     expect(queue.pending).toBe(0);
     expect(map.get(1, 16, 16)).toBe(P.CHAR_TIMBER);
     expect(queue.make(map, () => false)).toBe(0);
+  });
+
+  it('a fire stands on the nearest fuel its crater left, open to the air; none where none is left', () => {
+    // Duckboards 0.2 m thick on mud, a crater 2 m across the middle cut through them.
+    const map = new BrickMap({ x: 64, y: 32, z: 64 });
+    map.fillBox(0, 0, 0, 64, 4, 64, P.MUD);
+    map.fillBox(0, 4, 0, 64, 6, 64, P.DUCKBOARD);
+    const struck: [number, number, number] = [3.2, 0.6, 3.2];
+    for (let x = 0; x < 64; x++) for (let y = 0; y < 32; y++) for (let z = 0; z < 64; z++) {
+      if (Math.hypot((x + 0.5) * V - struck[0], (y + 0.5) * V - struck[1], (z + 0.5) * V - struck[2]) <= 2) map.set(x, y, z, P.AIR);
+    }
+    const at = fuelNear(map, struck, 2 + 1.5, V)!;
+    expect(at).not.toBeNull();
+    const [x, y, z] = at.map((m) => Math.floor(m / V));
+    // On a duckboard's top, in the open, at the crater's rim: nothing burnable is nearer.
+    expect(map.get(x, y - 1, z)).toBe(P.DUCKBOARD);
+    expect(map.get(x, y, z)).toBe(P.AIR);
+    expect(at[1]).toBeCloseTo(y * V, 9);
+    const d = Math.hypot(at[0] - struck[0], at[2] - struck[2]);
+    expect(d).toBeGreaterThan(1.5);
+    expect(d).toBeLessThan(2.1);
+    // Buried fuel is no place for a fire; and with none within reach, none.
+    const buried = new BrickMap({ x: 32, y: 32, z: 32 });
+    buried.fillBox(0, 0, 0, 32, 4, 32, P.TIMBER);
+    buried.fillBox(0, 4, 0, 32, 6, 32, P.MUD);
+    expect(fuelNear(buried, [1.6, 0.6, 1.6], 1.5, V)).toBeNull();
+    expect(fuelNear(map, struck, 1.5, V)).toBeNull();
   });
 });

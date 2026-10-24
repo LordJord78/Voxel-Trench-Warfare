@@ -312,6 +312,13 @@ describe('a frame of effects', () => {
     }
     // And in the haze.
     expect(built.smoke.map((p) => p.centre)).toEqual(plumes.map((p) => p.centre));
+    // Drawn before the flames, so its smoke covers what is behind it and not a flame drawn earlier.
+    const ft = fireTunables(tun);
+    const wind = new Wind(windTunables(tun), Rng.root(7).derive('battle.wind'));
+    const flames = fireFlames({ id: 1, at: [14, 0.4, 20], t0: 0, burnS: 180, size: 0.8, hamlet: false }, 60, wind, ft);
+    const both = new EffectsFrameBuilder(t).build(stand(), none(), null, undefined, { ...NO_BATTLE, seconds: 60, plumes, flames });
+    const kinds = Array.from({ length: both.frame.billboardCount }, (_, i) => both.frame.billboards[i * BILLBOARD_FLOATS + 8]);
+    expect(kinds.lastIndexOf(0)).toBeLessThan(kinds.indexOf(1));
   });
 
   it("the battle's billboards keep their allowance under a full pool", () => {

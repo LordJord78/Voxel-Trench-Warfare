@@ -65,6 +65,14 @@ describe('a fire', () => {
     expect(fireFlames(f, 50 + ft.growS + f.burnS + ft.dieS + 1, wind, ft)).toEqual([]);
   });
 
+  it('a fire put out while it grows only dies down from there', () => {
+    const f = fire({ out: 55 });
+    const atOut = fireStrength(f, 55, ft);
+    expect(atOut).toBeGreaterThan(0);
+    for (const t of [56, 60, 70, 80, 100]) expect(fireStrength(f, t, ft)).toBeLessThanOrEqual(atOut);
+    expect(fireStrength(f, 55 + ft.dieS + 0.01, ft)).toBe(0);
+  });
+
   it('its plume is six puffs rising and leaning with the wind, thinning with its strength', () => {
     const f = fire();
     const t = 50 + ft.growS + 30;
