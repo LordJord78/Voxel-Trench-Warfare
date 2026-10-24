@@ -1,0 +1,107 @@
+import { describe, expect, it } from 'vitest';
+import { Director, type BattleInputs } from '../../src/battle/director';
+import { flareTunables } from '../../src/battle/flares';
+import { loadTunables } from '../../src/core/tunables';
+import { genParams } from '../../src/world/generation/params';
+import { planWorld } from '../../src/world/generation/plan';
+
+// The director's flares (the battle spec's §1–§2): fired from posts on both front lines' parapets out
+// over no man's land, a quarter from near the player, about six alight at the front's light
+// intensity, two and a half times that heavy, one a minute off, and none while the sky is light;
+// on the lights' clock, deterministic, and sought by stepping from its start.
+const tun = loadTunables();
+const p = genParams(tun);
+const plan = planWorld(p, 7);
+const v = p.voxel;
+const ft = flareTunables(tun);
+const front = plan.lines.find((l) => l.spec.side === 0 && l.spec.firingSteps)!;
+const bay = front.bays[Math.floor(front.bays.length / 2)];
+/** The player on the friendly front line's middle bay. */
+const player: [number, number, number] = bay.longAxis === 0 ? [((bay.a0 + bay.a1) / 2) * v, bay.crestY * v, ((bay.b0 + bay.b1) / 2) * v] : [((bay.b0 + bay.b1) / 2) * v, bay.crestY * v, ((bay.a0 + bay.a1) / 2) * v];
+const dark = (intensity: BattleInputs['intensity']): BattleInputs => ({ intensity, darkness: 1, player });
+
+/** Run `minutes` from the start at 60 Hz: the mean count burning, sampled each second, and every launch. */
+function run(inputs: BattleInputs, minutes: number, seed = 7) {
+  const d = new Director(plan, tun, seed);
+  let burning = 0;
+  let samples = 0;
+  const launches = [];
+  for (let k = 0; k < minutes * 3600; k++) {
+    launches.push(...d.tick(1 / 60, inputs).launches);
+    if (k % 60 === 0) {
+      burning += d.flares().filter((f) => f.stage === 'burning').length;
+      samples++;
+    }
+  }
+  return { d, mean: burning / samples, launches };
+}
+
+describe('the director', () => {
+  it('about six burn at once at light, two and a half times that heavy, one a minute off', () => {
+    const light = run(dark('light'), 30).mean;
+    expect(light).toBeGreaterThan(ft.meanLight * 0.8);
+    expect(light).toBeLessThan(ft.meanLight * 1.2);
+    const heavy = run(dark('heavy'), 30).mean;
+    expect(heavy / light).toBeGreaterThan(ft.heavyScale * 0.8);
+    expect(heavy / light).toBeLessThan(ft.heavyScale * 1.2);
+    const off = run(dark('off'), 30).launches.length;
+    expect(off).toBeGreaterThan(30 * ft.offPerMin * 0.6);
+    expect(off).toBeLessThan(30 * ft.offPerMin * 1.4);
+  });
+
+  it("no flare is fired while the sky's flares key is 0.1 or less; one alight burns out", () => {
+    expect(run({ ...dark('heavy'), darkness: ft.darkAbove }, 10).launches).toEqual([]);
+    // Dark for a minute, then light: none fired after, and those alight burn on until out.
+    const d = new Director(plan, tun, 7);
+    for (let k = 0; k < 3600; k++) d.tick(1 / 60, dark('heavy'));
+    const alight = d.flares().filter((f) => f.stage === 'burning').length;
+    expect(alight).toBeGreaterThan(0);
+    let fired = 0;
+    for (let k = 0; k < 60; k++) fired += d.tick(1 / 60, { ...dark('heavy'), darkness: 0 }).launches.length;
+    expect(fired).toBe(0);
+    expect(d.flares().filter((f) => f.stage === 'burning').length).toBeGreaterThan(0);
+    for (let k = 0; k < 60 * 60; k++) d.tick(1 / 60, { ...dark('heavy'), darkness: 0 });
+    expect(d.flares()).toEqual([]);
+  });
+
+  it("flares come from posts on both lines' parapets, a quarter within 60 m of the player along the lines, fired over no man's land", () => {
+    const { launches } = run(dark('heavy'), 30);
+    expect(launches.length).toBeGreaterThan(200);
+    const lines = plan.lines.filter((l) => l.spec.firingSteps);
+    const sideOf = (post: readonly number[]) => {
+      for (const l of lines) for (const b of l.bays) {
+        const along = b.longAxis === 0 ? post[0] / v : post[2] / v;
+        const across = b.longAxis === 0 ? post[2] / v : post[0] / v;
+        if (along >= b.a0 && along <= b.a1 && Math.abs(across - (b.facing > 0 ? b.b1 : b.b0)) < 1e-6) return { side: l.spec.side, b };
+      }
+      return null;
+    };
+    let near = 0;
+    const sides = [0, 0];
+    for (const l of launches) {
+      const at = sideOf(l.post)!;
+      expect(at, JSON.stringify(l.post)).not.toBeNull();
+      sides[at.side]++;
+      // Over no man's land: the bearing within spread_deg of straight across, toward the enemy.
+      const ahead = at.b.longAxis === 0 ? [0, at.b.facing] : [at.b.facing, 0];
+      const cosine = Math.sin(l.bearing) * ahead[0] + Math.cos(l.bearing) * ahead[1];
+      expect(cosine).toBeGreaterThanOrEqual(Math.cos(((ft.spreadDeg + 1e-6) * Math.PI) / 180));
+      const along = at.b.longAxis === 0 ? Math.abs(l.post[0] - player[0]) : Math.abs(l.post[2] - player[2]);
+      if (along <= ft.nearM) near++;
+    }
+    expect(Math.min(...sides) / launches.length).toBeGreaterThan(0.3);
+    expect(near / launches.length).toBeGreaterThan(ft.nearShare * 0.8);
+  });
+
+  it('the same seed, inputs and steps fire the same flares; seeking to t is stepping to t, at any frame rate', () => {
+    const a = run(dark('light'), 3, 11);
+    const b = run(dark('light'), 3, 11);
+    expect(b.launches).toEqual(a.launches);
+    expect(run(dark('light'), 3, 12).launches).not.toEqual(a.launches);
+    const sought = Director.at(150, plan, tun, 11, dark('light'));
+    const stepped = new Director(plan, tun, 11);
+    for (let k = 0; k < 150 * 30; k++) stepped.tick(1 / 30, dark('light'));
+    expect(sought.seconds).toBeCloseTo(150, 6);
+    expect(stepped.flares()).toEqual(sought.flares());
+  });
+});

@@ -4,7 +4,8 @@
  * its bearing the prevailing one plus two slow sines (together at most
  * `veer_deg`), its speed the middle of its bounds plus two gust sines, kept
  * within them. A drift is its integral, by the midpoint rule in quarter
- * seconds, so a flare's place at any moment needs no stepping to it.
+ * seconds from the clock's start, kept as it grows: two lookups, so a flare's
+ * place at any moment needs no stepping to it.
  */
 
 import { cos, radians, sin } from '../core/dmath';
@@ -42,6 +43,9 @@ type Sine = readonly [number, number, number];
 export class Wind {
   private readonly veer: readonly Sine[];
   private readonly gust: readonly Sine[];
+  /** The drift from 0 to each quarter second, x and z interleaved, as far as asked. */
+  private sums = new Float64Array(2 * 1024);
+  private known = 1;
 
   constructor(
     readonly t: WindTunables,
@@ -65,18 +69,37 @@ export class Wind {
     return [speed * sin(bearing), speed * cos(bearing)];
   }
 
-  /** Metres the wind carries something along x and z from `t0` to `t1` (seconds). */
+  /** Metres the wind carries something along x and z from `t0` to `t1` (seconds, from 0). */
   drift(t0: number, t1: number): [number, number] {
     if (t1 <= t0) return [0, 0];
-    const n = Math.ceil((t1 - t0) / STEP_S);
-    const h = (t1 - t0) / n;
-    let x = 0;
-    let z = 0;
-    for (let k = 0; k < n; k++) {
-      const v = this.at(t0 + (k + 0.5) * h);
-      x += v[0] * h;
-      z += v[1] * h;
+    const a = this.from0(t0);
+    const b = this.from0(t1);
+    return [b[0] - a[0], b[1] - a[1]];
+  }
+
+  /** The drift from 0 to `t`, between the quarter seconds either side of it. */
+  private from0(t: number): [number, number] {
+    const at = Math.max(0, t) / STEP_S;
+    const k = Math.floor(at);
+    this.reach(k + 1);
+    const f = at - k;
+    const s = this.sums;
+    return [s[2 * k] + f * (s[2 * k + 2] - s[2 * k]), s[2 * k + 1] + f * (s[2 * k + 3] - s[2 * k + 1])];
+  }
+
+  /** The sums out to quarter second `k`. */
+  private reach(k: number): void {
+    if (k < this.known) return;
+    if (2 * (k + 1) > this.sums.length) {
+      const grown = new Float64Array(Math.max(this.sums.length * 2, 2 * (k + 1)));
+      grown.set(this.sums);
+      this.sums = grown;
     }
-    return [x, z];
+    for (let j = this.known; j <= k; j++) {
+      const v = this.at((j - 0.5) * STEP_S);
+      this.sums[2 * j] = this.sums[2 * j - 2] + v[0] * STEP_S;
+      this.sums[2 * j + 1] = this.sums[2 * j - 1] + v[1] * STEP_S;
+    }
+    this.known = k + 1;
   }
 }
