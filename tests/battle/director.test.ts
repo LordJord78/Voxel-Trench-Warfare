@@ -3,6 +3,7 @@ import { HORIZON_FLASHES } from '../../src/battle/barrages';
 import { battleDarkness, Director, type BattleEvents, type BattleInputs, type DistantShell } from '../../src/battle/director';
 import { tracerAt, tracerTunables } from '../../src/battle/tracers';
 import { fireTunables } from '../../src/battle/fires';
+import { waterTunables } from '../../src/battle/water';
 import { P } from '../../src/world/materials';
 import { flareTunables } from '../../src/battle/flares';
 import { loadTunables, Tunables } from '../../src/core/tunables';
@@ -500,3 +501,41 @@ describe('the fires', () => {
     expect(stepped.fires()).toEqual(sought.fires());
   });
 });
+
+// The water (the battle spec's §1, §6): the session's splashes start rings on the director's clock,
+// the 32 newest kept; the wind roughens it.
+describe('the water', () => {
+  const wt = waterTunables(tun);
+  const calm: BattleInputs = { intensity: 'off', darkness: 0, player };
+  const splash = (k: number) => ({ at: [100 + k, 16, 120] as [number, number, number], energyJ: 1500 });
+
+  it('the director keeps the 32 newest rings, on its clock, the same for the same splashes', () => {
+    const run = () => {
+      const d = new Director(plan, tun, 7);
+      d.tick(1, calm);
+      // Forty splashes over 0.4 s, ten a step for four steps.
+      for (let k = 0; k < 4; k++) d.tick(0.1, { ...calm, splashes: Array.from({ length: 10 }, (_, j) => splash(k * 10 + j)) });
+      return d;
+    };
+    const d = run();
+    const rings = d.rings();
+    expect(rings).toHaveLength(wt.maxRings);
+    // The newest: the first eight splashes are the ones gone.
+    expect(rings.map((r) => r.at[0]).sort((a, b) => a - b)).toEqual(Array.from({ length: 32 }, (_, k) => 108 + k));
+    for (const r of rings) expect(r.radiusM).toBeCloseTo(wt.ringSpeedMps * r.age, 9);
+    expect(run().rings()).toEqual(rings);
+    // Gone once they have faded.
+    d.tick(wt.ringFadeS + 0.5, calm);
+    expect(d.rings()).toEqual([]);
+  });
+
+  it('with no splashes there are no rings, and the roughness is the wind\'s', () => {
+    const d = new Director(plan, tun, 7);
+    d.tick(30, calm);
+    expect(d.rings()).toEqual([]);
+    const r = d.roughness();
+    expect(Math.hypot(r.wind[0], r.wind[1])).toBeGreaterThan(0.5);
+    expect(r.slope).toBeCloseTo(wt.roughnessPerMps * Math.hypot(r.wind[0], r.wind[1]), 9);
+  });
+});
+

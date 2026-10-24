@@ -937,6 +937,18 @@ trail_m             = 24.0     # each drawn with this much trail: two frames' fl
 # third of the time, a hull a fifth; at night the hamlet's ruins burn. A fire grows, burns its while
 # and dies down; it lights its surroundings (a light of its own, flickering), throws flames and embers,
 # smokes into the haze leaning downwind, chars what it burned and crackles close by. It does not spread.
+[battle.water]
+# The water's rings (src/battle/water.ts, director.ts): each round or shell that falls in water starts
+# a ring, spreading and fading; the surface takes the newest, and the wind's roughness on top.
+ring_speed_mps      = 1.0
+ring_fade_s         = 2.0
+max_rings           = 32
+ring_height_m       = 0.04     # a whole ring's height at its start; fading as (1 − age/fade)²
+ring_log_full       = 6.0      # log10 of the energy (J) of a whole ring: a shell's megajoules; a round's kilojoule a half
+ring_wavelength_m   = 0.3
+ring_width_m        = 0.15     # the wave packet's width about its radius, widening 0.1 m a second
+roughness_per_mps   = 0.012    # the surface's slope a metre a second of the wind
+
 [battle.fires]
 chance_timber       = 0.3333   # timber, cloth and duckboards
 chance_hull         = 0.2

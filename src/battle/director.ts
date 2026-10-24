@@ -40,6 +40,7 @@ import { flareAt, flareTunables, type FlareState, type FlareTunables, type Launc
 import { planShot, tracerAt, tracerTunables, type Shot, type TracerState, type TracerTunables } from './tracers';
 import { fireChance, fireFlames, firePlume, fireStrength, fireTunables, hamletFireSites, type Fire, type FireTunables, type FlameQuad, type PlumePuff } from './fires';
 import { fieldHeight } from '../world/generation/terrain';
+import { ringAt, ringStrength, waterTunables, type Ring, type RingState, type WaterTunables } from './water';
 import { Wind, windTunables } from './wind';
 
 export interface BattleInputs {
@@ -51,6 +52,8 @@ export interface BattleInputs {
   player: readonly [number, number, number];
   /** The session's shells landed since the last tick: where, on what, and their craters. */
   strikes?: readonly Strike[];
+  /** Where the session's rounds and shells fell in water since the last tick (metres), and with what energy (J). */
+  splashes?: readonly { at: readonly [number, number, number]; energyJ: number }[];
 }
 
 /** A shell of the session's landed: where it struck (metres), the material it struck, and its crater's id. */
@@ -163,6 +166,10 @@ export class Director {
   private readonly hamletSites: [number, number, number][];
   private burning: (Fire & { crater: number | null; charred: boolean })[] = [];
   private pending: Strike[] = [];
+  private readonly waterT: WaterTunables;
+  /** The splashes since the last step, and the rings alive (the newest max_rings). */
+  private splashing: { at: readonly [number, number, number]; energyJ: number }[] = [];
+  private rippling: Ring[] = [];
   private hamletLit = false;
   private nextFire = 1;
 
@@ -180,6 +187,7 @@ export class Director {
     this.tt = tracerTunables(tun);
     this.gunRng = root.derive('battle.guns');
     this.fireT = fireTunables(tun);
+    this.waterT = waterTunables(tun);
     this.fireRng = root.derive('battle.fires');
     this.hamletSites = plan ? hamletFireSites(plan, root.derive('battle.fires.hamlet'), this.fireT) : [];
     this.field = plan ? (x, z) => fieldHeight(plan.terrain, plan.params, x / plan.params.voxel, z / plan.params.voxel) * plan.params.voxel : () => -Infinity;
@@ -214,6 +222,7 @@ export class Director {
   tick(seconds: number, inputs: BattleInputs): BattleEvents {
     this.given += seconds;
     if (inputs.strikes && inputs.strikes.length > 0) this.pending.push(...inputs.strikes);
+    if (inputs.splashes && inputs.splashes.length > 0) this.splashing.push(...inputs.splashes);
     const events = noBattleEvents();
     const target = Math.floor(this.given * HZ + 1e-6);
     while (this.ticks < target) this.step(inputs, events);
@@ -325,6 +334,31 @@ export class Director {
     this.fireDistant(t, now, inputs, events);
     this.fireGuns(t, now, inputs, events);
     this.tendFires(now, inputs, events);
+    this.tendWater(now);
+  }
+
+  /** A step of the water, at `now`: each splash since the last a ring; the faded and the oldest past max_rings dropped. */
+  private tendWater(now: number): void {
+    const wt = this.waterT;
+    for (const s of this.splashing) this.rippling.push({ at: [s.at[0], s.at[1], s.at[2]], t0: now, strength: ringStrength(s.energyJ, wt) });
+    this.splashing = [];
+    this.rippling = this.rippling.filter((r) => now - r.t0 < wt.ringFadeS).slice(-wt.maxRings);
+  }
+
+  /** The water's rings now, the newest max_rings. */
+  rings(): RingState[] {
+    const out: RingState[] = [];
+    for (const r of this.rippling) {
+      const s = ringAt(r, this.seconds, this.waterT);
+      if (s) out.push(s);
+    }
+    return out;
+  }
+
+  /** The water's roughness now: the wind (metres a second, x and z) and the surface's slope from it. */
+  roughness(): { wind: [number, number]; slope: number } {
+    const [wx, wz] = this.wind.at(this.seconds);
+    return { wind: [wx, wz], slope: this.waterT.roughnessPerMps * Math.sqrt(wx * wx + wz * wz) };
   }
 
   /** A step of the fires, at `now`: the strikes since the last lit by chance; the hamlet's lit or dying with the dark; the cap; chars and crackles; the out dropped. */
