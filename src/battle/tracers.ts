@@ -34,6 +34,8 @@ export interface TracerTunables {
   clearM: number;
   missM: number;
   maxDrawn: number;
+  /** Metres of trail a tracer is drawn with: two frames' flight at 60 Hz, the streak a far one makes. */
+  trailM: number;
   /** Per metre: the round's drag factor × the air's density. */
   k: number;
   /** m/s², downward. */
@@ -61,6 +63,7 @@ export function tracerTunables(tun: Tunables): TracerTunables {
     clearM: f('clear_m'),
     missM: f('miss_m'),
     maxDrawn: tun.i('battle.tracers.max_drawn'),
+    trailM: f('trail_m'),
     k: projectileSpec(tun, 'assault_rifle').dragFactor * b.airDensity,
     gravity: -b.gravity,
   };

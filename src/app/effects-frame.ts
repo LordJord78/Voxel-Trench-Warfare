@@ -44,8 +44,9 @@ export interface EffectsTunables {
   farShells: FarShellTunables;
   /** A distant shell's flash's colour ([battle.flashes]). */
   distantColour: V3;
-  /** The most of the battle's tracers drawn, the nearest the eye. */
+  /** The most of the battle's tracers drawn, the nearest the eye, and the trail each is drawn with. */
   maxBattleTracers: number;
+  battleTrailM: number;
   tracerLengthM: number;
   tracerWidthM: number;
   tracerColour: V3;
@@ -88,6 +89,7 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     farShells: farShellTunables(tun),
     distantColour: tun.triple('battle.flashes.colour'),
     maxBattleTracers: tracerTunables(tun).maxDrawn,
+    battleTrailM: tracerTunables(tun).trailM,
     tracerLengthM: f('tracer_length_m'),
     tracerWidthM: f('tracer_width_m'),
     tracerColour: rgb(tun, 'effects.tracer_colour'),
@@ -290,7 +292,7 @@ export class EffectsFrameBuilder {
     lights.push(...this.debugLights);
 
     // The battle's tracers, after the session's own: drawn as theirs are, the head at the round and
-    // its trail tracer_length_m back along its way (or its flight since it was fired or struck, if
+    // its trail battleTrailM back along its way (or its flight since it was fired or struck, if
     // shorter); the nearest the eye, at most maxBattleTracers.
     const eyeAt = eye ?? [session.player.position.x, session.player.position.y + session.controller.eyeHeight(session.player), session.player.position.z];
     const offEye = (p: readonly number[]) => (p[0] - eyeAt[0]) ** 2 + (p[1] - eyeAt[1]) ** 2 + (p[2] - eyeAt[2]) ** 2;
@@ -299,7 +301,7 @@ export class EffectsFrameBuilder {
     for (const tr of nearest) {
       const speed = Math.hypot(tr.velocity[0], tr.velocity[1], tr.velocity[2]);
       if (!(speed > 0)) continue;
-      const trail = Math.min(t.tracerLengthM, tr.flown) / speed;
+      const trail = Math.min(t.battleTrailM, tr.flown) / speed;
       const tail = [0, 1, 2].map((k) => tr.position[k] - tr.velocity[k] * trail);
       if (!ribbon(tail, tr.position, t.tracerWidthM, glow, t.tracerTailAlpha, 1)) break;
       battleTracers++;

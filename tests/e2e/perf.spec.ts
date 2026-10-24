@@ -411,6 +411,7 @@ test("a heavy night's flares render within the budget at the overview and in no 
       let seen = h.stats().gpuSamples;
       let lit = 0;
       let flashes = 0;
+      let tracers = 0;
       for (let k = 0; k < 300; k++) {
         await h.waitFrames(1);
         const s = h.stats();
@@ -418,12 +419,13 @@ test("a heavy night's flares render within the budget at the overview and in no 
         seen = s.gpuSamples;
         lit = Math.max(lit, h.lights().filter((l) => l.kind === 'flare').length);
         flashes = Math.max(flashes, h.horizon().length);
+        tracers = Math.max(tracers, h.effects().battleTracers);
       }
       gpu.sort((a, b) => a - b);
-      return { at, count: gpu.length, p95: gpu[Math.floor(0.95 * gpu.length)], median: gpu[gpu.length >> 1], max: gpu[gpu.length - 1], lit, flashes };
+      return { at, count: gpu.length, p95: gpu[Math.floor(0.95 * gpu.length)], median: gpu[gpu.length >> 1], max: gpu[gpu.length - 1], lit, flashes, tracers };
     }, view);
     if (r.count === 0) test.skip(true, 'no GPU timestamps');
-    lines.push(`${view}: GPU p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, worst ${r.max.toFixed(2)}; ${r.lit} flares alight at most, from ${r.at} s in; ${r.flashes} distant flashes at most`);
+    lines.push(`${view}: GPU p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, worst ${r.max.toFixed(2)}; ${r.lit} flares alight at most, from ${r.at} s in; ${r.flashes} distant flashes, ${r.tracers} tracers drawn at most`);
     expect(r.lit, lines.join('; ')).toBeGreaterThanOrEqual(15);
     expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
   }
@@ -474,5 +476,42 @@ test("a heavy dusk's barrages render within the budget at the overview and in no
     expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
   }
   console.log(`A heavy dusk's barrages: ${lines.join('; ')}`);
+  expect(errors).toEqual([]);
+});
+
+test('a heavy night in play, with its sound, holds the main thread and the GPU', async ({ page }) => {
+  // Done-table row 6's main thread with the battle's voices on top of the front's: the player in the
+  // bay, the front heavy at night, the battle two minutes in (flares, barrages, far shells, the
+  // machine guns' chatter): a frame's main-thread work within 8 ms at the 99th percentile, the voices
+  // held within the cap, the GPU within its budget.
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  const r = await hooks(page, async (h) => {
+    h.setQuality({ preset: 'high', dynres: false });
+    h.setTimeOfDay(21);
+    h.setIntensity('heavy');
+    h.runLights(120);
+    await h.waitFrames(60);
+    const gpu: number[] = [];
+    let seen = h.stats().gpuSamples;
+    let held = 0;
+    for (let k = 0; k < 300; k++) {
+      await h.waitFrames(1);
+      const s = h.stats();
+      if (s.gpuSamples > seen && s.gpuLastMs !== null) gpu.push(s.gpuLastMs);
+      seen = s.gpuSamples;
+      held = Math.max(held, h.audio().held);
+    }
+    const main = h.mainMs().slice(-300).sort((a, b) => a - b);
+    gpu.sort((a, b) => a - b);
+    return { count: gpu.length, p95: gpu[Math.floor(0.95 * gpu.length)], main99: main[Math.floor(0.99 * main.length)], mainMax: main[main.length - 1], held, dropped: h.audio().dropped, state: h.audio().state, tracers: h.effects().battleTracers };
+  });
+  const line = `A heavy night in play: main thread p99 ${r.main99.toFixed(1)} ms (worst ${r.mainMax.toFixed(1)}); ${r.held} voices held at most, ${r.dropped} dropped; GPU p95 ${r.count ? r.p95.toFixed(2) : 'n/a'} ms; ${r.tracers} tracers drawn`;
+  console.log(line);
+  expect(r.state, line).toBe('running');
+  expect(r.main99, line).toBeLessThanOrEqual(8);
+  expect(r.held, line).toBeLessThanOrEqual(64);
+  if (r.count > 0) expect(r.p95, line).toBeLessThanOrEqual(BUDGET_MS);
   expect(errors).toEqual([]);
 });

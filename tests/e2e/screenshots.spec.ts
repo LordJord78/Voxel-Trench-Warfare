@@ -556,3 +556,29 @@ test('a barrage on the horizon at dusk and at night, and a far shell flashing an
   await look({ ...farNight!, eye: overview }, farNight!.t + 20, 3, 'far-smoke-night-overview');
   if (errors.length) throw new Error(errors.join('\n'));
 });
+
+// Battle milestone 3's review: tracers over the field at night, from the firing step and from the
+// overview, the front at light and at heavy, two minutes into the battle. Written to artifacts/b3.
+test('tracers over the field at night', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  for (const view of ['step', 'overview'] as const) {
+    for (const intensity of ['light', 'heavy'] as const) {
+      await hooks(
+        page,
+        async (h, a) => {
+          const { view: v, intensity: i } = a as { view: string; intensity: 'light' | 'heavy' };
+          h.setQuality({ preset: 'high', dynres: false });
+          h.view(v);
+          h.setTimeOfDay(21);
+          h.setIntensity(i);
+          h.runLights(120);
+          await h.waitFrames(90);
+        },
+        { view, intensity },
+      );
+      await page.screenshot({ path: `artifacts/b3/tracers-${view}-${intensity}.png` });
+    }
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
+});

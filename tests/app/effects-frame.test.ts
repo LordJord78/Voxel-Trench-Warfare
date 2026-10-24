@@ -331,10 +331,13 @@ describe('a frame of effects', () => {
     const r = built.frame.ribbons;
     expect(built.counts.battleTracers).toBe(2);
     const at = (i: number) => Array.from(r.slice(i * RIBBON_FLOATS, (i + 1) * RIBBON_FLOATS));
-    // The nearer the eye first: the first, 10.4 m off; its trail tracer_length_m back along its way.
+    // The nearer the eye first: the first, 10.4 m off; its trail the battle's trail_m back along its
+    // way (two frames' flight at 60 Hz: a far tracer seen as the streak it makes).
+    const tt = tracerTunables(tun);
+    expect(tt.trailM).toBe(24);
     const first = at(0);
     close(first.slice(4, 7), [50, 30, 80], 6, 'head');
-    close(first.slice(0, 3), [50 - 0.8 * t.tracerLengthM, 30, 80 - 0.6 * t.tracerLengthM], 5, 'tail');
+    close(first.slice(0, 3), [50 - 0.8 * tt.trailM, 30, 80 - 0.6 * tt.trailM], 5, 'tail');
     expect(first[3]).toBeCloseTo(t.tracerWidthM, 6);
     expect(first[7]).toBeCloseTo(t.tracerTailAlpha, 6);
     expect(first[11]).toBe(1);

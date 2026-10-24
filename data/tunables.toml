@@ -913,9 +913,9 @@ heavy_scale         = 2.5      # and heavy's over that
 rounds              = [5, 20]
 rpm                 = 600.0
 tracer_every        = 5        # rounds 0, 5, 10 and 15 of a burst
-spread_deg          = 35.0     # either way of straight across
+spread_deg          = 45.0     # either way of straight across
 sweep_deg           = 10.0     # the gun turns this far over a burst
-elevation_deg       = [0.3, 3.0]
+elevation_deg       = [0.5, 8.0]   # some arcing high over the field: fired near level, from the trench they came on as dots
 muzzle_mps          = 820.0
 burn_s              = 3.0      # a tracer burns this long from its firing
 ricochet_share      = 0.1667   # of those that strike: one in six
@@ -924,6 +924,7 @@ ricochet_up_deg     = [10.0, 40.0]
 clear_m             = 60.0     # guns stand further than this along the line from the player
 miss_m              = 30.0     # a burst whose fire would pass nearer the player is not fired
 max_drawn           = 400      # the nearest the eye drawn; the farther not
+trail_m             = 24.0     # each drawn with this much trail: two frames' flight at 60 Hz, the streak a far one makes (the player's own keep [effects] tracer_length_m)
 
 # A distant shell's flash (barrages.ts), as the sky and the far field take it (sky.wgsl's horizonGlow
 # and horizonLight): the haze over where it fell lit, a patch spread_m across and high seen from the
