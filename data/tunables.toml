@@ -928,6 +928,44 @@ miss_m              = 30.0     # a burst whose fire would pass nearer the player
 max_drawn           = 400      # the nearest the eye drawn; the farther not
 trail_m             = 24.0     # each drawn with this much trail: two frames' flight at 60 Hz, the streak a far one makes (the player's own keep [effects] tracer_length_m)
 
+# Fires (src/battle/fires.ts, director.ts): a shell striking timber, cloth or duckboards starts one a
+# third of the time, a hull a fifth; at night the hamlet's ruins burn. A fire grows, burns its while
+# and dies down; it lights its surroundings (a light of its own, flickering), throws flames and embers,
+# smokes into the haze leaning downwind, chars what it burned and crackles close by. It does not spread.
+[battle.fires]
+chance_timber       = 0.3333   # timber, cloth and duckboards
+chance_hull         = 0.2
+grow_s              = 20.0
+burn_s              = [120.0, 360.0]   # the hamlet's burn on until the dark lifts
+die_s               = 60.0
+size                = [0.5, 1.0]
+radius_m            = [12.0, 25.0]   # its light's reach, by its size
+intensity           = 40.0
+colour              = [1.0, 0.55, 0.2]
+flicker             = 0.25     # a lantern's flicker (0.08), harder
+flicker_rate        = 3.0      # and faster: the lantern's beats this many times as quick
+lift_m              = 0.3      # its light over its fuel: a shadow ray ends 1.5 voxels short of a light
+flames              = 10
+flame_s             = 0.8      # a flame's cycle: leaving the fire to gone
+flame_rise_m        = 1.5      # how high a flame rises, at full size
+flame_size_m        = [0.5, 0.15]   # across as it leaves, and at the top of its rise
+flame_glow          = 4.0
+flame_colour        = [1.0, 0.6, 0.2]
+embers              = 8
+ember_s             = 4.0
+ember_rise_mps      = 2.0
+ember_size_m        = 0.06
+ember_glow          = 8.0
+plume_puffs         = 6
+plume_m             = 12.0     # the plume's top
+plume_rise_mps      = 2.0      # smoke rising this fast leans by the wind over the time it takes
+plume_radius_m      = [1.5, 4.0]
+plume_density       = 0.15     # per metre at a puff's middle, at full strength
+crackle_per_s       = 8.0      # pops a second at full strength
+max_fires           = 12
+hamlet_fires        = [2, 4]
+char_m              = 1.5      # what is flammable within this of it is charred at its full burn
+
 # A distant shell's flash (barrages.ts), as the sky and the far field take it (sky.wgsl's horizonGlow
 # and horizonLight): the haze over where it fell lit, a patch spread_m across and high seen from the
 # eye, its glow added to the sky and (by haze) to the haze toward it, dimmed by the air over reach_m;
