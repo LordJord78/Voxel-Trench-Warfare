@@ -33,6 +33,9 @@ export interface TracerTunables {
   /** Guns stand more than clearM along the line from the player; a burst whose fire would pass within missM of them is not fired. */
   clearM: number;
   missM: number;
+  /** A share of bursts grazes the field this far out (metres), so their strikes and ricochets are near. */
+  grazeShare: number;
+  grazeM: [number, number];
   maxDrawn: number;
   /** Metres of trail a tracer is drawn with: two frames' flight at 60 Hz, the streak a far one makes. */
   trailM: number;
@@ -62,6 +65,8 @@ export function tracerTunables(tun: Tunables): TracerTunables {
     ricochetUpDeg: pair('ricochet_up_deg'),
     clearM: f('clear_m'),
     missM: f('miss_m'),
+    grazeShare: f('graze_share'),
+    grazeM: pair('graze_m'),
     maxDrawn: tun.i('battle.tracers.max_drawn'),
     trailM: f('trail_m'),
     k: projectileSpec(tun, 'assault_rifle').dragFactor * b.airDensity,
@@ -108,13 +113,26 @@ function along(leg: { from: readonly number[]; dir: readonly number[]; v0: numbe
   };
 }
 
-/** Where a flight from `t0` first goes under the ground before `until`: its time there, or null. */
-function strike(leg: { from: readonly number[]; dir: readonly number[]; v0: number }, t0: number, until: number, ground: (xM: number, zM: number) => number, tt: TracerTunables): number | null {
+/** A flight's height `s` seconds on. */
+function heightAt(leg: { from: readonly number[]; dir: readonly number[]; v0: number }, s: number, tt: TracerTunables): number {
+  return leg.from[1] + (leg.dir[1] * log(1 + tt.k * leg.v0 * s)) / tt.k - (tt.gravity * s * s) / 2;
+}
+
+/**
+ * Where a flight from `t0` first goes under the ground before `until`: its time there, or null.
+ * Its lowest over what is left of its flight is at one end of it (its height is concave fired up,
+ * and falls all the way fired down), so once both are over `groundTop` (the ground's highest) it
+ * cannot strike, and is marched no further.
+ */
+function strike(leg: { from: readonly number[]; dir: readonly number[]; v0: number }, t0: number, until: number, ground: (xM: number, zM: number) => number, tt: TracerTunables, groundTop: number): number | null {
+  const endHigh = heightAt(leg, until - t0, tt) > groundTop;
   let last = 0;
   let lastAbove = Number.NaN;
   for (let s = MARCH_S; t0 + s <= until + 1e-9; s += MARCH_S) {
-    const p = along(leg, s, tt).position;
-    const above = p[1] - ground(p[0], p[2]);
+    const d = log(1 + tt.k * leg.v0 * s) / tt.k;
+    const y = leg.from[1] + leg.dir[1] * d - (tt.gravity * s * s) / 2;
+    if (endHigh && y > groundTop) return null;
+    const above = y - ground(leg.from[0] + leg.dir[0] * d, leg.from[2] + leg.dir[2] * d);
     if (above < 0) {
       // Between the last step over the ground and this one under it, where the two meet.
       const before = Number.isNaN(lastAbove) ? 0 : lastAbove;
@@ -128,23 +146,23 @@ function strike(leg: { from: readonly number[]; dir: readonly number[]; v0: numb
 
 /**
  * A tracer fired from `origin` along `dir` (a unit) at `t0`, over `ground` (its height in metres at
- * x, z): its flight to where it strikes or burns out, and its ricochet's. Its ricochet's chance,
+ * x, z; never over `groundTop`): its flight to where it strikes or burns out, and its ricochet's. Its ricochet's chance,
  * bearing and climb are drawn whether or not it strikes, so the stream's order never depends on the
  * ground.
  */
-export function planShot(id: number, origin: readonly number[], dir: readonly number[], t0: number, ground: (xM: number, zM: number) => number, rng: Rng, tt: TracerTunables): Shot {
+export function planShot(id: number, origin: readonly number[], dir: readonly number[], t0: number, ground: (xM: number, zM: number) => number, rng: Rng, tt: TracerTunables, groundTop = Infinity): Shot {
   const roll = rng.float();
   const bearing = rng.uniform(0, TAU);
   const climb = radians(rng.uniform(tt.ricochetUpDeg[0], tt.ricochetUpDeg[1]));
   const end = t0 + tt.burnS;
   const first = { from: [origin[0], origin[1], origin[2]] as V3, dir: [dir[0], dir[1], dir[2]] as V3, v0: tt.muzzleMps };
-  const hit = strike(first, t0, end, ground, tt);
+  const hit = strike(first, t0, end, ground, tt, groundTop);
   const legs: Leg[] = [{ ...first, t0, t1: hit ?? end }];
   if (hit !== null && roll < tt.ricochetShare) {
     const at = along(first, hit - t0, tt);
     const v = hypot(at.velocity[0], at.velocity[1], at.velocity[2]);
     const second = { from: at.position, dir: [sin(bearing) * cos(climb), sin(climb), cos(bearing) * cos(climb)] as V3, v0: tt.ricochetSpeed * v };
-    legs.push({ ...second, t0: hit, t1: strike(second, hit, end, ground, tt) ?? end });
+    legs.push({ ...second, t0: hit, t1: strike(second, hit, end, ground, tt, groundTop) ?? end });
   }
   return { id, legs };
 }

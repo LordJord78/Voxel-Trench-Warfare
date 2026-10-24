@@ -340,6 +340,21 @@ describe('the machine guns', () => {
     }
   });
 
+  it('some ricochet up within sight: at light, two or more a minute start within 250 m of the player', () => {
+    // A share of bursts grazes the field 40–200 m out, so their strikes and ricochets are near.
+    const d = new Director(plan, tun, 7);
+    const seen = new Set<number>();
+    runFor(d, dark('light'), 600, (_, step) => {
+      if (step % 30 !== 0) return;
+      for (const shot of d.shots()) {
+        if (shot.legs.length < 2) continue;
+        const from = shot.legs[1].from;
+        if (Math.hypot(from[0] - player[0], from[2] - player[2]) <= 250) seen.add(shot.id);
+      }
+    });
+    expect(seen.size).toBeGreaterThanOrEqual(20);
+  });
+
   it("from guns on both lines, none within clear_m of the player's stretch", () => {
     const d = new Director(plan, tun, 7);
     const zs = new Set<number>();

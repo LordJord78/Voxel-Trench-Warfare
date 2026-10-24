@@ -69,6 +69,24 @@ describe("a tracer's flight", () => {
     expect(tt.burnS).toBe(3);
   });
 
+  it('a shot that can no longer come down to the field is not marched further, and plans the same', () => {
+    // Over a field no higher than 16 m, fired 8° up from 20 m: it never comes down within its burn.
+    let asked = 0;
+    const field = () => {
+      asked++;
+      return 16;
+    };
+    const high = planShot(1, muzzle, level(30, 8), 10, field, Rng.root(3).derive('battle.guns'), tt, 16);
+    expect(asked).toBeLessThanOrEqual(2);
+    expect(high).toEqual(planShot(1, muzzle, level(30, 8), 10, () => 16, Rng.root(3).derive('battle.guns'), tt));
+    // Over rolling ground, with and without the field's top: the same flights, struck or not.
+    const rolling = (x: number, z: number) => 15 + 2 * Math.sin(x / 7) * Math.cos(z / 11);
+    for (let k = 0; k < 200; k++) {
+      const dir = level(k * 13, -3 + (k % 12));
+      expect(planShot(k, muzzle, dir, 10, rolling, Rng.root(k).derive('battle.guns'), tt, 17)).toEqual(planShot(k, muzzle, dir, 10, rolling, Rng.root(k).derive('battle.guns'), tt));
+    }
+  });
+
   it('the same stream plans the same shot', () => {
     const ground = () => muzzle[1] - 5;
     expect(shoot(level(20, -10), ground, 4)).toEqual(shoot(level(20, -10), ground, 4));

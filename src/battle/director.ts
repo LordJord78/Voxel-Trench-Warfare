@@ -24,7 +24,7 @@
  * `miss_m` of the player is not fired.
  */
 
-import { cos, radians, sin } from '../core/dmath';
+import { atan2, cos, radians, sin } from '../core/dmath';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import type { WorldPlan } from '../world/generation/plan';
@@ -116,8 +116,9 @@ export class Director {
   private nextShell = 1;
   private readonly tt: TracerTunables;
   private readonly gunRng: Rng;
-  /** The field's undisturbed height (metres) under a point: where a tracer ends. */
+  /** The field's undisturbed height (metres) under a point: where a tracer ends; and the most it can be. */
   private readonly field: (xM: number, zM: number) => number;
+  private readonly fieldTop: number;
   /** Tracers fired and not yet out. */
   private alive: Shot[] = [];
   private nextTracer = 1;
@@ -137,6 +138,9 @@ export class Director {
     this.tt = tracerTunables(tun);
     this.gunRng = root.derive('battle.guns');
     this.field = plan ? (x, z) => fieldHeight(plan.terrain, plan.params, x / plan.params.voxel, z / plan.params.voxel) * plan.params.voxel : () => -Infinity;
+    // fbm is under 1, and the swale only dips: the field is never higher than this.
+    const span = plan ? plan.terrain.reliefMax - plan.terrain.reliefMin : 0;
+    this.fieldTop = plan ? (plan.params.ground + ((span > 1e-12 ? (1 - plan.terrain.reliefMin) / span : 0.5) - 0.5) * 2 * plan.params.field.amplitude) * plan.params.voxel : Infinity;
     const v = plan?.params.voxel ?? 0;
     this.centre = [((plan?.params.dims.x ?? 0) / 2) * v, ((plan?.params.dims.z ?? 0) / 2) * v];
     const level = (plan?.params.ground ?? 0) * v;
@@ -260,12 +264,16 @@ export class Director {
     const from = bearing + radians(r.uniform(-tt.spreadDeg, tt.spreadDeg));
     const sweep = radians(r.uniform(-tt.sweepDeg, tt.sweepDeg));
     const elevation = radians(r.uniform(tt.elevationDeg[0], tt.elevationDeg[1]));
+    const graze = r.float() < tt.grazeShare;
+    const reach = r.uniform(tt.grazeM[0], tt.grazeM[1]);
     const gun: [number, number, number] = post ? [post.at[0], post.at[1] + 0.5, post.at[2]] : [0, 0, 0];
+    // A grazing burst is laid on the field `reach` out, so it strikes, and ricochets, near.
+    const aim = graze ? atan2(this.field(gun[0] + sin(from) * reach, gun[2] + cos(from) * reach) - gun[1], reach) : elevation;
     const shots: Shot[] = [];
     for (let k = 0; k < rounds; k += tt.tracerEvery) {
       const b = from + (rounds > 1 ? (sweep * k) / (rounds - 1) : 0);
-      const dir = [sin(b) * cos(elevation), sin(elevation), cos(b) * cos(elevation)];
-      shots.push(planShot(this.nextTracer++, gun, dir, t + (k * 60) / tt.rpm, this.field, r, tt));
+      const dir = [sin(b) * cos(aim), sin(aim), cos(b) * cos(aim)];
+      shots.push(planShot(this.nextTracer++, gun, dir, t + (k * 60) / tt.rpm, this.field, r, tt, this.fieldTop));
     }
     if (!post || shots.some((s) => s.legs.some((leg) => this.passes(leg, player)))) return;
     this.alive.push(...shots);
