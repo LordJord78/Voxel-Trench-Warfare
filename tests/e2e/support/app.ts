@@ -86,6 +86,8 @@ export interface Hooks {
     flashes: { id: number; position: [number, number, number]; t: number; power: number; far: boolean }[];
     /** The far shells' columns of smoke, puff by puff. */
     smoke: { centre: [number, number, number]; radiusM: number; alpha: number }[];
+    /** The machine guns' tracers in flight. */
+    tracers: { id: number; position: [number, number, number]; velocity: [number, number, number]; flown: number }[];
   };
   /** The distant shells' flashes the frame was last given (metres, their power then). */
   horizon(): { position: [number, number, number]; power: number; glow: boolean }[];
@@ -114,7 +116,7 @@ export interface Hooks {
   /** The front's fire, for this visit (the pause menu's choice is what is kept). */
   setIntensity(i: 'off' | 'light' | 'heavy'): void;
   /** What the last frame's effects held: particles' billboards, tracers, flash stars, transient lights. */
-  effects(): { billboards: number; tracers: number; stars: number; lights: number };
+  effects(): { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number };
   /** Test quads (metres, metres across, linear colour) drawn with the effects from the next frame, emissive or `lit` as dust is; [] for none. */
   debugQuads(quads: { position: [number, number, number]; size: number; colour: [number, number, number]; lit?: boolean; square?: boolean }[]): void;
   /** Emissive test ribbons (metres; metres across; linear colour), as tracers are drawn, from the next frame; [] for none. */

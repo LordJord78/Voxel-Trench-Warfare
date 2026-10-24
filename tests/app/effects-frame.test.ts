@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CameraRig, rigTunables } from '../../src/app/camera-rig';
 import { EffectsFrameBuilder, effectsTunables, NO_BATTLE, type ShownBattle } from '../../src/app/effects-frame';
 import { farShellTunables } from '../../src/battle/far-shells';
+import { tracerTunables, type TracerState } from '../../src/battle/tracers';
 import { flareTunables, type FlareState } from '../../src/battle/flares';
 import { projectileSpec } from '../../src/combat/ballistics';
 import { BILLBOARD_FLOATS } from '../../src/combat/particles';
@@ -319,6 +320,41 @@ describe('a frame of effects', () => {
     for (let c = 0; c < 3; c++) expect(puff[4 + c]).toBeCloseTo(fs.smokeColour[c] * 0.4, 6);
     expect(puff[7]).toBeCloseTo(0.4, 6);
     expect(puff[8]).toBe(0);
+  });
+
+  it("a battle tracer is a ribbon from its trail to its head, as the session's are", () => {
+    const tracers: TracerState[] = [
+      { id: 1, position: [50, 30, 80], velocity: [400, 0, 300], flown: 100 },
+      { id: 2, position: [60, 31, 90], velocity: [0, 0, 500], flown: 3 },
+    ];
+    const built = new EffectsFrameBuilder(t).build(stand(), none(), null, [50, 20, 70], { ...NO_BATTLE, tracers });
+    const r = built.frame.ribbons;
+    expect(built.counts.battleTracers).toBe(2);
+    const at = (i: number) => Array.from(r.slice(i * RIBBON_FLOATS, (i + 1) * RIBBON_FLOATS));
+    // The nearer the eye first: the first, 10.4 m off; its trail tracer_length_m back along its way.
+    const first = at(0);
+    close(first.slice(4, 7), [50, 30, 80], 6, 'head');
+    close(first.slice(0, 3), [50 - 0.8 * t.tracerLengthM, 30, 80 - 0.6 * t.tracerLengthM], 5, 'tail');
+    expect(first[3]).toBeCloseTo(t.tracerWidthM, 6);
+    expect(first[7]).toBeCloseTo(t.tracerTailAlpha, 6);
+    expect(first[11]).toBe(1);
+    for (let c = 0; c < 3; c++) expect(first[8 + c]).toBeCloseTo(t.tracerColour[c] * t.tracerIntensity, 4);
+    // One just fired: its trail only as long as its flight.
+    close(at(1).slice(0, 3), [60, 31, 87], 5, 'short tail');
+  });
+
+  it("at most max_drawn battle tracers, the nearest the eye, after the session's own", () => {
+    const tt = tracerTunables(tun);
+    const { s, events, rifle } = walkAndShoot();
+    const eye: V3 = [0, 20, 0];
+    const tracers: TracerState[] = Array.from({ length: 500 }, (_, i) => ({ id: i, position: [10 + i, 30, 0], velocity: [0, 0, 500], flown: 50 }));
+    const built = new EffectsFrameBuilder(t).build(s, events, rifle, eye, { ...NO_BATTLE, tracers });
+    expect(built.counts.battleTracers).toBe(tt.maxDrawn);
+    const own = built.counts.tracers + built.counts.stars;
+    expect(own).toBeGreaterThan(0);
+    const heads = Array.from({ length: built.counts.battleTracers }, (_, i) => ribbon(built.frame.ribbons, own + i).head[0]);
+    expect(Math.max(...heads)).toBeLessThan(10 + tt.maxDrawn);
+    expect(tt.maxDrawn).toBe(400);
   });
 
   it("a flare's spark and disc are dimmed by the sky's flares key, as its light is", () => {

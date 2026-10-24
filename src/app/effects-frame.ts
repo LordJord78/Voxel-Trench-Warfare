@@ -14,6 +14,7 @@
 import type { DistantShell } from '../battle/director';
 import { farShellTunables, type ColumnPuff, type FarShellTunables } from '../battle/far-shells';
 import { flareTunables, type FlareState, type FlareTunables } from '../battle/flares';
+import { tracerTunables, type TracerState } from '../battle/tracers';
 import { BILLBOARD_FLOATS } from '../combat/particles';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../combat/rifle-model';
 import type { Tunables } from '../core/tunables';
@@ -24,16 +25,17 @@ import { MUZZLE_ANCHOR, PORT_ANCHOR, type CombatEvents, type Session } from '../
 
 type V3 = [number, number, number];
 
-/** The battle as a frame draws it (src/battle/director.ts): at its moment, its flares, its newest distant shells' flashes, and the far shells' smoke. */
+/** The battle as a frame draws it (src/battle/director.ts): at its moment, its flares, its newest distant shells' flashes, the far shells' smoke, and the machine guns' tracers. */
 export interface ShownBattle {
   seconds: number;
   flares: readonly FlareState[];
   flashes: readonly DistantShell[];
   smoke: readonly ColumnPuff[];
+  tracers: readonly TracerState[];
 }
 
 /** No battle drawn: at rest, as the approved views are measured. */
-export const NO_BATTLE: ShownBattle = { seconds: 0, flares: [], flashes: [], smoke: [] };
+export const NO_BATTLE: ShownBattle = { seconds: 0, flares: [], flashes: [], smoke: [], tracers: [] };
 
 export interface EffectsTunables {
   /** The battle's flares, as they are seen: their sparks climbing and discs burning. */
@@ -42,6 +44,8 @@ export interface EffectsTunables {
   farShells: FarShellTunables;
   /** A distant shell's flash's colour ([battle.flashes]). */
   distantColour: V3;
+  /** The most of the battle's tracers drawn, the nearest the eye. */
+  maxBattleTracers: number;
   tracerLengthM: number;
   tracerWidthM: number;
   tracerColour: V3;
@@ -83,6 +87,7 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     flares: flareTunables(tun),
     farShells: farShellTunables(tun),
     distantColour: tun.triple('battle.flashes.colour'),
+    maxBattleTracers: tracerTunables(tun).maxDrawn,
     tracerLengthM: f('tracer_length_m'),
     tracerWidthM: f('tracer_width_m'),
     tracerColour: rgb(tun, 'effects.tracer_colour'),
@@ -135,7 +140,7 @@ export interface BuiltEffects {
   blasts: TransientLight[];
   /** Their smoke in the haze, the nearest MAX_PUFFS puffs (renderer.setSmoke). */
   smoke: SmokePuff[];
-  counts: { billboards: number; tracers: number; stars: number; lights: number };
+  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number };
 }
 
 const RAD = Math.PI / 180;
@@ -284,6 +289,22 @@ export class EffectsFrameBuilder {
     for (const r of this.debugRibbons) ribbon(r.tail, r.head, r.width, r.colour, 1, 1);
     lights.push(...this.debugLights);
 
+    // The battle's tracers, after the session's own: drawn as theirs are, the head at the round and
+    // its trail tracer_length_m back along its way (or its flight since it was fired or struck, if
+    // shorter); the nearest the eye, at most maxBattleTracers.
+    const eyeAt = eye ?? [session.player.position.x, session.player.position.y + session.controller.eyeHeight(session.player), session.player.position.z];
+    const offEye = (p: readonly number[]) => (p[0] - eyeAt[0]) ** 2 + (p[1] - eyeAt[1]) ** 2 + (p[2] - eyeAt[2]) ** 2;
+    const nearest = [...battle.tracers].sort((a, b) => offEye(a.position) - offEye(b.position)).slice(0, t.maxBattleTracers);
+    let battleTracers = 0;
+    for (const tr of nearest) {
+      const speed = Math.hypot(tr.velocity[0], tr.velocity[1], tr.velocity[2]);
+      if (!(speed > 0)) continue;
+      const trail = Math.min(t.tracerLengthM, tr.flown) / speed;
+      const tail = [0, 1, 2].map((k) => tr.position[k] - tr.velocity[k] * trail);
+      if (!ribbon(tail, tr.position, t.tracerWidthM, glow, t.tracerTailAlpha, 1)) break;
+      battleTracers++;
+    }
+
     // Each shell's blast: a light a metre over where it landed, flaring and dying over blast_light_s.
     const blasts: TransientLight[] = this.landed
       .filter((b) => b.age < t.blastLightS)
@@ -321,7 +342,7 @@ export class EffectsFrameBuilder {
       lights,
       blasts,
       smoke,
-      counts: { billboards, tracers, stars, lights: lights.length },
+      counts: { billboards, tracers, stars, lights: lights.length, battleTracers },
     };
   }
 }

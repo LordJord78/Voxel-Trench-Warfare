@@ -30,7 +30,7 @@ const LIT_BYTES = 32;
 /** The particle pool, and room for test quads. */
 export const MAX_BILLBOARDS = 4096 + 64;
 /** Every round in flight a tracer, and a few shots' stars. */
-export const MAX_RIBBONS = 512;
+export const MAX_RIBBONS = 1024;
 
 export interface EffectsFrame {
   billboards: Float32Array;
