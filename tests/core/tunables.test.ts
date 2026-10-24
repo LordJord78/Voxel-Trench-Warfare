@@ -10,6 +10,12 @@ describe('Tunables', () => {
     expect(t.sections('s')).toEqual(['x', 'y']);
     expect(t.has('a.b.z')).toBe(false);
   });
+  it('reads a range as two numbers, low first, and refuses anything else', () => {
+    const r = new Tunables({ g: { ok: [1, 5], flat: [2, 2], back: [5, 1], three: [1, 2, 3], word: 'x' } });
+    expect(r.pair('g.ok')).toEqual([1, 5]);
+    expect(r.pair('g.flat')).toEqual([2, 2]);
+    for (const k of ['g.back', 'g.three', 'g.word']) expect(() => r.pair(k), k).toThrow(TypeError);
+  });
   it('names the missing part', () => {
     expect(() => t.get('a.b.z')).toThrow("tunable 'a.b.z' not found (missing 'z')");
   });

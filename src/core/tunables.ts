@@ -48,6 +48,15 @@ export class Tunables {
     return value;
   }
 
+  /** A range: two finite numbers, low first. */
+  pair(key: string): [number, number] {
+    const value = this.get(key);
+    if (!Array.isArray(value) || value.length !== 2 || !value.every((v) => typeof v === 'number' && Number.isFinite(v)) || !(value[0] <= value[1])) {
+      throw new TypeError(`tunable '${key}' is not two finite numbers, low first: ${JSON.stringify(value)}`);
+    }
+    return [value[0], value[1]];
+  }
+
   /** A deep copy of the whole file, for deriving a variant (tests shrink the world this way). */
   raw(): Record<string, unknown> {
     return JSON.parse(JSON.stringify(this.rawData)) as Record<string, unknown>;

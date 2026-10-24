@@ -802,3 +802,16 @@ smoke_density       = 0.00053  # per metre, at the ground
 smoke_height_m      = 300.0    # it thins by e over this many metres
 aureole             = 12.0     # the sky's glow round the key light (sun or moon), over the key's light at its middle, falling as cos⁹⁰⁰: some 2.7° to 1/e, the approved sun's glow
 
+
+# ---------------------------------------------------------------------------
+# THE BATTLE AROUND YOU (sub-project 4, docs/superpowers/specs/2026-10-23-trenchline-web-battle-design.md)
+#
+# The wind over the whole map (src/battle/wind.ts), a pure function of time: it carries the flares
+# and leans the smoke. Bearings are as yaw: the way it blows toward, 0 = +z, 90 = +x.
+[battle.wind]
+prevailing_deg      = 200.0    # from the enemy's side (they lie toward +z), across a little
+veer_deg            = 20.0     # the most it veers either way of that, in two slow sines
+veer_period_s       = [900.0, 2400.0]   # their periods: a few degrees a minute at most
+speed_mps           = [1.0, 5.0]   # its bounds; it blows at their middle, and gusts
+gust_mps            = 1.5      # the two gust sines together, at most
+gust_period_s       = [20.0, 90.0]
