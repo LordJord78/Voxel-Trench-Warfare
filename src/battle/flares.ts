@@ -84,6 +84,8 @@ export interface FlareState {
   /** How brightly it burns, 0 to 1: 0 climbing and out. */
   glow: number;
   stage: 'climb' | 'burning' | 'out';
+  /** Its light's colour, linear RGB (its launch's). */
+  colour: [number, number, number];
 }
 
 const smooth = (x: number) => {
@@ -96,14 +98,14 @@ export function flareAt(l: Launch, t: number, wind: Wind, ft: FlareTunables): Fl
   const g = ft.gravity;
   const climb = Math.sqrt((2 * l.burstM) / g);
   const across = Math.sqrt(2 * g * l.burstM) * (cos(l.elevation) / sin(l.elevation));
-  const out = (position: [number, number, number]): FlareState => ({ id: l.id, position, glow: 0, stage: 'out' });
+  const out = (position: [number, number, number]): FlareState => ({ id: l.id, position, glow: 0, stage: 'out', colour: l.colour });
   const tau = t - l.t0;
   if (tau < 0) return out([l.post[0], l.post[1], l.post[2]]);
   const ahead = (s: number): [number, number] => [l.post[0] + sin(l.bearing) * across * s, l.post[2] + cos(l.bearing) * across * s];
   if (tau < climb) {
     const [x, z] = ahead(tau);
     const up = Math.sqrt(2 * g * l.burstM);
-    return { id: l.id, position: [x, l.post[1] + up * tau - (g * tau * tau) / 2, z], glow: 0, stage: 'climb' };
+    return { id: l.id, position: [x, l.post[1] + up * tau - (g * tau * tau) / 2, z], glow: 0, stage: 'climb', colour: l.colour };
   }
   const [bx, bz] = ahead(climb);
   const tb = l.t0 + climb;
@@ -111,5 +113,5 @@ export function flareAt(l: Launch, t: number, wind: Wind, ft: FlareTunables): Fl
   const d = wind.drift(tb, tb + s);
   const position: [number, number, number] = [bx + d[0], l.post[1] + l.burstM - ft.sinkMps * s, bz + d[1]];
   if (t - tb > ft.burnS) return out(position);
-  return { id: l.id, position, glow: smooth(s / ft.igniteS) * smooth((ft.burnS - s) / ft.fadeS), stage: 'burning' };
+  return { id: l.id, position, glow: smooth(s / ft.igniteS) * smooth((ft.burnS - s) / ft.fadeS), stage: 'burning', colour: l.colour };
 }

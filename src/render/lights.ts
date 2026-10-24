@@ -2,10 +2,12 @@
  * The point lights of the scene, from the plan: a lantern in every dugout,
  * always lit, and a handful of flares hanging over no man's land that burn as
  * brightly as the time of day says. They are the lights at rest: each has a
- * phase, and light-motion.ts moves them from it, frame by frame (lanterns
- * flicker, flares sink and gutter out). A frame takes as many as 1,024.
+ * phase, and light-motion.ts flickers the lanterns from it, frame by frame.
+ * With the lights running, the battle's director flies the flares instead
+ * (battleFlareLights). A frame takes as many as 1,024.
  */
 
+import type { FlareState, FlareTunables } from '../battle/flares';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import { lanternFacing, lanternVoxel } from '../world/generation/furniture';
@@ -25,6 +27,15 @@ export interface SceneLight {
   kind: 'lantern' | 'flare';
   /** In [0, 1): where the light is in its motion's cycles (light-motion.ts), its own. */
   phase: number;
+  /** A battle flare's, kept as it is fired and goes out (its shadow map follows it). */
+  id?: number;
+}
+
+/** The battle's flares burning now (the director's), as flare lights at their glow. */
+export function battleFlareLights(states: readonly FlareState[], ft: FlareTunables): SceneLight[] {
+  return states
+    .filter((s) => s.stage === 'burning' && s.glow > 0)
+    .map((s) => ({ position: [s.position[0], s.position[1], s.position[2]], radius: ft.radiusM, colour: s.colour, intensity: ft.intensity * s.glow, kind: 'flare', phase: 0, id: s.id }));
 }
 
 /** Each light's phase, by its index: the golden ratio's sequence, so no two match and they spread evenly. */

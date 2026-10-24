@@ -14,13 +14,14 @@ export interface Hooks {
   /** The exposure's adaptation after the last frame: the base reckoned from the light, the correction and its want, the metered mean (stops). */
   exposureState(): Promise<{ base: number; correction: number; want: number; metered: number }>;
   /** The point lights the last frame was lit with. */
-  lights(): { position: [number, number, number]; radius: number; colour: [number, number, number]; intensity: number; kind: 'lantern' | 'flare'; phase: number }[];
+  lights(): { position: [number, number, number]; radius: number; colour: [number, number, number]; intensity: number; kind: 'lantern' | 'flare'; phase: number; id?: number }[];
   /** Hold the lights still: as the plan placed them (their motion is new since the approved views), or as they are `seconds` into their motion. */
   holdLights(seconds?: number): void;
   /** Light the scene with these lights in place of its own (they move from their phases as its own do). */
   useLights(lights: { position: [number, number, number]; radius: number; colour: [number, number, number]; intensity: number; kind: 'lantern' | 'flare'; phase: number }[]): void;
   /** Let the lights move with their own clock again. */
-  runLights(): void;
+  /** Run the lights' clock; from `seconds` into the battle, if given. */
+  runLights(seconds?: number): void;
   /** The sun's elevation the last frame was lit at, in degrees. */
   sunElevation(): number;
   frames(): number;
@@ -76,6 +77,8 @@ export interface Hooks {
     destruction: { pending: number };
     player: { position: { x: number; y: number; z: number }; yaw: number };
   };
+  /** The battle's director as the lights show it: its clock, and its flares climbing and burning. */
+  battle(): { seconds: number; flares: { id: number; position: [number, number, number]; glow: number; stage: 'climb' | 'burning' | 'out' }[] };
   /** The camera held at `pose` while the session runs as if playing; null to play again. */
   spectate(pose: { position: [number, number, number]; yaw: number; pitch: number } | null): void;
   /** Stand the player at a standard view, their body clear of solid. */

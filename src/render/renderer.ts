@@ -291,6 +291,8 @@ export class Renderer {
   flags = 0;
   /** What the frame is lit by. */
   sky: FrameSky = PROBE_DUSK;
+  /** setFlareGlow's. */
+  private flareGlow = 1;
   stats: RenderStats = { gpuMs: null, gpuLastMs: null, gpuSamples: 0, passes: {}, own: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
 
   private readonly canvas: HTMLCanvasElement | null;
@@ -445,11 +447,17 @@ export class Renderer {
     }
   }
 
-  /** The point lights, with flares burning at `flares` (0 to 1) of their strength. */
-  setLights(lights: readonly SceneLight[], flares: number): void {
-    this.device.queue.writeBuffer(this.compiled.lights, 0, lightBuffer(lights, flares, this.voxelSize()));
+  /** The point lights, with flares burning at `flares` (0 to 1) of their strength; the burning flares nearest `eye` (metres) hold the shadow maps. */
+  setLights(lights: readonly SceneLight[], flares: number, eye?: readonly number[]): void {
+    const voxel = this.voxelSize();
+    this.device.queue.writeBuffer(this.compiled.lights, 0, lightBuffer(lights, flares, voxel));
     this.lightCount = lights.length;
-    this.flareShadows.setFlares(lights, flares, this.voxelSize());
+    this.flareShadows.setFlares(lights, flares, voxel, eye && [eye[0] / voxel, eye[1] / voxel, eye[2] / voxel]);
+  }
+
+  /** The front's glow on the haze, as a share of its keyed colour: the flares burning over the field (1 as planned). */
+  setFlareGlow(scale: number): void {
+    this.flareGlow = scale;
   }
 
   /** This frame's tracers, flash stars and particles (effects.ts). */
@@ -755,7 +763,7 @@ export class Renderer {
     w.set('sigmaLuma', denoise.sigmaLuma);
     w.set('sigmaPlane', denoise.sigmaPlane);
     w.set('casSharpness', this.options.sharpness ?? 0.4);
-    writeSky(w, this.sky);
+    writeSky(w, this.flareGlow === 1 ? this.sky : { ...this.sky, frontGlow: this.sky.frontGlow.map((c) => c * this.flareGlow) });
     w.set('flashCount', this.flashes.length);
     this.flashes.forEach((f, k) => {
       w.set(`flashes.${k}.pos`, f.position.map((m) => m / voxel));

@@ -3,7 +3,8 @@ import { loadTunables } from '../../src/core/tunables';
 import { genParams } from '../../src/world/generation/params';
 import { planWorld } from '../../src/world/generation/plan';
 import { lanternVoxel } from '../../src/world/generation/furniture';
-import { lightBuffer, MAX_LIGHTS, sceneLights, type SceneLight } from '../../src/render/lights';
+import { flareTunables, type FlareState } from '../../src/battle/flares';
+import { battleFlareLights, lightBuffer, MAX_LIGHTS, sceneLights, type SceneLight } from '../../src/render/lights';
 
 const tun = loadTunables();
 const p = genParams(tun);
@@ -59,5 +60,17 @@ describe('the scene\'s lights', () => {
       expect(data[i * 8]).toBeCloseTo(l.position[0] / v, 3);
       expect(data[i * 8 + 3]).toBeCloseTo(l.radius / v, 3);
     });
+  });
+  it("a burning flare is a flare light at its glow, its id kept; one climbing or out is none", () => {
+    const ft = flareTunables(tun);
+    const states: FlareState[] = [
+      { id: 4, position: [10, 40, 20], glow: 0.5, stage: 'burning', colour: [1, 0.25, 0.15] },
+      { id: 5, position: [12, 20, 22], glow: 0, stage: 'climb', colour: [1, 0.88, 0.7] },
+      { id: 7, position: [30, 35, 25], glow: 1, stage: 'burning', colour: [1, 0.88, 0.7] },
+    ];
+    const ls = battleFlareLights(states, ft);
+    expect(ls.map((l) => l.id)).toEqual([4, 7]);
+    expect(ls[0]).toMatchObject({ kind: 'flare', position: [10, 40, 20], radius: ft.radiusM, intensity: ft.intensity * 0.5, colour: [1, 0.25, 0.15] });
+    expect(ls[1].intensity).toBe(ft.intensity);
   });
 });

@@ -706,10 +706,6 @@ flare_intensity     = 260.0
 lantern_radius_m    = 7.0      # each dugout's lantern
 lantern_intensity   = 2.5
 lantern_flicker     = 0.08     # the most a lantern's light strays either way, as a fraction of it (light-motion.ts)
-flare_burn_s        = 40.0     # a flare burns this long, then is lit again where it began
-flare_sink_mps      = 0.3      # how fast it sinks under its parachute as it burns
-flare_ignite_s      = 0.5      # how long it takes to catch
-flare_fade_s        = 5.0      # how long it gutters out over, at the end of its burn
 
 # ---------------------------------------------------------------------------
 # ATMOSPHERE

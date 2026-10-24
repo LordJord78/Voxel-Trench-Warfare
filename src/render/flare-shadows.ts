@@ -6,6 +6,9 @@
  * (key-shadow.ts), below its height map, four tiles to a row; the froxels ask flareLit whether a
  * flare reaches a point, so its glow in the haze is cut into shafts by what stands between.
  *
+ * The burning flares nearest the eye hold the maps, a flare by its id (the battle's are fired and go
+ * out, so its place in the frame's lights changes under it), or its index if it has none.
+ *
  * A flare keeps its map while it burns. The map is traced as the key's is, a sixteenth a frame in
  * tiles of 8 × 8: each sixteenth again once its flare has moved a voxel since it was traced, or the
  * world has changed; all of it when the flare is new to its map or jumps a metre in a frame (lit
@@ -50,6 +53,9 @@ const ORDER: [number, number][] = [
 ];
 
 interface Mapped {
+  /** Which flare: its id, or −1 − its index for one without. */
+  key: number;
+  /** Its index in this frame's lights, as the shaders read them. */
   light: number;
   /** Voxels: where the flare is, and how far its light reaches. */
   at: Vec3;
@@ -81,26 +87,41 @@ export class FlareShadows {
     this.writeInfo();
   }
 
-  /** The frame's lights, flares burning at `flares` of their strength (lights.ts), at `voxel` metres a voxel: the first FLARE_MAPS burning flares hold maps. */
-  setFlares(lights: readonly SceneLight[], flares: number, voxel: number): void {
-    const burning: number[] = [];
+  /**
+   * The frame's lights, flares burning at `flares` of their strength (lights.ts), at `voxel` metres a
+   * voxel: the FLARE_MAPS burning flares nearest `eye` (voxels) hold maps, or without an eye the first.
+   */
+  setFlares(lights: readonly SceneLight[], flares: number, voxel: number, eye?: readonly number[]): void {
+    let burning: number[] = [];
     lights.forEach((l, i) => {
-      if (l.kind === 'flare' && l.intensity * flares > 0 && burning.length < FLARE_MAPS) burning.push(i);
+      if (l.kind === 'flare' && l.intensity * flares > 0) burning.push(i);
     });
+    if (eye) {
+      const away = (i: number) => {
+        const p = lights[i].position;
+        const d = [p[0] / voxel - eye[0], p[1] / voxel - eye[1], p[2] / voxel - eye[2]];
+        return d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+      };
+      burning.sort((a, b) => away(a) - away(b) || a - b);
+    }
+    burning = burning.slice(0, FLARE_MAPS);
+    const keyOf = (i: number) => lights[i].id ?? -1 - i;
+    const keys = burning.map(keyOf);
     // A flare keeps its slot while it burns; a new one takes a free slot.
-    for (let k = 0; k < FLARE_MAPS; k++) if (this.slots[k] && !burning.includes(this.slots[k]!.light)) this.slots[k] = null;
+    for (let k = 0; k < FLARE_MAPS; k++) if (this.slots[k] && !keys.includes(this.slots[k]!.key)) this.slots[k] = null;
     for (const i of burning) {
       const l = lights[i];
       const at: Vec3 = [l.position[0] / voxel, l.position[1] / voxel, l.position[2] / voxel];
-      const held = this.slots.find((s) => s?.light === i);
+      const held = this.slots.find((s) => s?.key === keyOf(i));
       if (held) {
+        held.light = i;
         held.last = held.at;
         held.at = at;
         held.reach = l.radius / voxel;
         if (Math.hypot(at[0] - held.last[0], at[1] - held.last[1], at[2] - held.last[2]) * voxel > JUMP_M) held.traced.fill(null);
       } else {
         const k = this.slots.indexOf(null);
-        this.slots[k] = { light: i, at, reach: l.radius / voxel, last: at, traced: new Array(SLOTS).fill(null), tracedWorld: new Array(SLOTS).fill(0), count: 0 };
+        this.slots[k] = { key: keyOf(i), light: i, at, reach: l.radius / voxel, last: at, traced: new Array(SLOTS).fill(null), tracedWorld: new Array(SLOTS).fill(0), count: 0 };
       }
     }
     this.writeInfo();

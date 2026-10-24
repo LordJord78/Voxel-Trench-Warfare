@@ -122,15 +122,16 @@ test('the lights move with their own clock, frame by frame, and stop for the pau
   await hooks(page, (h) => h.waitFrames(5));
   expect(await hooks(page, (h) => h.lights())).toEqual(rest);
   const lanterns = rest.flatMap((l, i) => (l.kind === 'lantern' ? [i] : []));
-  const flares = rest.flatMap((l, i) => (l.kind === 'flare' ? [i] : []));
   expect(lanterns.length).toBeGreaterThan(0);
-  expect(flares.length).toBeGreaterThan(0);
-  // Running, over the free camera: every lantern's light wavers from one moment to the next, and
-  // every flare hangs lower than it was lit at.
+  expect(rest.some((l) => l.kind === 'flare')).toBe(true);
+  // Running, over the free camera at night, the front heavy: every lantern's light wavers from one
+  // moment to the next, and the battle's flares in the air move (each followed by its id).
   const [a, b] = await hooks(page, async (h) => {
     h.view('dugout');
+    h.setTimeOfDay(21);
+    h.setIntensity('heavy');
     h.runLights();
-    await h.waitFrames(20);
+    await h.waitFrames(60 * 25);
     const first = h.lights();
     await h.waitFrames(20);
     return [first, h.lights()];
@@ -139,7 +140,9 @@ test('the lights move with their own clock, frame by frame, and stop for the pau
     expect(a[i].position).toEqual(rest[i].position);
     expect(b[i].intensity).not.toBe(a[i].intensity);
   }
-  for (const i of flares) expect(b[i].position[1]).not.toBe(a[i].position[1]);
+  const flown = a.filter((l) => l.kind === 'flare' && l.id !== undefined && b.some((m) => m.id === l.id));
+  expect(flown.length).toBeGreaterThan(0);
+  for (const l of flown) expect(b.find((m) => m.id === l.id)!.position).not.toEqual(l.position);
   // Paused, they wait.
   await page.keyboard.press('Escape');
   expect(await hooks(page, (h) => h.mode())).toBe('paused');

@@ -28,7 +28,7 @@ import { FarFieldGpu } from '../render/farfield-gpu';
 import { GpuWorld } from '../render/gpu-world';
 import { KEY_MAP_SIZE, KEY_SLOTS } from '../render/key-shadow';
 import { lightMotion, lightsAt } from '../render/light-motion';
-import { sceneLights, type SceneLight } from '../render/lights';
+import { battleFlareLights, sceneLights, type SceneLight } from '../render/lights';
 import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
@@ -39,6 +39,8 @@ import { PauseMenu } from '../ui/pause';
 import { Hud } from '../ui/hud';
 import { boxHitsSolid } from '../physics/collision';
 import { Vec3 } from '../physics/vec';
+import { Director, type BattleEvents, type BattleInputs } from '../battle/director';
+import { flareTunables } from '../battle/flares';
 import { clearOf, underFire, type PeakGame } from './peak-combat';
 import { PeriscopeFrame } from '../ui/periscope';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from '../ui/settings';
@@ -243,19 +245,46 @@ async function start(): Promise<void> {
   let lights = sceneLights(world.plan, tun);
   const motion = lightMotion(tun);
   let lightSeconds = 0;
-  let lightsHeld: number | 'rest' | null = null;
+  // The check measures its views with the lights as planned, as they were approved.
+  let lightsHeld: number | 'rest' | null = checkRun ? 'rest' : null;
   let lit: SceneLight[] = lights;
   let litFor = Number.NaN;
   let sky = skyState(tun, timeOfDay);
-  const light = (dt: number) => {
+  // The battle around the player (src/battle): on the lights' clock, so every view sees it. At rest
+  // the six planned flares hang instead; held at a moment, the director is sought to it.
+  let battle = new Director(world.plan, tun, SEED);
+  const flareT = flareTunables(tun);
+  const battleInputs = (): BattleInputs => ({ intensity: session.front.intensity, darkness: sky.flares, player: session.player.position.toArray() });
+  let battleEvents: BattleEvents = { launches: [] };
+  let shownBattle: Director = battle;
+  let sought: { at: number; inputs: string; d: Director } | null = null;
+  const battleAt = (t: number) => {
+    const inputs = battleInputs();
+    const key = JSON.stringify([inputs.intensity, inputs.darkness]);
+    if (!sought || sought.at !== t || sought.inputs !== key) sought = { at: t, inputs: key, d: Director.at(t, world.plan, tun, SEED, inputs) };
+    return sought.d;
+  };
+  const light = (dt: number, eye: readonly number[]) => {
     if (timeOfDay !== litFor) {
       litFor = timeOfDay;
       sky = skyState(tun, timeOfDay);
       renderer.sky = frameSky(sky, tun);
     }
-    if (mode !== 'paused') lightSeconds += dt;
-    lit = lightsHeld === 'rest' ? lights : lightsAt(lights, lightsHeld ?? lightSeconds, motion);
-    renderer.setLights(lit, sky.flares);
+    battleEvents = { launches: [] };
+    if (mode !== 'paused') {
+      lightSeconds += dt;
+      if (lightsHeld === null) battleEvents = battle.tick(dt, battleInputs());
+    }
+    if (lightsHeld === 'rest') {
+      lit = lights;
+      renderer.setFlareGlow(1);
+    } else {
+      shownBattle = lightsHeld === null ? battle : battleAt(lightsHeld);
+      const flares = shownBattle.flares();
+      lit = [...lightsAt(lights.filter((l) => l.kind !== 'flare'), lightsHeld ?? lightSeconds, motion), ...battleFlareLights(flares, flareT)];
+      renderer.setFlareGlow(Math.min(2, flares.reduce((sum, f) => sum + f.glow, 0) / flareT.meanLight));
+    }
+    renderer.setLights(lit, sky.flares, eye);
   };
 
   const changeSettings = (next: Settings) => {
@@ -508,7 +537,7 @@ async function start(): Promise<void> {
     renderer.setBlasts(frameEffects.blasts);
     renderer.setSmoke(frameEffects.smoke);
     built = frameEffects.counts;
-    light(dt);
+    light(dt, pose.position);
     renderer.render(pose, timeOfDay, now);
     lastPose = pose;
     frames++;
@@ -874,10 +903,13 @@ async function start(): Promise<void> {
     exposure: () => renderer.exposure(),
     exposureState: () => renderer.exposureState(),
     lights: () => lit,
+    battle: () => ({ seconds: shownBattle.seconds, flares: shownBattle.flares() }),
     holdLights(seconds?: number) {
       lightsHeld = seconds ?? 'rest';
     },
-    runLights() {
+    /** Run the lights' clock; from `seconds` into the battle (sought there at the inputs of the moment), if given. */
+    runLights(seconds?: number) {
+      if (seconds !== undefined) battle = Director.at(seconds, world.plan, tun, SEED, battleInputs());
       lightsHeld = null;
     },
     useLights(next: SceneLight[]) {

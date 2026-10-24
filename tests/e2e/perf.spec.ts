@@ -163,11 +163,11 @@ test('with the clock running, the overview renders within the budget, the shafts
   expect(errors).toEqual([]);
 });
 
-// The flares' shadows: at night the scene's flares burn and sink (the lights' clock running), so
-// their maps are traced every frame, in a pass of their own while the key's map has nothing to
-// trace; held at rest, they are traced once. The overview at night within the budget so, and the
-// shafts all told (the froxels, the flares' maps, and anything they add to the primary pass) within
-// 0.6 ms.
+// The flares' shadows: at night the battle's flares burn, drift and sink (the lights' clock running,
+// the front light, two minutes into the battle so they are alight), so their maps are traced every
+// frame, in a pass of their own while the key's map has nothing to trace; held at rest, they are
+// traced once. The overview at night within the budget so, and the shafts all told (the froxels,
+// the flares' maps, and anything they add to the primary pass) within 0.6 ms.
 test('at night with the flares sinking, the overview renders within the budget, the shafts within 0.6 ms', async ({ page }) => {
   test.setTimeout(240_000);
   const errors = await openGame(page);
@@ -179,7 +179,10 @@ test('at night with the flares sinking, the overview renders within the budget, 
   });
   const held = await sample(page, null);
   test.skip(held.count === 0, 'no timestamp queries on this GPU');
-  await hooks(page, (h) => h.runLights());
+  await hooks(page, (h) => {
+    h.setIntensity('light');
+    h.runLights(120);
+  });
   const running = await sample(page, null);
   const shafts = running.froxels + running.maps + running.primary - held.primary;
   console.log(`The overview at night: ${running.gpu.toFixed(2)} ms, the flares sinking (${held.gpu.toFixed(2)} held), the shafts ${shafts.toFixed(3)} ms (froxels ${running.froxels.toFixed(3)}, the flares' maps ${running.maps.toFixed(3)}, the primary ${(running.primary - held.primary).toFixed(3)} more)`);

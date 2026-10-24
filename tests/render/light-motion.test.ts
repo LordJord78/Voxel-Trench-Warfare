@@ -26,33 +26,8 @@ describe('the lights in motion', () => {
     expect(hi - lo).toBeGreaterThan(0.05 * lantern.intensity);
   });
 
-  it('lets a flare sink no faster than half a metre a second, fade at the end of its burn, and light again above', () => {
-    expect(motion.flareSink).toBeLessThanOrEqual(0.5);
-    const burn = motion.flareBurn;
-    let last = lightsAt([flare], 0, motion)[0];
-    let relit = 0;
-    let brightest = 0;
-    for (let f = 1; f < 60 * burn * 3; f++) {
-      const now = lightsAt([flare], f / 60, motion)[0];
-      const fell = last.position[1] - now.position[1];
-      if (fell < 0) {
-        // Lit again, from dark, back up at its height (less what it has sunk since, within the frame).
-        relit++;
-        expect(flare.position[1] - now.position[1]).toBeGreaterThanOrEqual(0);
-        expect(flare.position[1] - now.position[1]).toBeLessThanOrEqual(motion.flareSink / 60 + 1e-9);
-        expect(last.intensity).toBeLessThan(0.05 * flare.intensity);
-      } else {
-        expect(fell).toBeLessThanOrEqual(motion.flareSink / 60 + 1e-9);
-      }
-      expect(now.position[0]).toBe(flare.position[0]);
-      expect(now.position[2]).toBe(flare.position[2]);
-      expect(now.intensity).toBeLessThanOrEqual(flare.intensity);
-      brightest = Math.max(brightest, now.intensity);
-      last = now;
-    }
-    expect(relit).toBeGreaterThanOrEqual(2);
-    // Between catching and guttering out, it burns at its full strength.
-    expect(brightest).toBeCloseTo(flare.intensity, 6);
+  it("leaves a flare where it is: the battle's director flies the flares now", () => {
+    for (const seconds of [0, 1, 12.5, 600]) expect(lightsAt([flare], seconds, motion)[0]).toEqual(flare);
   });
 
   it('gives the same lights for the same moment', () => {
