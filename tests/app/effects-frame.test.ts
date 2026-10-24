@@ -280,4 +280,18 @@ describe('a frame of effects', () => {
     expect(disc[5]).toBeCloseTo(ft.discGlow * 0.5 * 0.25, 6);
     expect(at(flares[2].position)).toEqual([]);
   });
+  it("a flare's spark and disc are dimmed by the sky's flares key, as its light is", () => {
+    const ft = flareTunables(tun);
+    const b = new EffectsFrameBuilder(t);
+    const flares: FlareState[] = [
+      { id: 1, position: [10, 20, 30], glow: 0, stage: 'climb', colour: [1, 0.88, 0.7] },
+      { id: 2, position: [40, 35, 60], glow: 1, stage: 'burning', colour: [1, 0.88, 0.7] },
+    ];
+    const built = b.build(stand(), none(), null, undefined, flares, 0.2);
+    const out = built.frame.billboards;
+    const all = Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS)));
+    const at = (p: readonly number[]) => all.find((q) => q[0] === p[0] && q[1] === p[1] && q[2] === p[2])!;
+    expect(at(flares[0].position)[4]).toBeCloseTo(ft.sparkGlow * 0.2, 6);
+    expect(at(flares[1].position)[4]).toBeCloseTo(ft.discGlow * 0.2, 6);
+  });
 });

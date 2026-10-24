@@ -26,8 +26,19 @@ describe('the lights in motion', () => {
     expect(hi - lo).toBeGreaterThan(0.05 * lantern.intensity);
   });
 
-  it("leaves a flare where it is: the battle's director flies the flares now", () => {
-    for (const seconds of [0, 1, 12.5, 600]) expect(lightsAt([flare], seconds, motion)[0]).toEqual(flare);
+  it("sinks a flare a test gives under its parachute as it burns, and gutters it out, as sub-project 2's did (the scene's own come from the battle's director)", () => {
+    // Its phase sets how far through its burn it is: 0.7 of 40 s at the clock's start.
+    const burnt = (seconds: number) => ((seconds / motion.flareBurn + flare.phase) % 1) * motion.flareBurn;
+    for (const seconds of [0, 1, 6, 11.5]) {
+      const now = lightsAt([flare], seconds, motion)[0];
+      expect(now.position[1]).toBeCloseTo(flare.position[1] - motion.flareSink * burnt(seconds), 6);
+      expect([now.position[0], now.position[2]]).toEqual([flare.position[0], flare.position[2]]);
+    }
+    // Lit again where it began once out: dark at the end of its burn, whole in the middle of it.
+    expect(lightsAt([flare], 12, motion)[0].intensity).toBeLessThan(0.01 * flare.intensity);
+    expect(lightsAt([flare], 32, motion)[0].intensity).toBeCloseTo(flare.intensity, 6);
+    expect(motion.flareBurn).toBe(40);
+    expect(motion.flareSink).toBe(0.3);
   });
 
   it('gives the same lights for the same moment', () => {

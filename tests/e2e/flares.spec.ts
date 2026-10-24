@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { useManyLights } from './many-lights';
 import { hooks, openGame } from './support/app';
 
 // The battle's flares (the battle spec's §2): at night, with the lights running, the director fires
@@ -91,5 +92,56 @@ test('the battle run from a moment is sought at the time of day just set, not th
     return h.battle().flares.filter((f) => f.stage === 'burning').length;
   });
   expect(alight).toBeGreaterThanOrEqual(8);
+  expect(errors).toEqual([]);
+});
+
+test('in the morning, with the sun up, no flare is fired', async ({ page }) => {
+  // The sky's flares key is 0.2 at dawn and falls to 0.1 only by half past nine, the sun some 19° up;
+  // the battle's dark is none once the sun is up (daytime flares are not in this sub-project).
+  const errors = await openGame(page);
+  const seen = await hooks(page, async (h) => {
+    h.setTimeOfDay(8);
+    h.setIntensity('heavy');
+    h.runLights(0);
+    await h.waitFrames(600);
+    return { flares: h.battle().flares.length, seconds: h.battle().seconds, sun: h.sunElevation() };
+  });
+  expect(seen.sun).toBeGreaterThan(0);
+  expect(seen.seconds).toBeGreaterThan(5);
+  expect(seen.flares).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('jumping into the night finds the flares already burning', async ({ page }) => {
+  // From dusk with the lights running, the night's hour at once (a view key, the time key): a night
+  // already under way, about six alight at light, not an empty sky filling over a minute.
+  const errors = await openGame(page);
+  const burning = await hooks(page, async (h) => {
+    h.setIntensity('light');
+    h.runLights();
+    await h.waitFrames(30);
+    h.setTimeOfDay(21);
+    await h.waitFrames(10);
+    return h.battle().flares.filter((f) => f.stage === 'burning').length;
+  });
+  expect(burning).toBeGreaterThanOrEqual(3);
+  expect(errors).toEqual([]);
+});
+
+test("a test's own lights replace the scene's, battle and all: its 256 flares lit, sinking as sub-project 2's did", async ({ page }) => {
+  const errors = await openGame(page);
+  await useManyLights(page);
+  const [a, b] = await hooks(page, async (h) => {
+    h.setTimeOfDay(21);
+    h.runLights();
+    await h.waitFrames(30);
+    const first = h.lights().filter((l) => l.kind === 'flare').map((l) => l.position[1]);
+    await h.waitFrames(60);
+    return [first, h.lights().filter((l) => l.kind === 'flare').map((l) => l.position[1])];
+  });
+  expect(a).toHaveLength(256);
+  expect(b).toHaveLength(256);
+  // Sinking under their parachutes (a few lit again where they began).
+  expect(b.filter((y, i) => y < a[i]).length).toBeGreaterThan(200);
   expect(errors).toEqual([]);
 });

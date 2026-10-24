@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { Director, type BattleInputs } from '../../src/battle/director';
+import { battleDarkness, Director, type BattleInputs } from '../../src/battle/director';
 import { flareTunables } from '../../src/battle/flares';
 import { loadTunables } from '../../src/core/tunables';
+import { sceneLights } from '../../src/render/lights';
 import { genParams } from '../../src/world/generation/params';
 import { planWorld } from '../../src/world/generation/plan';
 
@@ -91,6 +92,60 @@ describe('the director', () => {
     }
     expect(Math.min(...sides) / launches.length).toBeGreaterThan(0.3);
     expect(near / launches.length).toBeGreaterThan(ft.nearShare * 0.8);
+  });
+
+  it("at light, the flares light no man's land about as the approved six did", () => {
+    // light.wgsl's unshadowed point light on the ground (normal up): ndl · win² / (m² + 1), win = 1 − (d/r)⁴;
+    // averaged over no man's land's ground and twenty minutes at light, against the six planned flares.
+    const enemy = plan.lines.find((l) => l.spec.side === 1 && l.spec.firingSteps)!;
+    const z0 = Math.max(...front.bays.map((b) => b.b1)) * v;
+    const z1 = Math.min(...enemy.bays.map((b) => b.b0)) * v;
+    const ground: number[][] = [];
+    for (let x = 10; x <= 246; x += 8) for (let z = z0 + 2; z <= z1 - 2; z += 6) ground.push([x, 16, z]);
+    const lightOn = (flares: { at: readonly number[]; glow: number }[]) => {
+      let sum = 0;
+      for (const q of ground) {
+        for (const f of flares) {
+          const d = Math.hypot(q[0] - f.at[0], q[1] - f.at[1], q[2] - f.at[2]);
+          if (d >= ft.radiusM) continue;
+          const x = d / ft.radiusM;
+          const win = 1 - x * x * x * x;
+          sum += (f.glow * Math.max(0, (f.at[1] - q[1]) / d) * win * win) / (d * d + 1);
+        }
+      }
+      return sum / ground.length;
+    };
+    const approved = lightOn(sceneLights(plan, tun).filter((l) => l.kind === 'flare').map((l) => ({ at: l.position, glow: 1 })));
+    const d = new Director(plan, tun, 7);
+    let lit = 0;
+    let samples = 0;
+    for (let k = 0; k < 21 * 3600; k++) {
+      d.tick(1 / 60, dark('light'));
+      if (k >= 3600 && k % 60 === 0) {
+        lit += lightOn(d.flares().filter((f) => f.stage === 'burning').map((f) => ({ at: f.position, glow: f.glow })));
+        samples++;
+      }
+    }
+    expect(lit / samples / approved).toBeGreaterThan(0.7);
+  });
+
+  it('never more than max_alight alight, even heavy', () => {
+    const d = new Director(plan, tun, 7);
+    let most = 0;
+    for (let k = 0; k < 30 * 3600; k++) {
+      d.tick(1 / 60, dark('heavy'));
+      if (k % 30 === 0) most = Math.max(most, d.flares().length);
+    }
+    expect(ft.maxAlight).toBe(16);
+    expect(most).toBe(ft.maxAlight);
+  });
+
+  it("the battle's dark is the sky's flares key while the sun is down, and none once it is up", () => {
+    expect(ft.sunBelowDeg).toBe(0);
+    expect(battleDarkness(-3, 0.2, ft)).toBe(0.2);
+    expect(battleDarkness(-0.5, 1, ft)).toBe(1);
+    expect(battleDarkness(0.5, 0.2, ft)).toBe(0);
+    expect(battleDarkness(20, 0.15, ft)).toBe(0);
   });
 
   it('the same seed, inputs and steps fire the same flares; seeking to t is stepping to t, at any frame rate', () => {

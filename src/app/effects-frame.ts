@@ -150,8 +150,12 @@ export class EffectsFrameBuilder {
 
   constructor(readonly t: EffectsTunables) {}
 
-  /** `rifle`: the rifle as this frame draws it, or null when it is not drawn; `eye`: the camera (metres), the player's eye if not given. */
-  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battleFlares: readonly FlareState[] = []): BuiltEffects {
+  /**
+   * `rifle`: the rifle as this frame draws it, or null when it is not drawn; `eye`: the camera
+   * (metres), the player's eye if not given; `battleFlares`, the battle's flares seen, dimmed by the
+   * sky's flares key `flareKey` as their light is.
+   */
+  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battleFlares: readonly FlareState[] = [], flareKey = 1): BuiltEffects {
     const t = this.t;
     // Flashes age with the world's time as the frame shows it: none while paused.
     const shown = (session.ticks + session.clock.alpha) * session.clock.dt;
@@ -184,7 +188,7 @@ export class EffectsFrameBuilder {
     const ft = t.flares;
     for (const fl of battleFlares) {
       if (billboards >= MAX_BILLBOARDS || fl.stage === 'out') continue;
-      const [size, glow] = fl.stage === 'climb' ? [ft.sparkSizeM, ft.sparkGlow] : [ft.discSizeM, ft.discGlow * fl.glow];
+      const [size, glow] = fl.stage === 'climb' ? [ft.sparkSizeM, ft.sparkGlow * flareKey] : [ft.discSizeM, ft.discGlow * fl.glow * flareKey];
       this.billboards.set([...fl.position, size / 2, fl.colour[0] * glow, fl.colour[1] * glow, fl.colour[2] * glow, 1, 1], billboards * BILLBOARD_FLOATS);
       billboards++;
     }

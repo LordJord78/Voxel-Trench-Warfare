@@ -387,10 +387,10 @@ test('every standard view at dusk and at night under peak combat stays within th
 });
 
 test("a heavy night's flares render within the budget at the overview and in no man's land", async ({ page }) => {
-  // Done-table row 1 at the heavy intensity: about fifteen alight, the eight nearest holding shadow
-  // maps and the rest lighting the field unshadowed; each frame's own GPU time within 14 ms at the
-  // 95th percentile. At least eight alight, so every shadow map is in use (the battle two minutes in
-  // is the same each run; how many frames the window spans is not).
+  // Done-table row 1 at the heavy intensity: about fifteen alight (never more than max_alight, 16),
+  // the eight nearest holding shadow maps and the rest lighting the field unshadowed; each frame's own
+  // GPU time within 14 ms at the 95th percentile. Measured from a moment of the battle with at least
+  // fifteen burning, sought from two minutes in.
   test.setTimeout(240_000);
   const errors = await openGame(page);
   const lines: string[] = [];
@@ -400,8 +400,13 @@ test("a heavy night's flares render within the budget at the overview and in no 
       h.view(v as string);
       h.setTimeOfDay(21);
       h.setIntensity('heavy');
-      h.runLights(120);
-      await h.waitFrames(60);
+      let at = 120;
+      for (; at < 900; at += 5) {
+        h.runLights(at);
+        await h.waitFrames(1);
+        if (h.battle().flares.filter((f) => f.stage === 'burning').length >= 15) break;
+      }
+      await h.waitFrames(30);
       const gpu: number[] = [];
       let seen = h.stats().gpuSamples;
       let lit = 0;
@@ -413,11 +418,11 @@ test("a heavy night's flares render within the budget at the overview and in no 
         lit = Math.max(lit, h.lights().filter((l) => l.kind === 'flare').length);
       }
       gpu.sort((a, b) => a - b);
-      return { count: gpu.length, p95: gpu[Math.floor(0.95 * gpu.length)], median: gpu[gpu.length >> 1], max: gpu[gpu.length - 1], lit };
+      return { at, count: gpu.length, p95: gpu[Math.floor(0.95 * gpu.length)], median: gpu[gpu.length >> 1], max: gpu[gpu.length - 1], lit };
     }, view);
     if (r.count === 0) test.skip(true, 'no GPU timestamps');
-    lines.push(`${view}: GPU p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, worst ${r.max.toFixed(2)}; ${r.lit} flares alight at most`);
-    expect(r.lit, lines.join('; ')).toBeGreaterThanOrEqual(8);
+    lines.push(`${view}: GPU p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, worst ${r.max.toFixed(2)}; ${r.lit} flares alight at most, from ${r.at} s in`);
+    expect(r.lit, lines.join('; ')).toBeGreaterThanOrEqual(15);
     expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
   }
   console.log(`A heavy night's flares: ${lines.join('; ')}`);

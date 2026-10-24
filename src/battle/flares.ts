@@ -29,6 +29,12 @@ export interface FlareTunables {
   heavyScale: number;
   offPerMin: number;
   darkAbove: number;
+  /** Fired only while the sun is below this (degrees). */
+  sunBelowDeg: number;
+  /** The most alight at once. */
+  maxAlight: number;
+  /** Seconds a jump into the dark finds the night under way. */
+  preRollS: number;
   nearShare: number;
   nearM: number;
   /** How a flare is seen: the spark it trails climbing, and its disc burning (sizes in metres, brightness over its colour). */
@@ -65,6 +71,9 @@ export function flareTunables(tun: Tunables): FlareTunables {
     heavyScale: f('heavy_scale'),
     offPerMin: f('off_per_min'),
     darkAbove: f('dark_above'),
+    sunBelowDeg: f('sun_below_deg'),
+    maxAlight: tun.i('battle.flares.max_alight'),
+    preRollS: f('pre_roll_s'),
     nearShare: f('near_share'),
     nearM: f('near_m'),
     sparkSizeM: f('spark_size_m'),

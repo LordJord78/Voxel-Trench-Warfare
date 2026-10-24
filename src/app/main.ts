@@ -39,7 +39,7 @@ import { PauseMenu } from '../ui/pause';
 import { Hud } from '../ui/hud';
 import { boxHitsSolid } from '../physics/collision';
 import { Vec3 } from '../physics/vec';
-import { Director, type BattleEvents, type BattleInputs } from '../battle/director';
+import { battleDarkness, Director, type BattleEvents, type BattleInputs } from '../battle/director';
 import { flareTunables } from '../battle/flares';
 import { clearOf, underFire, type PeakGame } from './peak-combat';
 import { PeriscopeFrame } from '../ui/periscope';
@@ -242,7 +242,10 @@ async function start(): Promise<void> {
   // The light follows the clock; the flares burn as it says. The point lights move with a clock of
   // their own, which runs whenever the world is drawn but paused (tests can hold them still, as
   // planned or at a moment of their motion), and are written every frame.
-  let lights = sceneLights(world.plan, tun);
+  // The scene's lights as planned. A test may give its own instead (useLights): they replace these,
+  // the battle's flares and all, and move as sub-project 2's did.
+  const planned = sceneLights(world.plan, tun);
+  let lights = planned;
   const motion = lightMotion(tun);
   let lightSeconds = 0;
   // The check measures its views with the lights as planned, as they were approved.
@@ -263,7 +266,23 @@ async function start(): Promise<void> {
     }
     return sky;
   };
-  const battleInputs = (): BattleInputs => ({ intensity: session.front.intensity, darkness: skyNow().flares, player: session.player.position.toArray() });
+  const battleInputs = (): BattleInputs => {
+    const s = skyNow();
+    return { intensity: session.front.intensity, darkness: battleDarkness(s.sunElevationDeg, s.flares, flareT), player: session.player.position.toArray() };
+  };
+  /**
+   * The clock and the dark when the battle last ran live. A jump of the clock into the dark from there
+   * (a view, the time key, the pause menu; not the lapse's creep) finds a night already under way: the
+   * battle is run a flare's climb and burn first, its launches unheard.
+   */
+  let ranAt: { hours: number; darkness: number } | null = null;
+  const jumpedIntoDark = (dt: number, darkness: number) => {
+    if (darkness <= flareT.darkAbove) return false;
+    if (ranAt === null) return true;
+    const crept = (ranAt.hours + (lapse * dt) / 60) % 24;
+    const off = Math.abs(timeOfDay - crept);
+    return ranAt.darkness <= flareT.darkAbove && Math.min(off, 24 - off) > 1e-6;
+  };
   let battleEvents: BattleEvents = { launches: [] };
   let shownBattle: Director = battle;
   let sought: { at: number; inputs: string; d: Director } | null = null;
@@ -278,10 +297,18 @@ async function start(): Promise<void> {
     battleEvents = { launches: [] };
     if (mode !== 'paused') {
       lightSeconds += dt;
-      if (lightsHeld === null) battleEvents = battle.tick(dt, battleInputs());
+      if (lightsHeld === null) {
+        const inputs = battleInputs();
+        if (jumpedIntoDark(dt, inputs.darkness)) battle.tick(flareT.preRollS, inputs);
+        battleEvents = battle.tick(dt, inputs);
+        ranAt = { hours: timeOfDay, darkness: inputs.darkness };
+      }
     }
     if (lightsHeld === 'rest') {
       lit = lights;
+      renderer.setFlareGlow(1);
+    } else if (lights !== planned) {
+      lit = lightsAt(lights, lightsHeld ?? lightSeconds, motion);
       renderer.setFlareGlow(1);
     } else {
       shownBattle = lightsHeld === null ? battle : battleAt(lightsHeld);
@@ -535,7 +562,7 @@ async function start(): Promise<void> {
       craterWaiters.delete(c.id);
     }
     // The battle's flares seen (sparks climbing, discs burning) as the lights last showed them; none at rest.
-    const frameEffects = effects.build(session, events, rifle, pose.position, lightsHeld === 'rest' ? [] : shownBattle.flares());
+    const frameEffects = effects.build(session, events, rifle, pose.position, lightsHeld === 'rest' || lights !== planned ? [] : shownBattle.flares(), skyNow().flares);
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
     audio.play(planVoices(hearing, events, pose.position, battleEvents));
@@ -916,7 +943,11 @@ async function start(): Promise<void> {
     },
     /** Run the lights' clock; from `seconds` into the battle (sought there at the inputs of the moment), if given. */
     runLights(seconds?: number) {
-      if (seconds !== undefined) battle = Director.at(seconds, world.plan, tun, SEED, battleInputs());
+      if (seconds !== undefined) {
+        const inputs = battleInputs();
+        battle = Director.at(seconds, world.plan, tun, SEED, inputs);
+        ranAt = { hours: timeOfDay, darkness: inputs.darkness };
+      }
       lightsHeld = null;
     },
     useLights(next: SceneLight[]) {

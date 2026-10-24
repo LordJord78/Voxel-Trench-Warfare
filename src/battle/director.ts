@@ -8,8 +8,9 @@
  * This milestone it fires the flares (§2): from posts on both front lines'
  * parapets, out over no man's land, at a rate by the front's intensity — about
  * `mean_light` alight at once at light, `heavy_scale` times that heavy,
- * `off_per_min` a minute off — and only while the sky is dark enough. A
- * quarter come from the posts near the player.
+ * `off_per_min` a minute off, never more than `max_alight` at once — and only
+ * while the sky is dark enough and the sun down. A quarter come from the posts
+ * near the player.
  */
 
 import { radians } from '../core/dmath';
@@ -23,7 +24,7 @@ import { Wind, windTunables } from './wind';
 export interface BattleInputs {
   /** The front's, the pause menu's. */
   intensity: Intensity;
-  /** The sky's flares key, 0 to 1: how dark it is. */
+  /** How dark it is, 0 to 1: the sky's flares key while the sun is down (battleDarkness). */
   darkness: number;
   /** The player's feet, metres. */
   player: readonly [number, number, number];
@@ -31,6 +32,11 @@ export interface BattleInputs {
 
 export interface BattleEvents {
   launches: Launch[];
+}
+
+/** How dark the battle takes it to be: the sky's flares key while the sun is below `sun_below_deg`, and none once it is up (no flare by day). */
+export function battleDarkness(sunElevationDeg: number, flaresKey: number, ft: FlareTunables): number {
+  return sunElevationDeg < ft.sunBelowDeg ? flaresKey : 0;
 }
 
 /** Steps a second. */
@@ -112,7 +118,7 @@ export class Director {
     const t = this.ticks / HZ;
     const ft = this.ft;
     const perSecond = inputs.intensity === 'off' ? ft.offPerMin / 60 : (ft.meanLight / ft.burnS) * (inputs.intensity === 'heavy' ? ft.heavyScale : 1);
-    if (inputs.darkness > ft.darkAbove && this.posts.length > 0 && this.rng.float() < perSecond / HZ) {
+    if (inputs.darkness > ft.darkAbove && this.posts.length > 0 && this.alight.length < ft.maxAlight && this.rng.float() < perSecond / HZ) {
       const launch = this.fire(t, inputs);
       this.alight.push(launch);
       events.launches.push(launch);

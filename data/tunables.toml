@@ -707,6 +707,11 @@ flare_intensity     = 260.0
 lantern_radius_m    = 7.0      # each dugout's lantern
 lantern_intensity   = 2.5
 lantern_flicker     = 0.08     # the most a lantern's light strays either way, as a fraction of it (light-motion.ts)
+# A flare a test gives (useLights) burns and sinks as sub-project 2's did; the scene's own are the battle's (src/battle).
+flare_burn_s        = 40.0     # a flare burns this long, then is lit again where it began
+flare_sink_mps      = 0.3      # how fast it sinks under its parachute as it burns
+flare_ignite_s      = 0.5      # how long it takes to catch
+flare_fade_s        = 5.0      # how long it gutters out over, at the end of its burn
 
 # ---------------------------------------------------------------------------
 # ATMOSPHERE
@@ -804,21 +809,24 @@ aureole             = 12.0     # the sky's glow round the key light (sun or moon
 # THE BATTLE AROUND YOU (sub-project 4, docs/superpowers/specs/2026-10-23-trenchline-web-battle-design.md)
 #
 # The wind over the whole map (src/battle/wind.ts), a pure function of time: it carries the flares
-# and leans the smoke. Bearings are as yaw: the way it blows toward, 0 = +z, 90 = +x.
+# and leans the smoke. Bearings are as yaw: the way it blows toward, 0 = +z, 90 = +x. It blows along
+# the front, so the flares drift along no man's land and light it as the approved night's did; blowing
+# across from the enemy's side at up to 5 m/s it carried them over the lines behind, and no man's land
+# had a sixth of that light.
 [battle.wind]
-prevailing_deg      = 200.0    # from the enemy's side (they lie toward +z), across a little
+prevailing_deg      = 270.0    # along the front, from the right (+x) toward the left
 veer_deg            = 20.0     # the most it veers either way of that, in two slow sines
 veer_period_s       = [900.0, 2400.0]   # their periods: a few degrees a minute at most
-speed_mps           = [1.0, 5.0]   # its bounds; it blows at their middle, and gusts
+speed_mps           = [1.0, 3.0]   # its bounds; it blows at their middle, and gusts
 gust_mps            = 1.5      # the two gust sines together, at most
 gust_period_s       = [20.0, 90.0]
 
 # The flares both lines fire at night (src/battle/flares.ts, director.ts): from a post on a front
 # line's parapet, out over no man's land, to burst at the top of the climb and drift on the wind.
-# They burst low enough to light the field as the approved night's flares, which hung 18–34 m up:
-# their light reaches 65 m.
+# They burst low enough to light the field as the approved night's flares, which hung 22–32 m up:
+# their light reaches 65 m, and over a burn they sink 12 m.
 [battle.flares]
-burst_m             = [30.0, 50.0]   # above the post, at the apogee
+burst_m             = [25.0, 40.0]   # above the post, at the apogee
 elevation_deg       = [70.0, 85.0]
 spread_deg          = 20.0     # either way of straight across no man's land
 sink_mps            = 0.3      # under the parachute, as it burns
@@ -834,6 +842,9 @@ mean_light          = 6.0      # flares alight at once on average at the front's
 heavy_scale         = 2.5      # and at heavy, as many again and a half
 off_per_min         = 1.0      # a quiet night's
 dark_above          = 0.1      # fired only while the sky's flares key is above this
+sun_below_deg       = 0.0      # and the sun below this: the key is 0.2 at dawn, and falls to 0.1 only with the sun 19° up
+max_alight          = 16       # never more alight at once (a heavy night's would reach 28 now and then)
+pre_roll_s          = 45.0     # a jump into the dark finds a night this far under way: a flare's climb and burn
 near_share          = 0.25     # fired from the posts near the player
 near_m              = 60.0     # along the line
 spark_size_m        = 0.15     # the spark a flare trails as it climbs (an emissive point)
