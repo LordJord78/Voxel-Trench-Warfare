@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { CameraRig, rigTunables } from '../../src/app/camera-rig';
 import { EffectsFrameBuilder, effectsTunables, NO_BATTLE, type ShownBattle } from '../../src/app/effects-frame';
 import { farShellTunables } from '../../src/battle/far-shells';
+import { fireFlames, fireTunables, type Fire } from '../../src/battle/fires';
+import { Wind, windTunables } from '../../src/battle/wind';
 import { tracerTunables, type TracerState } from '../../src/battle/tracers';
 import { flareTunables, type FlareState } from '../../src/battle/flares';
 import { projectileSpec } from '../../src/combat/ballistics';
-import { BILLBOARD_FLOATS } from '../../src/combat/particles';
+import { BILLBOARD_FLOATS, particleSpec } from '../../src/combat/particles';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../../src/combat/rifle-model';
+import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
-import { RIBBON_FLOATS } from '../../src/render/effects';
+import { MAX_BILLBOARDS, RIBBON_FLOATS } from '../../src/render/effects';
 import { MAX_PUFFS } from '../../src/render/frame-uniforms';
 import { HAZE_PUFFS } from '../../src/render/quality';
 import { throughPose, type RiflePose } from '../../src/render/rifle';
@@ -259,6 +262,52 @@ describe('a frame of effects', () => {
     expect(taken.length).toBe(plumes.filter((p) => far(p) <= Math.max(...drawn)).length);
     expect(taken.length).toBeGreaterThan(0);
     expect(taken.length).toBeLessThan(plumes.length);
+  });
+
+  it("a fire's flames and embers are emissive billboards by its strength", () => {
+    const ft = fireTunables(tun);
+    const wind = new Wind(windTunables(tun), Rng.root(7).derive('battle.wind'));
+    const fire: Fire = { id: 3, at: [14, 0.4, 20], t0: 0, burnS: 180, size: 0.8, hamlet: false };
+    const drawn = (seconds: number) => {
+      const flames = fireFlames(fire, seconds, wind, ft);
+      const built = new EffectsFrameBuilder(t).build(stand(), none(), null, undefined, { ...NO_BATTLE, seconds, flames });
+      const out = built.frame.billboards;
+      const all = Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS)));
+      return { flames, quads: flames.map((q) => all.find((b) => b[0] === Math.fround(q.centre[0]) && b[1] === Math.fround(q.centre[1]) && b[2] === Math.fround(q.centre[2]))!) };
+    };
+    // Half grown, and forty seconds on at full strength: the same moment of every flame's and ember's cycle.
+    const half = drawn(ft.growS / 2);
+    const full = drawn(ft.growS / 2 + 40);
+    expect(full.flames).toHaveLength(ft.flames + ft.embers);
+    full.flames.forEach((q, i) => {
+      const b = full.quads[i];
+      expect(b, `quad ${i}`).toBeDefined();
+      expect(b[3]).toBeCloseTo(q.sizeM / 2, 6);
+      for (let c = 0; c < 3; c++) expect(b[4 + c]).toBeCloseTo(ft.flameColour[c] * q.glow, 5);
+      expect(b[7]).toBe(1);
+      // Emissive: its own light.
+      expect(b[8]).toBe(1);
+      // By its strength: half as bright half grown.
+      if (q.glow > 1e-3) expect(half.quads[i][4] / b[4]).toBeCloseTo(0.5, 4);
+    });
+  });
+
+  it("the battle's billboards keep their allowance under a full pool", () => {
+    const s = stand();
+    s.particles.emit([12.8, 1, 20], [0, 0, 0], { ...particleSpec(tun, 'dust'), lifeS: 60 }, s.particles.capacity);
+    expect(s.particles.count).toBe(s.particles.capacity);
+    const b = new EffectsFrameBuilder(t);
+    b.debug = Array.from({ length: 64 }, (_, k) => ({ position: [k * 0.2, 2, 5] as V3, size: 0.1, colour: [1, 1, 1] as V3 }));
+    const ft = fireTunables(tun);
+    const wind = new Wind(windTunables(tun), Rng.root(7).derive('battle.wind'));
+    // Twelve fires at full strength, sixteen flares burning, a far shell's column of smoke.
+    const flames = Array.from({ length: 12 }, (_, k) => fireFlames({ id: k, at: [k * 2, 0.4, 30], t0: 0, burnS: 180, size: 0.8, hamlet: false }, 60, wind, ft)).flat();
+    const flares: FlareState[] = Array.from({ length: 16 }, (_, k) => ({ id: k, position: [k * 3, 35, 120], glow: 1, stage: 'burning', colour: [1, 0.88, 0.7] }));
+    const smoke = Array.from({ length: 8 }, (_, k) => ({ centre: [500, 10 + 10 * k, 700] as V3, radiusM: 8, alpha: 0.85 }));
+    const built = b.build(s, none(), null, undefined, { ...NO_BATTLE, seconds: 60, flares, smoke, flames });
+    expect(MAX_BILLBOARDS).toBe(4096 + 64 + 512);
+    expect(built.counts.billboards).toBe(s.particles.capacity + 64 + flares.length + smoke.length + flames.length);
+    expect(b.debugAt).toBe(s.particles.capacity);
   });
 
   it("the session's particles are the frame's billboards", () => {

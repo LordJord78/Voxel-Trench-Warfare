@@ -220,7 +220,7 @@ async function start(): Promise<void> {
   const effects = new EffectsFrameBuilder(effectsTunables(tun));
   const hearing = audioTunables(tun);
   const audio = new AudioEngine(hearing, { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') });
-  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0 };
+  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0, flames: 0 };
   /** Whether the rifle is in hand (tests put it down to read the world behind it). */
   let rifleHeld = true;
   const input = new Input();
@@ -577,8 +577,8 @@ async function start(): Promise<void> {
       craterWaiters.get(c.id)?.(c.bricks);
       craterWaiters.delete(c.id);
     }
-    // The battle seen (its flares, flashes, smoke, tracers and fires' plumes) as the lights last showed it; none at rest.
-    const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), plumes: shownBattle.plumes() };
+    // The battle seen (its flares, flashes, smoke, tracers, and fires' flames and plumes) as the lights last showed it; none at rest.
+    const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
     const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares);
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).

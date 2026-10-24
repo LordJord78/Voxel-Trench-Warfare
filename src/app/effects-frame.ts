@@ -13,7 +13,7 @@
 
 import type { DistantShell } from '../battle/director';
 import { farShellTunables, type ColumnPuff, type FarShellTunables } from '../battle/far-shells';
-import type { PlumePuff } from '../battle/fires';
+import { fireTunables, type FireTunables, type FlameQuad, type PlumePuff } from '../battle/fires';
 import { flareTunables, type FlareState, type FlareTunables } from '../battle/flares';
 import { tracerTunables, type TracerState } from '../battle/tracers';
 import { BILLBOARD_FLOATS } from '../combat/particles';
@@ -26,24 +26,27 @@ import { MUZZLE_ANCHOR, PORT_ANCHOR, type CombatEvents, type Session } from '../
 
 type V3 = [number, number, number];
 
-/** The battle as a frame draws it (src/battle/director.ts): at its moment, its flares, its newest distant shells' flashes, the far shells' smoke, the machine guns' tracers, and the fires' plumes. */
+/** The battle as a frame draws it (src/battle/director.ts): at its moment, its flares, its newest distant shells' flashes, the far shells' smoke, the machine guns' tracers, and the fires' flames, embers and plumes. */
 export interface ShownBattle {
   seconds: number;
   flares: readonly FlareState[];
   flashes: readonly DistantShell[];
   smoke: readonly ColumnPuff[];
   tracers: readonly TracerState[];
+  flames: readonly FlameQuad[];
   plumes: readonly PlumePuff[];
 }
 
 /** No battle drawn: at rest, as the approved views are measured. */
-export const NO_BATTLE: ShownBattle = { seconds: 0, flares: [], flashes: [], smoke: [], tracers: [], plumes: [] };
+export const NO_BATTLE: ShownBattle = { seconds: 0, flares: [], flashes: [], smoke: [], tracers: [], flames: [], plumes: [] };
 
 export interface EffectsTunables {
   /** The battle's flares, as they are seen: their sparks climbing and discs burning. */
   flares: FlareTunables;
   /** The far shells, as they are seen: their flash's disc and their columns of smoke. */
   farShells: FarShellTunables;
+  /** The fires, as they are seen: their flames' and embers' colour. */
+  fires: FireTunables;
   /** A distant shell's flash's colour ([battle.flashes]). */
   distantColour: V3;
   /** The most of the battle's tracers drawn, the nearest the eye, and the trail each is drawn with. */
@@ -89,6 +92,7 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
   return {
     flares: flareTunables(tun),
     farShells: farShellTunables(tun),
+    fires: fireTunables(tun),
     distantColour: tun.triple('battle.flashes.colour'),
     maxBattleTracers: tracerTunables(tun).maxDrawn,
     battleTrailM: tracerTunables(tun).trailM,
@@ -144,7 +148,7 @@ export interface BuiltEffects {
   blasts: TransientLight[];
   /** Their smoke in the haze, and the fires' plumes: the nearest MAX_PUFFS puffs, nearest first (renderer.setSmoke). */
   smoke: SmokePuff[];
-  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number };
+  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number };
 }
 
 const RAD = Math.PI / 180;
@@ -236,6 +240,15 @@ export class EffectsFrameBuilder {
       const c = fs.smokeColour;
       this.billboards.set([...p.centre, p.radiusM, c[0] * p.alpha, c[1] * p.alpha, c[2] * p.alpha, p.alpha, 0], billboards * BILLBOARD_FLOATS);
       billboards++;
+    }
+    // The fires' flames and embers seen: emissive, each its glow over the flames' colour.
+    const fc = t.fires.flameColour;
+    let flames = 0;
+    for (const q of battle.flames) {
+      if (billboards >= MAX_BILLBOARDS) break;
+      this.billboards.set([...q.centre, q.sizeM / 2, fc[0] * q.glow, fc[1] * q.glow, fc[2] * q.glow, 1, 1], billboards * BILLBOARD_FLOATS);
+      billboards++;
+      flames++;
     }
 
     let ribbons = 0;
@@ -348,7 +361,7 @@ export class EffectsFrameBuilder {
       lights,
       blasts,
       smoke,
-      counts: { billboards, tracers, stars, lights: lights.length, battleTracers },
+      counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames },
     };
   }
 }

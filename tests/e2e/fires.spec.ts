@@ -85,3 +85,37 @@ test('its plume thickens the haze above it', async ({ page }) => {
   expect(haze.burning[3]).toBeLessThan(0.85 * haze.rest[3]);
   expect(errors).toEqual([]);
 });
+
+test("a burning fire's flames are drawn", async ({ page }) => {
+  const errors = await openGame(page);
+  const { fires, fire } = await burning(page);
+  // From 8 m off and 3 m up, looking at its flames: the image with the effects and without, burning and at rest.
+  const r = await hooks(page, async (h, at) => {
+    const a = at as V3;
+    const pose = { position: [a[0], a[1] + 3, a[2] - 8] as V3, yaw: 0, pitch: (Math.atan2(-2.5, 8) * 180) / Math.PI };
+    const [w, hh] = h.stats().res;
+    const box: [number, number, number, number] = [Math.floor(w / 2) - 12, Math.floor(hh / 2) - 12, 25, 25];
+    const lum = (c: readonly number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    const seen = async () => {
+      const px = await h.sharpAt(box);
+      const sum = [0, 0, 0];
+      for (let i = 0; i < px.length; i += 3) for (let c = 0; c < 3; c++) sum[c] += px[i + c];
+      return { flames: h.effects().flames, sharp: lum(sum.map((v) => v / (px.length / 3))), shaded: lum(await h.colourAt(box)) };
+    };
+    h.flyTo(pose);
+    await h.stepFrames(30);
+    const burning = await seen();
+    h.holdLights();
+    h.flyTo(pose);
+    await h.stepFrames(30);
+    return { burning, rest: await seen() };
+  }, fire.at);
+  console.log(`a hamlet fire's flames from 8 m: with the effects ${r.burning.sharp.toFixed(3)}, without ${r.burning.shaded.toFixed(3)}; at rest ${r.rest.sharp.toFixed(4)} and ${r.rest.shaded.toFixed(4)}`);
+  // Ten flames and eight embers a fire, every fire's drawn; none at rest.
+  expect(r.burning.flames).toBe(fires.length * 18);
+  expect(r.rest.flames).toBe(0);
+  // Where they burn, they add their own light over the ruins they light.
+  expect(r.burning.sharp).toBeGreaterThan(1.25 * r.burning.shaded);
+  expect(Math.abs(r.rest.sharp / r.rest.shaded - 1)).toBeLessThan(0.15);
+  expect(errors).toEqual([]);
+});

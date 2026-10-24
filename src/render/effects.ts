@@ -27,8 +27,8 @@ export const RIBBON_FLOATS = 12;
 const BILLBOARD_FLOATS = 9;
 /** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4). */
 const LIT_BYTES = 32;
-/** The particle pool, and room for test quads. */
-export const MAX_BILLBOARDS = 4096 + 64;
+/** The particle pool, room for test quads, and the battle's allowance: its flares, far shells' flashes and smoke, and fires' flames and embers. */
+export const MAX_BILLBOARDS = 4096 + 64 + 512;
 /** Every round in flight a tracer, and a few shots' stars. */
 export const MAX_RIBBONS = 1024;
 
