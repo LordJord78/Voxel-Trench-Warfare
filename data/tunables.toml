@@ -557,6 +557,15 @@ blast_gain          = 1.0      # a shell landing, heard at any distance
 blast_rumble_s      = 1.8
 scrape_gain         = 0.5      # a scoop dug: the blade's scrape and the spoil landing
 flare_gain          = 0.4      # a flare fired: the pistol's pop and the flare's hiss as it climbs
+# The distant guns (the battle spec's §3): a barrage's shell beyond the map rumbles, a far shell thumps,
+# each late by its distance; quieter as the near end of its shells' range over the distance, and over
+# that range duller (geometrically, from the second lowpass to the first) and longer.
+rumble_gain         = 0.5      # at 1 km, the barrages' nearest (battle.barrages.distance_m)
+rumble_lowpass_hz   = [80.0, 300.0]
+rumble_length_s     = [1.5, 5.0]
+thump_gain          = 0.6      # at 200 m, the far shells' nearest (battle.far_shells.distance_m)
+thump_lowpass_hz    = [500.0, 1200.0]
+thump_length_s      = [0.8, 1.5]
 
 # What is drawn over the world after sharpening (render/effects.ts): tracers, each
 # shot's flash star and light, and how the particles take the world's light. The

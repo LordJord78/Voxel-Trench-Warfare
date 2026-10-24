@@ -113,6 +113,36 @@ describe('the sound of a frame', () => {
     expect(planVoices(t, none(), ear)).toEqual([]);
   });
 
+  it("a barrage's shell rumbles distance ÷ 343 m/s later, quieter, duller and longer the farther", () => {
+    const shell = (id: number, metres: number) => ({ id, position: [ear[0] + metres, ear[1], ear[2]] as [number, number, number], t: 5, power: 1, far: false });
+    const v = planVoices(t, none(), ear, { launches: [], distant: [shell(1, 1000), shell(2, 8000)] });
+    expect(v.map((x) => x.kind)).toEqual(['rumble', 'rumble']);
+    const [near, far] = v;
+    expect(near.delayS).toBeCloseTo(1000 / 343, 9);
+    expect(far.delayS).toBeCloseTo(8000 / 343, 9);
+    expect(near.gain).toBeCloseTo(t.rumble.gain, 9);
+    expect(far.gain / near.gain).toBeCloseTo(1 / 8, 9);
+    expect(near.lowpassHz).toBeCloseTo(300, 6);
+    expect(far.lowpassHz).toBeCloseTo(80, 6);
+    expect(near.lengthS).toBeCloseTo(1.5, 9);
+    expect(far.lengthS).toBeCloseTo(5, 9);
+    expect(near.at).toEqual(shell(1, 1000).position);
+  });
+
+  it('a far shell thumps after its distance', () => {
+    const shell = (id: number, metres: number) => ({ id, position: [ear[0], ear[1], ear[2] + metres] as [number, number, number], t: 5, power: 1, far: true });
+    const [near, far] = planVoices(t, none(), ear, { launches: [], distant: [shell(1, 200), shell(2, 800)] });
+    expect([near.kind, far.kind]).toEqual(['thump', 'thump']);
+    expect(near.delayS).toBeCloseTo(200 / 343, 9);
+    expect(far.delayS).toBeCloseTo(800 / 343, 9);
+    expect(near.gain).toBeCloseTo(t.thump.gain, 9);
+    expect(far.gain / near.gain).toBeCloseTo(1 / 4, 9);
+    expect(near.lowpassHz).toBeCloseTo(1200, 6);
+    expect(far.lowpassHz).toBeCloseTo(500, 6);
+    expect(near.lengthS).toBeCloseTo(0.8, 9);
+    expect(far.lengthS).toBeCloseTo(1.5, 9);
+  });
+
   it('a scoop is a scrape where it was dug, at scrape_gain', () => {
     expect(t.scrapeGain).toBe(0.5);
     const scoop = { tick: 1, voxels: 24, at: [10.6, 1.4, 10.8] as [number, number, number] };

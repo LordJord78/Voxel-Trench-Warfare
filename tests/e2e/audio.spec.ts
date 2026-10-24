@@ -133,3 +133,22 @@ test('flares are heard when they are fired', async ({ page }) => {
   expect(after - before.flares).toBeGreaterThanOrEqual(fired);
   expect(errors).toEqual([]);
 });
+
+test('distant artillery is heard: a barrage beyond the map rumbles, a far shell thumps', async ({ page }) => {
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  await hooks(page, (h) => h.waitFrames(10));
+  // The front heavy, the battle two minutes in: barrages in progress and a far shell every few seconds.
+  const heard = await hooks(page, async (h) => {
+    h.setIntensity('heavy');
+    h.runLights(120);
+    const before = { ...h.audio().kinds };
+    for (let k = 0; k < 40; k++) await h.waitFrames(60);
+    const after = h.audio().kinds;
+    return { rumble: (after.rumble ?? 0) - (before.rumble ?? 0), thump: (after.thump ?? 0) - (before.thump ?? 0), state: h.audio().state };
+  });
+  expect(heard.state).toBe('running');
+  expect(heard.rumble).toBeGreaterThan(0);
+  expect(heard.thump).toBeGreaterThan(0);
+  expect(errors).toEqual([]);
+});

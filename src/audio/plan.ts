@@ -17,7 +17,7 @@ import type { Tunables } from '../core/tunables';
 import type { CombatEvents } from '../sim/session';
 import { K, kindOf } from '../world/materials';
 
-export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare';
+export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare' | 'rumble' | 'thump';
 
 export interface VoicePlan {
   kind: VoiceKind;
@@ -28,7 +28,7 @@ export interface VoicePlan {
   gain: number;
   /** What distance leaves of it. */
   lowpassHz: number;
-  /** A whistle's time to its landing; a blast's rumble. */
+  /** A whistle's time to its landing; a blast's rumble; a distant shell's rumble or thump. */
   lengthS?: number;
   /** A whistle's pitch, falling from and to. */
   fromHz?: number;
@@ -55,6 +55,16 @@ export interface AudioTunables {
   blastRumbleS: number;
   scrapeGain: number;
   flareGain: number;
+  /** A distant shell heard: its gain at the near end of its shells' range (metres), its lowpass and length over that range. */
+  rumble: DistantVoice;
+  thump: DistantVoice;
+}
+
+export interface DistantVoice {
+  gain: number;
+  rangeM: [number, number];
+  lowpassHz: [number, number];
+  lengthS: [number, number];
 }
 
 export function audioTunables(tun: Tunables): AudioTunables {
@@ -80,6 +90,8 @@ export function audioTunables(tun: Tunables): AudioTunables {
     blastRumbleS: f('blast_rumble_s'),
     scrapeGain: f('scrape_gain'),
     flareGain: f('flare_gain'),
+    rumble: { gain: f('rumble_gain'), rangeM: tun.pair('battle.barrages.distance_m'), lowpassHz: tun.pair('audio.rumble_lowpass_hz'), lengthS: tun.pair('audio.rumble_length_s') },
+    thump: { gain: f('thump_gain'), rangeM: tun.pair('battle.far_shells.distance_m'), lowpassHz: tun.pair('audio.thump_lowpass_hz'), lengthS: tun.pair('audio.thump_length_s') },
   };
 }
 
@@ -122,5 +134,20 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
   for (const b of events.blasts) out.push({ ...afar(b.at, t.blastGain, 'blast'), lengthS: t.blastRumbleS });
   for (const s of events.scoops) out.push(afar(s.at, t.scrapeGain, 'scrape'));
   for (const l of battle?.launches ?? []) out.push(afar(l.post, t.flareGain, 'flare'));
+  // A distant shell, late by its distance: quieter as the near end of its range over the distance,
+  // duller and longer across the range.
+  const distant = (at: [number, number, number], kind: VoiceKind, v: DistantVoice): VoicePlan => {
+    const d = distance(at);
+    const share = Math.min(1, Math.max(0, (d - v.rangeM[0]) / (v.rangeM[1] - v.rangeM[0])));
+    return {
+      kind,
+      at,
+      delayS: d / t.speedOfSound,
+      gain: (v.gain * v.rangeM[0]) / Math.max(v.rangeM[0], d),
+      lowpassHz: v.lowpassHz[1] * Math.pow(v.lowpassHz[0] / v.lowpassHz[1], share),
+      lengthS: v.lengthS[0] + (v.lengthS[1] - v.lengthS[0]) * share,
+    };
+  };
+  for (const s of battle?.distant ?? []) out.push(s.far ? distant(s.position, 'thump', t.thump) : distant(s.position, 'rumble', t.rumble));
   return out;
 }

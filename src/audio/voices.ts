@@ -34,6 +34,18 @@ function burst(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when:
   source.start(when, Math.random() * Math.max(0, noise.duration - length), length);
 }
 
+/** Noise rolling in over `attack` and away over the rest of `length` seconds, through a lowpass: looped, as a distant rumble outlasts the noise buffer. */
+function roll(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, lowpassHz: number, peak: number, attack: number, length: number): void {
+  const source = new AudioBufferSourceNode(ctx, { buffer: noise, loop: true });
+  const shape = new GainNode(ctx, { gain: 0 });
+  shape.gain.setValueAtTime(0, when);
+  shape.gain.linearRampToValueAtTime(peak, when + attack);
+  shape.gain.exponentialRampToValueAtTime(1e-4, when + length);
+  source.connect(new BiquadFilterNode(ctx, { type: 'lowpass', frequency: lowpassHz })).connect(shape).connect(into);
+  source.start(when, Math.random() * noise.duration);
+  source.stop(when + length + 0.05);
+}
+
 /** A shell coming in: a tone and a narrow band of noise falling from `from` to `to` Hz over `length` seconds, louder as it nears, cut off as it lands. */
 function whistle(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, from: number, to: number, peak: number, length: number): void {
   const end = when + Math.max(0.05, length);
@@ -128,6 +140,16 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 400 }, 0.8 * g, 0.002, 0.08);
       burst(ctx, noise, dull, when, { type: 'highpass', frequency: 2500 }, 0.5 * g, 0.001, 0.02);
       hiss(ctx, noise, dull, when + 0.05, 2000, 5000, 0.25 * g, 3);
+      break;
+    case 'rumble':
+      // A barrage's shell far off: low noise rolling in over 0.1 s and away over its length, under a 40 Hz sine.
+      roll(ctx, noise, dull, when, v.lowpassHz, g, 0.1, v.lengthS ?? 3);
+      tone(ctx, dull, when, 'sine', 45, 35, 0.5 * g, v.lengthS ?? 3);
+      break;
+    case 'thump':
+      // A far shell: a sine dropping 90 to 40 Hz, and a short burst of low noise.
+      tone(ctx, dull, when, 'sine', 90, 40, g, v.lengthS ?? 1);
+      burst(ctx, noise, dull, when, { type: 'lowpass', frequency: v.lowpassHz }, 0.6 * g, 0.005, 0.25);
       break;
     case 'scrape':
       // The blade into the earth, rising for 0.04 s and falling over 0.18 s; then the shovelful thrown, landing low.
