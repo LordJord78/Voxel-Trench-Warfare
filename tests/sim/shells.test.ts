@@ -26,7 +26,7 @@ describe('a shell landing', () => {
     const id = s.land(12.8, 15.0, 3, 7);
     expect(id).not.toBeNull();
     const first = s.drainEvents();
-    expect(first.blasts).toEqual([{ tick: s.ticks, at: [12.8, 7.6000000000000005, 15.0], radiusM: 3, material: P.SPOIL }]);
+    expect(first.blasts).toEqual([{ tick: s.ticks, at: [12.8, 7.6000000000000005, 15.0], radiusM: 3, material: P.SPOIL, crater: id }]);
     const craters = [];
     for (let k = 0; k < 10; k++) {
       s.tick();

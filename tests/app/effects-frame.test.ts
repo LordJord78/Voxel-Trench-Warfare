@@ -194,7 +194,7 @@ describe('a frame of effects', () => {
   it("a blast's light flares and dies over blast_light_s of the world's time, a metre over where it landed", () => {
     const s = stand();
     const b = new EffectsFrameBuilder(t);
-    const blast: CombatEvents = { ...none(), blasts: [{ tick: s.ticks, at: [12.8, 0.4, 20], radiusM: 3, material: P.SOD }] };
+    const blast: CombatEvents = { ...none(), blasts: [{ tick: s.ticks, at: [12.8, 0.4, 20], radiusM: 3, material: P.SOD, crater: null }] };
     let built = b.build(s, blast);
     expect(built.blasts).toEqual([{ position: [12.8, 1.4, 20], radiusM: t.blastLightRadiusM, colour: t.blastLightColour, intensity: t.blastLightIntensity }]);
     // Half way, a quarter as bright; at the end, gone.
@@ -210,7 +210,7 @@ describe('a frame of effects', () => {
   it("a paused world holds a blast's light", () => {
     const s = stand();
     const b = new EffectsFrameBuilder(t);
-    b.build(s, { ...none(), blasts: [{ tick: s.ticks, at: [12.8, 0.4, 20], radiusM: 3, material: P.SOD }] });
+    b.build(s, { ...none(), blasts: [{ tick: s.ticks, at: [12.8, 0.4, 20], radiusM: 3, material: P.SOD, crater: null }] });
     for (let k = 0; k < 10; k++) expect(b.build(s, none()).blasts[0].intensity).toBe(t.blastLightIntensity);
   });
 
@@ -218,7 +218,7 @@ describe('a frame of effects', () => {
     const s = stand();
     const b = new EffectsFrameBuilder(t);
     const crater = 3;
-    let built = b.build(s, { ...none(), blasts: [{ tick: s.ticks, at: [12.8, 0.4, 20], radiusM: crater, material: P.SOD }] });
+    let built = b.build(s, { ...none(), blasts: [{ tick: s.ticks, at: [12.8, 0.4, 20], radiusM: crater, material: P.SOD, crater: null }] });
     expect(built.smoke.length).toBe(t.smokePuffs);
     const start = built.smoke.map((p) => ({ ...p, centre: [...p.centre] }));
     for (const p of start) {
@@ -242,7 +242,7 @@ describe('a frame of effects', () => {
     const s = stand();
     const b = new EffectsFrameBuilder(t);
     // Farthest first, so the first sixteen are not the nearest.
-    const blasts = Array.from({ length: 10 }, (_, k) => ({ tick: s.ticks, at: [12.8, 0.4, 46 - 4 * k] as [number, number, number], radiusM: 2.5, material: P.SOD }));
+    const blasts = Array.from({ length: 10 }, (_, k) => ({ tick: s.ticks, at: [12.8, 0.4, 46 - 4 * k] as [number, number, number], radiusM: 2.5, material: P.SOD, crater: null }));
     const eye: [number, number, number] = [12.8, 2, 0];
     const built = b.build(s, { ...none(), blasts }, null, eye);
     expect(built.smoke.length).toBe(16);

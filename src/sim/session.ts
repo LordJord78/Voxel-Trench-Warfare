@@ -81,7 +81,8 @@ export interface CombatEvents {
   /** Shells announced (their whistle): where each will land (metres), and in how long. */
   incoming: { tick: number; at: [number, number, number]; landsInS: number }[];
   /** Shells landed: where (metres, the top of the ground), how big, and what they struck. */
-  blasts: { tick: number; at: [number, number, number]; radiusM: number; material: number }[];
+  /** Shells landed: where, how big, what they struck, and the crater each made (null where none could be). */
+  blasts: { tick: number; at: [number, number, number]; radiusM: number; material: number; crater: number | null }[];
   /** Each scoop the player dug: how many voxels, and where (metres). */
   scoops: (Scoop & { tick: number })[];
 }
@@ -346,7 +347,7 @@ export class Session {
     const material = this.map.get(Math.floor(x / v), top - 1, Math.floor(z / v));
     const id = this.destruction.shell([x / v, top, z / v], radiusM / v, seed);
     const at: [number, number, number] = [x, top * v, z];
-    this.events.blasts.push({ tick: this.ticks, at, radiusM, material });
+    this.events.blasts.push({ tick: this.ticks, at, radiusM, material, crater: id });
     this.throwBlast(at, material);
     const p = this.player;
     const d = hypot(at[0] - p.position.x, at[1] - (p.position.y + this.controller.eyeHeight(p)), at[2] - p.position.z);

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { HORIZON_FLASHES } from '../../src/battle/barrages';
 import { battleDarkness, Director, type BattleEvents, type BattleInputs, type DistantShell } from '../../src/battle/director';
 import { tracerAt, tracerTunables } from '../../src/battle/tracers';
+import { fireTunables } from '../../src/battle/fires';
+import { P } from '../../src/world/materials';
 import { flareTunables } from '../../src/battle/flares';
 import { loadTunables, Tunables } from '../../src/core/tunables';
 import { sceneLights } from '../../src/render/lights';
@@ -378,5 +380,97 @@ describe('the machine guns', () => {
     for (let k = 0; k < 150 * 30; k++) stepped.tick(1 / 30, dark('light'));
     expect(stepped.tracers().length).toBeGreaterThan(0);
     expect(stepped.tracers()).toEqual(sought.tracers());
+  });
+});
+
+// The fires (the battle spec's §5): struck by the session's shells on timber, cloth, duckboards or a
+// hull by chance; the hamlet's lit at nightfall and dying down at dawn; twelve at most, the oldest
+// strike fire first out; each charring once at its full burn, and crackling by its strength.
+describe('the fires', () => {
+  const fireT = fireTunables(tun);
+  const strike = (material: number, x = 120, crater: number | null = 1) => ({ at: [x, 16, 120] as [number, number, number], material, crater });
+  /** `seconds` at `inputs`, strikes given on the first step only. */
+  const runFires = (d: Director, inputs: BattleInputs, seconds: number, each?: (e: BattleEvents, k: number) => void) => {
+    for (let k = 0; k < seconds * 60; k++) {
+      const e = d.tick(1 / 60, k === 0 ? inputs : { ...inputs, strikes: [] });
+      each?.(e, k);
+    }
+  };
+  const dusk = (strikes: ReturnType<typeof strike>[] = []): BattleInputs => ({ intensity: 'off', darkness: 0, player, strikes });
+
+  it('a strike on timber starts a fire a third of the time; on soil never', () => {
+    let started = 0;
+    for (let k = 0; k < 30; k++) {
+      const d = new Director(plan, tun, 100 + k);
+      runFires(d, dusk(Array.from({ length: 20 }, (_, i) => strike(P.TIMBER, 10 + i * 10))), 1, (e) => (started += e.fires.length));
+    }
+    expect(started / 600).toBeGreaterThan(1 / 3 - 0.06);
+    expect(started / 600).toBeLessThan(1 / 3 + 0.06);
+    const soil = new Director(plan, tun, 7);
+    let none = 0;
+    runFires(soil, dusk(Array.from({ length: 50 }, () => strike(P.MUD))), 1, (e) => (none += e.fires.length));
+    expect(none).toBe(0);
+  });
+
+  it("the hamlet's fires light at nightfall, burn while it is dark, and die down over a minute when it lifts", () => {
+    const d = new Director(plan, tun, 7);
+    runFires(d, dusk(), 5);
+    expect(d.fires().filter((f) => f.hamlet)).toEqual([]);
+    runFires(d, { ...dusk(), darkness: 1 }, fireT.growS + 5);
+    const lit = d.fires().filter((f) => f.hamlet);
+    expect(lit.length).toBeGreaterThanOrEqual(fireT.hamletFires[0]);
+    expect(lit.length).toBeLessThanOrEqual(fireT.hamletFires[1]);
+    for (const f of lit) expect(f.strength).toBe(1);
+    runFires(d, { ...dusk(), darkness: 1 }, 600);
+    expect(d.fires().filter((f) => f.hamlet && f.strength === 1)).toHaveLength(lit.length);
+    runFires(d, dusk(), fireT.dieS / 2);
+    for (const f of d.fires().filter((g) => g.hamlet)) expect(f.strength).toBeCloseTo(0.5, 1);
+    runFires(d, dusk(), fireT.dieS / 2 + 1);
+    expect(d.fires().filter((f) => f.hamlet)).toEqual([]);
+  });
+
+  it('at most 12: the oldest strike fire goes out first, never a hamlet fire', () => {
+    const d = new Director(plan, tun, 7);
+    runFires(d, { ...dusk(), darkness: 1 }, fireT.growS + 1);
+    const hamlet = d.fires().filter((f) => f.hamlet).length;
+    const ids: number[] = [];
+    for (let k = 0; k < 40; k++) runFires(d, { ...dusk([strike(P.TIMBER, 10 + k * 5)]), darkness: 1 }, 1, (e) => ids.push(...e.fires.map((f) => f.id)));
+    runFires(d, { ...dusk(), darkness: 1 }, 2);
+    const burning = d.fires().filter((f) => f.strength > 0 && !f.dying);
+    expect(burning.length).toBeLessThanOrEqual(fireT.maxFires);
+    expect(burning.filter((f) => f.hamlet)).toHaveLength(hamlet);
+    // The ones still burning are the newest struck.
+    const struck = burning.filter((f) => !f.hamlet).map((f) => f.id).sort((a, b) => a - b);
+    expect(struck).toEqual(ids.slice(-struck.length));
+  });
+
+  it('each fire chars once, at its full burn', () => {
+    const d = new Director(plan, tun, 11);
+    const chars: { fire: number; t: number }[] = [];
+    let id = -1;
+    for (let k = 0; k < 50 && id < 0; k++) runFires(d, dusk([strike(P.TIMBER, 10 + k, 7)]), 0.1, (e) => (id = e.fires[0]?.id ?? id));
+    expect(id).toBeGreaterThan(0);
+    runFires(d, dusk(), fireT.growS + 30, (e) => chars.push(...e.chars.map((c) => ({ fire: c.fire, t: d.seconds }))));
+    const mine = chars.filter((c) => c.fire === id);
+    expect(mine).toHaveLength(1);
+  });
+
+  it('a fire crackles at a rate by its strength', () => {
+    const d = new Director(plan, tun, 7);
+    runFires(d, { ...dusk(), darkness: 1 }, fireT.growS + 1);
+    const burning = d.fires().filter((f) => f.strength === 1).length;
+    let pops = 0;
+    runFires(d, { ...dusk(), darkness: 1 }, 10, (e) => (pops += e.crackles.length));
+    expect(pops / (10 * burning)).toBeGreaterThan(fireT.cracklePerS * 0.7);
+    expect(pops / (10 * burning)).toBeLessThan(fireT.cracklePerS * 1.3);
+  });
+
+  it("seeking replays the hamlet's fires", () => {
+    const night: BattleInputs = { intensity: 'off', darkness: 1, player };
+    const sought = Director.at(90, plan, tun, 7, night);
+    const stepped = new Director(plan, tun, 7);
+    for (let k = 0; k < 90 * 30; k++) stepped.tick(1 / 30, night);
+    expect(stepped.fires().length).toBeGreaterThan(0);
+    expect(stepped.fires()).toEqual(sought.fires());
   });
 });

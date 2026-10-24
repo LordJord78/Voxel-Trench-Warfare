@@ -39,7 +39,7 @@ import { PauseMenu } from '../ui/pause';
 import { Hud } from '../ui/hud';
 import { boxHitsSolid } from '../physics/collision';
 import { Vec3 } from '../physics/vec';
-import { battleDarkness, Director, type BattleEvents, type BattleInputs } from '../battle/director';
+import { battleDarkness, Director, noBattleEvents, type BattleEvents, type BattleInputs, type Strike } from '../battle/director';
 import { flareTunables } from '../battle/flares';
 import { flashPower, flashTunables } from '../battle/barrages';
 import { farHeightM } from '../world/generation/farfield';
@@ -291,7 +291,7 @@ async function start(): Promise<void> {
     const off = Math.abs(timeOfDay - crept);
     return ranAt.darkness <= flareT.darkAbove && Math.min(off, 24 - off) > 1e-6;
   };
-  let battleEvents: BattleEvents = { launches: [], distant: [], bursts: [] };
+  let battleEvents: BattleEvents = noBattleEvents();
   let shownBattle: Director = battle;
   let sought: { at: number; inputs: string; d: Director } | null = null;
   const battleAt = (t: number) => {
@@ -300,13 +300,14 @@ async function start(): Promise<void> {
     if (!sought || sought.at !== t || sought.inputs !== key) sought = { at: t, inputs: key, d: Director.at(t, world.plan, tun, SEED, inputs, ground) };
     return sought.d;
   };
-  const light = (dt: number, eye: readonly number[]) => {
+  /** `strikes`: the session's shells landed this frame, which may start fires. */
+  const light = (dt: number, eye: readonly number[], strikes: readonly Strike[] = []) => {
     skyNow();
-    battleEvents = { launches: [], distant: [], bursts: [] };
+    battleEvents = noBattleEvents();
     if (mode !== 'paused') {
       lightSeconds += dt;
       if (lightsHeld === null) {
-        const inputs = battleInputs();
+        const inputs = { ...battleInputs(), strikes };
         if (jumpedIntoDark(dt, inputs.darkness)) battle.tick(flareT.preRollS, inputs);
         battleEvents = battle.tick(dt, inputs);
         ranAt = { hours: timeOfDay, darkness: inputs.darkness };
@@ -585,7 +586,7 @@ async function start(): Promise<void> {
     renderer.setBlasts(frameEffects.blasts);
     renderer.setSmoke(frameEffects.smoke);
     built = frameEffects.counts;
-    light(dt, pose.position);
+    light(dt, pose.position, events.blasts.map((b) => ({ at: b.at, material: b.material, crater: b.crater })));
     renderer.render(pose, timeOfDay, now);
     lastPose = pose;
     frames++;

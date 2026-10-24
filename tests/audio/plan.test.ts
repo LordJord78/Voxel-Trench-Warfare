@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { noBattleEvents } from '../../src/battle/director';
 import { audioTunables, planVoices } from '../../src/audio/plan';
 import type { Impact } from '../../src/combat/ballistics';
 import { loadTunables } from '../../src/core/tunables';
@@ -105,7 +106,7 @@ describe('the sound of a frame', () => {
   it("a flare's launch is a pop and a hiss at its post, late by its distance", () => {
     expect(t.flareGain).toBe(0.4);
     const launch = { id: 3, post: [10, 6, 90] as [number, number, number], t0: 12, bearing: 0, elevation: 1.4, burstM: 40, colour: [1, 0.88, 0.7] as [number, number, number] };
-    const v = planVoices(t, none(), ear, { launches: [launch], distant: [], bursts: [] });
+    const v = planVoices(t, none(), ear, { ...noBattleEvents(), launches: [launch], distant: [], bursts: [] });
     expect(v.map((x) => x.kind)).toEqual(['flare']);
     expect(v[0].at).toEqual(launch.post);
     expect(v[0].delayS).toBeCloseTo(Math.hypot(0, 4, 80) / 343, 9);
@@ -115,7 +116,7 @@ describe('the sound of a frame', () => {
 
   it("a barrage's shell rumbles distance ÷ 343 m/s later, quieter, duller and longer the farther", () => {
     const shell = (id: number, metres: number) => ({ id, position: [ear[0] + metres, ear[1], ear[2]] as [number, number, number], t: 5, power: 1, far: false });
-    const v = planVoices(t, none(), ear, { launches: [], distant: [shell(1, 1000), shell(2, 8000)], bursts: [] });
+    const v = planVoices(t, none(), ear, { ...noBattleEvents(), launches: [], distant: [shell(1, 1000), shell(2, 8000)], bursts: [] });
     expect(v.map((x) => x.kind)).toEqual(['rumble', 'rumble']);
     const [near, far] = v;
     expect(near.delayS).toBeCloseTo(1000 / 343, 9);
@@ -131,7 +132,7 @@ describe('the sound of a frame', () => {
 
   it('a far shell thumps after its distance', () => {
     const shell = (id: number, metres: number) => ({ id, position: [ear[0], ear[1], ear[2] + metres] as [number, number, number], t: 5, power: 1, far: true });
-    const [near, far] = planVoices(t, none(), ear, { launches: [], distant: [shell(1, 200), shell(2, 800)], bursts: [] });
+    const [near, far] = planVoices(t, none(), ear, { ...noBattleEvents(), launches: [], distant: [shell(1, 200), shell(2, 800)], bursts: [] });
     expect([near.kind, far.kind]).toEqual(['thump', 'thump']);
     expect(near.delayS).toBeCloseTo(200 / 343, 9);
     expect(far.delayS).toBeCloseTo(800 / 343, 9);
@@ -145,7 +146,7 @@ describe('the sound of a frame', () => {
 
   it('a burst chatters at its gun, late by its distance, quieter and duller the farther', () => {
     const burst = (id: number, metres: number) => ({ id, gun: [ear[0] + metres, ear[1], ear[2]] as [number, number, number], t: 3, rounds: 12, rpm: 600 });
-    const [near, far] = planVoices(t, none(), ear, { launches: [], distant: [], bursts: [burst(1, 60), burst(2, 300)] });
+    const [near, far] = planVoices(t, none(), ear, { ...noBattleEvents(), launches: [], distant: [], bursts: [burst(1, 60), burst(2, 300)] });
     expect([near.kind, far.kind]).toEqual(['chatter', 'chatter']);
     expect(near.delayS).toBeCloseTo(60 / 343, 9);
     expect(far.delayS).toBeCloseTo(300 / 343, 9);
@@ -168,7 +169,7 @@ describe('the sound of a frame', () => {
   });
 
   it('a blast is late by its distance at 343 m/s, quieter and duller with it, and heard past impact_within_m', () => {
-    const blast = (z: number) => ({ tick: 1, at: [10, 2, 10 + z] as [number, number, number], radiusM: 3, material: P.SOD });
+    const blast = (z: number) => ({ tick: 1, at: [10, 2, 10 + z] as [number, number, number], radiusM: 3, material: P.SOD, crater: null });
     const v = planVoices(t, { ...none(), blasts: [blast(20), blast(200)] }, ear);
     expect(v.map((x) => x.kind)).toEqual(['blast', 'blast']);
     expect(v[0].delayS).toBeCloseTo(20 / 343, 9);

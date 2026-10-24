@@ -22,6 +22,11 @@
  * them from the player, every fifth round a tracer (tracers.ts) swept across a bearing over no man's
  * land and the field, ending on the field's undisturbed ground; a burst whose fire would pass within
  * `miss_m` of the player is not fired.
+ *
+ * And the fires (§5): the session's shells striking timber, cloth, duckboards or a hull start them by
+ * chance (fires.ts), fed in with the inputs; the hamlet's are lit at nightfall and die down when the
+ * dark lifts; at most `max_fires` burn, the oldest strike fire first to die down past them. Each chars
+ * what it burned once, at its full burn, and crackles by its strength.
  */
 
 import { atan2, cos, radians, sin } from '../core/dmath';
@@ -33,6 +38,7 @@ import { barrageTunables, flashTunables, HORIZON_FLASHES, planBarrage, type Barr
 import { columnPuffs, farShellTunables, planFarShell, type ColumnPuff, type FarShellTunables } from './far-shells';
 import { flareAt, flareTunables, type FlareState, type FlareTunables, type Launch } from './flares';
 import { planShot, tracerAt, tracerTunables, type Shot, type TracerState, type TracerTunables } from './tracers';
+import { fireChance, fireFlames, firePlume, fireStrength, fireTunables, hamletFireSites, type Fire, type FireTunables, type FlameQuad, type PlumePuff } from './fires';
 import { fieldHeight } from '../world/generation/terrain';
 import { Wind, windTunables } from './wind';
 
@@ -43,6 +49,25 @@ export interface BattleInputs {
   darkness: number;
   /** The player's feet, metres. */
   player: readonly [number, number, number];
+  /** The session's shells landed since the last tick: where, on what, and their craters. */
+  strikes?: readonly Strike[];
+}
+
+/** A shell of the session's landed: where it struck (metres), the material it struck, and its crater's id. */
+export interface Strike {
+  at: [number, number, number];
+  material: number;
+  crater: number | null;
+}
+
+/** A fire as it is: where, how hard it burns (0 to 1), its size, whether it is the hamlet's, and whether it is dying down. */
+export interface FireState {
+  id: number;
+  at: [number, number, number];
+  strength: number;
+  size: number;
+  hamlet: boolean;
+  dying: boolean;
 }
 
 /** A distant shell landed: beyond the map in a barrage, or in the far field (`far`). Metres, and seconds on the battle's clock. */
@@ -69,12 +94,21 @@ export interface BattleEvents {
   distant: DistantShell[];
   /** Each machine gun's burst as it starts. */
   bursts: Burst[];
+  /** Each fire as it starts. */
+  fires: { id: number; at: [number, number, number] }[];
+  /** Each fire at its full burn: what is about it to be charred, once its crater has settled. */
+  chars: { fire: number; at: [number, number, number]; crater: number | null }[];
+  /** A fire's crackle's pops, by its strength. */
+  crackles: { at: [number, number, number]; gain: number }[];
 }
 
 /** How dark the battle takes it to be: the sky's flares key while the sun is below `sun_below_deg`, and none once it is up (no flare by day). */
 export function battleDarkness(sunElevationDeg: number, flaresKey: number, ft: FlareTunables): number {
   return sunElevationDeg < ft.sunBelowDeg ? flaresKey : 0;
 }
+
+/** A step's events: none yet. */
+export const noBattleEvents = (): BattleEvents => ({ launches: [], distant: [], bursts: [], fires: [], chars: [], crackles: [] });
 
 /** Steps a second. */
 const HZ = 60;
@@ -123,6 +157,14 @@ export class Director {
   private alive: Shot[] = [];
   private nextTracer = 1;
   private nextBurst = 1;
+  private readonly fireT: FireTunables;
+  private readonly fireRng: Rng;
+  /** Where the hamlet's fires stand, from the plan. */
+  private readonly hamletSites: [number, number, number][];
+  private burning: (Fire & { crater: number | null; charred: boolean })[] = [];
+  private pending: Strike[] = [];
+  private hamletLit = false;
+  private nextFire = 1;
 
   /** `ground`: the height (metres) a far shell stands at, at (x, z) metres; the plan's ground level if not given. */
   constructor(plan: WorldPlan | null, tun: Tunables, seed: number, ground?: (xM: number, zM: number) => number) {
@@ -137,6 +179,9 @@ export class Director {
     this.farRng = root.derive('battle.far');
     this.tt = tracerTunables(tun);
     this.gunRng = root.derive('battle.guns');
+    this.fireT = fireTunables(tun);
+    this.fireRng = root.derive('battle.fires');
+    this.hamletSites = plan ? hamletFireSites(plan, root.derive('battle.fires.hamlet'), this.fireT) : [];
     this.field = plan ? (x, z) => fieldHeight(plan.terrain, plan.params, x / plan.params.voxel, z / plan.params.voxel) * plan.params.voxel : () => -Infinity;
     // fbm is under 1, and the swale only dips: the field is never higher than this.
     const span = plan ? plan.terrain.reliefMax - plan.terrain.reliefMin : 0;
@@ -168,7 +213,8 @@ export class Director {
   /** `seconds` of the lights' clock, at `inputs`: what was fired. */
   tick(seconds: number, inputs: BattleInputs): BattleEvents {
     this.given += seconds;
-    const events: BattleEvents = { launches: [], distant: [], bursts: [] };
+    if (inputs.strikes && inputs.strikes.length > 0) this.pending.push(...inputs.strikes);
+    const events = noBattleEvents();
     const target = Math.floor(this.given * HZ + 1e-6);
     while (this.ticks < target) this.step(inputs, events);
     return events;
@@ -206,6 +252,31 @@ export class Director {
     return out;
   }
 
+  /** The fires burning or dying down now. */
+  fires(): FireState[] {
+    const now = this.seconds;
+    const ft = this.fireT;
+    const out: FireState[] = [];
+    for (const f of this.burning) {
+      const strength = fireStrength(f, now, ft);
+      if (strength <= 0) continue;
+      out.push({ id: f.id, at: f.at, strength, size: f.size, hamlet: f.hamlet, dying: f.out !== undefined || (!f.hamlet && now > f.t0 + ft.growS + f.burnS) });
+    }
+    return out;
+  }
+
+  /** The fires' flames and embers now. */
+  flames(): FlameQuad[] {
+    const now = this.seconds;
+    return this.burning.flatMap((f) => fireFlames(f, now, this.wind, this.fireT));
+  }
+
+  /** The fires' plumes now, puff by puff. */
+  plumes(): PlumePuff[] {
+    const now = this.seconds;
+    return this.burning.flatMap((f) => firePlume(f, now, this.wind, this.fireT));
+  }
+
   /** The tracers fired and not yet out, as planned (their flights, for tests). */
   shots(): readonly Shot[] {
     return this.alive;
@@ -220,7 +291,7 @@ export class Director {
   static at(seconds: number, plan: WorldPlan | null, tun: Tunables, seed: number, inputs: BattleInputs, ground?: (xM: number, zM: number) => number): Director {
     const d = new Director(plan, tun, seed, ground);
     d.given = seconds;
-    const events: BattleEvents = { launches: [], distant: [], bursts: [] };
+    const events = noBattleEvents();
     const target = Math.round(seconds * HZ);
     while (d.ticks < target) d.step(inputs, events);
     return d;
@@ -241,6 +312,59 @@ export class Director {
     this.alight = this.alight.filter((l) => now <= l.t0 + Math.sqrt((2 * l.burstM) / ft.gravity) + ft.burnS);
     this.fireDistant(t, now, inputs, events);
     this.fireGuns(t, now, inputs, events);
+    this.tendFires(now, inputs, events);
+  }
+
+  /** A step of the fires, at `now`: the strikes since the last lit by chance; the hamlet's lit or dying with the dark; the cap; chars and crackles; the out dropped. */
+  private tendFires(now: number, inputs: BattleInputs, events: BattleEvents): void {
+    const ft = this.fireT;
+    const r = this.fireRng;
+    for (const s of this.pending) {
+      // Every draw made whatever it struck, so the stream does not hang on the material.
+      const roll = r.float();
+      const size = r.uniform(ft.size[0], ft.size[1]);
+      const burnS = r.uniform(ft.burnS[0], ft.burnS[1]);
+      if (roll >= fireChance(s.material, ft)) continue;
+      const f = { id: this.nextFire++, at: [s.at[0], s.at[1], s.at[2]] as [number, number, number], t0: now, burnS, size, hamlet: false, crater: s.crater, charred: false };
+      this.burning.push(f);
+      events.fires.push({ id: f.id, at: f.at });
+    }
+    this.pending = [];
+    const dark = inputs.darkness > this.ft.darkAbove;
+    if (dark && !this.hamletLit) {
+      this.hamletLit = true;
+      for (const at of this.hamletSites) {
+        const f = { id: this.nextFire++, at, t0: now, burnS: 0, size: r.uniform(ft.size[0], ft.size[1]), hamlet: true, crater: null, charred: false };
+        this.burning.push(f);
+        events.fires.push({ id: f.id, at: f.at });
+      }
+    } else if (!dark && this.hamletLit) {
+      this.hamletLit = false;
+      for (const f of this.burning) if (f.hamlet && f.out === undefined) f.out = now;
+    }
+    // Past max_fires burning, the oldest struck die down first; the hamlet's never for the cap.
+    const alive = this.burning.filter((f) => f.out === undefined && (f.hamlet || now <= f.t0 + ft.growS + f.burnS));
+    let over = alive.length - ft.maxFires;
+    for (const f of alive) {
+      if (over <= 0) break;
+      if (f.hamlet) continue;
+      f.out = now;
+      over--;
+    }
+    for (const f of this.burning) {
+      const strength = fireStrength(f, now, ft);
+      const full = f.t0 + ft.growS;
+      if (!f.charred && now >= full && (f.out === undefined || f.out >= full)) {
+        f.charred = true;
+        events.chars.push({ fire: f.id, at: f.at, crater: f.crater });
+      }
+      if (strength > 0 && r.float() < (ft.cracklePerS * strength) / HZ) events.crackles.push({ at: f.at, gain: strength });
+    }
+    // Dropped once died down: from its being put out, or the end of its burn (the hamlet's burn on).
+    this.burning = this.burning.filter((f) => {
+      const down = f.out ?? (f.hamlet ? Infinity : f.t0 + ft.growS + f.burnS);
+      return now <= down + ft.dieS;
+    });
   }
 
   /** A step of the machine guns, from `t` to `now`: maybe a burst, in the dark and with the front firing; the tracers out dropped. */
