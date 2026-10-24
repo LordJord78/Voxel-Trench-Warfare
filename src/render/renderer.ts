@@ -68,7 +68,7 @@ import { KeyShadow, keyShadowLayouts, type Key, type KeyShadowPipelines } from '
 import { cellGrid, LightCells } from './light-cells';
 import { lightBuffer, type SceneLight } from './lights';
 import { Restir, type RestirPipelines } from './restir';
-import { FROXEL_COLUMNS, LIGHT_SCALE, scaledSize, SKY_VIEW_SIZE, type Preset, type RenderSettings } from './quality';
+import { FROXEL_COLUMNS, HAZE_PUFFS, LIGHT_SCALE, scaledSize, SKY_VIEW_SIZE, type Preset, type RenderSettings } from './quality';
 import { sceneExtras, sceneGroup, sceneLayout, type SkyLuts } from './scene';
 import { moduleSource } from './shaders';
 import atrousSrc from './shaders/atrous.wgsl';
@@ -283,6 +283,16 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
   return { scene, layouts, pipelines: { beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects, rifle, ...sceneExtras(device) };
 }
 
+/** A half float's bits as the number they hold. */
+function half(b: number): number {
+  const e = (b >> 10) & 0x1f;
+  const m = b & 0x3ff;
+  const s = b & 0x8000 ? -1 : 1;
+  if (e === 0) return s * m * 2 ** -24;
+  if (e === 31) return m ? NaN : s * Infinity;
+  return s * (1 + m / 1024) * 2 ** (e - 15);
+}
+
 export class Renderer {
   readonly device: GPUDevice;
   readonly world: GpuWorld;
@@ -355,7 +365,7 @@ export class Renderer {
   private flashes: TransientLight[] = [];
   /** This frame's shells' blasts, shadowed at the lighting resolution, outside the denoiser. */
   private blasts: TransientLight[] = [];
-  /** This frame's puffs of shells' smoke in the haze. */
+  /** This frame's puffs of shells' and fires' smoke in the haze, nearest the eye first. */
   private puffs: SmokePuff[] = [];
   /** Suppression's look, as the present pass draws it: desaturation and vignette, 0 to 1. */
   private suppressionLook: [number, number] = [0, 0];
@@ -517,14 +527,6 @@ export class Renderer {
     const halves = new Uint16Array(staging.getMappedRange().slice(0));
     staging.destroy();
     const out = new Float32Array(w * h * 3);
-    const half = (b: number) => {
-      const e = (b >> 10) & 0x1f;
-      const m = b & 0x3ff;
-      const s = b & 0x8000 ? -1 : 1;
-      if (e === 0) return s * m * 2 ** -24;
-      if (e === 31) return m ? NaN : s * Infinity;
-      return s * (1 + m / 1024) * 2 ** (e - 15);
-    };
     for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) for (let c = 0; c < 3; c++) out[(j * w + i) * 3 + c] = half(halves[(j * row) / 2 + i * 4 + c]);
     return out;
   }
@@ -542,7 +544,7 @@ export class Renderer {
     return this.keyShadow.texelsTraced;
   }
 
-  /** This frame's puffs of shells' smoke (metres), the first MAX_PUFFS of them. */
+  /** This frame's puffs of shells' and fires' smoke (metres), nearest the eye first: the preset's HAZE_PUFFS of them reach the haze. */
   setSmoke(puffs: readonly SmokePuff[]): void {
     this.puffs = puffs.slice(0, MAX_PUFFS);
   }
@@ -560,6 +562,23 @@ export class Renderer {
   /** This frame's transient lights (shots' flashes): the strongest MAX_FLASHES of them light it. */
   setTransientLights(lights: readonly TransientLight[]): void {
     this.flashes = [...lights].sort((a, b) => b.intensity - a.intensity).slice(0, MAX_FLASHES);
+  }
+
+  /** The haze the last frame left over the whole of the froxel column through the view at each (u, v): the light it scatters toward the eye (rgb) and what it lets through (a). */
+  async readHaze(points: readonly [number, number][]): Promise<[number, number, number, number][]> {
+    const t = this.froxels.haze;
+    const staging = this.device.createBuffer({ size: Math.max(1, points.length) * 256, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const encoder = this.device.createCommandEncoder();
+    points.forEach(([u, v], i) => {
+      const x = Math.min(t.width - 1, Math.max(0, Math.floor(u * t.width)));
+      const y = Math.min(t.height - 1, Math.max(0, Math.floor(v * t.height)));
+      encoder.copyTextureToBuffer({ texture: t, origin: { x, y, z: t.depthOrArrayLayers - 1 } }, { buffer: staging, offset: i * 256, bytesPerRow: 256 }, { width: 1, height: 1 });
+    });
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const halves = new Uint16Array(staging.getMappedRange().slice(0));
+    staging.destroy();
+    return points.map((_, i) => [0, 1, 2, 3].map((c) => half(halves[i * 128 + c])) as [number, number, number, number]);
   }
 
   /** The G-buffer's depth the last frame left at pixels of the internal image, in metres along each pixel's ray. */
@@ -780,8 +799,9 @@ export class Renderer {
       w.set(`flashes.${k}.colour`, f.colour);
       w.set(`flashes.${k}.intensity`, f.intensity);
     });
-    w.set('puffCount', this.puffs.length);
-    this.puffs.forEach((p, k) => {
+    const puffs = this.puffs.slice(0, HAZE_PUFFS[this.preset]);
+    w.set('puffCount', puffs.length);
+    puffs.forEach((p, k) => {
       w.set(`puffs.${k}.centre`, p.centre.map((m) => m / voxel));
       w.set(`puffs.${k}.radius`, p.radiusM / voxel);
       w.set(`puffs.${k}.density`, p.density);

@@ -14,11 +14,11 @@ export interface Hooks {
   /** The exposure's adaptation after the last frame: the base reckoned from the light, the correction and its want, the metered mean (stops). */
   exposureState(): Promise<{ base: number; correction: number; want: number; metered: number }>;
   /** The point lights the last frame was lit with. */
-  lights(): { position: [number, number, number]; radius: number; colour: [number, number, number]; intensity: number; kind: 'lantern' | 'flare'; phase: number; id?: number }[];
+  lights(): { position: [number, number, number]; radius: number; colour: [number, number, number]; intensity: number; kind: 'lantern' | 'flare' | 'fire'; phase: number; id?: number }[];
   /** Hold the lights still: as the plan placed them (their motion is new since the approved views), or as they are `seconds` into their motion. */
   holdLights(seconds?: number): void;
   /** Light the scene with these lights in place of its own (they move from their phases as its own do). */
-  useLights(lights: { position: [number, number, number]; radius: number; colour: [number, number, number]; intensity: number; kind: 'lantern' | 'flare'; phase: number }[]): void;
+  useLights(lights: { position: [number, number, number]; radius: number; colour: [number, number, number]; intensity: number; kind: 'lantern' | 'flare' | 'fire'; phase: number }[]): void;
   /** Let the lights move with their own clock again. */
   /** Run the lights' clock; from `seconds` into the battle, if given. */
   runLights(seconds?: number): void;
@@ -88,6 +88,9 @@ export interface Hooks {
     smoke: { centre: [number, number, number]; radiusM: number; alpha: number }[];
     /** The machine guns' tracers in flight. */
     tracers: { id: number; position: [number, number, number]; velocity: [number, number, number]; flown: number }[];
+    /** The fires burning, and their plumes' puffs. */
+    fires: { id: number; at: [number, number, number]; strength: number; size: number; hamlet: boolean; dying: boolean }[];
+    plumes: { centre: [number, number, number]; radiusM: number; density: number }[];
   };
   /** The distant shells' flashes the frame was last given (metres, their power then). */
   horizon(): { position: [number, number, number]; power: number; glow: boolean }[];
@@ -133,6 +136,8 @@ export interface Hooks {
   debugLit(): Promise<[number, number, number, number][]>;
   /** Transient lights (as a shot's flash) added to the next frames' own; [] for none. */
   debugLights(lights: { position: [number, number, number]; radiusM: number; colour: [number, number, number]; intensity: number }[]): void;
+  /** The haze the last frame left over the whole of each froxel column (to 120 m) through the view at (u, v): the light it scatters toward the eye (rgb) and what it lets through (a). */
+  hazeAt(points: [number, number][]): Promise<[number, number, number, number][]>;
   /** The last frame's shaded image (before TAA and the effects) over a box of the internal image: its mean linear rgb. */
   colourAt(box: [number, number, number, number]): Promise<[number, number, number]>;
   /** The G-buffer's depth at pixels of the internal image, in metres along each pixel's ray. */

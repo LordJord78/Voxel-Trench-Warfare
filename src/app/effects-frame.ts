@@ -13,6 +13,7 @@
 
 import type { DistantShell } from '../battle/director';
 import { farShellTunables, type ColumnPuff, type FarShellTunables } from '../battle/far-shells';
+import type { PlumePuff } from '../battle/fires';
 import { flareTunables, type FlareState, type FlareTunables } from '../battle/flares';
 import { tracerTunables, type TracerState } from '../battle/tracers';
 import { BILLBOARD_FLOATS } from '../combat/particles';
@@ -25,17 +26,18 @@ import { MUZZLE_ANCHOR, PORT_ANCHOR, type CombatEvents, type Session } from '../
 
 type V3 = [number, number, number];
 
-/** The battle as a frame draws it (src/battle/director.ts): at its moment, its flares, its newest distant shells' flashes, the far shells' smoke, and the machine guns' tracers. */
+/** The battle as a frame draws it (src/battle/director.ts): at its moment, its flares, its newest distant shells' flashes, the far shells' smoke, the machine guns' tracers, and the fires' plumes. */
 export interface ShownBattle {
   seconds: number;
   flares: readonly FlareState[];
   flashes: readonly DistantShell[];
   smoke: readonly ColumnPuff[];
   tracers: readonly TracerState[];
+  plumes: readonly PlumePuff[];
 }
 
 /** No battle drawn: at rest, as the approved views are measured. */
-export const NO_BATTLE: ShownBattle = { seconds: 0, flares: [], flashes: [], smoke: [], tracers: [] };
+export const NO_BATTLE: ShownBattle = { seconds: 0, flares: [], flashes: [], smoke: [], tracers: [], plumes: [] };
 
 export interface EffectsTunables {
   /** The battle's flares, as they are seen: their sparks climbing and discs burning. */
@@ -140,7 +142,7 @@ export interface BuiltEffects {
   lights: TransientLight[];
   /** Shells' blasts, lighting the world shadowed (renderer.setBlasts). */
   blasts: TransientLight[];
-  /** Their smoke in the haze, the nearest MAX_PUFFS puffs (renderer.setSmoke). */
+  /** Their smoke in the haze, and the fires' plumes: the nearest MAX_PUFFS puffs, nearest first (renderer.setSmoke). */
   smoke: SmokePuff[];
   counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number };
 }
@@ -319,7 +321,8 @@ export class EffectsFrameBuilder {
     blasts.push(...this.debugBlasts);
 
     // Each shell's smoke: smoke_puffs puffs, one over the crater and the rest a third of its radius
-    // aside, rising, spreading and thinning to nothing by smoke_s; the nearest the eye drawn.
+    // aside, rising, spreading and thinning to nothing by smoke_s; with the fires' plumes, the
+    // nearest the eye drawn.
     const from = eye ?? [session.player.position.x, session.player.position.y + session.controller.eyeHeight(session.player), session.player.position.z];
     const puffs: SmokePuff[] = [];
     for (const b of this.landed) {
@@ -337,6 +340,7 @@ export class EffectsFrameBuilder {
       }
     }
     const far = (p: SmokePuff) => Math.hypot(p.centre[0] - from[0], p.centre[1] - from[1], p.centre[2] - from[2]);
+    for (const p of battle.plumes) puffs.push({ centre: [p.centre[0], p.centre[1], p.centre[2]], radiusM: p.radiusM, density: p.density });
     const smoke = [...this.debugSmoke, ...puffs.sort((a, b) => far(a) - far(b))].slice(0, MAX_PUFFS);
 
     return {

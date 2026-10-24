@@ -3,8 +3,11 @@ import { loadTunables } from '../../src/core/tunables';
 import { genParams } from '../../src/world/generation/params';
 import { planWorld } from '../../src/world/generation/plan';
 import { lanternVoxel } from '../../src/world/generation/furniture';
+import type { FireState } from '../../src/battle/director';
+import { fireTunables } from '../../src/battle/fires';
 import { flareTunables, type FlareState } from '../../src/battle/flares';
-import { battleFlareLights, lightBuffer, MAX_LIGHTS, sceneLights, type SceneLight } from '../../src/render/lights';
+import { lightMotion, lightsAt } from '../../src/render/light-motion';
+import { battleFireLights, battleFlareLights, lightBuffer, MAX_LIGHTS, sceneLights, type SceneLight } from '../../src/render/lights';
 
 const tun = loadTunables();
 const p = genParams(tun);
@@ -72,5 +75,39 @@ describe('the scene\'s lights', () => {
     expect(ls.map((l) => l.id)).toEqual([4, 7]);
     expect(ls[0]).toMatchObject({ kind: 'flare', position: [10, 40, 20], radius: ft.radiusM, intensity: ft.intensity * 0.5, colour: [1, 0.25, 0.15] });
     expect(ls[1].intensity).toBe(ft.intensity);
+  });
+  it('a fire is a warm light flickering faster and harder than a lantern, by its strength', () => {
+    const ft = fireTunables(tun);
+    const fire = (strength: number, id = 3, size = ft.size[1]): FireState => ({ id, at: [40, 16, 30], strength, size, hamlet: false, dying: false });
+    const [l] = battleFireLights([fire(1)], 0, ft);
+    expect(l).toMatchObject({ kind: 'fire', position: [40, 16 + ft.liftM, 30], radius: ft.radiusM[1], colour: ft.colour, id: 3 });
+    // Warm: more red than green, more green than blue.
+    expect(l.colour[0]).toBeGreaterThan(l.colour[1]);
+    expect(l.colour[1]).toBeGreaterThan(l.colour[2]);
+    // Its reach by its size: the smallest fire's 12 m, the largest's 25.
+    expect(battleFireLights([fire(1, 3, ft.size[0])], 0, ft)[0].radius).toBeCloseTo(ft.radiusM[0], 9);
+    // Gone out, it is no light.
+    expect(battleFireLights([fire(0)], 0, ft)).toEqual([]);
+    // Ten seconds at 60 Hz of a fire's light and a lantern's, each as a share of its own away from its mean.
+    const lantern = sceneLights(plan, tun).find((x) => x.kind === 'lantern')!;
+    const motion = lightMotion(tun);
+    const frames = Array.from({ length: 600 }, (_, k) => k / 60);
+    const share = (id: number) => frames.map((s) => battleFireLights([fire(1, id)], s, ft)[0].intensity / ft.intensity - 1);
+    const flame = share(3);
+    const lamp = frames.map((s) => lightsAt([lantern], s, motion)[0].intensity / lantern.intensity - 1);
+    const most = (xs: number[]) => Math.max(...xs.map(Math.abs));
+    const crossings = (xs: number[]) => xs.slice(1).filter((x, k) => Math.sign(x) !== Math.sign(xs[k])).length;
+    // Harder: it strays as far as its flicker either way, well past a lantern's most.
+    expect(most(flame)).toBeLessThanOrEqual(ft.flicker + 1e-9);
+    expect(most(flame)).toBeGreaterThan(2 * motion.lanternFlicker);
+    // Faster: it crosses its mean more than twice as often.
+    expect(crossings(flame)).toBeGreaterThan(2 * crossings(lamp));
+    // By its strength: half as strong, half the light at every moment.
+    for (const s of frames.slice(0, 60)) expect(battleFireLights([fire(0.5)], s, ft)[0].intensity).toBeCloseTo(0.5 * battleFireLights([fire(1)], s, ft)[0].intensity, 9);
+    // Each its own: two fires flicker apart.
+    const other = share(4);
+    expect(Math.max(...flame.map((x, k) => Math.abs(x - other[k])))).toBeGreaterThan(0.05);
+    // Not a flare: the sky's flares key leaves it lit.
+    expect(lightBuffer([l], 0.25, v)[7]).toBeCloseTo(l.intensity, 4);
   });
 });

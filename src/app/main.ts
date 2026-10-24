@@ -28,7 +28,7 @@ import { FarFieldGpu } from '../render/farfield-gpu';
 import { GpuWorld } from '../render/gpu-world';
 import { KEY_MAP_SIZE, KEY_SLOTS } from '../render/key-shadow';
 import { lightMotion, lightsAt } from '../render/light-motion';
-import { battleFlareLights, sceneLights, type SceneLight } from '../render/lights';
+import { battleFireLights, battleFlareLights, sceneLights, type SceneLight } from '../render/lights';
 import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
@@ -40,6 +40,7 @@ import { Hud } from '../ui/hud';
 import { boxHitsSolid } from '../physics/collision';
 import { Vec3 } from '../physics/vec';
 import { battleDarkness, Director, noBattleEvents, type BattleEvents, type BattleInputs, type Strike } from '../battle/director';
+import { fireTunables } from '../battle/fires';
 import { flareTunables } from '../battle/flares';
 import { flashPower, flashTunables } from '../battle/barrages';
 import { farHeightM } from '../world/generation/farfield';
@@ -265,6 +266,7 @@ async function start(): Promise<void> {
   /** The distant shells' flashes the frame was last given. */
   let horizon: HorizonFlash[] = [];
   const flareT = flareTunables(tun);
+  const fireT = fireTunables(tun);
   /** The sky at the time of day, worked out again whenever the clock has been set since it was last asked. */
   const skyNow = () => {
     if (timeOfDay !== litFor) {
@@ -323,9 +325,9 @@ async function start(): Promise<void> {
     } else {
       shownBattle = lightsHeld === null ? battle : battleAt(lightsHeld);
       const flares = shownBattle.flares();
-      lit = [...lightsAt(lights.filter((l) => l.kind !== 'flare'), lightsHeld ?? lightSeconds, motion), ...battleFlareLights(flares, flareT)];
-      renderer.setFlareGlow(Math.min(2, flares.reduce((sum, f) => sum + f.glow, 0) / flareT.meanLight));
       const now = shownBattle.seconds;
+      lit = [...lightsAt(lights.filter((l) => l.kind !== 'flare'), lightsHeld ?? lightSeconds, motion), ...battleFlareLights(flares, flareT), ...battleFireLights(shownBattle.fires(), now, fireT)];
+      renderer.setFlareGlow(Math.min(2, flares.reduce((sum, f) => sum + f.glow, 0) / flareT.meanLight));
       horizon = shownBattle.flashes().map((f) => ({ position: f.position, power: flashPower(f, now, flashT), glow: !f.far }));
     }
     renderer.setLights(lit, sky.flares, eye);
@@ -575,8 +577,8 @@ async function start(): Promise<void> {
       craterWaiters.get(c.id)?.(c.bricks);
       craterWaiters.delete(c.id);
     }
-    // The battle's flares seen (sparks climbing, discs burning) as the lights last showed them; none at rest.
-    const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers() };
+    // The battle seen (its flares, flashes, smoke, tracers and fires' plumes) as the lights last showed it; none at rest.
+    const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), plumes: shownBattle.plumes() };
     const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares);
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
@@ -859,6 +861,7 @@ async function start(): Promise<void> {
       return Array.from({ length: lit.length / 8 }, (_, i) => Array.from(lit.subarray(i * 8 + 4, i * 8 + 8)));
     },
     depthAt: (points: [number, number][]) => renderer.readDepth(points),
+    hazeAt: (points: [number, number][]) => renderer.readHaze(points),
     colourAt: async (box: [number, number, number, number]) => {
       const rgb = await renderer.readColour(box);
       const n = rgb.length / 3;
@@ -958,7 +961,7 @@ async function start(): Promise<void> {
     exposure: () => renderer.exposure(),
     exposureState: () => renderer.exposureState(),
     lights: () => lit,
-    battle: () => ({ seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers() }),
+    battle: () => ({ seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), fires: shownBattle.fires(), plumes: shownBattle.plumes() }),
     horizon: () => horizon,
     holdLights(seconds?: number) {
       lightsHeld = seconds ?? 'rest';

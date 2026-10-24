@@ -85,7 +85,7 @@ export const MAX_FLASHES = 4;
 /** The most shells' blasts a frame lights by. */
 export const MAX_BLASTS = 4;
 
-/** A puff of a shell's smoke in the haze (froxels.wgsl): centre and radius in voxels, density per metre at its middle. */
+/** A puff of a shell's or a fire's smoke in the haze (smoke.wgsl): centre and radius in voxels, density per metre at its middle. */
 export const PUFF: StructDef = {
   name: 'Puff',
   fields: [
@@ -98,8 +98,8 @@ export const PUFF: StructDef = {
   ],
 };
 
-/** The most puffs of smoke a frame's haze holds. */
-export const MAX_PUFFS = 16;
+/** The most puffs of smoke a frame's haze holds (the high preset's; quality.ts's HAZE_PUFFS). */
+export const MAX_PUFFS = 64;
 
 /** The most distant shells' flashes a frame's sky takes (sky.wgsl's horizonGlow loops to it). */
 export const MAX_HORIZON = 16;
@@ -181,7 +181,7 @@ export const FRAME: StructDef = {
     // Shells' blasts lighting the world this frame: shadowed at the lighting resolution (lighting.wgsl), outside the denoiser.
     ['blastCount', 'u32'],
     ['blasts', { element: FLASH, count: MAX_BLASTS }],
-    // Shells' smoke in the froxels' haze: its puffs this frame.
+    // Shells' and fires' smoke in the froxels' haze: its puffs this frame, nearest the eye first.
     ['puffCount', 'u32'],
     ['puffs', { element: PUFF, count: MAX_PUFFS }],
     // Distant shells' flashes (sky.wgsl's horizonGlow and horizonLight): the colour they glow, the

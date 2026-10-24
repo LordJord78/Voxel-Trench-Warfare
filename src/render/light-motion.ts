@@ -54,10 +54,19 @@ const smooth = (x: number) => {
   return t * t * (3 - 2 * t);
 };
 
-function lantern(l: SceneLight, seconds: number, m: LightMotion): SceneLight {
+/**
+ * A flame's flicker `seconds` into its beats, mixed by its phase: within [-1, 1], a share of how far
+ * its light strays. A lantern's light strays by the lantern's flicker; a fire's (lights.ts) by its
+ * own, its beats quicker.
+ */
+export function flickerAt(seconds: number, phase: number): number {
   let s = 0;
-  for (const [hz, weight, spread] of BEATS) s += weight * Math.sin(2 * Math.PI * (hz * seconds + l.phase * spread));
-  return { ...l, intensity: l.intensity * (1 + m.lanternFlicker * s) };
+  for (const [hz, weight, spread] of BEATS) s += weight * Math.sin(2 * Math.PI * (hz * seconds + phase * spread));
+  return s;
+}
+
+function lantern(l: SceneLight, seconds: number, m: LightMotion): SceneLight {
+  return { ...l, intensity: l.intensity * (1 + m.lanternFlicker * flickerAt(seconds, l.phase)) };
 }
 
 function flare(l: SceneLight, seconds: number, m: LightMotion): SceneLight {
@@ -67,7 +76,7 @@ function flare(l: SceneLight, seconds: number, m: LightMotion): SceneLight {
   return { ...l, position: [l.position[0], l.position[1] - m.flareSink * burnt, l.position[2]], intensity: l.intensity * glow };
 }
 
-/** The lights as they are `seconds` into the lights' clock. */
+/** The lights as they are `seconds` into the lights' clock: a fire's as given, its flicker its fire's (lights.ts). */
 export function lightsAt(lights: readonly SceneLight[], seconds: number, motion: LightMotion): SceneLight[] {
-  return lights.map((l) => (l.kind === 'lantern' ? lantern(l, seconds, motion) : flare(l, seconds, motion)));
+  return lights.map((l) => (l.kind === 'lantern' ? lantern(l, seconds, motion) : l.kind === 'flare' ? flare(l, seconds, motion) : l));
 }

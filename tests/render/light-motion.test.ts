@@ -41,6 +41,11 @@ describe('the lights in motion', () => {
     expect(motion.flareSink).toBe(0.3);
   });
 
+  it("holds a fire's light a test gives as given: it flickers by its fire (battleFireLights), and neither sinks nor gutters as a flare", () => {
+    const fire: SceneLight = { position: [20, 16.3, 30], radius: 25, colour: [1, 0.55, 0.2], intensity: 38, kind: 'fire', phase: 0.1, id: 2 };
+    for (const seconds of [0, 6, 12, 33.3]) expect(lightsAt([fire], seconds, motion)[0]).toEqual(fire);
+  });
+
   it('gives the same lights for the same moment', () => {
     expect(lightsAt([lantern, flare], 123.45, motion)).toEqual(lightsAt([lantern, flare], 123.45, motion));
   });

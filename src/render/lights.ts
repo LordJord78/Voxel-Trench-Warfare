@@ -4,15 +4,19 @@
  * brightly as the time of day says. They are the lights at rest: each has a
  * phase, and light-motion.ts flickers the lanterns from it, frame by frame.
  * With the lights running, the battle's director flies the flares instead
- * (battleFlareLights). A frame takes as many as 1,024.
+ * (battleFlareLights), and its fires burn (battleFireLights). A frame takes as
+ * many as 1,024.
  */
 
+import type { FireState } from '../battle/director';
+import type { FireTunables } from '../battle/fires';
 import type { FlareState, FlareTunables } from '../battle/flares';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import { lanternFacing, lanternVoxel } from '../world/generation/furniture';
 import type { WorldPlan } from '../world/generation/plan';
 import { P, paletteData } from '../world/materials';
+import { flickerAt } from './light-motion';
 
 export const MAX_LIGHTS = 1024;
 
@@ -24,10 +28,10 @@ export interface SceneLight {
   /** Linear RGB. */
   colour: [number, number, number];
   intensity: number;
-  kind: 'lantern' | 'flare';
+  kind: 'lantern' | 'flare' | 'fire';
   /** In [0, 1): where the light is in its motion's cycles (light-motion.ts), its own. */
   phase: number;
-  /** A battle flare's, kept as it is fired and goes out (its shadow map follows it). */
+  /** A battle flare's, kept as it is fired and goes out (its shadow map follows it); a fire's. */
   id?: number;
 }
 
@@ -40,6 +44,30 @@ export function battleFlareLights(states: readonly FlareState[], ft: FlareTunabl
 
 /** Each light's phase, by its index: the golden ratio's sequence, so no two match and they spread evenly. */
 const phaseOf = (i: number) => (0.5 + i * 0.6180339887498949) % 1;
+
+/**
+ * The battle's fires burning at `t` (the director's clock), as fire lights: each `lift_m` over its
+ * fuel, reaching 12–25 m by its size, by its strength, flickering as a lantern does but harder
+ * (`flicker`) and `flicker_rate` times as fast, its beats mixed by its id.
+ */
+export function battleFireLights(fires: readonly FireState[], t: number, ft: FireTunables): SceneLight[] {
+  const span = ft.size[1] - ft.size[0];
+  return fires
+    .filter((f) => f.strength > 0)
+    .map((f) => {
+      const share = span > 0 ? Math.min(1, Math.max(0, (f.size - ft.size[0]) / span)) : 1;
+      const phase = phaseOf(f.id);
+      return {
+        position: [f.at[0], f.at[1] + ft.liftM, f.at[2]],
+        radius: ft.radiusM[0] + (ft.radiusM[1] - ft.radiusM[0]) * share,
+        colour: ft.colour,
+        intensity: ft.intensity * f.strength * (1 + ft.flicker * flickerAt(t * ft.flickerRate, phase)),
+        kind: 'fire',
+        phase,
+        id: f.id,
+      };
+    });
+}
 
 /**
  * Where a lantern's light goes (metres): its flame, a voxel out from the middle of its glass the way

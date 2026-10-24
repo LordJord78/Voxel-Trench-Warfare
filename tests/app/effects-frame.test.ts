@@ -9,6 +9,8 @@ import { BILLBOARD_FLOATS } from '../../src/combat/particles';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../../src/combat/rifle-model';
 import { loadTunables } from '../../src/core/tunables';
 import { RIBBON_FLOATS } from '../../src/render/effects';
+import { MAX_PUFFS } from '../../src/render/frame-uniforms';
+import { HAZE_PUFFS } from '../../src/render/quality';
 import { throughPose, type RiflePose } from '../../src/render/rifle';
 import { Session, type CombatEvents } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
@@ -238,18 +240,25 @@ describe('a frame of effects', () => {
     expect(b.build(s, none()).smoke).toEqual([]);
   });
 
-  it('at most 16 puffs are drawn, the nearest the eye', () => {
+  it("the haze takes 64 puffs, the nearest the eye, the blasts' and the fires' plumes together; the low preset 32", () => {
     const s = stand();
     const b = new EffectsFrameBuilder(t);
-    // Farthest first, so the first sixteen are not the nearest.
-    const blasts = Array.from({ length: 10 }, (_, k) => ({ tick: s.ticks, at: [12.8, 0.4, 46 - 4 * k] as [number, number, number], radiusM: 2.5, material: P.SOD, crater: null }));
-    const eye: [number, number, number] = [12.8, 2, 0];
-    const built = b.build(s, { ...none(), blasts }, null, eye);
-    expect(built.smoke.length).toBe(16);
-    const far = (p: { centre: number[] }) => Math.hypot(p.centre[0] - eye[0], p.centre[1] - eye[1], p.centre[2] - eye[2]);
-    const drawn = Math.max(...built.smoke.map(far));
-    // The nearest blasts' puffs, every one of the first five's.
-    expect(drawn).toBeLessThan(10 + 4 * 6);
+    // Farthest first, so the first 64 are not the nearest: 20 blasts' puffs, and 20 puffs of plumes between them.
+    const blasts = Array.from({ length: 20 }, (_, k) => ({ tick: s.ticks, at: [12.8, 0.4, 100 - 4 * k] as V3, radiusM: 2.5, material: P.SOD, crater: null }));
+    const plumes = Array.from({ length: 20 }, (_, k) => ({ centre: [15, 4, 98 - 4 * k] as V3, radiusM: 2, density: 0.15 }));
+    const eye: V3 = [12.8, 2, 0];
+    const built = b.build(s, { ...none(), blasts }, null, eye, { ...NO_BATTLE, plumes });
+    expect(MAX_PUFFS).toBe(64);
+    expect(HAZE_PUFFS).toEqual({ high: 64, low: 32 });
+    expect(built.smoke.length).toBe(MAX_PUFFS);
+    const far = (p: { centre: readonly number[] }) => Math.hypot(p.centre[0] - eye[0], p.centre[1] - eye[1], p.centre[2] - eye[2]);
+    const drawn = built.smoke.map(far);
+    // Nearest first, and every plume puff nearer than the farthest taken is taken.
+    expect(drawn).toEqual([...drawn].sort((x, y) => x - y));
+    const taken = built.smoke.filter((p) => p.density === 0.15);
+    expect(taken.length).toBe(plumes.filter((p) => far(p) <= Math.max(...drawn)).length);
+    expect(taken.length).toBeGreaterThan(0);
+    expect(taken.length).toBeLessThan(plumes.length);
   });
 
   it("the session's particles are the frame's billboards", () => {

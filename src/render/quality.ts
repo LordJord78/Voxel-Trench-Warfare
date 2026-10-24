@@ -4,7 +4,7 @@
  *
  *   high — the internal image at 1.5 MP, lit at one pixel in four;
  *   low  — the same image, lit at one pixel in sixteen, with half the froxel grid across and down,
- *          no spatial reuse in ReSTIR, and a sky view a quarter the size.
+ *          no spatial reuse in ReSTIR, a sky view a quarter the size, and half the haze's puffs of smoke.
  */
 
 import type { Tunables } from '../core/tunables';
@@ -17,6 +17,9 @@ export const LIGHT_SCALE: Record<Preset, number> = { high: 2, low: 4 };
 
 /** The froxel grid's columns across and down the view per preset (froxels.ts); each has 64 slices. */
 export const FROXEL_COLUMNS: Record<Preset, [number, number]> = { high: [160, 90], low: [80, 45] };
+
+/** The puffs of smoke a frame's haze takes per preset, the nearest the eye (smoke.wgsl): MAX_PUFFS on high. */
+export const HAZE_PUFFS: Record<Preset, number> = { high: 64, low: 32 };
 
 /** The sky view's texels per preset (atmosphere.ts). */
 export const SKY_VIEW_SIZE: Record<Preset, [number, number]> = { high: [192, 108], low: [96, 54] };
