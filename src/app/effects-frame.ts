@@ -250,6 +250,14 @@ export class EffectsFrameBuilder {
       billboards++;
       flames++;
     }
+    // Their plumes, drawn as the far shells' smoke is (lit discs) as well as in the haze: the haze's
+    // own glow lights its smoke as it lights the haze round it, which at dusk hides it.
+    for (const p of battle.plumes) {
+      if (billboards >= MAX_BILLBOARDS) break;
+      const c = fs.smokeColour;
+      this.billboards.set([...p.centre, p.radiusM, c[0] * p.alpha, c[1] * p.alpha, c[2] * p.alpha, p.alpha, 0], billboards * BILLBOARD_FLOATS);
+      billboards++;
+    }
 
     let ribbons = 0;
     const ribbon = (tail: readonly number[], head: readonly number[], width: number, colour: readonly number[], alphaTail: number, alphaHead: number) => {

@@ -77,6 +77,9 @@ describe('a fire', () => {
     expect(top.radiusM).toBeGreaterThan(puffs[0].radiusM);
     const half = firePlume(f, 50 + ft.growS / 2, wind, ft);
     expect(half[0].density).toBeCloseTo(puffs[0].density / 2, 6);
+    // Drawn too, covering by its strength.
+    expect(puffs[0].alpha).toBeCloseTo(ft.plumeAlpha, 9);
+    expect(half[0].alpha).toBeCloseTo(puffs[0].alpha / 2, 6);
   });
 
   it("the hamlet's fires stand on its buildings' floors, 2–4 of them", () => {

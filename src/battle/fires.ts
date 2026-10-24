@@ -47,6 +47,7 @@ export interface FireTunables {
   plumeRiseMps: number;
   plumeRadiusM: [number, number];
   plumeDensity: number;
+  plumeAlpha: number;
   cracklePerS: number;
   maxFires: number;
   hamletFires: [number, number];
@@ -90,6 +91,7 @@ export function fireTunables(tun: Tunables): FireTunables {
     plumeRiseMps: f('plume_rise_mps'),
     plumeRadiusM: pair('plume_radius_m'),
     plumeDensity: f('plume_density'),
+    plumeAlpha: f('plume_alpha'),
     cracklePerS: f('crackle_per_s'),
     maxFires: tun.i('battle.fires.max_fires'),
     hamletFires: pair('hamlet_fires'),
@@ -176,11 +178,12 @@ export function fireFlames(f: Fire, t: number, wind: Wind, ft: FireTunables): Fl
   return out;
 }
 
-/** A puff of a fire's plume in the haze: middle (metres), radius, density per metre at its middle. */
+/** A puff of a fire's plume: middle (metres), radius, density per metre at its middle in the haze, and how much it covers drawn. */
 export interface PlumePuff {
   centre: V3;
   radiusM: number;
   density: number;
+  alpha: number;
 }
 
 /** Its plume: `plume_puffs` puffs up to `plume_m`, each leaning downwind by the wind's speed over the time smoke takes to rise to it, growing as it rises, thinning with the fire's strength. */
@@ -197,6 +200,7 @@ export function firePlume(f: Fire, t: number, wind: Wind, ft: FireTunables): Plu
       centre: [f.at[0] + wx * lean, f.at[1] + h, f.at[2] + wz * lean],
       radiusM: (ft.plumeRadiusM[0] + (ft.plumeRadiusM[1] - ft.plumeRadiusM[0]) * share) * f.size,
       density: ft.plumeDensity * strength,
+      alpha: ft.plumeAlpha * strength,
     });
   }
   return out;

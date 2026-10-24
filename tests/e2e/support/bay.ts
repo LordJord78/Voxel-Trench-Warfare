@@ -1,5 +1,44 @@
 import type { Page } from '@playwright/test';
+import { P } from '../../../src/world/materials';
 import { hooks } from './app';
+
+/** What a fire burns, as the world's shades. */
+export const BURNS = [P.TIMBER, P.TIMBER_WEATHERED, P.TIMBER_DARK, P.DUCKBOARD, P.DUCKBOARD_WORN, P.CLOTH, P.CLOTH_DARK, P.HULL, P.HULL_RUST];
+
+/**
+ * A fire in the bay: playing, the battle running and the session's own shelling off, 0.3 m shells
+ * along the bay's duckboards either side of the spawn, each let settle, until one starts a fire (a
+ * third of the time). The fire, and how many shells it took; null if twenty spots gave none.
+ */
+export async function fireInTheBay(page: Page): Promise<{ fire: { id: number; at: [number, number, number] } | null; shells: number }> {
+  await hooks(page, (h) => {
+    h.setShelling('off');
+    h.runLights();
+    h.play();
+  });
+  let shells = 0;
+  for (let k = 0; k < 20; k++) {
+    const r = await hooks(page, async (h, a) => {
+      const [k, burns] = a as [number, number[]];
+      const v = 0.1;
+      const s = h.world.spawn;
+      const at = [...s.position];
+      at[s.bay.longAxis] += (k % 2 ? 1 : -1) * (0.6 + 0.45 * k);
+      const x = Math.floor(at[0] / v);
+      const z = Math.floor(at[2] / v);
+      let y = Math.floor(at[1] / v) + 20;
+      while (y > 0 && h.world.map.get(x, y - 1, z) === 0) y--;
+      if (!burns.includes(h.world.map.get(x, y - 1, z))) return { shelled: false, fire: null };
+      await h.shell([at[0], 0, at[2]], 0.3);
+      await h.waitFrames(3);
+      const struck = h.battle().fires.filter((f) => !f.hamlet);
+      return { shelled: true, fire: struck.length ? struck[struck.length - 1] : null };
+    }, [k, BURNS]);
+    if (r.shelled) shells++;
+    if (r.fire) return { fire: r.fire, shells };
+  }
+  return { fire: null, shells };
+}
 
 /** Where the player digs a shelled bay from, and the fixed vantage over them (metres, degrees). */
 export interface ShelledBay {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CameraRig, rigTunables } from '../../src/app/camera-rig';
 import { EffectsFrameBuilder, effectsTunables, NO_BATTLE, type ShownBattle } from '../../src/app/effects-frame';
 import { farShellTunables } from '../../src/battle/far-shells';
-import { fireFlames, fireTunables, type Fire } from '../../src/battle/fires';
+import { fireFlames, firePlume, fireTunables, type Fire } from '../../src/battle/fires';
 import { Wind, windTunables } from '../../src/battle/wind';
 import { tracerTunables, type TracerState } from '../../src/battle/tracers';
 import { flareTunables, type FlareState } from '../../src/battle/flares';
@@ -248,7 +248,7 @@ describe('a frame of effects', () => {
     const b = new EffectsFrameBuilder(t);
     // Farthest first, so the first 64 are not the nearest: 20 blasts' puffs, and 20 puffs of plumes between them.
     const blasts = Array.from({ length: 20 }, (_, k) => ({ tick: s.ticks, at: [12.8, 0.4, 100 - 4 * k] as V3, radiusM: 2.5, material: P.SOD, crater: null }));
-    const plumes = Array.from({ length: 20 }, (_, k) => ({ centre: [15, 4, 98 - 4 * k] as V3, radiusM: 2, density: 0.15 }));
+    const plumes = Array.from({ length: 20 }, (_, k) => ({ centre: [15, 4, 98 - 4 * k] as V3, radiusM: 2, density: 0.15, alpha: 0.5 }));
     const eye: V3 = [12.8, 2, 0];
     const built = b.build(s, { ...none(), blasts }, null, eye, { ...NO_BATTLE, plumes });
     expect(MAX_PUFFS).toBe(64);
@@ -292,6 +292,28 @@ describe('a frame of effects', () => {
     });
   });
 
+  it("a fire's plume is drawn as discs of dark smoke, lit, by its strength", () => {
+    const fs = farShellTunables(tun);
+    const plumes = [
+      { centre: [14, 3, 20] as V3, radiusM: 1.5, density: 0.15, alpha: 0.5 },
+      { centre: [15, 9, 21] as V3, radiusM: 3.5, density: 0.075, alpha: 0.25 },
+    ];
+    const built = new EffectsFrameBuilder(t).build(stand(), none(), null, undefined, { ...NO_BATTLE, plumes });
+    const out = built.frame.billboards;
+    const all = Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS)));
+    for (const p of plumes) {
+      const [b] = all.filter((q) => q[0] === p.centre[0] && q[1] === p.centre[1] && q[2] === p.centre[2]);
+      expect(b).toBeDefined();
+      expect(b[3]).toBeCloseTo(p.radiusM, 6);
+      for (let c = 0; c < 3; c++) expect(b[4 + c]).toBeCloseTo(fs.smokeColour[c] * p.alpha, 6);
+      expect(b[7]).toBeCloseTo(p.alpha, 6);
+      // Lit, as the far shells' smoke is.
+      expect(b[8]).toBe(0);
+    }
+    // And in the haze.
+    expect(built.smoke.map((p) => p.centre)).toEqual(plumes.map((p) => p.centre));
+  });
+
   it("the battle's billboards keep their allowance under a full pool", () => {
     const s = stand();
     s.particles.emit([12.8, 1, 20], [0, 0, 0], { ...particleSpec(tun, 'dust'), lifeS: 60 }, s.particles.capacity);
@@ -300,13 +322,16 @@ describe('a frame of effects', () => {
     b.debug = Array.from({ length: 64 }, (_, k) => ({ position: [k * 0.2, 2, 5] as V3, size: 0.1, colour: [1, 1, 1] as V3 }));
     const ft = fireTunables(tun);
     const wind = new Wind(windTunables(tun), Rng.root(7).derive('battle.wind'));
-    // Twelve fires at full strength, sixteen flares burning, a far shell's column of smoke.
-    const flames = Array.from({ length: 12 }, (_, k) => fireFlames({ id: k, at: [k * 2, 0.4, 30], t0: 0, burnS: 180, size: 0.8, hamlet: false }, 60, wind, ft)).flat();
+    // Twelve fires at full strength and twelve dying down past the cap, sixteen flares burning, a
+    // dozen far shells' columns of smoke.
+    const fires = Array.from({ length: 24 }, (_, k) => ({ id: k, at: [k * 2, 0.4, 30] as V3, t0: 0, burnS: 180, size: 0.8, hamlet: false }));
+    const flames = fires.flatMap((f) => fireFlames(f, 60, wind, ft));
+    const plumes = fires.flatMap((f) => firePlume(f, 60, wind, ft));
     const flares: FlareState[] = Array.from({ length: 16 }, (_, k) => ({ id: k, position: [k * 3, 35, 120], glow: 1, stage: 'burning', colour: [1, 0.88, 0.7] }));
-    const smoke = Array.from({ length: 8 }, (_, k) => ({ centre: [500, 10 + 10 * k, 700] as V3, radiusM: 8, alpha: 0.85 }));
-    const built = b.build(s, none(), null, undefined, { ...NO_BATTLE, seconds: 60, flares, smoke, flames });
-    expect(MAX_BILLBOARDS).toBe(4096 + 64 + 512);
-    expect(built.counts.billboards).toBe(s.particles.capacity + 64 + flares.length + smoke.length + flames.length);
+    const smoke = Array.from({ length: 96 }, (_, k) => ({ centre: [500 + k, 10 + 10 * (k % 8), 700] as V3, radiusM: 8, alpha: 0.85 }));
+    const built = b.build(s, none(), null, undefined, { ...NO_BATTLE, seconds: 60, flares, smoke, flames, plumes });
+    expect(MAX_BILLBOARDS).toBe(4096 + 64 + 1024);
+    expect(built.counts.billboards).toBe(s.particles.capacity + 64 + flares.length + smoke.length + flames.length + plumes.length);
     expect(b.debugAt).toBe(s.particles.capacity);
   });
 

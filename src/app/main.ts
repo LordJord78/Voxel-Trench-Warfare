@@ -970,9 +970,9 @@ async function start(): Promise<void> {
     holdLights(seconds?: number) {
       lightsHeld = seconds ?? 'rest';
     },
-    /** Run the battle on by `seconds` at once, as it is (its strikes' fires kept), at the inputs of the moment: its fires' chars made, the rest unheard. */
-    advanceBattle(seconds: number) {
-      for (const c of battle.tick(seconds, battleInputs()).chars) chars.add(c.at);
+    /** Run the battle on by `seconds` at once, as it is (its strikes' fires kept), at the inputs of the moment, `strikes` struck as it starts: its fires' chars made, the rest unheard. */
+    advanceBattle(seconds: number, strikes: Strike[] = []) {
+      for (const c of battle.tick(seconds, { ...battleInputs(), strikes }).chars) chars.add(c.at);
     },
     /** Run the lights' clock; from `seconds` into the battle (sought there at the inputs of the moment), if given. */
     runLights(seconds?: number) {

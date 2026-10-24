@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { P } from '../../src/world/materials';
 import { useManyLights } from './many-lights';
 import { audioRenders, hooks, openGame } from './support/app';
 import { digAlong, shellTheBay } from './support/bay';
@@ -432,6 +433,61 @@ test("a heavy night's flares render within the budget at the overview and in no 
     expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
   }
   console.log(`A heavy night's flares: ${lines.join('; ')}`);
+  expect(errors).toEqual([]);
+});
+
+test('a burning night renders within the budget at the overview and in the hamlet', async ({ page }) => {
+  // Done-table row 4 at the heavy intensity: the hamlet's fires and strike fires at the cap (12), each
+  // a shadowed light flickering, its flames and embers drawn and its plume in the haze (the 64 puffs
+  // nearest the eye), with the night's flares, barrages and tracers; each frame's own GPU time within
+  // 14 ms at the 95th percentile. Timber struck across the view, the fires grown to their full burn.
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  const lines: string[] = [];
+  for (const view of ['overview', 'hamlet'] as const) {
+    const r = await hooks(page, async (h, a) => {
+      const [v, timber] = a as [string, number];
+      h.setQuality({ preset: 'high', dynres: false });
+      h.view(v);
+      h.setTimeOfDay(21);
+      h.setIntensity('heavy');
+      h.runLights(120);
+      const c = h.camera();
+      const yaw = (c.yaw * Math.PI) / 180;
+      const strikes = Array.from({ length: 36 }, (_, k) => {
+        const d = 20 + (k % 6) * 15;
+        const side = ((Math.floor(k / 6) - 2.5) / 2.5) * 0.4 * d;
+        const x = c.position[0] + Math.sin(yaw) * d + Math.cos(yaw) * side;
+        const z = c.position[2] + Math.cos(yaw) * d - Math.sin(yaw) * side;
+        let y = 300;
+        while (y > 0 && h.world.map.get(Math.floor(x / 0.1), y - 1, Math.floor(z / 0.1)) === 0) y--;
+        return { at: [x, y * 0.1, z] as [number, number, number], material: timber, crater: null };
+      });
+      h.advanceBattle(25, strikes);
+      await h.waitFrames(30);
+      const gpu: number[] = [];
+      let seen = h.stats().gpuSamples;
+      let fires = 0;
+      let lit = 0;
+      let flames = 0;
+      for (let k = 0; k < 300; k++) {
+        await h.waitFrames(1);
+        const s = h.stats();
+        if (s.gpuSamples > seen && s.gpuLastMs !== null) gpu.push(s.gpuLastMs);
+        seen = s.gpuSamples;
+        fires = Math.max(fires, h.battle().fires.filter((f) => f.strength > 0 && !f.dying).length);
+        lit = Math.max(lit, h.lights().filter((l) => l.kind === 'fire').length);
+        flames = Math.max(flames, h.effects().flames);
+      }
+      gpu.sort((x, y) => x - y);
+      return { count: gpu.length, p95: gpu[Math.floor(0.95 * gpu.length)], median: gpu[gpu.length >> 1], max: gpu[gpu.length - 1], fires, lit, flames, flares: h.lights().filter((l) => l.kind === 'flare').length };
+    }, [view, P.TIMBER]);
+    if (r.count === 0) test.skip(true, 'no GPU timestamps');
+    lines.push(`${view}: GPU p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, worst ${r.max.toFixed(2)}; ${r.fires} fires burning (${r.lit} fire lights with the dying), ${r.flames} flames and embers drawn, ${r.flares} flares alight`);
+    expect(r.fires, lines.join('; ')).toBe(12);
+    expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
+  }
+  console.log(`A burning night: ${lines.join('; ')}`);
   expect(errors).toEqual([]);
 });
 

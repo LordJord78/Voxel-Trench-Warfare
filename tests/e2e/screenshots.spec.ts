@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
+import { P } from '../../src/world/materials';
 import { useManyLights } from './many-lights';
 import { hooks, openGame } from './support/app';
-import { digAlong, shellTheBay, type ShelledBay } from './support/bay';
+import { digAlong, fireInTheBay, shellTheBay, type ShelledBay } from './support/bay';
 
 // The six standard views at dusk, night, dawn and noon, and at 18:30, the darkest of the evening's
 // twilight, where the exposure peaks: for review by eye (grain, seams, the horizon, lanterns and
@@ -582,3 +583,109 @@ test('tracers over the field at night', async ({ page }) => {
   }
   if (errors.length) throw new Error(errors.join('\n'));
 });
+
+// Battle milestone 4's captures (artifacts/b4): a fire struck in the bay at dusk, burning and
+// smoking, from along the bay and from over it, and what it charred once it has burnt out; the
+// hamlet's fires at night from its view, near one, and from the overview.
+type Pose = { position: [number, number, number]; yaw: number; pitch: number };
+/** From `from` looking at `to` (metres). */
+const looking = (from: [number, number, number], to: readonly number[]): Pose => {
+  const d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+  return { position: from, yaw: (Math.atan2(d[0], d[2]) * 180) / Math.PI, pitch: (Math.atan2(d[1], Math.hypot(d[0], d[2])) * 180) / Math.PI };
+};
+
+test('a fire burning in the bay and its smoke at dusk', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors = await openGame(page);
+  await hooks(page, (h, dusk) => {
+    h.setQuality({ preset: 'high', dynres: false });
+    h.setTimeOfDay(dusk as number);
+  }, DUSK);
+  const { fire, shells } = await fireInTheBay(page);
+  if (!fire) throw new Error(`no fire from ${shells} shells on the bay's timber`);
+  const bay = await hooks(page, (h) => h.world.spawn.bay);
+  // Along the bay 5 m, at the eye's height; and over it, 6 m along and 3 m back of the trench, 4.5 m up.
+  const at = fire.at;
+  const along = (m: number, up: number, back = 0): [number, number, number] => {
+    const p: [number, number, number] = [at[0], at[1] + up, at[2]];
+    p[bay.longAxis] += m;
+    p[bay.longAxis === 0 ? 2 : 0] -= bay.facing * back;
+    return p;
+  };
+  const views: [string, Pose][] = [
+    ['along', looking(along(5, 1.6), [at[0], at[1] + 0.6, at[2]])],
+    ['over', looking(along(6, 4.5, 3), [at[0], at[1] + 2, at[2]])],
+  ];
+  // Held at each vantage while the session runs on (spectating: flying, it would stand still, and
+  // the shell's soil and smoke with it), the shell's smoke gone (15 s) and the fire at its full burn;
+  // then burnt out, what it charred, the exposure come back to dusk from the fire's light.
+  await hooks(page, async (h, p) => {
+    h.spectate(p as Pose);
+    await h.waitFrames(960);
+    h.advanceBattle(10);
+  }, views[0][1]);
+  for (const [name, pose] of views) {
+    await hooks(page, async (h, p) => {
+      h.spectate(p as Pose);
+      await h.waitFrames(120);
+    }, pose);
+    await page.screenshot({ path: `artifacts/b4/bay-fire-${name}-dusk.png` });
+  }
+  await hooks(page, async (h, p) => {
+    h.advanceBattle(500);
+    h.spectate(p as Pose);
+    await h.waitFrames(600);
+  }, views[0][1]);
+  await page.screenshot({ path: 'artifacts/b4/bay-char-along-dusk.png' });
+  // And at noon, where the char shows against the duckboards it did not reach.
+  await hooks(page, async (h) => {
+    h.setTimeOfDay(12);
+    await h.waitFrames(300);
+  });
+  await page.screenshot({ path: 'artifacts/b4/bay-char-along-noon.png' });
+  if (errors.length) throw new Error(errors.join('\n'));
+});
+
+test('the hamlet burning at night', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  await hooks(page, async (h) => {
+    h.setQuality({ preset: 'high', dynres: false });
+    h.view('hamlet');
+    h.setTimeOfDay(22);
+    h.runLights(60);
+    await h.waitFrames(120);
+  });
+  await page.screenshot({ path: 'artifacts/b4/hamlet-burning-night.png' });
+  // 8 m from the nearest fire, 3 m up, looking at its flames.
+  await hooks(page, async (h) => {
+    const eye = h.camera().position;
+    const near = (a: readonly number[]) => Math.hypot(a[0] - eye[0], a[2] - eye[2]);
+    const f = [...h.battle().fires].sort((x, y) => near(x.at) - near(y.at))[0];
+    h.flyTo({ position: [f.at[0], f.at[1] + 3, f.at[2] - 8], yaw: 0, pitch: (Math.atan2(-2.4, 8) * 180) / Math.PI });
+    await h.waitFrames(120);
+  });
+  await page.screenshot({ path: 'artifacts/b4/hamlet-fire-near-night.png' });
+  // The overview, timber struck across its view as the perf test's burning night has it: the fires at the cap.
+  await hooks(page, async (h, timber) => {
+    h.view('overview');
+    h.setTimeOfDay(22);
+    h.runLights(60);
+    const c = h.camera();
+    const yaw = (c.yaw * Math.PI) / 180;
+    const strikes = Array.from({ length: 36 }, (_, k) => {
+      const d = 20 + (k % 6) * 15;
+      const side = ((Math.floor(k / 6) - 2.5) / 2.5) * 0.4 * d;
+      const x = c.position[0] + Math.sin(yaw) * d + Math.cos(yaw) * side;
+      const z = c.position[2] + Math.cos(yaw) * d - Math.sin(yaw) * side;
+      let y = 300;
+      while (y > 0 && h.world.map.get(Math.floor(x / 0.1), y - 1, Math.floor(z / 0.1)) === 0) y--;
+      return { at: [x, y * 0.1, z] as [number, number, number], material: timber as number, crater: null };
+    });
+    h.advanceBattle(25, strikes);
+    await h.waitFrames(120);
+  }, P.TIMBER);
+  await page.screenshot({ path: 'artifacts/b4/overview-burning-night.png' });
+  if (errors.length) throw new Error(errors.join('\n'));
+});
+

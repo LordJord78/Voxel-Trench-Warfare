@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { P } from '../../src/world/materials';
 import { hooks, openGame } from './support/app';
+import { BURNS, fireInTheBay } from './support/bay';
 
 // The hamlet's fires, lit at nightfall (src/battle/fires.ts): a minute into the night, each a light
 // over its fuel lighting the ruins round it, and its plume in the haze. At rest there are none.
@@ -124,38 +125,10 @@ test("a burning fire's flames are drawn", async ({ page }) => {
 test('a fire in the bay chars its timber once its crater has settled', async ({ page }) => {
   test.setTimeout(180_000);
   const errors = await openGame(page);
-  const burns = [P.TIMBER, P.TIMBER_WEATHERED, P.TIMBER_DARK, P.DUCKBOARD, P.DUCKBOARD_WORN, P.CLOTH, P.CLOTH_DARK, P.HULL, P.HULL_RUST];
   const burnt = [P.CHAR_TIMBER, P.CHAR_DUCKBOARD, P.CHAR_CLOTH, P.CHAR_HULL];
-  // At dusk, playing in the bay, the battle running and the session's own shelling off: small
-  // shells along the bay's duckboards, each let settle, until one starts a fire.
-  await hooks(page, (h) => {
-    h.setTimeOfDay(17 + 35 / 60);
-    h.setShelling('off');
-    h.runLights();
-    h.play();
-  });
-  let fire: { id: number; at: V3 } | null = null;
-  let shells = 0;
-  for (let k = 0; k < 20 && !fire; k++) {
-    const r = await hooks(page, async (h, a) => {
-      const [k, burns] = a as [number, number[]];
-      const v = 0.1;
-      const s = h.world.spawn;
-      const at = [...s.position];
-      at[s.bay.longAxis] += (k % 2 ? 1 : -1) * (0.6 + 0.45 * k);
-      const x = Math.floor(at[0] / v);
-      const z = Math.floor(at[2] / v);
-      let y = Math.floor(at[1] / v) + 20;
-      while (y > 0 && h.world.map.get(x, y - 1, z) === 0) y--;
-      if (!burns.includes(h.world.map.get(x, y - 1, z))) return { shelled: false, fire: null };
-      await h.shell([at[0], 0, at[2]], 0.3);
-      await h.waitFrames(3);
-      const struck = h.battle().fires.filter((f) => !f.hamlet);
-      return { shelled: true, fire: struck.length ? struck[struck.length - 1] : null };
-    }, [k, burns]);
-    if (r.shelled) shells++;
-    fire = r.fire;
-  }
+  await hooks(page, (h) => h.setTimeOfDay(17 + 35 / 60));
+  // At dusk, small shells along the bay's duckboards until one starts a fire.
+  const { fire, shells } = await fireInTheBay(page);
   expect(fire, `no fire from ${shells} shells on the bay's timber`).not.toBeNull();
   const f = fire!;
   // What burns within 1.5 m of it, and what is charred.
@@ -174,7 +147,7 @@ test('a fire in the bay chars its timber once its crater has settled', async ({ 
             if (burnt.includes(p)) charred++;
           }
       return { unburnt, charred };
-    }, [f.at, burns, burnt]);
+    }, [f.at, BURNS, burnt]);
   const before = await count();
   // Lit, not yet at its full burn: nothing charred, and timber round it to char.
   expect(before.charred).toBe(0);
