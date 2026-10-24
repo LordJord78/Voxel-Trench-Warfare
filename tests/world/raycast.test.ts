@@ -93,6 +93,29 @@ describe('the CPU raycast', () => {
     expect(raycast(row(), [5.5, 5.5, 0.5], [0, 0, 1], 1000)).toEqual({ t: 39.5, cell: [5, 5, 40], face: 4, material: P.CLAY });
   });
 
+  it('a ray notes the first water it enters, and none when it starts in water', () => {
+    const map = row();
+    const water = { t: -1, cell: [0, 0, 0] as [number, number, number] };
+    // Into the water at z 10, through it as before, to the clay.
+    expect(raycast(map, [5.5, 5.5, 0.5], [0, 0, 1], 60, water)?.material).toBe(P.CLAY);
+    expect(water.t).toBeCloseTo(9.5, 9);
+    expect(water.cell).toEqual([5, 5, 10]);
+    // From inside it: none noted.
+    const inside = { t: -1, cell: [0, 0, 0] as [number, number, number] };
+    raycast(map, [5.5, 5.5, 12.5], [0, 0, 1], 60, inside);
+    expect(inside.t).toBe(-1);
+    // Short of it: none.
+    const short = { t: -1, cell: [0, 0, 0] as [number, number, number] };
+    expect(raycast(map, [5.5, 5.5, 0.5], [0, 0, 1], 5, short)).toBeNull();
+    expect(short.t).toBe(-1);
+    // Behind a solid: none (the round has stopped).
+    const walled = row();
+    walled.fillBox(0, 0, 5, 32, 32, 6, P.CLAY);
+    const behind = { t: -1, cell: [0, 0, 0] as [number, number, number] };
+    expect(raycast(walled, [5.5, 5.5, 0.5], [0, 0, 1], 60, behind)?.cell).toEqual([5, 5, 5]);
+    expect(behind.t).toBe(-1);
+  });
+
   it('starting inside a solid voxel is a hit at t 0 with no face', () => {
     expect(raycast(row(), [5.5, 5.5, 40.5], [0, 0, 1], 1000)).toEqual({ t: 0, cell: [5, 5, 40], face: -1, material: P.CLAY });
   });

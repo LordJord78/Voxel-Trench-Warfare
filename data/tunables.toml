@@ -308,6 +308,7 @@ heavy_mean_s        = 1.0
 heavy_gap_s         = 0.3
 whistle_s           = 1.5      # heard about 1.5 s before impact (the spec)
 radius_m            = [2.2, 3.4] # drawn uniform, from the stream combat.shells
+splash_energy_j     = 3.0e6    # a shell landing on water, at a 3 m crater (a 77 mm shell's charge), by the cube of its radius
 light_sector_share  = 0.2      # the share that lands in the player's sector;
 heavy_sector_share  = 0.5      # the rest in no man's land and along both lines
 light_sector_m      = [15.0, 40.0] # from the player, in their sector

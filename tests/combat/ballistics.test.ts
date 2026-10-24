@@ -106,6 +106,27 @@ describe('rounds in flight', () => {
     within(hundred.t, (Math.exp(k * 100) - 1) / (k * 880));
   });
 
+  it('a round into water splashes once where it enters, and on through it as before', () => {
+    const map = world();
+    // A pool 0.2 m deep over the ground from 10 m to 100 m out, its top at 0.6 m (y 6).
+    map.fillBox(0, 4, 100, 128, 6, 1000, P.WATER);
+    const r = new Rounds(T, map, VOXEL);
+    // Falling into the pool's top some 35 m out, and on through the water into the ground.
+    r.fire([6.4, 1.0, 0.5], [0, -10, 880], RIFLE, 0, false);
+    const splashes = [];
+    for (let k = 0; k < 20 && r.count > 0; k++) {
+      r.step(TICK);
+      splashes.push(...r.splashes);
+    }
+    expect(splashes).toHaveLength(1);
+    const [s] = splashes;
+    // Where it entered the water: on its top, some 35 m out.
+    expect(s.position[2]).toBeGreaterThan(30);
+    expect(s.position[2]).toBeLessThan(40);
+    expect(s.position[1]).toBeCloseTo(0.6, 6);
+    expect(s.energyJ).toBeGreaterThan(100);
+  });
+
   it('a round stops at the first solid voxel', () => {
     const map = world();
     map.fillBox(0, 0, 600, 128, 64, 610, P.CONCRETE);

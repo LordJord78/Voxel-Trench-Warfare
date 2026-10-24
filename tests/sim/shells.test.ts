@@ -55,6 +55,23 @@ describe('a shell landing', () => {
     expect(s.suppression.level).toBeGreaterThan(0);
   });
 
+  it('a shell landing on water is a splash at its top, as big as the shell', () => {
+    const s = session();
+    // A pool on the ground 12.8 m along, its top 0.3 m over the ground there.
+    const top = Math.round(7.6 / 0.1);
+    s.map.fillBox(120, top, 140, 136, top + 3, 160, P.WATER);
+    s.land(12.8, 15.0, 3, 7);
+    const e = s.drainEvents();
+    expect(e.blasts).toHaveLength(1);
+    expect(e.blasts[0].material).toBe(P.WATER);
+    expect(e.splashes).toEqual([{ tick: s.ticks, at: e.blasts[0].at, energyJ: expect.any(Number), kind: 'shell' }]);
+    expect(e.splashes[0].energyJ).toBeGreaterThan(1e5);
+    // On dry ground, none.
+    const dry = session();
+    dry.land(12.8, 15.0, 3, 7);
+    expect(dry.drainEvents().splashes).toEqual([]);
+  });
+
   it('a shell with no ground under it lands nowhere', () => {
     const s = session();
     expect(s.land(-5, 15, 3, 7)).toBeNull();

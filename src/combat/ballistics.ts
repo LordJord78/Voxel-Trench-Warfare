@@ -15,14 +15,15 @@
  * The pool is struct-of-arrays: live rounds are a prefix of it, retired by
  * swap-with-last. Each substep's segment is raycast through the brick map
  * (world/raycast.ts): the first solid voxel stops the round, and water, wire,
- * cloth and air let it through. A round past its range or flight time, or out
- * of the world's box, is retired; the far field is not hit.
+ * cloth and air let it through; where it goes into water, it splashes. A round
+ * past its range or flight time, or out of the world's box, is retired; the far
+ * field is not hit.
  */
 
 import { hypot } from '../core/dmath';
 import type { Tunables } from '../core/tunables';
 import type { BrickMap } from '../world/bricks';
-import { raycast } from '../world/raycast';
+import { raycast, type WaterEntry } from '../world/raycast';
 
 /** What flies, as opposed to what fired it. */
 export interface ProjectileSpec {
@@ -90,6 +91,9 @@ export class Rounds {
   dropped = 0;
   /** The last step's impacts, in slot order. */
   readonly impacts: Impact[] = [];
+  /** Where rounds entered water this step (metres), and with how much energy: a round splashes each time it goes in. */
+  readonly splashes: { position: [number, number, number]; energyJ: number }[] = [];
+  private readonly water: WaterEntry = { t: -1, cell: [0, 0, 0] };
   /** The last step's near misses of the listener: one per substep a round not the player's passed within its radius, how near (m) and where (suppression counts each). */
   readonly cracks: { missM: number; at: [number, number, number] }[] = [];
   /** The last step's rounds heard passing the listener: one per round, at its nearest approach (or as near as it came before it stopped). */
@@ -171,6 +175,7 @@ export class Rounds {
   /** One tick of `dt` seconds in substeps: this step's impacts, cracks and passes, and rounds retired by range, age or the world's edge. */
   step(dt: number): void {
     this.impacts.length = 0;
+    this.splashes.length = 0;
     this.cracks.length = 0;
     this.passes.length = 0;
     const h = dt / this.t.substeps;
@@ -271,7 +276,12 @@ export class Rounds {
     if (len > 0) {
       const dir: [number, number, number] = [tx / len, ty / len, tz / len];
       const v = this.voxel;
-      const hit = raycast(this.map, [this.pos[p] / v, this.pos[p + 1] / v, this.pos[p + 2] / v], dir, len / v);
+      this.water.t = -1;
+      const hit = raycast(this.map, [this.pos[p] / v, this.pos[p + 1] / v, this.pos[p + 2] / v], dir, len / v, this.water);
+      if (this.water.t >= 0) {
+        const m = this.water.t * v;
+        this.splashes.push({ position: [this.pos[p] + dir[0] * m, this.pos[p + 1] + dir[1] * m, this.pos[p + 2] + dir[2] * m], energyJ: 0.5 * spec.massKg * speed * speed });
+      }
       if (hit) {
         const m = hit.t * v;
         const normal: [number, number, number] = [0, 0, 0];

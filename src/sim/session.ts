@@ -85,10 +85,12 @@ export interface CombatEvents {
   blasts: { tick: number; at: [number, number, number]; radiusM: number; material: number; crater: number | null }[];
   /** Each scoop the player dug: how many voxels, and where (metres). */
   scoops: (Scoop & { tick: number })[];
+  /** Where rounds went into water and shells landed on it (metres), and with how much energy. */
+  splashes: { tick: number; at: [number, number, number]; energyJ: number; kind: 'round' | 'shell' }[];
 }
 
 function noEvents(): CombatEvents {
-  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [] };
+  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [] };
 }
 
 export interface SessionWorld {
@@ -158,6 +160,8 @@ export class Session {
   private readonly viewKickRng: Rng;
   private readonly suppressionRng: Rng;
   private readonly chipEnergyJ: number;
+  /** A shell's splash's energy, at a crater of 3 m: by the cube of its radius. */
+  private readonly splashEnergyJ: number;
   private events: CombatEvents = noEvents();
   private readonly particleRng: Rng;
   private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris', ParticleSpec>;
@@ -184,6 +188,7 @@ export class Session {
     this.viewKickRng = this.streams.derive('combat.viewkick');
     this.suppressionRng = this.streams.derive('combat.suppression');
     this.chipEnergyJ = tun.f('destruction.chip_energy_j');
+    this.splashEnergyJ = tun.f('artillery.splash_energy_j');
     this.recoil = new Recoil(recoilProfile(tun, 'assault_rifle'));
     this.viewKick = new ViewKick(viewKickProfile(tun, 'assault_rifle'));
     this.suppression = new Suppression(suppressionTunables(tun));
@@ -312,6 +317,7 @@ export class Session {
     // round once, where it passed nearest.
     for (const c of this.rounds.cracks) this.suppression.crack(c.missM, this.suppressionRng);
     for (const c of this.rounds.passes) this.events.cracks.push({ tick: this.ticks, missM: c.missM, at: c.at });
+    for (const w of this.rounds.splashes) this.events.splashes.push({ tick: this.ticks, at: w.position, energyJ: w.energyJ, kind: 'round' });
     for (const hit of this.rounds.impacts) {
       this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
       if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
@@ -348,6 +354,7 @@ export class Session {
     const id = this.destruction.shell([x / v, top, z / v], radiusM / v, seed);
     const at: [number, number, number] = [x, top * v, z];
     this.events.blasts.push({ tick: this.ticks, at, radiusM, material, crater: id });
+    if (kindOf(material) === K.WATER) this.events.splashes.push({ tick: this.ticks, at, energyJ: this.splashEnergyJ * Math.pow(radiusM / 3, 3), kind: 'shell' });
     this.throwBlast(at, material);
     const p = this.player;
     const d = hypot(at[0] - p.position.x, at[1] - (p.position.y + this.controller.eyeHeight(p)), at[2] - p.position.z);

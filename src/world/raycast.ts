@@ -14,7 +14,7 @@
  */
 
 import { UNIFORM, type BrickMap } from './bricks';
-import { isSolid } from './materials';
+import { isSolid, K, PALETTE_KIND } from './materials';
 
 export interface RayHit {
   /** Voxels along the unit direction to where the ray entered the hit cell; 0 if it started inside one. */
@@ -27,9 +27,20 @@ export interface RayHit {
 }
 
 const SOLID = Uint8Array.from({ length: 256 }, (_, p) => (isSolid(p) ? 1 : 0));
+const WET = Uint8Array.from({ length: 256 }, (_, p) => (PALETTE_KIND[p] === K.WATER ? 1 : 0));
 
-/** The first solid voxel along a ray from `origin` (voxels) along unit `dir`, within `maxT` voxels; null if none. */
-export function raycast(map: BrickMap, origin: readonly [number, number, number], dir: readonly [number, number, number], maxT: number): RayHit | null {
+/** Where a ray first entered water, if it did (`t` −1 if not): the caller resets it. */
+export interface WaterEntry {
+  t: number;
+  cell: [number, number, number];
+}
+
+/**
+ * The first solid voxel along a ray from `origin` (voxels) along unit `dir`, within `maxT` voxels;
+ * null if none. With `water`, also where it first entered water from outside it, short of that
+ * solid: noted in `water` (a ray that starts in water notes none).
+ */
+export function raycast(map: BrickMap, origin: readonly [number, number, number], dir: readonly [number, number, number], maxT: number, water?: WaterEntry): RayHit | null {
   const dims = [map.dims.x, map.dims.y, map.dims.z];
   let tEnd = maxT;
   let entry = -1;
@@ -61,15 +72,26 @@ export function raycast(map: BrickMap, origin: readonly [number, number, number]
   const by = map.bricks.y;
   let brick = -1;
   let entryWord = 0;
+  // Whether the last cell was water: the first is the ray's own, so a ray from inside water notes none.
+  let inWater = true;
   for (;;) {
     const bi = ((cell[2] >> 3) * by + (cell[1] >> 3)) * bx + (cell[0] >> 3);
     if (bi !== brick) {
       brick = bi;
       entryWord = map.table[bi];
     }
+    let p = 0;
     if (entryWord !== 0) {
-      const p = entryWord & UNIFORM ? entryWord & 0xff : map.get(cell[0], cell[1], cell[2]);
+      p = entryWord & UNIFORM ? entryWord & 0xff : map.get(cell[0], cell[1], cell[2]);
       if (SOLID[p]) return { t, cell: [cell[0], cell[1], cell[2]], face, material: p };
+    }
+    if (water) {
+      const wet = WET[p] === 1;
+      if (wet && !inWater && water.t < 0) {
+        water.t = t;
+        water.cell = [cell[0], cell[1], cell[2]];
+      }
+      inWater = wet;
     }
     let axis = -1;
     let next = Infinity;
