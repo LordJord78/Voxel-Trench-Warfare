@@ -168,7 +168,19 @@ export interface Hooks {
   /** Each of the last 600 frames' main-thread time, ms, from the frame's start to its render's return. */
   mainMs(): number[];
   /** The sound: its context's state ('none' before the click that starts play) and how many voices have started. */
-  audio(): { state: 'none' | 'suspended' | 'running' | 'closed'; voices: number; kinds: Record<string, number>; held: number; dropped: number };
+  audio(): { state: 'none' | 'suspended' | 'running' | 'closed'; voices: number; kinds: Record<string, number>; held: number; dropped: number; time: number | null };
+}
+
+/**
+ * Whether the game's sound renders here: its audio context's clock moves over half a second. Where
+ * no output renders (a laptop shut, no device) the context says it is running but its clock stands
+ * still, and voices held under the cap never end: what is played cannot be counted as heard.
+ */
+export async function audioRenders(page: Page): Promise<boolean> {
+  const before = await hooks(page, (h) => h.audio().time);
+  await page.waitForTimeout(500);
+  const after = await hooks(page, (h) => h.audio().time);
+  return before !== null && after !== null && after > before + 0.1;
 }
 
 export async function openGame(page: Page): Promise<string[]> {

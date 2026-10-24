@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { P } from '../../src/world/materials';
-import { hooks, openGame } from './support/app';
+import { audioRenders, hooks, openGame } from './support/app';
 
 // Sound starts with the click that starts play (no context before: the browser would refuse it),
 // a shot is heard, and the pause menu silences the game.
@@ -42,7 +42,7 @@ test('a browser that refuses sound still starts play, takes the pointer and resu
     h.trigger(false);
     await h.waitFrames(3);
   });
-  expect(await hooks(page, (h) => h.audio())).toEqual({ state: 'none', voices: 0, kinds: {}, held: 0, dropped: 0 });
+  expect(await hooks(page, (h) => h.audio())).toEqual({ state: 'none', voices: 0, kinds: {}, held: 0, dropped: 0, time: null });
   await page.keyboard.press('Escape');
   await expect(page.locator('#pause')).toBeVisible();
   await page.locator('#resume').click();
@@ -83,6 +83,7 @@ test('shells are heard: their whistles, then their blasts', async ({ page }) => 
 test('digging is heard: a scrape a scoop', async ({ page }) => {
   const errors = await openGame(page);
   await page.locator('#play').click();
+  test.skip(!(await audioRenders(page)), 'the audio clock stands still here (no output renders): what is played cannot be counted as heard');
   await hooks(page, (h) => {
     h.setIntensity('off');
     h.setShelling('off');
@@ -112,6 +113,7 @@ test('digging is heard: a scrape a scoop', async ({ page }) => {
 test('flares are heard when they are fired', async ({ page }) => {
   const errors = await openGame(page);
   await page.locator('#play').click();
+  test.skip(!(await audioRenders(page)), 'the audio clock stands still here (no output renders): what is played cannot be counted as heard');
   await hooks(page, (h) => h.waitFrames(10));
   const before = await hooks(page, (h) => ({ flares: h.audio().kinds.flare ?? 0, state: h.audio().state }));
   expect(before.state).toBe('running');
@@ -137,6 +139,7 @@ test('flares are heard when they are fired', async ({ page }) => {
 test('distant artillery is heard: a barrage beyond the map rumbles, a far shell thumps', async ({ page }) => {
   const errors = await openGame(page);
   await page.locator('#play').click();
+  test.skip(!(await audioRenders(page)), 'the audio clock stands still here (no output renders): what is played cannot be counted as heard');
   await hooks(page, (h) => h.waitFrames(10));
   // The front heavy, the battle two minutes in: barrages in progress and a far shell every few seconds.
   const heard = await hooks(page, async (h) => {
@@ -156,6 +159,7 @@ test('distant artillery is heard: a barrage beyond the map rumbles, a far shell 
 test('the machine guns are heard at night', async ({ page }) => {
   const errors = await openGame(page);
   await page.locator('#play').click();
+  test.skip(!(await audioRenders(page)), 'the audio clock stands still here (no output renders): what is played cannot be counted as heard');
   await hooks(page, (h) => h.waitFrames(10));
   const heard = await hooks(page, async (h) => {
     h.setTimeOfDay(21);

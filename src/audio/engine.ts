@@ -40,6 +40,11 @@ export class AudioEngine {
     return this.cap.count;
   }
 
+  /** The context's clock (seconds), or null without one: it stands still where no output renders. */
+  get time(): number | null {
+    return this.ctx?.currentTime ?? null;
+  }
+
   get state(): AudioContextState | 'none' {
     return this.ctx?.state ?? 'none';
   }

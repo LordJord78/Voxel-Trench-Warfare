@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { useManyLights } from './many-lights';
-import { hooks, openGame } from './support/app';
+import { audioRenders, hooks, openGame } from './support/app';
 import { digAlong, shellTheBay } from './support/bay';
 
 // 1600 × 1000 CSS pixels at a device scale of 1: a 1.6 MP canvas, so the
@@ -365,6 +365,8 @@ test('every standard view at dusk and at night under peak combat stays within th
   const errors = await openGame(page);
   await page.locator('#play').click();
   await expect(page.locator('#loading')).toBeHidden();
+  // Where no output renders, the voices held under the cap never end: none counted as played then.
+  const renders = await audioRenders(page);
   await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
   const lines: string[] = [];
   const over: string[] = [];
@@ -375,10 +377,10 @@ test('every standard view at dusk and at night under peak combat stays within th
       const g = r.gpu!;
       const line =
         `${view} ${label}: GPU p95 ${g.p95.toFixed(2)} ms, median ${g.median.toFixed(2)}, worst ${g.max.toFixed(2)}; ` +
-        `main thread p99 ${r.main.p99.toFixed(1)} ms, worst ${r.main.max.toFixed(1)}; ${r.frames} frames, ${r.shots} shots, ${r.shells} shells (${r.skipped} skipped), ${r.voices} voices; the feet strayed ${r.drift.toFixed(2)} m`;
+        `main thread p99 ${r.main.p99.toFixed(1)} ms, worst ${r.main.max.toFixed(1)}; ${r.frames} frames, ${r.shots} shots, ${r.shells} shells (${r.skipped} skipped), ${r.voices} voices${renders ? '' : ' (sound does not render here)'}; the feet strayed ${r.drift.toFixed(2)} m`;
       lines.push(line);
       // Measured where the view stands: a body lifted onto a parapet, or pushed off, is a different view.
-      if (g.p95 > BUDGET_MS || r.main.p99 > 8 || r.main.max > 20 || r.shots < 50 || r.shells < 5 || r.voices === 0 || r.drift > 0.2) over.push(line);
+      if (g.p95 > BUDGET_MS || r.main.p99 > 8 || r.main.max > 20 || r.shots < 50 || r.shells < 5 || (renders && r.voices === 0) || r.drift > 0.2) over.push(line);
     }
   }
   console.log(`Peak combat:\n${lines.join('\n')}`);
