@@ -54,7 +54,7 @@ import { copyRegion, type RegionCopy } from '../world/region-copy';
 import { CameraRig, rigTunables } from './camera-rig';
 import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
-import { EffectsFrameBuilder, effectsTunables, type BuiltEffects, type DebugQuad, type DebugRibbon } from './effects-frame';
+import { EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type DebugQuad, type DebugRibbon } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
@@ -574,7 +574,8 @@ async function start(): Promise<void> {
       craterWaiters.delete(c.id);
     }
     // The battle's flares seen (sparks climbing, discs burning) as the lights last showed them; none at rest.
-    const frameEffects = effects.build(session, events, rifle, pose.position, lightsHeld === 'rest' || lights !== planned ? [] : shownBattle.flares(), skyNow().flares);
+    const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke() };
+    const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares);
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
     audio.play(planVoices(hearing, events, pose.position, battleEvents));
@@ -949,7 +950,7 @@ async function start(): Promise<void> {
     exposure: () => renderer.exposure(),
     exposureState: () => renderer.exposureState(),
     lights: () => lit,
-    battle: () => ({ seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes() }),
+    battle: () => ({ seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke() }),
     horizon: () => horizon,
     holdLights(seconds?: number) {
       lightsHeld = seconds ?? 'rest';

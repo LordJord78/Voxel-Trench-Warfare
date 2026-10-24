@@ -31,3 +31,32 @@ test("at rest no flash is set; running at heavy, the battle's newest are, each a
   }
   expect(errors).toEqual([]);
 });
+
+test("running at heavy, a far shell's flash and smoke are drawn; at rest, none", async ({ page }) => {
+  // At dusk in fly mode nothing else draws billboards: no flare is fired, and the session is still.
+  const errors = await openGame(page);
+  const rest = await hooks(page, async (h) => {
+    h.setIntensity('heavy');
+    await h.waitFrames(30);
+    return h.effects().billboards;
+  });
+  const seen = await hooks(page, async (h) => {
+    h.runLights(0);
+    for (let k = 0; k < 1800; k++) {
+      await h.waitFrames(1);
+      const smoke = h.battle().smoke.length;
+      if (smoke >= 4) return { smoke, billboards: h.effects().billboards };
+    }
+    return null;
+  });
+  expect(seen, 'no far shell smoked in 30 s at heavy').not.toBeNull();
+  // The frame's effects are built from the battle a frame behind its lights: a puff either way.
+  expect(seen!.billboards - rest).toBeGreaterThanOrEqual(seen!.smoke - 1);
+  const after = await hooks(page, async (h) => {
+    h.holdLights();
+    await h.waitFrames(3);
+    return h.effects().billboards;
+  });
+  expect(after).toBe(rest);
+  expect(errors).toEqual([]);
+});

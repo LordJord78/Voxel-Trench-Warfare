@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CameraRig, rigTunables } from '../../src/app/camera-rig';
-import { EffectsFrameBuilder, effectsTunables } from '../../src/app/effects-frame';
+import { EffectsFrameBuilder, effectsTunables, NO_BATTLE, type ShownBattle } from '../../src/app/effects-frame';
+import { farShellTunables } from '../../src/battle/far-shells';
 import { flareTunables, type FlareState } from '../../src/battle/flares';
 import { projectileSpec } from '../../src/combat/ballistics';
 import { BILLBOARD_FLOATS } from '../../src/combat/particles';
@@ -265,7 +266,7 @@ describe('a frame of effects', () => {
       { id: 2, position: [40, 35, 60], glow: 0.5, stage: 'burning', colour: [1, 0.25, 0.15] },
       { id: 3, position: [70, 30, 90], glow: 0, stage: 'out', colour: [1, 0.88, 0.7] },
     ];
-    const built = b.build(s, none(), null, undefined, flares);
+    const built = b.build(s, none(), null, undefined, { ...NO_BATTLE, flares });
     const out = built.frame.billboards;
     const all = Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS)));
     const at = (p: readonly number[]) => all.filter((q) => q[0] === p[0] && q[1] === p[1] && q[2] === p[2]);
@@ -280,6 +281,46 @@ describe('a frame of effects', () => {
     expect(disc[5]).toBeCloseTo(ft.discGlow * 0.5 * 0.25, 6);
     expect(at(flares[2].position)).toEqual([]);
   });
+  it("a far shell's flash is an emissive disc growing from 6 to 12 m over 0.2 s, gone after; a shell beyond the map draws none", () => {
+    const fs = farShellTunables(tun);
+    const shown = (seconds: number): ShownBattle => ({
+      ...NO_BATTLE,
+      seconds,
+      flashes: [
+        { id: 2, position: [3000, 16, 4000], t: 10.05, power: 1, far: false },
+        { id: 1, position: [500, 20, 700], t: 10, power: 1, far: true },
+      ],
+    });
+    const all = (seconds: number) => {
+      const built = new EffectsFrameBuilder(t).build(stand(), none(), null, undefined, shown(seconds));
+      const out = built.frame.billboards;
+      return Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS)));
+    };
+    // 0.1 s in, halfway: 9 m across, standing on the ground, emissive, half as bright as it began.
+    const half = all(10.1);
+    expect(half.filter((q) => q[0] === 3000)).toEqual([]);
+    const [flash] = half.filter((q) => q[0] === 500);
+    expect(flash[3]).toBeCloseTo(4.5, 5);
+    expect(flash[1]).toBeCloseTo(20 + 4.5, 5);
+    expect(flash[2]).toBe(700);
+    expect(flash[8]).toBe(1);
+    for (let c = 0; c < 3; c++) expect(flash[4 + c]).toBeCloseTo(t.distantColour[c] * fs.flashGlow * 0.5, 5);
+    expect(all(10.25).filter((q) => q[0] === 500)).toEqual([]);
+    expect(fs.flashSizeM).toEqual([6, 12]);
+  });
+
+  it("its column's puffs are lit discs, premultiplied by their alpha", () => {
+    const fs = farShellTunables(tun);
+    const built = new EffectsFrameBuilder(t).build(stand(), none(), null, undefined, { ...NO_BATTLE, smoke: [{ centre: [510, 40, 705], radiusM: 5, alpha: 0.4 }] });
+    const out = built.frame.billboards;
+    const all = Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS)));
+    const [puff] = all.filter((q) => q[0] === 510);
+    expect(puff.slice(0, 4)).toEqual([510, 40, 705, 5]);
+    for (let c = 0; c < 3; c++) expect(puff[4 + c]).toBeCloseTo(fs.smokeColour[c] * 0.4, 6);
+    expect(puff[7]).toBeCloseTo(0.4, 6);
+    expect(puff[8]).toBe(0);
+  });
+
   it("a flare's spark and disc are dimmed by the sky's flares key, as its light is", () => {
     const ft = flareTunables(tun);
     const b = new EffectsFrameBuilder(t);
@@ -287,7 +328,7 @@ describe('a frame of effects', () => {
       { id: 1, position: [10, 20, 30], glow: 0, stage: 'climb', colour: [1, 0.88, 0.7] },
       { id: 2, position: [40, 35, 60], glow: 1, stage: 'burning', colour: [1, 0.88, 0.7] },
     ];
-    const built = b.build(stand(), none(), null, undefined, flares, 0.2);
+    const built = b.build(stand(), none(), null, undefined, { ...NO_BATTLE, flares }, 0.2);
     const out = built.frame.billboards;
     const all = Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS)));
     const at = (p: readonly number[]) => all.find((q) => q[0] === p[0] && q[1] === p[1] && q[2] === p[2])!;

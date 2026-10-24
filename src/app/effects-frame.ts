@@ -11,6 +11,8 @@
  * follows the interpolated, bobbing eye, centimetres away while walking.
  */
 
+import type { DistantShell } from '../battle/director';
+import { farShellTunables, type ColumnPuff, type FarShellTunables } from '../battle/far-shells';
 import { flareTunables, type FlareState, type FlareTunables } from '../battle/flares';
 import { BILLBOARD_FLOATS } from '../combat/particles';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../combat/rifle-model';
@@ -22,9 +24,24 @@ import { MUZZLE_ANCHOR, PORT_ANCHOR, type CombatEvents, type Session } from '../
 
 type V3 = [number, number, number];
 
+/** The battle as a frame draws it (src/battle/director.ts): at its moment, its flares, its newest distant shells' flashes, and the far shells' smoke. */
+export interface ShownBattle {
+  seconds: number;
+  flares: readonly FlareState[];
+  flashes: readonly DistantShell[];
+  smoke: readonly ColumnPuff[];
+}
+
+/** No battle drawn: at rest, as the approved views are measured. */
+export const NO_BATTLE: ShownBattle = { seconds: 0, flares: [], flashes: [], smoke: [] };
+
 export interface EffectsTunables {
   /** The battle's flares, as they are seen: their sparks climbing and discs burning. */
   flares: FlareTunables;
+  /** The far shells, as they are seen: their flash's disc and their columns of smoke. */
+  farShells: FarShellTunables;
+  /** A distant shell's flash's colour ([battle.flashes]). */
+  distantColour: V3;
   tracerLengthM: number;
   tracerWidthM: number;
   tracerColour: V3;
@@ -64,6 +81,8 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
   const f = (k: string) => tun.f(`effects.${k}`);
   return {
     flares: flareTunables(tun),
+    farShells: farShellTunables(tun),
+    distantColour: tun.triple('battle.flashes.colour'),
     tracerLengthM: f('tracer_length_m'),
     tracerWidthM: f('tracer_width_m'),
     tracerColour: rgb(tun, 'effects.tracer_colour'),
@@ -152,10 +171,10 @@ export class EffectsFrameBuilder {
 
   /**
    * `rifle`: the rifle as this frame draws it, or null when it is not drawn; `eye`: the camera
-   * (metres), the player's eye if not given; `battleFlares`, the battle's flares seen, dimmed by the
+   * (metres), the player's eye if not given; `battle`, the battle seen, its flares dimmed by the
    * sky's flares key `flareKey` as their light is.
    */
-  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battleFlares: readonly FlareState[] = [], flareKey = 1): BuiltEffects {
+  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battle: ShownBattle = NO_BATTLE, flareKey = 1): BuiltEffects {
     const t = this.t;
     // Flashes age with the world's time as the frame shows it: none while paused.
     const shown = (session.ticks + session.clock.alpha) * session.clock.dt;
@@ -186,10 +205,27 @@ export class EffectsFrameBuilder {
     }
     // The battle's flares seen: a spark trailing each as it climbs, a bright disc each as it burns.
     const ft = t.flares;
-    for (const fl of battleFlares) {
+    for (const fl of battle.flares) {
       if (billboards >= MAX_BILLBOARDS || fl.stage === 'out') continue;
       const [size, glow] = fl.stage === 'climb' ? [ft.sparkSizeM, ft.sparkGlow * flareKey] : [ft.discSizeM, ft.discGlow * fl.glow * flareKey];
       this.billboards.set([...fl.position, size / 2, fl.colour[0] * glow, fl.colour[1] * glow, fl.colour[2] * glow, 1, 1], billboards * BILLBOARD_FLOATS);
+      billboards++;
+    }
+    // The far shells seen: each flash a disc on the ground growing over flash_s and fading, emissive;
+    // their columns of smoke, puff by puff, lit discs.
+    const fs = t.farShells;
+    for (const f of battle.flashes) {
+      const age = battle.seconds - f.t;
+      if (billboards >= MAX_BILLBOARDS || !f.far || age < 0 || age >= fs.flashS) continue;
+      const half = (fs.flashSizeM[0] + (fs.flashSizeM[1] - fs.flashSizeM[0]) * (age / fs.flashS)) / 2;
+      const glow = fs.flashGlow * (1 - age / fs.flashS);
+      this.billboards.set([f.position[0], f.position[1] + half, f.position[2], half, t.distantColour[0] * glow, t.distantColour[1] * glow, t.distantColour[2] * glow, 1, 1], billboards * BILLBOARD_FLOATS);
+      billboards++;
+    }
+    for (const p of battle.smoke) {
+      if (billboards >= MAX_BILLBOARDS) break;
+      const c = fs.smokeColour;
+      this.billboards.set([...p.centre, p.radiusM, c[0] * p.alpha, c[1] * p.alpha, c[2] * p.alpha, p.alpha, 0], billboards * BILLBOARD_FLOATS);
       billboards++;
     }
 

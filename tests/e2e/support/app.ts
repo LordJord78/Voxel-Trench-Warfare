@@ -83,6 +83,8 @@ export interface Hooks {
     flares: { id: number; position: [number, number, number]; glow: number; stage: 'climb' | 'burning' | 'out' }[];
     /** The newest distant shells' flashes, newest first. */
     flashes: { id: number; position: [number, number, number]; t: number; power: number; far: boolean }[];
+    /** The far shells' columns of smoke, puff by puff. */
+    smoke: { centre: [number, number, number]; radiusM: number; alpha: number }[];
   };
   /** The distant shells' flashes the frame was last given (metres, their power then). */
   horizon(): { position: [number, number, number]; power: number }[];
