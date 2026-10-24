@@ -146,6 +146,8 @@ export function voiceLength(v: VoicePlan, report: ReportShape): number {
       return Math.max(v.lengthS ?? 1, 0.3);
     case 'chatter':
       return (v.lengthS ?? 1) + 0.1;
+    case 'crackle':
+      return 0.05;
   }
 }
 
@@ -206,6 +208,11 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
     case 'chatter':
       // A machine gun far off: its rounds popping at its rate, under the distance's lowpass.
       rattle(ctx, noise, dull, when, 1500, g, v.rounds ?? 10, 60 / (v.rpm ?? 600));
+      break;
+    case 'crackle':
+      // A fire's pop: a snap of highpassed noise, and a click.
+      burst(ctx, noise, dull, when, { type: 'highpass', frequency: 2500 }, 0.7 * g, 0.0005, 0.03);
+      tone(ctx, dull, when, 'square', 1700, 1100, 0.2 * g, 0.012);
       break;
     case 'scrape':
       // The blade into the earth, rising for 0.04 s and falling over 0.18 s; then the shovelful thrown, landing low.

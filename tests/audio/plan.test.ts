@@ -158,6 +158,22 @@ describe('the sound of a frame', () => {
     expect(near.lengthS).toBeCloseTo((11 * 60) / 600, 9);
   });
 
+  it("a fire's crackle is heard within 30 m, quieter with distance, and not past it", () => {
+    expect([t.crackleGain, t.crackleWithinM]).toEqual([0.4, 30]);
+    const pop = (metres: number, gain = 1) => ({ at: [ear[0] + metres, ear[1], ear[2]] as [number, number, number], gain });
+    const v = planVoices(t, none(), ear, { ...noBattleEvents(), crackles: [pop(2), pop(12), pop(29), pop(31), pop(2, 0.5)] });
+    expect(v.map((x) => x.kind)).toEqual(['crackle', 'crackle', 'crackle', 'crackle']);
+    const [near, mid, edge, weak] = v;
+    expect(near.delayS).toBeCloseTo(2 / 343, 9);
+    expect(edge.delayS).toBeCloseTo(29 / 343, 9);
+    expect(near.gain).toBeCloseTo(t.crackleGain * Math.min(1, Math.pow(t.referenceM / Math.max(t.referenceM, 2), t.rolloff)), 9);
+    expect(mid.gain).toBeLessThan(near.gain);
+    expect(edge.gain).toBeLessThan(mid.gain);
+    expect(edge.lowpassHz).toBeLessThanOrEqual(near.lowpassHz);
+    // A fire not yet at its full burn pops as loud as its strength.
+    expect(weak.gain).toBeCloseTo(0.5 * near.gain, 9);
+  });
+
   it('a scoop is a scrape where it was dug, at scrape_gain', () => {
     expect(t.scrapeGain).toBe(0.5);
     const scoop = { tick: 1, voxels: 24, at: [10.6, 1.4, 10.8] as [number, number, number] };

@@ -175,3 +175,39 @@ test('the machine guns are heard at night', async ({ page }) => {
   expect(heard.held).toBeLessThanOrEqual(64);
   expect(errors).toEqual([]);
 });
+
+test('a fire is heard crackling close by', async ({ page }) => {
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  test.skip(!(await audioRenders(page)), 'the audio clock stands still here (no output renders): what is played cannot be counted as heard');
+  await hooks(page, (h) => h.waitFrames(10));
+  // A minute into the night, the hamlet's fires burning: none heard from the bay, far off; then,
+  // standing in the hamlet, the nearest crackling.
+  const heard = await hooks(page, async (h) => {
+    h.setTimeOfDay(22);
+    h.runLights(60);
+    await h.waitFrames(10);
+    const nearest = () => {
+      const eye = h.camera().position;
+      return Math.min(...h.battle().fires.map((f) => Math.hypot(f.at[0] - eye[0], f.at[1] - eye[1], f.at[2] - eye[2])));
+    };
+    const fromBay = nearest();
+    let before = h.audio().kinds.crackle ?? 0;
+    for (let k = 0; k < 3; k++) await h.waitFrames(60);
+    const inBay = (h.audio().kinds.crackle ?? 0) - before;
+    h.standAt('hamlet');
+    await h.waitFrames(10);
+    const fromHamlet = nearest();
+    before = h.audio().kinds.crackle ?? 0;
+    for (let k = 0; k < 3; k++) await h.waitFrames(60);
+    const a = h.audio();
+    return { fromBay, inBay, fromHamlet, inHamlet: (a.kinds.crackle ?? 0) - before, state: a.state };
+  });
+  console.log(`crackles: ${heard.inBay} in 3 s from the bay (the nearest fire ${heard.fromBay.toFixed(0)} m off), ${heard.inHamlet} in the hamlet (${heard.fromHamlet.toFixed(1)} m)`);
+  expect(heard.state).toBe('running');
+  expect(heard.fromBay).toBeGreaterThan(30);
+  expect(heard.inBay).toBe(0);
+  expect(heard.fromHamlet).toBeLessThan(30);
+  expect(heard.inHamlet).toBeGreaterThan(5);
+  expect(errors).toEqual([]);
+});

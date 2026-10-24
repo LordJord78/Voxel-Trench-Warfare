@@ -570,6 +570,10 @@ thump_length_s      = [0.8, 1.5]
 chatter_gain        = 0.5      # at 60 m; quieter as 60 m over the distance
 chatter_range_m     = [60.0, 300.0]
 chatter_lowpass_hz  = [400.0, 2000.0]   # duller across the range, geometrically
+# A fire's crackle (the battle's fires): each pop a highpassed burst and a click, at the fire, as
+# loud as the fire's strength, quieter and duller with distance as a shot's is; none past this.
+crackle_gain        = 0.4
+crackle_within_m    = 30.0
 max_voices          = 64       # sounding or waiting to (a distant one is scheduled seconds ahead); the farthest dropped first
 
 # What is drawn over the world after sharpening (render/effects.ts): tracers, each

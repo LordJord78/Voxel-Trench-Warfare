@@ -9,7 +9,7 @@
  * A shell whistles from when it is announced until it lands, where it will
  * land, falling in pitch; its blast is heard at any distance, late by it. Each
  * scoop dug scrapes where it was dug, and each flare the battle fires pops and
- * hisses at its post.
+ * hisses at its post. A fire crackles, each pop heard within `crackle_within_m`.
  */
 
 import type { BattleEvents } from '../battle/director';
@@ -17,7 +17,7 @@ import type { Tunables } from '../core/tunables';
 import type { CombatEvents } from '../sim/session';
 import { K, kindOf } from '../world/materials';
 
-export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare' | 'rumble' | 'thump' | 'chatter';
+export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare' | 'rumble' | 'thump' | 'chatter' | 'crackle';
 
 export interface VoicePlan {
   kind: VoiceKind;
@@ -63,6 +63,9 @@ export interface AudioTunables {
   thump: DistantVoice;
   /** A machine gun's burst heard: its gain at the near end of its range (metres), its lowpass over that range. */
   chatter: { gain: number; rangeM: [number, number]; lowpassHz: [number, number] };
+  /** A fire's pop heard: at the fire's full strength, and as far as it is. */
+  crackleGain: number;
+  crackleWithinM: number;
   /** The most voices sounding or waiting to (cap.ts). */
   maxVoices: number;
 }
@@ -100,6 +103,8 @@ export function audioTunables(tun: Tunables): AudioTunables {
     rumble: { gain: f('rumble_gain'), rangeM: tun.pair('battle.barrages.distance_m'), lowpassHz: tun.pair('audio.rumble_lowpass_hz'), lengthS: tun.pair('audio.rumble_length_s') },
     thump: { gain: f('thump_gain'), rangeM: tun.pair('battle.far_shells.distance_m'), lowpassHz: tun.pair('audio.thump_lowpass_hz'), lengthS: tun.pair('audio.thump_length_s') },
     chatter: { gain: f('chatter_gain'), rangeM: tun.pair('audio.chatter_range_m'), lowpassHz: tun.pair('audio.chatter_lowpass_hz') },
+    crackleGain: f('crackle_gain'),
+    crackleWithinM: f('crackle_within_m'),
     maxVoices: tun.i('audio.max_voices'),
   };
 }
@@ -143,6 +148,11 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
   for (const b of events.blasts) out.push({ ...afar(b.at, t.blastGain, 'blast'), lengthS: t.blastRumbleS });
   for (const s of events.scoops) out.push(afar(s.at, t.scrapeGain, 'scrape'));
   for (const l of battle?.launches ?? []) out.push(afar(l.post, t.flareGain, 'flare'));
+  // A fire's pops, as loud as it is strong, near enough.
+  for (const c of battle?.crackles ?? []) {
+    if (distance(c.at) > t.crackleWithinM) continue;
+    out.push(afar(c.at, t.crackleGain * c.gain, 'crackle'));
+  }
   // A distant shell, late by its distance: quieter as the near end of its range over the distance,
   // duller and longer across the range.
   const distant = (at: [number, number, number], kind: VoiceKind, v: DistantVoice): VoicePlan => {
