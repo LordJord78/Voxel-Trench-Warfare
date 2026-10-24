@@ -33,7 +33,11 @@ It is built on what exists:
 
 ## 1. The battle's director and the wind
 
-- **The director** (`src/battle/director.ts`) is a deterministic simulation, ticked with the session at 60 Hz from its own seeded streams (`battle.*`). Each tick it schedules:
+- **The director** (`src/battle/director.ts`) is a deterministic simulation with its own seeded streams (`battle.*`), ticked at 60 Hz on the lights' clock (sub-project 2), not the session's.
+  - That clock runs whenever the world is drawn, in fly mode and the check as in play, and stops only for the pause menu. So the standard views and the check see the battle too; the session, which runs only in play, could not show it to them.
+  - The same clock steps give the same events. Tests hold the battle at a moment as they hold the lights (`holdLights`), by running the director from its start to that moment.
+  - The app feeds it what the session does that it must answer: each shell's strike and its material (for fires), and where rounds and shells meet water (for ripples).
+- **Each tick it schedules:**
   - flare launches;
   - barrages beyond the map, and shells into the far field;
   - tracer bursts;
@@ -84,7 +88,7 @@ It is built on what exists:
 - **The tracers fly** under gravity and drag along simplified ballistics: the reference's projectile, without strikes.
   - A round that falls below the ground ends.
   - One in six ricochets: it climbs again from where it struck, slower, at a random bearing.
-  - Rounds that pass near the player still crack (sub-project 3's suppression and sound); those far off do not.
+  - They are aimed over the field away from the player's own bay, so none passes near the player. They are seen and heard, not felt: sub-project 3's front is what fires at the player.
 - **The tracers are drawn** as the effects pass's ribbons, as sub-project 3's are: a bright head and a fading trail. Up to 400 are in flight; beyond that the farthest are not drawn.
 - **Sound:** the distant chatter of each burst, after its distance.
 
