@@ -8,14 +8,16 @@
  * timber knocks, metal rings — and further than `impact_within_m` not at all.
  * A shell whistles from when it is announced until it lands, where it will
  * land, falling in pitch; its blast is heard at any distance, late by it. Each
- * scoop dug scrapes where it was dug.
+ * scoop dug scrapes where it was dug, and each flare the battle fires pops and
+ * hisses at its post.
  */
 
+import type { BattleEvents } from '../battle/director';
 import type { Tunables } from '../core/tunables';
 import type { CombatEvents } from '../sim/session';
 import { K, kindOf } from '../world/materials';
 
-export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape';
+export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare';
 
 export interface VoicePlan {
   kind: VoiceKind;
@@ -52,6 +54,7 @@ export interface AudioTunables {
   blastGain: number;
   blastRumbleS: number;
   scrapeGain: number;
+  flareGain: number;
 }
 
 export function audioTunables(tun: Tunables): AudioTunables {
@@ -76,6 +79,7 @@ export function audioTunables(tun: Tunables): AudioTunables {
     blastGain: f('blast_gain'),
     blastRumbleS: f('blast_rumble_s'),
     scrapeGain: f('scrape_gain'),
+    flareGain: f('flare_gain'),
   };
 }
 
@@ -89,7 +93,7 @@ function struck(material: number): VoiceKind {
   return 'impact-soil';
 }
 
-export function planVoices(t: AudioTunables, events: CombatEvents, listener: readonly number[]): VoicePlan[] {
+export function planVoices(t: AudioTunables, events: CombatEvents, listener: readonly number[], battle?: BattleEvents): VoicePlan[] {
   const out: VoicePlan[] = [];
   const distance = (at: readonly number[]) => Math.hypot(at[0] - listener[0], at[1] - listener[1], at[2] - listener[2]);
   // Late by the distance, quieter as (reference / distance)^rolloff past the reference, and duller
@@ -117,5 +121,6 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
   for (const s of events.incoming) out.push({ ...afar(s.at, t.whistleGain, 'whistle'), delayS: 0, lengthS: s.landsInS, fromHz: t.whistleFromHz, toHz: t.whistleToHz });
   for (const b of events.blasts) out.push({ ...afar(b.at, t.blastGain, 'blast'), lengthS: t.blastRumbleS });
   for (const s of events.scoops) out.push(afar(s.at, t.scrapeGain, 'scrape'));
+  for (const l of battle?.launches ?? []) out.push(afar(l.post, t.flareGain, 'flare'));
   return out;
 }

@@ -8,7 +8,7 @@
  */
 
 import { cameraBasis, type CameraPose } from '../render/camera';
-import type { AudioTunables, VoicePlan } from './plan';
+import type { AudioTunables, VoiceKind, VoicePlan } from './plan';
 import { playVoice, type ReportShape } from './voices';
 
 const NOISE_S = 2;
@@ -16,6 +16,8 @@ const NOISE_S = 2;
 export class AudioEngine {
   /** Voices started, for the tests. */
   voices = 0;
+  /** Voices started, by kind. */
+  readonly kinds: Partial<Record<VoiceKind, number>> = {};
   private ctx: AudioContext | null = null;
   private mix: GainNode | null = null;
   private noise: AudioBuffer | null = null;
@@ -90,6 +92,7 @@ export class AudioEngine {
     for (const v of plans) {
       playVoice(ctx, this.mix, this.noise, v, now + v.delayS, this.report);
       this.voices++;
+      this.kinds[v.kind] = (this.kinds[v.kind] ?? 0) + 1;
     }
   }
 }

@@ -11,6 +11,7 @@
  * - A shell's whistle: a tone and a band of noise falling in pitch until it
  *   lands; its blast: a sub-bass thump, a rumble, and soil raining down.
  * - A scoop: the blade's scrape, a band of noise, and the shovelful landing.
+ * - A flare fired: the pistol's pop, and the flare's hiss rising as it climbs.
  */
 
 import type { VoicePlan } from './plan';
@@ -52,6 +53,22 @@ function whistle(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, whe
   band.frequency.setValueAtTime(from, when);
   band.frequency.exponentialRampToValueAtTime(to, end);
   air.connect(band).connect(new GainNode(ctx, { gain: 0.6 })).connect(shape);
+  air.start(when);
+  air.stop(end + 0.01);
+}
+
+/** Noise in a band rising from `from` to `to` Hz over `length` seconds, swelling for a fifth of it and fading after. */
+function hiss(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, from: number, to: number, peak: number, length: number): void {
+  const end = when + length;
+  const shape = new GainNode(ctx, { gain: 0 });
+  shape.gain.setValueAtTime(0, when);
+  shape.gain.linearRampToValueAtTime(peak, when + length * 0.2);
+  shape.gain.exponentialRampToValueAtTime(1e-4, end);
+  const band = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: from, Q: 4 });
+  band.frequency.setValueAtTime(from, when);
+  band.frequency.exponentialRampToValueAtTime(to, end);
+  const air = new AudioBufferSourceNode(ctx, { buffer: noise, loop: true });
+  air.connect(band).connect(shape).connect(into);
   air.start(when);
   air.stop(end + 0.01);
 }
@@ -105,6 +122,12 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       tone(ctx, dull, when, 'sine', 60, 30, g, 0.4);
       burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 200 }, 0.8 * g, 0.01, v.lengthS ?? 1.8);
       for (let k = 0; k < 8; k++) burst(ctx, noise, dull, when + 0.3 + k * 0.12 + Math.random() * 0.08, { type: 'highpass', frequency: 2500 }, 0.12 * g, 0.002, 0.05);
+      break;
+    case 'flare':
+      // The pistol: a low pop and its crack; then the flare hissing up, rising 2 to 5 kHz over 3 s.
+      burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 400 }, 0.8 * g, 0.002, 0.08);
+      burst(ctx, noise, dull, when, { type: 'highpass', frequency: 2500 }, 0.5 * g, 0.001, 0.02);
+      hiss(ctx, noise, dull, when + 0.05, 2000, 5000, 0.25 * g, 3);
       break;
     case 'scrape':
       // The blade into the earth, rising for 0.04 s and falling over 0.18 s; then the shovelful thrown, landing low.

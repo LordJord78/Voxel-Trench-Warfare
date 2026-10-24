@@ -531,7 +531,8 @@ async function start(): Promise<void> {
     }
     const frameEffects = effects.build(session, events, rifle, pose.position);
     audio.listen(pose);
-    audio.play(planVoices(hearing, events, pose.position));
+    // The battle's events from the last frame's lights (light() below runs the battle's clock).
+    audio.play(planVoices(hearing, events, pose.position, battleEvents));
     renderer.setEffects(frameEffects.frame);
     renderer.setTransientLights(frameEffects.lights);
     renderer.setBlasts(frameEffects.blasts);
@@ -815,7 +816,7 @@ async function start(): Promise<void> {
     jitter(on: boolean) {
       renderer.flags = on ? renderer.flags & ~FLAGS.JITTER_OFF : renderer.flags | FLAGS.JITTER_OFF;
     },
-    audio: () => ({ state: audio.state, voices: audio.voices }),
+    audio: () => ({ state: audio.state, voices: audio.voices, kinds: { ...audio.kinds } }),
     shell: (at: [number, number, number], radiusM: number) => dropShell(at, radiusM, false).landed,
     shellCheck: async (at: [number, number, number], radiusM: number) => {
       const drop = dropShell(at, radiusM, true);

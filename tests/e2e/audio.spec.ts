@@ -42,7 +42,7 @@ test('a browser that refuses sound still starts play, takes the pointer and resu
     h.trigger(false);
     await h.waitFrames(3);
   });
-  expect(await hooks(page, (h) => h.audio())).toEqual({ state: 'none', voices: 0 });
+  expect(await hooks(page, (h) => h.audio())).toEqual({ state: 'none', voices: 0, kinds: {} });
   await page.keyboard.press('Escape');
   await expect(page.locator('#pause')).toBeVisible();
   await page.locator('#resume').click();
@@ -106,5 +106,30 @@ test('digging is heard: a scrape a scoop', async ({ page }) => {
   const scoops = (after.cleared - before.cleared) / 24;
   expect(scoops).toBeGreaterThanOrEqual(3);
   expect(after.voices - before.voices).toBeGreaterThanOrEqual(Math.floor(scoops));
+  expect(errors).toEqual([]);
+});
+
+test('flares are heard when they are fired', async ({ page }) => {
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  await hooks(page, (h) => h.waitFrames(10));
+  const before = await hooks(page, (h) => ({ flares: h.audio().kinds.flare ?? 0, state: h.audio().state }));
+  expect(before.state).toBe('running');
+  // At night, the front heavy, the battle running from its start: two flares or more fired in 12 s,
+  // each heard (by the flares' own voices: the front's fire is heard too).
+  const fired = await hooks(page, async (h) => {
+    h.setTimeOfDay(21);
+    h.setIntensity('heavy');
+    h.runLights(0);
+    const seen = new Set<number>();
+    for (let k = 0; k < 24; k++) {
+      await h.waitFrames(30);
+      for (const f of h.battle().flares) seen.add(f.id);
+    }
+    return seen.size;
+  });
+  const after = (await hooks(page, (h) => h.audio())).kinds.flare ?? 0;
+  expect(fired).toBeGreaterThanOrEqual(2);
+  expect(after - before.flares).toBeGreaterThanOrEqual(fired);
   expect(errors).toEqual([]);
 });

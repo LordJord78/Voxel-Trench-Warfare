@@ -102,6 +102,17 @@ describe('the sound of a frame', () => {
     });
   });
 
+  it("a flare's launch is a pop and a hiss at its post, late by its distance", () => {
+    expect(t.flareGain).toBe(0.4);
+    const launch = { id: 3, post: [10, 6, 90] as [number, number, number], t0: 12, bearing: 0, elevation: 1.4, burstM: 40, colour: [1, 0.88, 0.7] as [number, number, number] };
+    const v = planVoices(t, none(), ear, { launches: [launch] });
+    expect(v.map((x) => x.kind)).toEqual(['flare']);
+    expect(v[0].at).toEqual(launch.post);
+    expect(v[0].delayS).toBeCloseTo(Math.hypot(0, 4, 80) / 343, 9);
+    expect(v[0].gain).toBeLessThan(t.flareGain);
+    expect(planVoices(t, none(), ear)).toEqual([]);
+  });
+
   it('a scoop is a scrape where it was dug, at scrape_gain', () => {
     expect(t.scrapeGain).toBe(0.5);
     const scoop = { tick: 1, voxels: 24, at: [10.6, 1.4, 10.8] as [number, number, number] };
