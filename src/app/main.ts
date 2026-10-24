@@ -493,6 +493,7 @@ async function start(): Promise<void> {
   let lastPose: CameraPose = rig.pose(session, 0, settings.fov);
   const waiting: { until: number; resolve: () => void }[] = [];
   let snapshot: ((stats: ReturnType<typeof canvasStats>) => void) | null = null;
+  let snapshotRegion: readonly number[] | undefined;
   let shot: ((taken: { png: Blob; spread: number }) => void) | null = null;
   let work: { count: number; left: number; samples: number[]; done: (samples: number[]) => void } | null = null;
 
@@ -601,7 +602,7 @@ async function start(): Promise<void> {
     if (snapshot) {
       const take = snapshot;
       snapshot = null;
-      take(canvasStats(canvas));
+      take(canvasStats(canvas, snapshotRegion));
     }
     if (shot) {
       // A WebGPU canvas holds this frame only until it is presented: copy it now, encode later.
@@ -672,7 +673,8 @@ async function start(): Promise<void> {
    * (max − min) / max per pixel; and the mean luminance of its outer tenth (`edge`) and of its
    * middle half (`middle`), for suppression's look.
    */
-  function canvasStats(source: HTMLCanvasElement): { mean: number; std: number; saturation: number; edge: number; middle: number } {
+  /** The canvas's luminance (0 to 1) on a 160 × 100 grid: its mean, spread and saturation, its edge's and middle's means, and `region`'s ([x0, y0, x1, y1] in fractions of it), if given. */
+  function canvasStats(source: HTMLCanvasElement, region?: readonly number[]): { mean: number; std: number; saturation: number; edge: number; middle: number; region: number } {
     const small = document.createElement('canvas');
     small.width = 160;
     small.height = 100;
@@ -684,6 +686,7 @@ async function start(): Promise<void> {
     let saturation = 0;
     const edge = [0, 0];
     const middle = [0, 0];
+    const inRegion = [0, 0];
     const n = px.length / 4;
     for (let i = 0; i < px.length; i += 4) {
       const l = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
@@ -700,9 +703,13 @@ async function start(): Promise<void> {
         middle[0] += l;
         middle[1]++;
       }
+      if (region && x >= region[0] * 160 && x < region[2] * 160 && y >= region[1] * 100 && y < region[3] * 100) {
+        inRegion[0] += l;
+        inRegion[1]++;
+      }
     }
     const mean = sum / n;
-    return { mean, std: Math.sqrt(Math.max(0, sq / n - mean * mean)), saturation: saturation / n, edge: edge[0] / edge[1], middle: middle[0] / middle[1] };
+    return { mean, std: Math.sqrt(Math.max(0, sq / n - mean * mean)), saturation: saturation / n, edge: edge[0] / edge[1], middle: middle[0] / middle[1], region: inRegion[1] > 0 ? inRegion[0] / inRegion[1] : Number.NaN };
   }
 
   const waitFrames = (n: number) => new Promise<void>((resolve) => waiting.push({ until: frames + n, resolve }));
@@ -984,7 +991,11 @@ async function start(): Promise<void> {
     waitConverged: () => waitFrames(render.denoise.historyMax + 8),
     stats: () => renderer.stats,
     hud: () => ({ visible: hud.visible, crosshair: hud.visible && hud.crosshair, text: hud.text }),
-    snapshot: () => new Promise<{ mean: number; std: number; saturation: number; edge: number; middle: number }>((resolve) => (snapshot = resolve)),
+    snapshot: (region?: readonly number[]) =>
+      new Promise<{ mean: number; std: number; saturation: number; edge: number; middle: number; region: number }>((resolve) => {
+        snapshotRegion = region;
+        snapshot = resolve;
+      }),
     fingerprint: () => fingerprint(world.map),
     setQuality: (q: Partial<Quality> & { budgetMs?: number }) => {
       renderer.setQuality(q);

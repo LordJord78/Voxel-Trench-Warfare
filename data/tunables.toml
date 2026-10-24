@@ -770,6 +770,7 @@ star_gain           = 16.0     # the stars over their light against the moon's: 
 # Keyed to the clock: dawn 06:50, noon 12:00, dusk 17:35, night 21:00; between them by the hour.
 fog_density         = [0.02, 0.006, 0.012, 0.02]   # per metre, at the ground
 flares              = [0.2, 0.0, 0.0, 1.0]         # how brightly the static flares burn
+flash_glow          = [1.4, 1.5, 1.4, 0.4]         # the radiance of the haze lit over a barrage's flash at full power ([battle.flashes]): to read against dusk's haze (some 0.5) as against night's (0.025), and no stronger by night
 # Film grain's deviation, in 8-bit steps, by the sun's height: the day's while it is up, the night's
 # once it is 12° below the horizon, between by its depth.
 grain_day           = 0.6      # under the dither's step
@@ -892,11 +893,11 @@ flash_glow          = 3.0      # its brightness, over the flash's colour
 smoke_s             = 60.0     # its column stands this long, thinning
 puffs               = 8        # the column's puffs, let out one by one
 puff_every_s        = 0.5
-rise_mps            = 6.0      # each rises this fast at first, slowing by e over rise_s: to some 48 m
-rise_s              = 8.0
-puff_radius_m       = [6.0, 18.0]   # each grows over the column's life
-smoke_alpha         = 0.75     # how much it covers at first
-smoke_colour        = [0.2, 0.18, 0.16]
+rise_mps            = 10.0     # each rises this fast at first, slowing by e over rise_s: to some 100 m, over the low dusk haze
+rise_s              = 10.0
+puff_radius_m       = [8.0, 24.0]   # each grows over the column's life
+smoke_alpha         = 0.85     # how much it covers at first
+smoke_colour        = [0.06, 0.055, 0.05]   # the black smoke of high explosive: lit by a low sun, a paler grey went into the haze
 
 # A distant shell's flash (barrages.ts), as the sky and the far field take it (sky.wgsl's horizonGlow
 # and horizonLight): the haze over where it fell lit, a patch spread_m across and high seen from the
@@ -906,7 +907,6 @@ smoke_colour        = [0.2, 0.18, 0.16]
 window_s            = 1.0      # seen this long after it lands
 decay_s             = 0.15     # its power falls by e over this
 colour              = [1.0, 0.72, 0.45]
-sky                 = 0.4      # the radiance of the haze lit over one at full power: one at 5 km a third over dusk's haze on the horizon, six times the night's
 haze                = 1.0      # the haze's share of that glow toward it
 far                 = 0.5      # its light on the far field within near_m, at full power
 near_m              = 60.0

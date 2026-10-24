@@ -26,7 +26,7 @@ describe('shells into the far field', () => {
       // Beyond the map, whose corners are 181 m from its middle.
       expect(s.x < 0 || s.x > 256 || s.z < 0 || s.z > 256).toBe(true);
     }
-    expect([ft.everyLightS, ft.everyHeavyS, ft.arcDeg, ft.smokeS, ft.puffs, ft.puffEveryS, ft.riseMps, ft.riseS]).toEqual([30, 5, 110, 60, 8, 0.5, 6, 8]);
+    expect([ft.everyLightS, ft.everyHeavyS, ft.arcDeg, ft.smokeS, ft.puffs, ft.puffEveryS, ft.riseMps, ft.riseS]).toEqual([30, 5, 110, 60, 8, 0.5, 10, 10]);
   });
 
   it('its column stands from the crater up, leans downwind, grows and thins over a minute', () => {

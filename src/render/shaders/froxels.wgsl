@@ -159,6 +159,8 @@ fn integrate(@builtin(global_invocation_id) g: vec3u) {
   var light = vec3f(0.0);
   // The haze's optical depth to the slice's near side.
   var depth = 0.0;
+  // The distant shells' flashes' glow, the same down the whole column.
+  let horizon = frame.horizonHaze * horizonGlow(rd);
   for (var k = 0u; k < FROXEL_SLICES; k++) {
     let far = sliceMetres(f32(k + 1u));
     var smoke = 0.0;
@@ -169,7 +171,7 @@ fn integrate(@builtin(global_invocation_id) g: vec3u) {
     // The slice's glow, lit by this frame's key as far as it reaches, over what of it the haze
     // before it lets through.
     let sampled = textureLoad(glowNow, vec3u(g.xy, k), 0);
-    var glow = hazeGlow(rd, mix(shadow, 1.0, sampled.a)) + sampled.rgb;
+    var glow = hazeGlowBase(rd, mix(shadow, 1.0, sampled.a)) + horizon + sampled.rgb;
     if (frame.blastCount > 0u) {
       glow += blastGlow(frame.cam.origin + rd * (sliceMetres(f32(k) + 0.5) / frame.voxel), rd);
     }

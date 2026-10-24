@@ -207,7 +207,7 @@ export const cases = {
     const extra = (frame: StructWriter) => {
       frame.set('voxel', voxel);
       writeCamera(frame, 'cam', { position: [args.eyeM[0], args.eyeM[1], args.eyeM[2]], yaw: 0, pitch: 0 }, voxel, [0, 0]);
-      writeHorizon(frame, horizonTerms(tun), args.flashes.map((f) => ({ position: [f.position[0], f.position[1], f.position[2]] as const, power: f.power, glow: f.glow })), voxel);
+      writeHorizon(frame, horizonTerms(tun), args.flashes.map((f) => ({ position: [f.position[0], f.position[1], f.position[2]] as const, power: f.power, glow: f.glow })), voxel, args.eyeM, sky.flashGlow);
     };
     const bodies = await sample('bodies', args.dirs, sky, args.eyeM[1], extra);
     const fog = await sample('fog', args.dirs, sky, args.eyeM[1], extra);

@@ -46,7 +46,8 @@ export interface Hooks {
     reset: boolean;
     frame: number;
   };
-  snapshot(): Promise<{ mean: number; std: number; saturation: number; edge: number; middle: number }>;
+  /** The next frame's canvas, as luminance: `region` ([x0, y0, x1, y1], fractions of it) gives its mean too. */
+  snapshot(region?: readonly number[]): Promise<{ mean: number; std: number; saturation: number; edge: number; middle: number; region: number }>;
   setQuality(q: { preset?: 'high' | 'low'; dynres?: boolean; scale?: number; budgetMs?: number }): void;
   loseDevice(): void;
   simulateGap(ms: number): void;

@@ -56,6 +56,8 @@ export interface SkyState {
   exposure: number;
   /** How brightly the static flares burn, 0 to 1. */
   flares: number;
+  /** How brightly a barrage's flash lights the haze over it (FrameSky.flashGlow). */
+  flashGlow: number;
   /** Film grain's deviation, in 8-bit steps. */
   grain: number;
 }
@@ -196,6 +198,7 @@ export function skyState(tun: Tunables, hours: number): SkyState {
     fogDensity: keyed(tun, 'fog_density', hours),
     exposure: exposureBias(tun, hours),
     flares: keyed(tun, 'flares', hours),
+    flashGlow: keyed(tun, 'flash_glow', hours),
     grain: grainAt(tun, c.sun.elevationDeg),
   };
 }
@@ -227,6 +230,7 @@ export function frameSky(sky: SkyState, tun: Tunables): FrameSky {
     hazeShadow: tun.f('sky.haze_shadow'),
     hazeLights: tun.f('sky.haze_lights'),
     frontGlow: scale(triple(tun, 'sky.front_glow'), sky.flares),
+    flashGlow: sky.flashGlow,
     smokeDensity: tun.f('sky.smoke_density'),
     smokeHeight: tun.f('sky.smoke_height_m'),
     aureole: tun.f('sky.aureole'),

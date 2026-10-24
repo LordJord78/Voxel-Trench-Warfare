@@ -29,41 +29,40 @@ fn hazePhase(c: f32) -> f32 {
 // fogColour where only `lit` (0 to 1) of the key light reaches the haze; with the distant shells'
 // flashes' glow toward them.
 fn hazeGlow(rd: vec3f, lit: f32) -> vec3f {
+  return hazeGlowBase(rd, lit) + frame.horizonHaze * horizonGlow(rd);
+}
+
+// hazeGlow without the flashes' glow, for a caller that takes that once for many (the froxels' column).
+fn hazeGlowBase(rd: vec3f, lit: f32) -> vec3f {
   let above = frame.sunLight * skyLight[3].rgb + frame.moonLight * skyLight[9].rgb;
-  return frame.keyColour * (hazePhase(dot(rd, frame.keyDir)) * lit) + frame.hazeSky / PI_ATM * above + frame.frontGlow + frame.horizonHaze * horizonGlow(rd);
+  return frame.keyColour * (hazePhase(dot(rd, frame.keyDir)) * lit) + frame.hazeSky / PI_ATM * above + frame.frontGlow;
 }
 
 // Distant shells' flashes (the battle spec's §3): a barrage's shell lights the haze over where it
-// fell, a patch frame.horizonSpread.x metres across and .y high, seen from the eye as a glow in
-// azimuth (half-width the patch's half across) and up from the flash's own elevation (half-height the
-// patch's height, at least frame.horizonMinEl; under it, a tenth of that, so the glow stands on the
-// horizon and does not spill over the nearer ground): a broad swath for a near shell, a flicker on the
-// skyline for a far one, dimmed by e every frame.horizonReach metres of air. The azimuth's square is
-// 2(1 − cos), and nothing where rd is vertical. The first frame.horizonGlowCount flashes glow; loops to
-// frame_uniforms' MAX_HORIZON.
+// fell, seen from the eye as a glow in azimuth about its bearing and in elevation about its own, wider
+// the nearer, standing on the horizon (its glow under its elevation a tenth as high), dimmed by the
+// air between: each worked out for the eye this frame (frame_uniforms' horizonGlowRecord), leaving a
+// dot, a subtraction and an exp a flash here. The azimuth's square is 2(1 − cos), and nothing where rd
+// is vertical. The first frame.horizonGlowCount flashes glow; loops to frame_uniforms' MAX_HORIZON.
 fn horizonGlow(rd: vec3f) -> vec3f {
   let count = min(frame.horizonGlowCount, 16u);
   if (count == 0u) {
     return vec3f(0.0);
   }
-  let eye = frame.cam.origin * frame.voxel;
   let flat = length(rd.xz);
   let el = asin(clamp(rd.y, -1.0, 1.0));
   var sum = 0.0;
   for (var i = 0u; i < count; i++) {
-    let f = frame.horizon[i];
-    let to = f.xz * frame.voxel - eye.xz;
-    let d = max(length(to), 1.0);
+    let a = frame.glows[2u * i];
+    let b = frame.glows[2u * i + 1u];
     var az2 = 0.0;
     if (flat > 1e-4) {
-      az2 = 2.0 * (1.0 - dot(rd.xz / flat, to / d));
+      az2 = 2.0 * (1.0 - dot(rd.xz / flat, a.xy));
     }
-    let w = atan(0.5 * frame.horizonSpread.x / d);
-    let de = el - atan2(f.y * frame.voxel - eye.y, d);
-    let h = max(atan(frame.horizonSpread.y / d), frame.horizonMinEl) * select(0.1, 1.0, de >= 0.0);
-    sum += f.w * exp(-d / frame.horizonReach - az2 / (w * w) - de * de / (h * h));
+    let de = el - a.z;
+    sum += a.w * exp(-az2 * b.x - de * de * select(b.z, b.y, de >= 0.0));
   }
-  return frame.horizonColour * (frame.horizonSky * sum);
+  return frame.horizonColour * sum;
 }
 
 // The far field lit by distant shells' flashes, at p (voxels) facing n: each a light frame.horizonLift

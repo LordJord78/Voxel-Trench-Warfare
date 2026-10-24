@@ -185,24 +185,19 @@ export const FRAME: StructDef = {
     ['puffCount', 'u32'],
     ['puffs', { element: PUFF, count: MAX_PUFFS }],
     // Distant shells' flashes (sky.wgsl's horizonGlow and horizonLight): the colour they glow, the
-    // radiance of the haze lit over one at full power and the haze's share of it, the far field's
-    // light from one within horizonNear metres; the lit patch's width and height (metres), the least
-    // height its glow takes (radians), the metres the air dims it by e over; and each, where it fell
-    // (voxels) and its power now, the first horizonGlowCount glowing (a barrage's), all lighting the
-    // far field.
+    // haze's share of their glow, the far field's light from one within horizonNear metres, from
+    // horizonLift metres over where it fell (its fireball, and the dust it lights); each, where it
+    // fell (voxels) and its power now, the first horizonGlowCount glowing (a barrage's), all lighting
+    // the far field; and the glowing ones' glow worked out for the eye this frame (horizonGlowRecord).
     ['horizonColour', 'vec3f'],
-    ['horizonSky', 'f32'],
-    ['horizonSpread', 'vec2f'],
     ['horizonHaze', 'f32'],
     ['horizonFar', 'f32'],
     ['horizonNear', 'f32'],
-    ['horizonMinEl', 'f32'],
-    ['horizonReach', 'f32'],
+    ['horizonLift', 'f32'],
     ['horizonCount', 'u32'],
     ['horizonGlowCount', 'u32'],
-    // Metres above where a shell fell that its light on the far field comes from: its fireball and the dust it lights.
-    ['horizonLift', 'f32'],
     ['horizon', { element: 'vec4f', count: MAX_HORIZON }],
+    ['glows', { element: 'vec4f', count: 2 * MAX_HORIZON }],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],
     // The atmosphere as this frame's sky view was built.
@@ -236,6 +231,8 @@ export interface FrameSky {
   hazeShadow: number;
   hazeLights: number;
   frontGlow: readonly number[];
+  /** The radiance of the haze lit over a barrage's flash at full power, keyed to the clock: it reads against dusk's bright haze as against night's (writeHorizon). */
+  flashGlow: number;
   smokeDensity: number;
   smokeHeight: number;
   aureole: number;
@@ -267,9 +264,7 @@ export function writeCamera(w: StructWriter, path: 'cam' | 'prev', pose: CameraP
 /** How distant shells' flashes light the sky, the haze and the far field (the battle spec's §3; [battle.flashes]). */
 export interface HorizonTerms {
   colour: [number, number, number];
-  /** The radiance of the haze lit over a flash at full power. */
-  sky: number;
-  /** The haze's share of that glow (the sky's is whole). */
+  /** The haze's share of a flash's glow (the sky's is whole); its strength is the sky's, keyed to the clock (FrameSky.flashGlow). */
   haze: number;
   /** The far field's light from a flash at full power, within nearM, from liftM above where it fell. */
   far: number;
@@ -292,7 +287,6 @@ export function horizonTerms(tun: Tunables): HorizonTerms {
   }
   return {
     colour: tun.triple('battle.flashes.colour'),
-    sky: f('sky'),
     haze: f('haze'),
     far: f('far'),
     nearM: f('near_m'),
@@ -314,21 +308,40 @@ export interface HorizonFlash {
   glow: boolean;
 }
 
-/** The terms, and the first MAX_HORIZON of `flashes`, those that glow first. */
-export function writeHorizon(w: StructWriter, terms: HorizonTerms, flashes: readonly HorizonFlash[], voxel: number): void {
+/**
+ * A glowing flash's glow as seen from `eyeM` (metres) this frame, for sky.wgsl's horizonGlow: the lit
+ * patch of haze over it, spreadM across and high. Its bearing from the eye (x and z of a unit
+ * vector), its own elevation from it (radians), its weight (`strength` × its power, dimmed by e every
+ * reachM of air); then 1 / its half-width² in azimuth, and 1 / its half-height² above its elevation
+ * (the patch's height, at least minDeg) and under it (a tenth of that, so it stands on the horizon
+ * and does not spill over the nearer ground).
+ */
+export function horizonGlowRecord(f: HorizonFlash, eyeM: readonly number[], terms: HorizonTerms, strength: number): number[] {
+  const dx = f.position[0] - eyeM[0];
+  const dz = f.position[2] - eyeM[2];
+  const d = Math.max(Math.hypot(dx, dz), 1);
+  const w = Math.atan((0.5 * terms.spreadM[0]) / d);
+  const h = Math.max(Math.atan(terms.spreadM[1] / d), (terms.minDeg * Math.PI) / 180);
+  return [dx / d, dz / d, Math.atan2(f.position[1] - eyeM[1], d), strength * f.power * Math.exp(-d / terms.reachM), 1 / (w * w), 1 / (h * h), 100 / (h * h), 0];
+}
+
+/** The terms, and the first MAX_HORIZON of `flashes`, those that glow first, their glow worked out for the eye (metres) at `strength`. */
+export function writeHorizon(w: StructWriter, terms: HorizonTerms, flashes: readonly HorizonFlash[], voxel: number, eyeM: readonly number[], strength: number): void {
   w.set('horizonColour', terms.colour);
-  w.set('horizonSky', terms.sky);
   w.set('horizonHaze', terms.haze);
   w.set('horizonFar', terms.far);
   w.set('horizonNear', terms.nearM);
   w.set('horizonLift', terms.liftM);
-  w.set('horizonSpread', terms.spreadM);
-  w.set('horizonMinEl', (terms.minDeg * Math.PI) / 180);
-  w.set('horizonReach', terms.reachM);
   const shown = [...flashes.filter((f) => f.glow), ...flashes.filter((f) => !f.glow)].slice(0, MAX_HORIZON);
   w.set('horizonCount', shown.length);
-  w.set('horizonGlowCount', shown.filter((f) => f.glow).length);
+  const glowing = shown.filter((f) => f.glow);
+  w.set('horizonGlowCount', glowing.length);
   shown.forEach((f, k) => w.set(`horizon.${k}`, [f.position[0] / voxel, f.position[1] / voxel, f.position[2] / voxel, f.power]));
+  glowing.forEach((f, k) => {
+    const r = horizonGlowRecord(f, eyeM, terms, strength);
+    w.set(`glows.${2 * k}`, r.slice(0, 4));
+    w.set(`glows.${2 * k + 1}`, r.slice(4, 8));
+  });
 }
 
 export function writeSky(w: StructWriter, sky: FrameSky): void {
@@ -401,6 +414,7 @@ export const PROBE_DUSK: FrameSky = {
   hazeShadow: 0.7,
   hazeLights: 0.1,
   frontGlow: [0, 0, 0],
+  flashGlow: 1.4,
   smokeDensity: 0.00053,
   smokeHeight: 300,
   aureole: 12,
