@@ -205,13 +205,15 @@ export const FRAME: StructDef = {
     // The water (reflect.wgsl, water-frame.ts): its rings, the newest MAX_RINGS, each where it began
     // and how far it has spread, then its height, its width and its waves' length (voxels); the
     // wind's way and the slope it roughens the surface to; how far a reflection is traced (voxels);
-    // and the flares' and fires' glints, each where it is and its disc's radius (voxels), then its light.
+    // the battle's clock, its waves' (seconds); and the flares' and fires' glints, each where it is
+    // and its disc's radius (voxels), then its light.
     ['ringCount', 'u32'],
     ['waterSlope', 'f32'],
     ['waterWind', 'vec2f'],
     ['rings', { element: 'vec4f', count: 2 * MAX_RINGS }],
     ['glintCount', 'u32'],
     ['reflectReach', 'f32'],
+    ['waterTime', 'f32'],
     ['glints', { element: 'vec4f', count: 2 * MAX_GLINTS }],
     // Far field: origin x and z, cell size and cell count, in voxels.
     ['far', 'vec4f'],

@@ -78,3 +78,44 @@ test.describe("the water's reflection", () => {
     expect(luma(r.glint!.low)).toBeGreaterThan(3 * luma(r.glint!.without));
   });
 });
+
+interface Surface {
+  centre: number[];
+  ringM: number;
+  samples: { at: number[]; still: number[]; second: number[]; faded: number[]; calm: number[]; breeze: number[]; wind: number[] }[];
+  errors: string[];
+}
+
+test.describe("the water's surface", () => {
+  let s: Surface;
+
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    await openHarness(page);
+    s = await runCase<Surface>(page, 'waterSurface');
+    await page.close();
+  });
+
+  test('a ring bends the reflection on its circle, 1 m out after 1 s, and is gone by 2 s', () => {
+    expect(s.errors).toEqual([]);
+    const off = (x: { at: number[] }) => Math.hypot(x.at[0] - s.centre[0], x.at[2] - s.centre[2]);
+    const bent = s.samples.filter((x) => !near(x.second, x.still, 0.03));
+    console.log(`a ring 1 s on: ${bent.length} of ${s.samples.length} water samples bent, ${bent.filter((x) => Math.abs(off(x) - s.ringM) <= 0.4).length} of them within 0.4 m of its circle`);
+    expect(bent.length).toBeGreaterThan(20);
+    expect(bent.filter((x) => Math.abs(off(x) - s.ringM) <= 0.4).length / bent.length).toBeGreaterThan(0.8);
+    // Away from its circle, untouched.
+    const away = s.samples.filter((x) => Math.abs(off(x) - s.ringM) > 0.6);
+    expect(away.filter((x) => near(x.second, x.still, 0.01)).length / away.length).toBeGreaterThan(0.98);
+    // Near its end, all but gone.
+    expect(s.samples.filter((x) => near(x.faded, x.still, 0.01)).length / s.samples.length).toBeGreaterThan(0.98);
+  });
+
+  test('the wind roughens the reflection, more for a stronger wind; none without its slope', () => {
+    const mean = (k: 'breeze' | 'wind' | 'calm') => s.samples.reduce((sum, x) => sum + Math.abs(luma(x[k]) - luma(x.still)), 0) / s.samples.length;
+    console.log(`the wind's roughness: ${mean('calm').toExponential(2)} calm, ${mean('breeze').toExponential(2)} at 0.024, ${mean('wind').toExponential(2)} at 0.048`);
+    expect(mean('calm')).toBeLessThan(1e-4);
+    expect(mean('breeze')).toBeGreaterThan(1e-3);
+    expect(mean('wind')).toBeGreaterThan(1.5 * mean('breeze'));
+  });
+});
+

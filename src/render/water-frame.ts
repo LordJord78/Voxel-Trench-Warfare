@@ -24,14 +24,15 @@ export function waterFrameTunables(tun: Tunables): WaterFrameTunables {
   return { flareM: tun.f('render.glint_m'), fireM: tun.f('render.glint_fire_m'), gain: tun.f('render.glint_gain'), reflectM: tun.f('render.reflect_m') };
 }
 
-/** The battle's water now: its rings, and the wind (metres a second) with the slope it gives the surface. */
+/** The battle's water now: its rings, the wind (metres a second) with the slope it gives the surface, and its clock (seconds), which the wind's waves travel by. */
 export interface FrameWater {
   rings: readonly RingState[];
   wind: readonly [number, number];
   slope: number;
+  seconds: number;
 }
 
-export const STILL_WATER: FrameWater = { rings: [], wind: [0, 0], slope: 0 };
+export const STILL_WATER: FrameWater = { rings: [], wind: [0, 0], slope: 0, seconds: 0 };
 
 /** A glint: where its light is (metres), its disc's radius (metres), its light (linear rgb). */
 export interface Glint {
@@ -64,6 +65,7 @@ export function writeWater(w: StructWriter, water: FrameWater, glints: readonly 
   const speed = Math.hypot(water.wind[0], water.wind[1]);
   w.set('waterWind', speed > 0 ? [water.wind[0] / speed, water.wind[1] / speed] : [1, 0]);
   w.set('waterSlope', water.slope);
+  w.set('waterTime', water.seconds);
   w.set('reflectReach', gt.reflectM / voxel);
   const shown = glints.slice(0, MAX_GLINTS);
   w.set('glintCount', shown.length);

@@ -11,6 +11,9 @@ import { GpuWorld } from '../../../src/render/gpu-world';
 import type { SceneLight } from '../../../src/render/lights';
 import type { Preset } from '../../../src/render/quality';
 import { Renderer } from '../../../src/render/renderer';
+import { STILL_WATER, type FrameWater } from '../../../src/render/water-frame';
+import { ringAt, waterTunables } from '../../../src/battle/water';
+import { loadTunables } from '../../../src/core/tunables';
 import { BrickMap } from '../../../src/world/bricks';
 import { HeapMirror } from '../../../src/world/encode';
 import { P } from '../../../src/world/materials';
@@ -32,17 +35,22 @@ export const WATER_Y = 1.6;
 /** A flare over the pool, 2.9 m above the water. */
 const FLARE: SceneLight = { position: [6.43, 4.5, 6.07], radius: 65, colour: [1, 0.88, 0.7], intensity: 260, kind: 'flare', phase: 0 };
 
-/** A floor 1.6 m deep, a pool cut into its top (0.3 m deep) from 1.6 m to 8 m out, and, `wall` given, a brick wall 9.6 m out. */
-function world(wall: boolean): BrickMap {
+/**
+ * A floor 1.6 m deep, a pool cut into its top (0.3 m deep) from 1.6 m to 8 m out, and, `wall` given,
+ * a brick wall 9.6 m out; `striped`, in upright stripes of brick and concrete 0.3 m wide, so a
+ * reflected ray turned a little meets another colour.
+ */
+function world(wall: boolean, striped = false): BrickMap {
   const map = new BrickMap(DIMS);
   map.fillBox(0, 0, 0, 128, 16, 128, P.SOD);
   map.fillBox(16, 13, 16, 112, 16, 80, P.WATER);
   if (wall) map.fillBox(0, 16, 96, 128, 64, 100, P.BRICK);
+  if (wall && striped) for (let x = 3; x < 128; x += 6) map.fillBox(x, 16, 96, x + 3, 64, 100, P.CONCRETE);
   return map;
 }
 
 /** The reflection, depth and hit of the last frame of `frames` from POSE over `map`. */
-async function look(map: BrickMap, options: { preset?: Preset; reachM?: number; lights?: SceneLight[] } = {}) {
+async function look(map: BrickMap, options: { preset?: Preset; reachM?: number; lights?: SceneLight[]; water?: FrameWater } = {}) {
   const g = await gpu();
   const gw = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
   const renderer = await Renderer.create(g, null, gw, null, { size: SIZE, preset: options.preset ?? 'high' });
@@ -51,6 +59,7 @@ async function look(map: BrickMap, options: { preset?: Preset; reachM?: number; 
   renderer.flags |= FLAGS.JITTER_OFF;
   if (options.reachM !== undefined) renderer.waterTerms = { ...renderer.waterTerms, frame: { ...renderer.waterTerms.frame, reflectM: options.reachM } };
   renderer.setLights(options.lights ?? [], 1);
+  renderer.setWater(options.water ?? STILL_WATER);
   let now = 0;
   for (let k = 0; k < 12; k++) renderer.render(POSE, 0, (now += 16));
   const reflection = new Uint16Array(await readTexture(renderer.texture('reflection')));
@@ -112,5 +121,43 @@ export const cases = {
       aside: lit.reflection(Math.min(SIZE[0] - 1, glint.px + 12), glint.py),
     };
     return { pose: POSE, waterY: WATER_Y, samples, glint: glints, errors: [...walled.errors, ...bare.errors, ...low.errors, ...short.errors, ...lit.errors, ...lowLit.errors] };
+  },
+
+  /**
+   * The surface, before the striped wall: a whole ring at the pool's middle 1 s and 1.99 s on, and the
+   * wind at 2 m/s roughening it to two slopes, against still water; each sampled water pixel's point
+   * (metres).
+   */
+  async waterSurface() {
+    const wt = waterTunables(loadTunables());
+    const centre: [number, number, number] = [6.4, WATER_Y, 4.8];
+    const ring = (age: number): FrameWater => ({ rings: [ringAt({ at: centre, t0: 0, strength: 1 }, age, wt)!], wind: [0, 0], slope: 0, seconds: age });
+    const map = () => world(true, true);
+    const still = await look(map());
+    const second = await look(map(), { water: ring(1) });
+    const faded = await look(map(), { water: ring(1.99) });
+    const calm = await look(map(), { water: { rings: [], wind: [2, 0], slope: 0, seconds: 3 } });
+    const breeze = await look(map(), { water: { rings: [], wind: [2, 0], slope: 0.024, seconds: 3 } });
+    const wind = await look(map(), { water: { rings: [], wind: [2, 0], slope: 0.048, seconds: 3 } });
+    const samples: { at: number[]; still: number[]; second: number[]; faded: number[]; calm: number[]; breeze: number[]; wind: number[] }[] = [];
+    for (let j = 0; j < 45; j++) {
+      for (let i = 0; i < 80; i++) {
+        const px = Math.floor(((i + 0.5) / 80) * SIZE[0]);
+        const py = Math.floor(((j + 0.5) / 45) * SIZE[1]);
+        if (!still.water(px, py)) continue;
+        const ray = rayDir(POSE, SIZE, px + 0.5, py + 0.5);
+        const d = still.depth(px, py) * 0.1;
+        samples.push({
+          at: POSE.position.map((c, k) => c + ray[k] * d),
+          still: still.reflection(px, py),
+          second: second.reflection(px, py),
+          faded: faded.reflection(px, py),
+          calm: calm.reflection(px, py),
+          breeze: breeze.reflection(px, py),
+          wind: wind.reflection(px, py),
+        });
+      }
+    }
+    return { centre, ringM: wt.ringSpeedMps, samples, errors: [...still.errors, ...second.errors, ...faded.errors, ...calm.errors, ...breeze.errors, ...wind.errors] };
   },
 };

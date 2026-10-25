@@ -1,6 +1,6 @@
 // The water's reflection (renderer.ts's `reflect` pass, before shade): for each pixel of the
-// internal image whose G-buffer hit is a water voxel's top, what its surface reflects toward the
-// eye. The reflected ray leaves a sixteenth of a voxel over the surface and is traced through the
+// internal image whose G-buffer hit is a water voxel's top, what its surface (still, or bent by the
+// battle's rings and the wind: waterNormal) reflects toward the eye. The reflected ray leaves a sixteenth of a voxel over the surface and is traced through the
 // world (the shared traversal) to frame.reflectReach; what it meets is shaded cheaply, as it has no
 // denoised light of its own: its albedo, the key light through the key's height map, the sky's
 // ambient, the nearest four lights of its light cell unshadowed, and its emission, seen through the
@@ -39,6 +39,45 @@ fn reflectedLight(q: vec3f, n: vec3f, mat: u32) -> vec3f {
   return albedoOf(mat) * lit + emissionOf(mat);
 }
 
+// The surface's normal at p (voxels, on a water top): still water's up, bent by the rings and the
+// wind. A ring is a wave packet about its circle, h(d) = A cos(2π(d − r)/λ) exp(−((d − r)/w)²),
+// within half a metre of its water's height; the wind's roughness three waves travelling with it
+// (along it, 30° off it, and across it), their slopes frame.waterSlope at most. The normal is the
+// height's gradient, (−∂h/∂x, 1, −∂h/∂z).
+fn waterNormal(p: vec3f) -> vec3f {
+  var grad = vec2f(0.0);
+  for (var k = 0u; k < min(frame.ringCount, 32u); k++) {
+    let c = frame.rings[2u * k];
+    let shape = frame.rings[2u * k + 1u];
+    if (abs(p.y - c.y) > 5.0) {
+      continue;
+    }
+    let d = p.xz - c.xz;
+    let dist = length(d);
+    let x = dist - c.w;
+    let width = shape.y;
+    if (dist < 1e-3 || abs(x) > 3.0 * width) {
+      continue;
+    }
+    let envelope = exp(-(x * x) / (width * width));
+    let k2 = 6.2831853 / shape.z;
+    let dhdr = shape.x * envelope * (-sin(k2 * x) * k2 - cos(k2 * x) * 2.0 * x / (width * width));
+    grad += dhdr * (d / dist);
+  }
+  if (frame.waterSlope > 0.0) {
+    let along = frame.waterWind;
+    let off = vec2f(along.x * 0.866 - along.y * 0.5, along.x * 0.5 + along.y * 0.866);
+    let across = vec2f(-along.y, along.x);
+    let t = frame.waterTime;
+    // Wavelengths 9, 5 and 3.5 voxels' tenths of a metre apiece (0.9, 0.5, 0.35 m), at speeds a deep
+    // wave of each has (√(gλ/2π): 1.2, 0.9, 0.74 m/s), in voxels.
+    grad += frame.waterSlope * 0.5 * cos(dot(p.xz, along) * (6.2831853 / 9.0) - t * 8.4) * along;
+    grad += frame.waterSlope * 0.3 * cos(dot(p.xz, off) * (6.2831853 / 5.0) - t * 11.3) * off;
+    grad += frame.waterSlope * 0.2 * cos(dot(p.xz, across) * (6.2831853 / 3.5) - t * 13.3) * across;
+  }
+  return normalize(vec3f(-grad.x, 1.0, -grad.y));
+}
+
 // The flares' and fires' glints the reflected ray from ro along r passes through, short of `until` voxels.
 fn glintsAlong(ro: vec3f, r: vec3f, until: f32) -> vec3f {
   var light = vec3f(0.0);
@@ -75,7 +114,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let rd = cameraRay(frame.cam, vec2f(g.xy) + 0.5 + frameJitter(), vec2f(frame.res));
   let depth = textureLoad(gDepth, vec2i(g.xy), 0).r;
   let p = frame.cam.origin + rd * depth;
-  let n = vec3f(0.0, 1.0, 0.0);
+  let n = waterNormal(p);
   var r = reflect(rd, n);
   // Never under the surface it leaves.
   r = normalize(vec3f(r.x, max(r.y, 0.02), r.z));

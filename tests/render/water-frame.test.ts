@@ -21,7 +21,7 @@ describe("the frame's water", () => {
     expect([MAX_RINGS, MAX_GLINTS]).toEqual([32, 32]);
     const rings: RingState[] = Array.from({ length: 40 }, (_, k) => ({ at: [10 + k, 1.6, 20], radiusM: 0.5, heightM: 0.02, age: 0.5 }));
     const w = new StructWriter(FRAME);
-    writeWater(w, { rings, wind: [3, 4], slope: 0.06 }, [], V, gt, wt);
+    writeWater(w, { rings, wind: [3, 4], slope: 0.06, seconds: 12.5 }, [], V, gt, wt);
     expect(u32(w, 'ringCount')).toBe(32);
     // The newest: the last 32 given.
     const first = floats(w, 'rings', 0);
@@ -36,6 +36,7 @@ describe("the frame's water", () => {
     expect(wind[1]).toBeCloseTo(0.8, 6);
     expect(new Float32Array(w.buffer, offsets.waterSlope, 1)[0]).toBeCloseTo(0.06, 6);
     expect(new Float32Array(w.buffer, offsets.reflectReach, 1)[0]).toBeCloseTo(gt.reflectM / V, 3);
+    expect(new Float32Array(w.buffer, offsets.waterTime, 1)[0]).toBeCloseTo(12.5, 6);
     // At rest: still.
     const rest = new StructWriter(FRAME);
     writeWater(rest, STILL_WATER, [], V, gt, wt);

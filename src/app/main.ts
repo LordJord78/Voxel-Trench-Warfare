@@ -364,7 +364,7 @@ async function start(): Promise<void> {
     renderer.setLights(lit, sky.flares, eye);
     renderer.setHorizon(horizon);
     // The battle's water: its rings and the wind on it; still at rest, and under a test's own lights.
-    renderer.setWater(lightsHeld === 'rest' || lights !== planned ? STILL_WATER : { rings: shownBattle.rings(), ...shownBattle.roughness() });
+    renderer.setWater(lightsHeld === 'rest' || lights !== planned ? STILL_WATER : { rings: shownBattle.rings(), ...shownBattle.roughness(), seconds: shownBattle.seconds });
   };
 
   const changeSettings = (next: Settings) => {
