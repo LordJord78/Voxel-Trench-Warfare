@@ -689,3 +689,63 @@ test('the hamlet burning at night', async ({ page }) => {
   if (errors.length) throw new Error(errors.join('\n'));
 });
 
+// Battle milestone 5's captures (artifacts/b5): the flooded crater in front of the view over no
+// man's land, seen from over its near rim: at night under a flare hung where its mirror image lies
+// in the crater's water, on the high preset (the world traced) and the low (the sky and the glints
+// alone, as the water was); and at dusk, its lit sides in its water, and rings spreading over it.
+const CRATER: { eye: [number, number, number]; pool: [number, number, number] } = { eye: [130, 18, 134], pool: [130.5, 12.6, 139.5] };
+
+test("a crater's water reflecting a flare at night", async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  // Hung 9.4 m over the water and 10 m beyond the pool's middle along the eye's line to it, so its mirror image lies in the pool.
+  const flare = { position: [131.4, 22, 149.1] as [number, number, number], radius: 65, colour: [1, 0.88, 0.7] as [number, number, number], intensity: 260, kind: 'flare' as const, phase: 0 };
+  for (const preset of ['high', 'low'] as const) {
+    await hooks(page, async (h, a) => {
+      const { preset, flare, pose } = a as { preset: 'high' | 'low'; flare: never; pose: Pose };
+      h.setQuality({ preset, dynres: false });
+      h.view('nml-night');
+      h.setTimeOfDay(21);
+      h.useLights([...h.lights(), flare]);
+      h.holdLights();
+      h.flyTo(pose);
+      await h.waitFrames(150);
+    }, { preset, flare, pose: looking(CRATER.eye, CRATER.pool) });
+    await page.screenshot({ path: `artifacts/b5/crater-flare-night-${preset}.png` });
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
+});
+
+/** Just over the pool's far end, 0.6 m above the water, looking back across it, away from the low sun: its sunlit side in it. */
+const GRAZING: Pose = { position: [130, 13.2, 142], yaw: 180, pitch: -4 };
+
+test('a lit wall in water, and rings spreading', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  // At dusk, the battle running, just over the crater's water: its sunlit side in it; then a shell's
+  // splash in the pool and two rounds' beside it, and the rings 0.5 s and 1.5 s on.
+  await hooks(page, async (h, a) => {
+    const { pose, dusk } = a as { pose: Pose; dusk: number };
+    h.setQuality({ preset: 'high', dynres: false });
+    h.setTimeOfDay(dusk);
+    h.runLights();
+    h.flyTo(pose);
+    await h.waitFrames(150);
+  }, { pose: GRAZING, dusk: DUSK });
+  await page.screenshot({ path: 'artifacts/b5/crater-dusk-still.png' });
+  await hooks(page, async (h, p) => {
+    const at = p as [number, number, number];
+    h.advanceBattle(0.02, [], [
+      { at, energyJ: 3e6 },
+      { at: [at[0] + 1.2, at[1], at[2] - 0.8], energyJ: 1500 },
+      { at: [at[0] - 1, at[1], at[2] + 0.6], energyJ: 1500 },
+    ]);
+    await h.waitFrames(30);
+  }, CRATER.pool);
+  await page.screenshot({ path: 'artifacts/b5/crater-dusk-rings-0.5s.png' });
+  await hooks(page, async (h) => {
+    await h.waitFrames(60);
+  });
+  await page.screenshot({ path: 'artifacts/b5/crater-dusk-rings-1.5s.png' });
+  if (errors.length) throw new Error(errors.join('\n'));
+});

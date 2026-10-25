@@ -491,6 +491,41 @@ test('a burning night renders within the budget at the overview and in the hamle
   expect(errors).toEqual([]);
 });
 
+test("the water's reflection costs at most 1 ms at no man's land at night", async ({ page }) => {
+  // Done-table row 5: the reflect pass's own GPU time, at the view over no man's land and its flooded
+  // crater, at night with the battle heavy (flares and fires glinting), its median and 95th percentile.
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  const r = await hooks(page, async (h) => {
+    h.setQuality({ preset: 'high', dynres: false });
+    h.view('nml-night');
+    h.setTimeOfDay(21);
+    h.setIntensity('heavy');
+    h.runLights(120);
+    await h.waitFrames(30);
+    const own: number[] = [];
+    const gpu: number[] = [];
+    let seen = h.stats().gpuSamples;
+    for (let k = 0; k < 300; k++) {
+      await h.waitFrames(1);
+      const s = h.stats();
+      if (s.gpuSamples > seen && s.gpuLastMs !== null) {
+        gpu.push(s.gpuLastMs);
+        own.push(s.own.reflect ?? 0);
+      }
+      seen = s.gpuSamples;
+    }
+    own.sort((a, b) => a - b);
+    gpu.sort((a, b) => a - b);
+    return { count: own.length, median: own[own.length >> 1], p95: own[Math.floor(0.95 * own.length)], frameP95: gpu[Math.floor(0.95 * gpu.length)] };
+  });
+  if (r.count === 0) test.skip(true, 'no GPU timestamps');
+  console.log(`The water's reflection at no man's land at night: median ${r.median.toFixed(3)} ms, p95 ${r.p95.toFixed(3)} ms; the frame's p95 ${r.frameP95.toFixed(2)} ms`);
+  expect(r.p95).toBeLessThanOrEqual(1);
+  expect(r.frameP95).toBeLessThanOrEqual(BUDGET_MS);
+  expect(errors).toEqual([]);
+});
+
 test("a heavy dusk's barrages render within the budget at the overview and in no man's land", async ({ page }) => {
   // Done-table row 2 at the heavy intensity, at dusk (no flares yet): barrages beyond the map and far
   // shells landing, their flashes glowing in the sky and the haze, the far shells' smoke standing; each

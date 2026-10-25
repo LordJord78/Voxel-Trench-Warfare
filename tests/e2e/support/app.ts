@@ -23,7 +23,7 @@ export interface Hooks {
   /** Run the lights' clock; from `seconds` into the battle, if given. */
   runLights(seconds?: number): void;
   /** Run the battle on by `seconds` at once, as it is (its strikes' fires kept), `strikes` struck as it starts: its fires' chars made, the rest unheard. */
-  advanceBattle(seconds: number, strikes?: { at: [number, number, number]; material: number; crater: number | null }[]): void;
+  advanceBattle(seconds: number, strikes?: { at: [number, number, number]; material: number; crater: number | null }[], splashes?: { at: [number, number, number]; energyJ: number }[]): void;
   /** The sun's elevation the last frame was lit at, in degrees. */
   sunElevation(): number;
   frames(): number;
