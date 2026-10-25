@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { P } from '../../src/world/materials';
 import { useManyLights } from './many-lights';
 import { hooks, openGame } from './support/app';
@@ -493,57 +493,61 @@ test("flares over no man's land, and one fired and bursting", async ({ page }) =
 // Battle milestone 2's review: a barrage on the horizon at dusk and at night, from the firing step, the
 // battle held at a shell's flash 0.02 s old with the camera turned to it, beside the moment half a second
 // before; and a far shell's flash and its column of smoke 20 s on, at dusk. Written to artifacts/b2.
+type Landed = { t: number; position: number[]; eye: number[] };
+/** From the step, the front heavy: the first far shell, or shell beyond the map within `withinM`, to land. */
+const firstLanded = (page: Page, hours: number, far: boolean, withinM = Infinity): Promise<Landed | null> =>
+  hooks(
+    page,
+    async (h, a) => {
+      const { hours: at, far: wantFar, within } = a as { hours: number; far: boolean; within: number };
+      h.setQuality({ preset: 'high', dynres: false });
+      h.view('step');
+      h.setTimeOfDay(at);
+      h.setIntensity('heavy');
+      h.runLights(120);
+      for (let k = 0; k < 7200; k++) {
+        await h.waitFrames(1);
+        const eye = h.views.step.position;
+        const f = h.battle().flashes.find((s) => s.far === wantFar && h.battle().seconds - s.t < 0.1 && Math.hypot(s.position[0] - eye[0], s.position[2] - eye[2]) <= within);
+        if (f) return { t: f.t, position: f.position, eye: h.views.step.position };
+      }
+      return null;
+    },
+    { hours, far, within: withinM },
+  );
+/** The battle held at `at` (its clock, seconds), the camera at the shell's eye turned to it and `upDeg` above it, settled; then photographed to `path`, what it held logged. */
+const heldOn = async (page: Page, shell: Landed, at: number, upDeg: number, path: string) => {
+  await hooks(
+    page,
+    async (h, a) => {
+      const { shell: s, at: t, up } = a as { shell: Landed; at: number; up: number };
+      h.holdLights(t);
+      const d = [s.position[0] - s.eye[0], s.position[2] - s.eye[2]];
+      const far = Math.hypot(d[0], d[1]);
+      const pitch = (Math.atan2(s.position[1] - s.eye[1], far) * 180) / Math.PI + up;
+      h.flyTo({ position: s.eye as [number, number, number], yaw: (Math.atan2(d[0], d[1]) * 180) / Math.PI, pitch });
+      await h.waitFrames(90);
+    },
+    { shell, at, up: upDeg },
+  );
+  const held = await hooks(page, (h) => ({ flashes: h.horizon().length, smoke: h.battle().smoke.length, billboards: h.effects().billboards }));
+  const metres = Math.hypot(shell.position[0] - shell.eye[0], shell.position[2] - shell.eye[2]);
+  console.log(`${path}: the shell ${metres.toFixed(0)} m off (${shell.position.map((v) => v.toFixed(0)).join(', ')}), eye ${shell.eye.map((v) => v.toFixed(0)).join(', ')}; ${held.flashes} flashes, ${held.smoke} puffs, ${held.billboards} billboards drawn`);
+  await page.screenshot({ path });
+};
+
 test('a barrage on the horizon at dusk and at night, and a far shell flashing and smoking', async ({ page }) => {
   test.setTimeout(300_000);
   const errors = await openGame(page);
-  /** From the step, the front heavy: the first far shell, or shell beyond the map within `withinM`, to land. */
-  const firstLanded = (hours: number, far: boolean, withinM = Infinity) =>
-    hooks(
-      page,
-      async (h, a) => {
-        const { hours: at, far: wantFar, within } = a as { hours: number; far: boolean; within: number };
-        h.setQuality({ preset: 'high', dynres: false });
-        h.view('step');
-        h.setTimeOfDay(at);
-        h.setIntensity('heavy');
-        h.runLights(120);
-        for (let k = 0; k < 7200; k++) {
-          await h.waitFrames(1);
-          const eye = h.views.step.position;
-          const f = h.battle().flashes.find((s) => s.far === wantFar && h.battle().seconds - s.t < 0.1 && Math.hypot(s.position[0] - eye[0], s.position[2] - eye[2]) <= within);
-          if (f) return { t: f.t, position: f.position, eye: h.views.step.position };
-        }
-        return null;
-      },
-      { hours, far, within: withinM },
-    );
-  const look = async (shell: { t: number; position: number[]; eye: number[] }, at: number, upDeg: number, file: string) => {
-    await hooks(
-      page,
-      async (h, a) => {
-        const { shell: s, at: t, up } = a as { shell: { position: number[]; eye: number[] }; at: number; up: number };
-        h.holdLights(t);
-        const d = [s.position[0] - s.eye[0], s.position[2] - s.eye[2]];
-        const far = Math.hypot(d[0], d[1]);
-        const pitch = (Math.atan2(s.position[1] - s.eye[1], far) * 180) / Math.PI + up;
-        h.flyTo({ position: s.eye as [number, number, number], yaw: (Math.atan2(d[0], d[1]) * 180) / Math.PI, pitch });
-        await h.waitFrames(90);
-      },
-      { shell, at, up: upDeg },
-    );
-    const held = await hooks(page, (h) => ({ flashes: h.horizon().length, smoke: h.battle().smoke.length, billboards: h.effects().billboards }));
-    const metres = Math.hypot(shell.position[0] - shell.eye[0], shell.position[2] - shell.eye[2]);
-    console.log(`${file}: the shell ${metres.toFixed(0)} m off (${shell.position.map((v) => v.toFixed(0)).join(', ')}), eye ${shell.eye.map((v) => v.toFixed(0)).join(', ')}; ${held.flashes} flashes, ${held.smoke} puffs, ${held.billboards} billboards drawn`);
-    await page.screenshot({ path: `artifacts/b2/${file}.png` });
-  };
+  const look = (shell: Landed, at: number, upDeg: number, file: string) => heldOn(page, shell, at, upDeg, `artifacts/b2/${file}.png`);
   // At dusk a barrage reads against the bright haze only from a few kilometres: one within 2.5 km.
   for (const [name, hours, within] of [['dusk', 17 + 35 / 60, 2500], ['night', 21, Infinity]] as const) {
-    const shell = await firstLanded(hours, false, within);
+    const shell = await firstLanded(page, hours, false, within);
     expect(shell, `no barrage's shell landed in a minute at ${name}`).not.toBeNull();
     await look(shell!, shell!.t + 0.02, 3, `barrage-${name}`);
     await look(shell!, shell!.t - 0.5, 3, `barrage-${name}-before`);
   }
-  const far = await firstLanded(17 + 35 / 60, true);
+  const far = await firstLanded(page, 17 + 35 / 60, true);
   expect(far, 'no far shell landed in a minute at dusk').not.toBeNull();
   await look(far!, far!.t + 0.05, 2, 'far-flash-dusk');
   await look(far!, far!.t + 20, 6, 'far-smoke-dusk');
@@ -551,7 +555,7 @@ test('a barrage on the horizon at dusk and at night, and a far shell flashing an
   const overview = await hooks(page, (h) => h.views.overview.position);
   await look({ ...far!, eye: overview }, far!.t + 0.05, 0, 'far-flash-dusk-overview');
   await look({ ...far!, eye: overview }, far!.t + 20, 3, 'far-smoke-dusk-overview');
-  const farNight = await firstLanded(21, true);
+  const farNight = await firstLanded(page, 21, true);
   expect(farNight, 'no far shell landed in a minute at night').not.toBeNull();
   await look({ ...farNight!, eye: overview }, farNight!.t + 0.05, 0, 'far-flash-night-overview');
   await look({ ...farNight!, eye: overview }, farNight!.t + 20, 3, 'far-smoke-night-overview');
@@ -770,3 +774,147 @@ test("the battle's flares in a crater's water at night", async ({ page }) => {
   if (errors.length) throw new Error(errors.join('\n'));
 });
 
+// Battle milestone 6's review captures (artifacts/b6): the battle at its close, each part of it where
+// it shows, the front heavy — no man's land at night under its flares, at the first moment from two
+// minutes in with fifteen burning; a barrage on the horizon at dusk from the firing step, held at a
+// shell's flash; tracers over the field at night from the overview; a fire burning in the bay and its
+// smoke at dusk; a crater's water reflecting the flares at night, from its rim and from just over it;
+// and the hamlet burning at night.
+test("the battle's review captures", async ({ page }) => {
+  test.setTimeout(600_000);
+  const errors = await openGame(page);
+  const shot = (name: string) => page.screenshot({ path: `artifacts/b6/${name}.png` });
+  /** The heavy night sought to its first moment from two minutes in with fifteen flares burning. */
+  const flaresAtTheirMost = () =>
+    hooks(page, async (h) => {
+      h.setTimeOfDay(21);
+      h.setIntensity('heavy');
+      let at = 120;
+      for (; at < 900; at += 5) {
+        h.runLights(at);
+        await h.waitFrames(1);
+        if (h.battle().flares.filter((f) => f.stage === 'burning').length >= 15) break;
+      }
+      return at;
+    });
+  await hooks(page, (h) => {
+    h.setQuality({ preset: 'high', dynres: false });
+    h.view('nml-night');
+  });
+  const at = await flaresAtTheirMost();
+  // Turned to where the flares hang (their mean bearing from the eye) and raised to 10° under their
+  // mean height (0–25°): they burst 25–40 m up, above a level eye's frame.
+  const turned = await hooks(page, async (h) => {
+    const v = h.views['nml-night'];
+    const burning = h.battle().flares.filter((f) => f.stage === 'burning');
+    let across = 0;
+    let along = 0;
+    let up = 0;
+    for (const f of burning) {
+      const dx = f.position[0] - v.position[0];
+      const dz = f.position[2] - v.position[2];
+      const d = Math.hypot(dx, dz);
+      across += dx / d;
+      along += dz / d;
+      up += Math.atan2(f.position[1] - v.position[1], d);
+    }
+    const yaw = (Math.atan2(across, along) * 180) / Math.PI;
+    const pitch = Math.min(25, Math.max(0, ((up / burning.length) * 180) / Math.PI - 10));
+    h.flyTo({ position: v.position, yaw, pitch });
+    await h.waitFrames(90);
+    return { yaw, pitch, burning: burning.length };
+  });
+  console.log(`no man's land under the flares: ${turned.burning} burning, the eye turned to ${turned.yaw.toFixed(0)}°, raised ${turned.pitch.toFixed(0)}°`);
+  await shot('nml-flares-night');
+  // The barrage at dusk: its shell within 2.5 km (beyond, a barrage does not read against the bright haze).
+  const shell = await firstLanded(page, DUSK, false, 2500);
+  expect(shell, "no barrage's shell landed in a minute at dusk").not.toBeNull();
+  await heldOn(page, shell!, shell!.t + 0.02, 3, 'artifacts/b6/barrage-dusk.png');
+  await heldOn(page, shell!, shell!.t - 0.5, 3, 'artifacts/b6/barrage-dusk-before.png');
+  // Tracers over the field from the overview, the night heavy at its flares' most.
+  await hooks(page, (h) => {
+    h.runLights();
+    h.view('overview');
+  });
+  await flaresAtTheirMost();
+  await hooks(page, (h) => h.waitFrames(90));
+  await shot('tracers-overview-night');
+  // The crater's water under the night's flares, the battle held at the moment: from 2.5 m over the
+  // water, looking down at the pool's middle from across it from a burning flare, so that flare's
+  // mirror image lies there — the flare nearest 50° up from it, and at least 42° (lower, the crater's
+  // far wall stands between the water and the flare); and from just over its far end.
+  const mirrored = await hooks(page, async (h, a) => {
+    const { at, pool } = a as { at: number; pool: [number, number, number] };
+    h.view('nml-night');
+    h.setTimeOfDay(21);
+    h.runLights(at);
+    await h.waitFrames(1);
+    const up = 2.5;
+    let best: { pose: Pose; off: number; flare: number[] } | null = null;
+    for (const f of h.battle().flares) {
+      if (f.stage !== 'burning') continue;
+      const dx = f.position[0] - pool[0];
+      const dz = f.position[2] - pool[2];
+      const across = Math.hypot(dx, dz);
+      const elevation = (Math.atan2(f.position[1] - pool[1], across) * 180) / Math.PI;
+      const back = (up * across) / (f.position[1] - pool[1]);
+      const eye: [number, number, number] = [pool[0] - (dx / across) * back, pool[1] + up, pool[2] - (dz / across) * back];
+      const pose = { position: eye, yaw: (Math.atan2(dx, dz) * 180) / Math.PI, pitch: (Math.atan2(-up, back) * 180) / Math.PI };
+      const off = elevation < 42 ? 90 + Math.abs(elevation - 50) : Math.abs(elevation - 50);
+      if (!best || off < best.off) best = { pose, off, flare: f.position };
+    }
+    h.holdLights(h.battle().seconds);
+    h.flyTo(best!.pose);
+    await h.waitFrames(150);
+    return best;
+  }, { at, pool: CRATER.pool });
+  console.log(`the crater's water: the flare at ${mirrored!.flare.map((v) => v.toFixed(1)).join(', ')}, the eye at ${mirrored!.pose.position.map((v) => v.toFixed(1)).join(', ')}`);
+  await shot('crater-flare-night-mirror');
+  await hooks(page, async (h, pose) => {
+    h.flyTo(pose as Pose);
+    await h.waitFrames(150);
+  }, GRAZING);
+  await shot('crater-flares-night-grazing');
+  await hooks(page, (h) => h.runLights());
+  // The hamlet burning, as the hamlet's view has it at 22:00, its fires lit an hour on.
+  await hooks(page, async (h) => {
+    h.view('hamlet');
+    h.setTimeOfDay(22);
+    h.runLights(60);
+    await h.waitFrames(120);
+  });
+  await shot('hamlet-burning-night');
+  // A fire in the bay at dusk at its full burn, from along the bay and from over it (as B4's, the
+  // front at its default, light): the battle sought afresh at dusk, so no night's flare lingers.
+  await hooks(page, (h, dusk) => {
+    h.setIntensity('light');
+    h.setTimeOfDay(dusk as number);
+    h.runLights(120);
+  }, DUSK);
+  const { fire, shells } = await fireInTheBay(page);
+  if (!fire) throw new Error(`no fire from ${shells} shells on the bay's timber`);
+  const bay = await hooks(page, (h) => h.world.spawn.bay);
+  const along = (m: number, up: number, back = 0): [number, number, number] => {
+    const p: [number, number, number] = [fire.at[0], fire.at[1] + up, fire.at[2]];
+    p[bay.longAxis] += m;
+    p[bay.longAxis === 0 ? 2 : 0] -= bay.facing * back;
+    return p;
+  };
+  const views: [string, Pose][] = [
+    ['along', looking(along(5, 1.6), [fire.at[0], fire.at[1] + 0.6, fire.at[2]])],
+    ['over', looking(along(6, 4.5, 3), [fire.at[0], fire.at[1] + 2, fire.at[2]])],
+  ];
+  await hooks(page, async (h, p) => {
+    h.spectate(p as Pose);
+    await h.waitFrames(960);
+    h.advanceBattle(10);
+  }, views[0][1]);
+  for (const [name, pose] of views) {
+    await hooks(page, async (h, p) => {
+      h.spectate(p as Pose);
+      await h.waitFrames(120);
+    }, pose);
+    await shot(`bay-fire-${name}-dusk`);
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
+});
