@@ -153,3 +153,19 @@ test('the HUD goes when the game stops: not over the failure screen', async ({ p
   await expect(page.locator('#hud')).toBeHidden();
   await expect(page.locator('#hud .crosshair i').first()).toBeHidden();
 });
+
+test('the periscope goes when the game stops: its frame not over the failure screen', async ({ page }) => {
+  // C5's review's case, left for the showcase: the GPU lost with the periscope up, its dark frame
+  // stayed round the failure's message.
+  await playing(page);
+  await hooks(page, (h) => {
+    const v = h.views.step;
+    h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: 0 });
+  });
+  await page.waitForFunction((s) => (window as unknown as { __trenchline: { player(): { stance: number } } }).__trenchline.player().stance === s, FIRING_STEP);
+  await page.keyboard.press('KeyQ');
+  await expect(page.locator('#periscope')).toBeVisible();
+  await hooks(page, (h) => h.loseDevice());
+  await expect(page.locator('#loading.failed')).toBeVisible();
+  await expect(page.locator('#periscope')).toBeHidden();
+});

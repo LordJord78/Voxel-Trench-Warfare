@@ -93,9 +93,11 @@ if (checkRun) loading.onPhase = (stage) => void reporter(checkRun)('progress.jso
 function stop(message: string): void {
   if (stopped) return;
   stopped = true;
-  // The message goes over everything: a pause menu left open would hide it, and the HUD would sit on it.
+  // The message goes over everything: a pause menu left open would hide it, and the HUD and the
+  // periscope's frame would sit on it.
   document.getElementById('pause')!.hidden = true;
   document.getElementById('hud')!.hidden = true;
+  document.getElementById('periscope')!.hidden = true;
   loading.fail(message);
   hooks.error = message;
   hooks.ready = true;
