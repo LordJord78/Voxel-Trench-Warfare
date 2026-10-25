@@ -386,12 +386,16 @@ async function start(): Promise<void> {
     );
   };
 
-  const changeSettings = (next: Settings) => {
-    if (next.preset !== settings.preset) renderer.setQuality({ preset: next.preset });
+  /** The visitor's settings (the pause menu, the keys): a preset they pick is theirs, kept and never moved for them. */
+  const changeSettings = (change: Omit<Settings, 'presetChosen'>) => {
+    const picked = change.preset !== settings.preset;
+    if (picked) renderer.setQuality({ preset: change.preset });
+    const next: Settings = { ...change, presetChosen: settings.presetChosen || picked };
     session.front.intensity = next.intensity;
     session.artillery.intensity = next.intensity;
     settings = next;
-    saveSettings(storage, settings);
+    // A preset not their own (the warm-up's move, for this visit) is kept as the default.
+    saveSettings(storage, settings.presetChosen ? settings : { ...settings, preset: defaultSettings(tun).preset });
   };
   const overlay = new Overlay(document.body);
   const periscope = new PeriscopeFrame(document);

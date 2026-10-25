@@ -9,7 +9,7 @@ const holding = (raw: string | null) => ({ getItem: () => raw });
 
 describe('settings', () => {
   it('default to the high preset, the tunables sensitivity, a 90° view and light fire from the front', () => {
-    expect(defaults).toEqual({ preset: 'high', sensitivity: 0.14, fov: 90, intensity: 'light' });
+    expect(defaults).toEqual({ preset: 'high', presetChosen: false, sensitivity: 0.14, fov: 90, intensity: 'light' });
     expect(loadSettings(null, defaults)).toEqual(defaults);
     expect(loadSettings(holding(null), defaults)).toEqual(defaults);
   });
@@ -21,16 +21,22 @@ describe('settings', () => {
     expect(loadSettings(throwing, defaults)).toEqual(defaults);
   });
   it('clamp values from outside their range', () => {
-    expect(loadSettings(holding('{"preset":"low","sensitivity":5,"fov":10}'), defaults)).toEqual({ preset: 'low', sensitivity: 0.6, fov: 60, intensity: 'light' });
-    expect(loadSettings(holding('{"sensitivity":0,"fov":400}'), defaults)).toEqual({ preset: 'high', sensitivity: 0.02, fov: 110, intensity: 'light' });
+    expect(loadSettings(holding('{"preset":"low","sensitivity":5,"fov":10}'), defaults)).toEqual({ preset: 'low', presetChosen: false, sensitivity: 0.6, fov: 60, intensity: 'light' });
+    expect(loadSettings(holding('{"sensitivity":0,"fov":400}'), defaults)).toEqual({ preset: 'high', presetChosen: false, sensitivity: 0.02, fov: 110, intensity: 'light' });
   });
   it('come back as they were saved, and a full or blocked storage loses only the save', () => {
     const store = new Map<string, string>();
     const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
-    const mine: Settings = { preset: 'low', sensitivity: 0.3, fov: 75, intensity: 'heavy' };
+    const mine: Settings = { preset: 'low', presetChosen: true, sensitivity: 0.3, fov: 75, intensity: 'heavy' };
     saveSettings(storage, mine);
     expect(loadSettings(storage, defaults)).toEqual(mine);
     const full = { setItem: () => { throw new Error('QuotaExceededError'); } };
     expect(() => saveSettings(full, mine)).not.toThrow();
+  });
+  it("keep whether the preset was the visitor's own; old settings without it read as not", () => {
+    // Settings from before the choice was kept: the preset as it was, not the visitor's own.
+    expect(loadSettings(holding('{"preset":"low"}'), defaults)).toMatchObject({ preset: 'low', presetChosen: false });
+    expect(loadSettings(holding('{"preset":"high","presetChosen":true}'), defaults)).toMatchObject({ preset: 'high', presetChosen: true });
+    expect(loadSettings(holding('{"preset":"high","presetChosen":"yes"}'), defaults)).toMatchObject({ presetChosen: false });
   });
 });

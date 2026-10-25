@@ -11,6 +11,8 @@ import type { Preset } from '../render/quality';
 
 export interface Settings {
   preset: Preset;
+  /** Whether the preset is the visitor's own, picked in the pause menu: kept, and never moved for them (app/tiers.ts). */
+  presetChosen: boolean;
   /** Degrees of turn per pixel of mouse movement. */
   sensitivity: number;
   /** Horizontal field of view, degrees. */
@@ -24,7 +26,7 @@ export const SETTING_RANGES = { sensitivity: [0.02, 0.6], fov: [60, 110] } as co
 const KEY = 'trenchline.settings';
 
 export function defaultSettings(tun: Tunables): Settings {
-  return { preset: 'high', sensitivity: tun.f('player.mouse_sensitivity'), fov: tun.f('camera.fov'), intensity: 'light' };
+  return { preset: 'high', presetChosen: false, sensitivity: tun.f('player.mouse_sensitivity'), fov: tun.f('camera.fov'), intensity: 'light' };
 }
 
 export function loadSettings(storage: Pick<Storage, 'getItem'> | null, defaults: Settings): Settings {
@@ -43,6 +45,8 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> | null, defaults:
   };
   return {
     preset: r.preset === 'high' || r.preset === 'low' ? r.preset : defaults.preset,
+    // Settings kept before the choice was: not the visitor's own.
+    presetChosen: r.presetChosen === true,
     sensitivity: number('sensitivity'),
     fov: number('fov'),
     intensity: r.intensity === 'off' || r.intensity === 'light' || r.intensity === 'heavy' ? r.intensity : defaults.intensity,

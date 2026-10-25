@@ -10,7 +10,8 @@ import type { Settings } from './settings';
 export interface PauseHandlers {
   resume(): void;
   /** A preference changed; the menu passes the whole set. */
-  change(settings: Settings): void;
+  /** The form's settings; whether the preset is the visitor's own is the game's to say (it was, or they changed it). */
+  change(settings: Omit<Settings, 'presetChosen'>): void;
   /** The clock, in hours. */
   time(hours: number): void;
   /** How fast the clock runs, in game minutes a second (0: held). */
@@ -78,7 +79,7 @@ export class PauseMenu {
     this.root.hidden = true;
   }
 
-  private read(): Settings {
+  private read(): Omit<Settings, 'presetChosen'> {
     const preset = this.form.querySelector<HTMLInputElement>('input[name="preset"]:checked')?.value === 'low' ? 'low' : 'high';
     const chosen = this.form.querySelector<HTMLInputElement>('input[name="intensity"]:checked')?.value;
     const intensity = chosen === 'off' || chosen === 'heavy' ? chosen : 'light';
