@@ -167,8 +167,17 @@ async function start(): Promise<void> {
   // The device comes up and the pipelines compile while the workers generate.
   const asError = (e: unknown) => (e instanceof Error ? e : new Error(String(e)));
   const gpuReady: Promise<Gpu | Error> = createGpu().catch(asError);
-  // Without a GPU there is nothing to draw: say so at once, not after generating a world.
-  void gpuReady.then((g) => g instanceof Error && fail(g));
+  // Without a GPU there is nothing to draw: say so at once, not after generating a world. A device lost
+  // before the world is first drawn means the page cannot start (its video, fallback.ts); lost after, the
+  // game stops and says so.
+  void gpuReady.then((g) => {
+    if (g instanceof Error) return fail(g);
+    void g.device.lost.then((info) => {
+      console.warn(`[gpu] device lost (${info.reason}): ${info.message}`);
+      if (hooks.ready === true) stop(`The graphics device was lost (${info.reason}). Reload the page to continue.`);
+      else fail(new Error(`the graphics device was lost (${info.reason})`));
+    });
+  });
   // How long the pipelines take to compile, from the device's coming up (a load timing).
   let compileMs = 0;
   const compiling = gpuReady.then((g) => {
@@ -188,10 +197,6 @@ async function start(): Promise<void> {
   );
   const gpu = await gpuReady;
   if (gpu instanceof Error || stopped) return;
-  void gpu.device.lost.then((info) => {
-    console.warn(`[gpu] device lost (${info.reason}): ${info.message}`);
-    stop(`The graphics device was lost (${info.reason}). Reload the page to continue.`);
-  });
   loading.progress('Sending the world to the GPU', null, 0.88);
   await nextPaint();
 
@@ -1192,6 +1197,9 @@ async function start(): Promise<void> {
   }
 }
 
-// A phone or tablet (touch alone) is shown the game's video first, and may try it anyway (fallback.ts).
-if (!checkRun && fallbackReason(placeHere(window)) === 'touch') fallBack('touch', () => void start().catch(fail));
+// Without WebGPU nothing is generated: the page falls back at once. A phone or tablet (touch alone) is
+// shown the game's video first, and may try it anyway (fallback.ts).
+const why = fallbackReason(placeHere(window));
+if (why === 'no-webgpu') fail(new GpuUnavailable('no-webgpu', 'This browser has no WebGPU.'));
+else if (why === 'touch' && !checkRun) fallBack('touch', () => void start().catch(fail));
 else start().catch(fail);

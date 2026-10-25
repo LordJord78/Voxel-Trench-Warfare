@@ -89,3 +89,65 @@ test('the built site at a sub-path falls back with its video found', async ({ pa
     await site.close();
   }
 });
+
+test('a device lost while loading falls back to the video', async ({ page }) => {
+  await page.addInitScript(() => {
+    const request = GPUAdapter.prototype.requestDevice;
+    GPUAdapter.prototype.requestDevice = async function (this: GPUAdapter, ...args: Parameters<GPUAdapter['requestDevice']>) {
+      const device = await request.apply(this, args);
+      device.destroy();
+      return device;
+    };
+  });
+  await page.goto('/');
+  const v = await playing(page);
+  expect(v.status).toContain('could not start');
+  expect(await hooks(page, (h) => (h as unknown as { fallback?: string }).fallback)).toBe('failed');
+});
+
+test('without WebGPU nothing is generated', async ({ page }) => {
+  const workers: string[] = [];
+  page.on('worker', (w) => workers.push(w.url()));
+  await withoutWebGpu(page);
+  await page.goto('/');
+  await playing(page);
+  expect(workers).toEqual([]);
+});
+
+test('the video can be paused and played, and plays only when asked where motion is reduced', async ({ browser }) => {
+  for (const reduced of [false, true]) {
+    const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, reducedMotion: reduced ? 'reduce' : 'no-preference' });
+    const page = await context.newPage();
+    await withoutWebGpu(page);
+    await page.goto('/');
+    const toggle = page.locator('#motion-toggle');
+    await expect(toggle).toBeVisible();
+    const paused = () => page.evaluate(() => (document.getElementById('motion') as HTMLVideoElement).paused);
+    if (reduced) {
+      await page.waitForTimeout(1000);
+      expect(await paused()).toBe(true);
+      await expect(toggle).toHaveText('Play');
+      await toggle.click();
+      await page.waitForFunction(() => ((document.getElementById('motion') as HTMLVideoElement).currentTime ?? 0) > 0.3);
+      await expect(toggle).toHaveText('Pause');
+    } else {
+      await playing(page);
+      await expect(toggle).toHaveText('Pause');
+      await toggle.click();
+      expect(await paused()).toBe(true);
+      await expect(toggle).toHaveText('Play');
+    }
+    await context.close();
+  }
+});
+
+test('where the browser refuses to play it, the video waits on its control', async ({ page }) => {
+  // A browser that refuses: play() rejects, and what the autoplay attribute starts is stopped at once.
+  await page.addInitScript(() => {
+    HTMLMediaElement.prototype.play = () => Promise.reject(new DOMException('autoplay refused', 'NotAllowedError'));
+    document.addEventListener('play', (e) => (e.target as HTMLMediaElement).pause(), true);
+  });
+  await withoutWebGpu(page);
+  await page.goto('/');
+  await expect(page.locator('#motion-toggle')).toHaveText('Play');
+});

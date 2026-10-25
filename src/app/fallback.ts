@@ -33,9 +33,9 @@ export function fallbackReason(p: Place): FallbackReason | null {
   return null;
 }
 
-/** The page's own place, before WebGPU is asked for an adapter. */
+/** The page's own place, before WebGPU is asked for an adapter: WebGPU there as the renderer needs it (a navigator.gpu, not merely the name). */
 export function placeHere(win: Window): Place {
-  return { gpu: 'gpu' in win.navigator, coarse: win.matchMedia('(pointer: coarse)').matches, fine: win.matchMedia('(any-pointer: fine)').matches };
+  return { gpu: Boolean((win.navigator as Navigator & { gpu?: unknown }).gpu), coarse: win.matchMedia('(pointer: coarse)').matches, fine: win.matchMedia('(any-pointer: fine)').matches };
 }
 
 /** What the page says under the video, by why it shows it (without WebGPU, the failure itself names the browsers). */
@@ -71,6 +71,20 @@ export function showFallback(doc: Document, reason: FallbackReason, tryAnyway?: 
   }
   doc.getElementById('still')?.after(video);
   const status = doc.getElementById('status')!;
+  // Its control, as a looping video must have (WCAG 2.2.2): Pause while it plays, Play while it waits.
+  // Where motion is reduced it waits to be asked; where the browser refuses to play it, it waits too.
+  const toggle = doc.createElement('button');
+  toggle.id = 'motion-toggle';
+  toggle.type = 'button';
+  const label = () => (toggle.textContent = video.paused ? 'Play' : 'Pause');
+  video.addEventListener('play', label);
+  video.addEventListener('pause', label);
+  toggle.onclick = () => (video.paused ? void video.play().catch(label) : video.pause());
+  const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (still) {
+    video.autoplay = false;
+    video.removeAttribute('autoplay');
+  }
   if (reason === 'touch') {
     // An SVG element: hidden by its attribute (index.html's [hidden] rule), as SVG has no hidden property.
     const trace = doc.querySelector('#loading .trace');
@@ -84,18 +98,22 @@ export function showFallback(doc: Document, reason: FallbackReason, tryAnyway?: 
     button.onclick = () => {
       video.pause();
       video.remove();
+      toggle.remove();
       button.remove();
       status.textContent = was;
       trace?.removeAttribute('hidden');
       tryAnyway?.();
     };
     status.after(button);
+    button.after(toggle);
   } else {
     const line = doc.createElement('p');
     line.id = 'motion-line';
     line.textContent = fallbackLine(reason);
     status.after(line);
+    line.after(toggle);
   }
-  void video.play().catch(() => {});
+  label();
+  if (!still) void video.play().then(label, label);
   return video;
 }

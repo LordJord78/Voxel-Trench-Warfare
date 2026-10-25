@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test';
 // The game's video (npm run video; the showcase spec's §3), as ffprobe reads it: what the page plays
 // where the game cannot run.
 interface Probe {
-  streams: { codec_type: string; codec_name: string; width?: number; height?: number; avg_frame_rate: string }[];
+  streams: { codec_type: string; codec_name: string; width?: number; height?: number; avg_frame_rate: string; color_space?: string; color_primaries?: string; color_transfer?: string }[];
   format: { duration: string };
 }
 const probe = (file: string): Probe => JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', file], { encoding: 'utf8' }));
@@ -36,6 +36,8 @@ test('the video is 20–30 s of 1280 × 720 at 30 fps, VP9 and H.264, each ≤ 6
     expect(seconds, file).toBeGreaterThanOrEqual(20);
     expect(seconds, file).toBeLessThanOrEqual(30);
     expect(statSync(file).size, file).toBeLessThanOrEqual(6 * 1024 * 1024);
+    // Its colours said, as the browser decodes them: BT.709.
+    expect([video.color_space, video.color_primaries, video.color_transfer], file).toEqual(['bt709', 'bt709', 'bt709']);
   }
   // Its index first, so it plays as it arrives.
   const order = boxes('public/video/trenchline.mp4');

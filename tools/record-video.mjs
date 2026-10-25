@@ -4,11 +4,13 @@
 // frozen and stepped two frames (a sixtieth of a second each) per video frame, so the battle runs in
 // real time whatever a frame takes to read back.
 //
-// There are five shots. Each is set up with the flying camera (its histories started afresh) and held
+// There are four shots. Each is set up with the flying camera (its histories started afresh) and held
 // 20 frames before it is recorded. It is then flown with glide, which moves the camera without starting
-// those histories again.
+// those histories again. Nothing of the page but the world is in a frame: the still, the loading screen,
+// the note and the HUD are checked hidden before the first.
 //
-// The frames are encoded by ffmpeg as VP9 (CRF 36) and H.264 (CRF 26, faststart) into public/video/.
+// The frames are encoded by ffmpeg as VP9 (CRF 36) and H.264 (CRF 26, faststart) into public/video/,
+// converted and tagged as BT.709, as browsers decode HD video.
 // Each file is at most 6 MB: the CRF is raised until it fits. Run it again when the look changes.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
@@ -99,6 +101,15 @@ try {
       return f ? f.at : null;
     }, start) : null;
     await page.evaluate((k) => window.__trenchline.stepFrames(k), HOLD_FRAMES);
+    // The world alone in the frame, and the game still running.
+    const shown = await page.evaluate(() => [
+      ...['still', 'loading', 'note', 'hud'].filter((id) => {
+        const e = document.getElementById(id);
+        return e && !e.hidden && getComputedStyle(e).display !== 'none' && getComputedStyle(e).opacity !== '0';
+      }),
+      ...(window.__trenchline.error ? [`error: ${window.__trenchline.error}`] : []),
+    ]);
+    if (shown.length) throw new Error(`not the world alone: ${shown.join(', ')}`);
     const count = Math.round(shot.seconds * FPS);
     for (let f = 0; f < count; f++) {
       const u = f / (count - 1);
@@ -135,8 +146,11 @@ try {
       if (size <= MAX_BYTES) return;
     }
   };
-  encode(`${OUT}/trenchline.webm`, { crf: 36, codec: (crf) => ['-c:v', 'libvpx-vp9', '-crf', String(crf), '-b:v', '0', '-row-mt', '1', '-pix_fmt', 'yuv420p'] });
-  encode(`${OUT}/trenchline.mp4`, { crf: 26, codec: (crf) => ['-c:v', 'libx264', '-preset', 'slow', '-crf', String(crf), '-pix_fmt', 'yuv420p', '-movflags', '+faststart'] });
+  // RGB to BT.709 YUV, and said so: untagged, a browser decodes HD as BT.709, which ffmpeg's default (BT.601) is not.
+  // The frames carry the tags into the encoder (this ffmpeg takes them from the frames, not its options).
+  const bt709 = ['-vf', 'scale=out_color_matrix=bt709:out_range=tv,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709'];
+  encode(`${OUT}/trenchline.webm`, { crf: 36, codec: (crf) => [...bt709, '-c:v', 'libvpx-vp9', '-crf', String(crf), '-b:v', '0', '-row-mt', '1', '-pix_fmt', 'yuv420p'] });
+  encode(`${OUT}/trenchline.mp4`, { crf: 26, codec: (crf) => [...bt709, '-c:v', 'libx264', '-preset', 'slow', '-crf', String(crf), '-pix_fmt', 'yuv420p', '-movflags', '+faststart'] });
 } finally {
   rmSync(frames, { recursive: true, force: true });
   await browser.close();
