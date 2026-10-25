@@ -8,10 +8,12 @@
  * point is off the map turns until it lands, or is skipped. Each view's frames
  * are measured while it lasts: the GPU's own time a frame (by timestamps, or by
  * submitted work where a browser has none) and the main thread's. Chrome's perf
- * gate and the check run (Safari's report) both measure through this.
+ * gate and the check run (Safari's report) both measure through this; under the
+ * battle's peak (peak-battle.ts) too when asked, sought once the player stands.
  */
 
 import type { CameraPose } from '../render/camera';
+import { battlePeak, type BattleGame, type BattlePeak } from './peak-battle';
 import type { ViewName } from './views';
 
 /** Seconds between shells; their distance from the player and their radius, metres. */
@@ -88,28 +90,26 @@ export interface PeakResult {
   voices: number;
   /** The farthest the feet strayed from where they stood while it lasted, metres: a body lifted out of a wall, or pushed off its view, shows here. */
   drift: number;
+  /** The battle's peak it was put under (peak-battle.ts), if asked; null without. */
+  battle: BattlePeak | null;
 }
 
-/** What the driver needs of the game. */
-export interface PeakGame {
+/** What the driver needs of the game: the battle's peak's too. */
+export interface PeakGame extends BattleGame {
   views: Record<ViewName, CameraPose>;
   /** Stand the player playing, their eye at `pose`, or as near it as their body stands clear of solid. */
   standAt(pose: CameraPose): void;
   /** Hold the camera at `pose` with the session running; null to stop, and play again. */
   spectate(pose: CameraPose | null): void;
-  setTimeOfDay(hours: number): void;
-  setFront(intensity: 'off' | 'heavy'): void;
   trigger(held: boolean): void;
   rounds(): number;
   refill(): void;
   shotsFired(): number;
-  feet(): [number, number, number];
   onMap(x: number, z: number): boolean;
   /** A shell of `radiusM` at (x, z), metres: resolves when its crater is in. */
   shell(x: number, z: number, radiusM: number): Promise<unknown>;
   /** Craters queued or out. */
   pending(): number;
-  waitFrames(n: number): Promise<void>;
   frames(): number;
   stats(): { gpuLastMs: number | null; gpuSamples: number };
   /** The main thread's time of each of the last frames (up to 600), ms. */
@@ -119,8 +119,8 @@ export interface PeakGame {
   voices(): number;
 }
 
-/** `view` at `hours` under peak combat for `seconds`, measured; the game calm again after. */
-export async function underFire(game: PeakGame, view: ViewName, hours: number, seconds: number): Promise<PeakResult> {
+/** `view` at `hours` under peak combat for `seconds`, measured; under the battle's peak too, `battle` given; the game calm again after. */
+export async function underFire(game: PeakGame, view: ViewName, hours: number, seconds: number, options: { battle?: boolean } = {}): Promise<PeakResult> {
   if (view === 'overview') {
     game.spectate(null);
     game.standAt(game.views.bay);
@@ -131,6 +131,7 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
   }
   game.setTimeOfDay(hours);
   game.setFront('heavy');
+  const battle = options.battle ? await battlePeak(game, hours) : null;
   await game.waitFrames(SETTLE_FRAMES);
   const feet = game.feet();
   const shots0 = game.shotsFired();
@@ -188,5 +189,6 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
     skipped,
     voices,
     drift,
+    battle,
   };
 }

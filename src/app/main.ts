@@ -48,6 +48,7 @@ import { flareTunables } from '../battle/flares';
 import { flashPower, flashTunables } from '../battle/barrages';
 import { farHeightM } from '../world/generation/farfield';
 import { clearOf, underFire, type PeakGame } from './peak-combat';
+import { battlePeak } from './peak-battle';
 import { PeriscopeFrame } from '../ui/periscope';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from '../ui/settings';
 import { UNIFORM } from '../world/bricks';
@@ -788,6 +789,17 @@ async function start(): Promise<void> {
   };
   const submittedWork = (count: number) => new Promise<number[]>((resolve) => (work = { count, left: count, samples: [], done: resolve }));
   const eyeM = world.plan.params.eye.standing * voxelM;
+  /** The battle sought to `seconds` from its start, at the inputs of the moment, and running on from there. */
+  const seekBattle = (seconds: number) => {
+    const inputs = battleInputs();
+    battle = Director.at(seconds, world.plan, tun, SEED, inputs, ground);
+    ranAt = { hours: timeOfDay, darkness: inputs.darkness };
+    lightsHeld = null;
+  };
+  /** The battle run on by `seconds` at once, as it is (its strikes' fires kept), at the inputs of the moment, `strikes` struck and `splashes` splashed as it starts: its fires' chars made, the rest unheard. */
+  const runBattle = (seconds: number, strikes: Strike[] = [], splashes: NonNullable<BattleInputs['splashes']> = []) => {
+    for (const c of battle.tick(seconds, { ...battleInputs(), strikes, splashes }).chars) chars.add(c.at);
+  };
   const peakGame: PeakGame = {
     views,
     standAt: (pose) => {
@@ -835,6 +847,21 @@ async function start(): Promise<void> {
     timestamps: gpu.timestamps,
     submittedWork,
     voices: () => audio.voices,
+    eyeYaw: () => (mode === 'fly' ? fly.pose.yaw : session.player.yaw),
+    groundTop: (x, z) => {
+      const top = groundTop(session.map, x / voxelM, z / voxelM);
+      return top === null ? null : top * voxelM;
+    },
+    dark: () => battleInputs().darkness > flareT.darkAbove,
+    seekBattle,
+    runBattle,
+    battleNow: () => ({
+      seconds: battle.seconds,
+      flares: battle.flares().filter((f) => f.stage === 'burning').length,
+      barrages: battle.barrages.running,
+      tracers: battle.tracers().length,
+      fires: battle.fires().filter((f) => !f.dying).length,
+    }),
   };
   Object.assign(hooks, {
     world,
@@ -849,8 +876,10 @@ async function start(): Promise<void> {
     standAt(view: ViewName) {
       peakGame.standAt(views[view]);
     },
-    /** `view` at `hours` under peak combat for `seconds`, measured (peak-combat.ts). */
-    underFire: (view: ViewName, hours: number, seconds: number) => underFire(peakGame, view, hours, seconds),
+    /** The battle brought to its peak where the player stands, at the time of day (peak-battle.ts). */
+    battlePeak: () => battlePeak(peakGame, timeOfDay),
+    /** `view` at `hours` under peak combat for `seconds`, measured; under the battle's peak too, if asked (peak-combat.ts). */
+    underFire: (view: ViewName, hours: number, seconds: number, options?: { battle?: boolean }) => underFire(peakGame, view, hours, seconds, options),
     timings: world.timings,
     view(name: ViewName) {
       if (!VIEW_NAMES.includes(name)) throw new Error(`no view '${name}'`);
@@ -1004,17 +1033,10 @@ async function start(): Promise<void> {
     holdLights(seconds?: number) {
       lightsHeld = seconds ?? 'rest';
     },
-    /** Run the battle on by `seconds` at once, as it is (its strikes' fires kept), at the inputs of the moment, `strikes` struck and `splashes` splashed as it starts: its fires' chars made, the rest unheard. */
-    advanceBattle(seconds: number, strikes: Strike[] = [], splashes: NonNullable<BattleInputs['splashes']> = []) {
-      for (const c of battle.tick(seconds, { ...battleInputs(), strikes, splashes }).chars) chars.add(c.at);
-    },
+    advanceBattle: runBattle,
     /** Run the lights' clock; from `seconds` into the battle (sought there at the inputs of the moment), if given. */
     runLights(seconds?: number) {
-      if (seconds !== undefined) {
-        const inputs = battleInputs();
-        battle = Director.at(seconds, world.plan, tun, SEED, inputs, ground);
-        ranAt = { hours: timeOfDay, darkness: inputs.darkness };
-      }
+      if (seconds !== undefined) seekBattle(seconds);
       lightsHeld = null;
     },
     useLights(next: SceneLight[]) {

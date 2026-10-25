@@ -64,3 +64,28 @@ test('a view under fire: shots, shells and incoming every second, and calm again
   }
   expect(errors).toEqual([]);
 });
+
+test('the battle at its peak: at night the most flares, a barrage, tracers and twelve fires; at dusk the barrage and the fires', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  const night = await hooks(page, async (h) => {
+    h.standAt('nml-night');
+    h.setTimeOfDay(21);
+    h.setIntensity('heavy');
+    return h.battlePeak();
+  });
+  console.log(`the battle's peak at night: ${JSON.stringify(night)}`);
+  expect(night.flares).toBeGreaterThanOrEqual(15);
+  expect(night.barrages).toBeGreaterThan(0);
+  expect(night.tracers).toBeGreaterThan(0);
+  expect(night.fires).toBe(12);
+  const dusk = await hooks(page, async (h) => {
+    h.setTimeOfDay(17 + 35 / 60);
+    return h.battlePeak();
+  });
+  console.log(`the battle's peak at dusk: ${JSON.stringify(dusk)}`);
+  expect(dusk.flares).toBe(0);
+  expect(dusk.barrages).toBeGreaterThan(0);
+  expect(dusk.fires).toBe(12);
+  expect(errors).toEqual([]);
+});

@@ -100,8 +100,10 @@ export interface Hooks {
   spectate(pose: { position: [number, number, number]; yaw: number; pitch: number } | null): void;
   /** Stand the player at a standard view, their body clear of solid. */
   standAt(view: string): void;
-  /** A standard view at `hours` under peak combat for `seconds`, measured (src/app/peak-combat.ts). */
-  underFire(view: string, hours: number, seconds: number): Promise<{
+  /** The battle brought to its peak where the player stands (src/app/peak-battle.ts): when, and what of it burns, runs and flies. */
+  battlePeak(): Promise<{ at: number; flares: number; barrages: number; tracers: number; fires: number }>;
+  /** A standard view at `hours` under peak combat for `seconds`, measured; under the battle's peak too, if asked (src/app/peak-combat.ts). */
+  underFire(view: string, hours: number, seconds: number, options?: { battle?: boolean }): Promise<{
     view: string;
     hours: number;
     frames: number;
@@ -113,6 +115,7 @@ export interface Hooks {
     skipped: number;
     voices: number;
     drift: number;
+    battle: { at: number; flares: number; barrages: number; tracers: number; fires: number } | null;
   }>;
   /** The HUD as drawn: whether it shows, whether its crosshair does, and its words. */
   hud(): { visible: boolean; crosshair: boolean; text: string };
