@@ -43,27 +43,32 @@ export class LoadingScreen {
     this.bar.setAttribute('aria-valuenow', String(Math.round(f * 100)));
   }
 
-  /** The world is drawing behind the sheet: the still fades from over it, and the way in is offered. */
+  /** The world is drawing behind the sheet (the still over it until reveal): the way in is offered. */
   ready(onPlay: () => void): void {
     if (this.failed) return;
     this.progress('Ready', null, 1);
     this.root.classList.add('over-world');
-    const still = this.still;
-    if (still) {
-      still.classList.add('gone');
-      // Gone from the page once faded (at once where motion is reduced: no transition ends).
-      const remove = () => (still.hidden = true);
-      still.addEventListener('transitionend', remove, { once: true });
-      setTimeout(remove, 1000);
-    }
     this.play.hidden = false;
     this.controls.hidden = false;
     this.play.onclick = onPlay;
     this.play.focus();
   }
 
+  /** The world has settled behind the still: the still fades out over it. */
+  reveal(): void {
+    const still = this.still;
+    if (!still || still.hidden || still.classList.contains('gone')) return;
+    still.classList.add('gone');
+    // Gone from the page once faded (at once where motion is reduced: no transition ends).
+    const remove = () => (still.hidden = true);
+    still.addEventListener('transitionend', remove, { once: true });
+    setTimeout(remove, 1000);
+  }
+
+  /** The sheet gone, and the still with it at once (play, or flying, before or during its fade). */
   hide(): void {
     this.root.hidden = true;
+    if (this.still) this.still.hidden = true;
   }
 
   fail(message: string): void {

@@ -68,18 +68,23 @@ test('the still is painted within 1 s of navigation', async ({ page }) => {
 test.describe('at the still\'s own size', () => {
   test.use({ viewport: { width: 1920, height: 1200 }, deviceScaleFactor: 1 });
 
-  test('when the world is drawn the still fades out over 0.8 s, and the live world is the same view', async ({ page }) => {
+  test('once the world has settled the still fades out over 0.8 s, and the live world is the same view', async ({ page }) => {
     test.setTimeout(180_000);
     await page.goto('/');
     await ready(page);
+    // Up over the world's first frames, while its histories settle (the denoiser's 32 and 8); then gone.
     const faded = await page.evaluate(async () => {
+      const h = (window as unknown as { __trenchline: { waitFrames(n: number): Promise<void> } }).__trenchline;
       const still = document.getElementById('still') as HTMLImageElement;
+      await h.waitFrames(10);
+      const early = still.classList.contains('gone');
+      await h.waitFrames(40);
       const gone = still.classList.contains('gone');
       const duration = getComputedStyle(still).transitionDuration;
       await new Promise((r) => setTimeout(r, 1200));
-      return { gone, duration, hidden: still.hidden };
+      return { early, gone, duration, hidden: still.hidden };
     });
-    expect(faded).toEqual({ gone: true, duration: '0.8s', hidden: true });
+    expect(faded).toEqual({ early: false, gone: true, duration: '0.8s', hidden: true });
     // The live view as the still was taken (tools/stills.mjs): the loading screen hidden, the high
     // preset at its full image, its histories settled.
     await hooks(page, async (h) => {
@@ -153,4 +158,33 @@ test('the failure sheet reads over the still', async ({ page }) => {
     return { hidden: s.hidden, gone: s.classList.contains('gone'), width: s.naturalWidth, opacity: getComputedStyle(s).opacity };
   });
   expect(still).toEqual({ hidden: false, gone: false, width: 1920, opacity: '1' });
+});
+
+test("a returning visitor's own field of view leaves the backdrop the still's, and is theirs once they play", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('trenchline.settings', JSON.stringify({ fov: 70 })));
+  await page.goto('/');
+  await ready(page);
+  expect(await hooks(page, async (h) => {
+    await h.waitFrames(2);
+    return h.camera().fov;
+  })).toBe(90);
+  await page.locator('#play').click();
+  await expect(page.locator('#loading')).toBeHidden();
+  expect(await hooks(page, async (h) => {
+    await h.waitFrames(2);
+    return h.camera().fov;
+  })).toBeCloseTo(70, 3);
+});
+
+test('the click into play takes the still away at once and starts the image afresh', async ({ page }) => {
+  await page.goto('/');
+  await ready(page);
+  const r = await hooks(page, async (h) => {
+    // Within the still's first frames, before it fades: the cut from the backdrop to the spawn.
+    (document.getElementById('play') as HTMLButtonElement).click();
+    const stillHidden = (document.getElementById('still') as HTMLElement).hidden;
+    await h.waitFrames(1);
+    return { stillHidden, reset: h.stats().reset };
+  });
+  expect(r).toEqual({ stillHidden: true, reset: true });
 });

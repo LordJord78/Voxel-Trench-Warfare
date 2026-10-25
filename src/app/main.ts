@@ -245,6 +245,10 @@ async function start(): Promise<void> {
   const pitchLimit = tun.f('player.pitch_limit');
   const periscopeScale = session.controller.t.stances[Stance.PERISCOPE].fovScale;
   let settings: Settings = loadSettings(storage, defaultSettings(tun));
+  /** The backdrop's field of view: the default, the still's (npm run stills), whatever the visitor's own. */
+  const backdropFov = defaultSettings(tun).fov;
+  /** The frame the still fades from over the backdrop. */
+  let revealAt = -1;
   // The front fires as the visitor chose; a check measures without it.
   session.front.intensity = checkRun ? 'off' : settings.intensity;
   session.artillery.intensity = session.front.intensity;
@@ -410,6 +414,8 @@ async function start(): Promise<void> {
   const play = (lock: boolean) => {
     if (stopped) return;
     loading.hide();
+    // From the backdrop to the spawn: a cut, so the image starts afresh.
+    if (mode === 'ready') renderer.resetHistory();
     mode = 'playing';
     // The click that starts play is where the browser lets the sound start.
     audio.start();
@@ -612,10 +618,11 @@ async function start(): Promise<void> {
         if (session.advance(ms / 1000) > 0) input.ticked();
         if (!session.player.onFiringStep) input.lowerPeriscope();
       }
-      // Until the click, the world is drawn from the firing step over the parapet at dusk (the page's
-      // still is that view); the click starts play at the spawn, in the bay.
-      const step = views.step;
-      pose = mode === 'loading' || mode === 'ready' ? { position: [...step.position], yaw: step.yaw, pitch: step.pitch, fov: settings.fov } : rig.pose(session, dt, settings.fov);
+      // Until the click, the world is drawn from the firing step over the parapet at dusk at the default
+      // field of view, as the page's still is (npm run stills); the click starts play at the spawn, in the
+      // bay, at the visitor's own.
+      const backdrop = views.step;
+      pose = mode === 'loading' || mode === 'ready' ? { position: [...backdrop.position], yaw: backdrop.yaw, pitch: backdrop.pitch, fov: backdropFov } : rig.pose(session, dt, settings.fov);
       periscope.set((1 - rig.fovScale) / (1 - periscopeScale));
     }
     // The rifle in hand while playing (paused too), not through the periscope or flying.
@@ -677,8 +684,11 @@ async function start(): Promise<void> {
       const spread = canvasStats(copy).std;
       copy.toBlob((png) => take({ png: png!, spread }), 'image/png');
     }
+    // The still fades once the world behind it has settled (the denoiser's history and its margin).
+    if (mode === 'ready' && frames === revealAt) loading.reveal();
     if (mode === 'loading') {
       mode = 'ready';
+      revealAt = frames + render.denoise.historyMax + 8;
       loading.ready(() => play(true));
       hooks.promptMs = Math.round(performance.now());
       hooks.ready = true;
