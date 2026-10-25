@@ -185,22 +185,23 @@ export const cases = {
     device.queue.writeBuffer(frame, 0, writer.buffer);
     // No shell's blast lights these cases (blastCount 0): its texture is bound, never read.
     const blast = device.createTexture({ size: [8, 8], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING });
-    // What each water top reflects, as the reflect pass leaves it (reflect.wgsl, tested in the water
-    // spec): here the sky alone, the reference's own, so this spec tests shade's weighing of it.
-    const reflection = tex('rgba16float', RES);
-    const reflected = new Uint16Array(16 * 16 * 4);
+    // What each 2 × 2 block's water tops reflect, as the reflect pass leaves it (reflect.wgsl, at half
+    // size, tested in the water spec): here the sky alone for the block's pixel this spec reads (its
+    // second), the reference's own, so this spec tests shade's weighing of it.
+    const reflection = tex('rgba16float', [8, 8]);
+    const reflected = new Uint16Array(8 * 8 * 4);
     args.regions.forEach((r, k) => {
       if (kindOf(r.mat) !== K.WATER || r.face !== 3) return;
       const rx = (k % 4) * 4;
       const ry = Math.floor(k / 4) * 4;
-      for (let y = ry; y < ry + 4; y++) {
-        for (let x = rx; x < rx + 4; x++) {
-          const rd = rayDir(args.pose, RES, x + 0.5, y + 0.5);
-          reflected.set([...skyRef(sky, [rd[0], -rd[1], rd[2]]).map(floatToHalf), 0], (y * 16 + x) * 4);
+      for (let by = ry / 2; by < ry / 2 + 2; by++) {
+        for (let bx = rx / 2; bx < rx / 2 + 2; bx++) {
+          const rd = rayDir(args.pose, RES, 2 * bx + 1.5, 2 * by + 1.5);
+          reflected.set([...skyRef(sky, [rd[0], -rd[1], rd[2]]).map(floatToHalf), 0], (by * 8 + bx) * 4);
         }
       }
     });
-    device.queue.writeTexture({ texture: reflection }, reflected, { bytesPerRow: 16 * 8 }, RES);
+    device.queue.writeTexture({ texture: reflection }, reflected, { bytesPerRow: 8 * 8 }, [8, 8]);
     const group = device.createBindGroup({
       layout: compiled.layouts.shade,
       entries: [gDepth.createView(), gHit.createView(), out.createView(), light.createView(), lightHit.createView(), blast.createView(), reflection.createView()].map((resource, binding) => ({ binding, resource })),

@@ -309,6 +309,12 @@ heavy_gap_s         = 0.3
 whistle_s           = 1.5      # heard about 1.5 s before impact (the spec)
 radius_m            = [2.2, 3.4] # drawn uniform, from the stream combat.shells
 splash_energy_j     = 3.0e6    # a shell landing on water, at a 3 m crater (a 77 mm shell's charge), by the cube of its radius
+# Its debris falling into water near it (the particles never meet the world): points over a disc of
+# this many times its radius, drawn from its seed, each on water a splash once the debris has fallen.
+debris_splash_reach = 2.5
+debris_splash_samples = 16
+debris_splash_j     = 300.0
+debris_fall_s       = [0.6, 1.4]
 light_sector_share  = 0.2      # the share that lands in the player's sector;
 heavy_sector_share  = 0.5      # the rest in no man's land and along both lines
 light_sector_m      = [15.0, 40.0] # from the player, in their sector
@@ -737,12 +743,9 @@ flare_burn_s        = 40.0     # a flare burns this long, then is lit again wher
 flare_sink_mps      = 0.3      # how fast it sinks under its parachute as it burns
 flare_ignite_s      = 0.5      # how long it takes to catch
 flare_fade_s        = 5.0      # how long it gutters out over, at the end of its burn
-# The water's reflection (reflect.wgsl): traced this far, the sky beyond; the flares' and fires'
-# glints, each a disc of its light (its radius, metres), and their gain.
+# The water's reflection (reflect.wgsl): traced this far, the sky beyond. Its glints are the battle's
+# flares and fires as they are drawn (water-frame.ts): a flare's disc, a fire's flames.
 reflect_m           = 160.0
-glint_m             = 0.4
-glint_fire_m        = 0.6
-glint_gain          = 1.0
 
 # ---------------------------------------------------------------------------
 # ATMOSPHERE

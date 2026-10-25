@@ -31,7 +31,7 @@ const FAR_SKY_METRES: f32 = 2000.0;
 @group(1) @binding(4) var lightHit: texture_2d<u32>;
 // The shells' blasts' light, shadowed, at the lighting resolution (lighting.wgsl).
 @group(1) @binding(5) var lBlast: texture_2d<f32>;
-// What each water top reflects (reflect.wgsl); not written elsewhere.
+// What each 2 × 2 block's water tops reflect (reflect.wgsl), at half size; not written elsewhere.
 @group(1) @binding(6) var reflection: texture_2d<f32>;
 
 // The probe's per-voxel variation: fine grain, coarser blotches, a slight tint.
@@ -145,7 +145,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
         colour = albedo * lit + emissionOf(mat);
         if (kindOf(mat) == KIND_WATER && face == 3u) {
           let fresnel = 0.02 + 0.98 * pow(1.0 - abs(dot(rd, n)), 5.0);
-          colour = albedo * lit * 0.6 + fresnel * textureLoad(reflection, vec2i(g.xy), 0).rgb;
+          colour = albedo * lit * 0.6 + fresnel * textureLoad(reflection, vec2i(g.xy / 2u), 0).rgb;
         }
       }
     }

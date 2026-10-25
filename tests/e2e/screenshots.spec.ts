@@ -749,3 +749,24 @@ test('a lit wall in water, and rings spreading', async ({ page }) => {
   await page.screenshot({ path: 'artifacts/b5/crater-dusk-rings-1.5s.png' });
   if (errors.length) throw new Error(errors.join('\n'));
 });
+
+test("the battle's flares in a crater's water at night", async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors = await openGame(page);
+  // Heavy, two minutes in: the battle's flares over no man's land, from just over the crater's water.
+  for (const preset of ['high', 'low'] as const) {
+    await hooks(page, async (h, a) => {
+      const { preset, pose } = a as { preset: 'high' | 'low'; pose: Pose };
+      h.setQuality({ preset, dynres: false });
+      h.view('nml-night');
+      h.setTimeOfDay(21);
+      h.setIntensity('heavy');
+      h.runLights(120);
+      h.flyTo(pose);
+      await h.waitFrames(150);
+    }, { preset, pose: GRAZING });
+    await page.screenshot({ path: `artifacts/b5/crater-battle-night-${preset}.png` });
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
+});
+

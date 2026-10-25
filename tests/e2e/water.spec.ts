@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { P, paletteData } from '../../src/world/materials';
 import { openHarness, runCase } from './support/run';
 
 // The water's reflection (reflect.wgsl), over a pool before a lit brick wall (cases/water.ts): the
@@ -14,10 +15,14 @@ interface Sample {
   bare: number[];
   low: number[];
   short: number[];
+  unlit: number[];
+  concrete: number[];
 }
 
 interface Reflected {
   pose: { position: number[] };
+  key: number[];
+  keyColour: number[];
   waterY: number;
   samples: Sample[];
   glint: { px: number; py: number; water: boolean; with: number[]; without: number[]; low: number[]; aside: number[] } | null;
@@ -58,6 +63,30 @@ test.describe("the water's reflection", () => {
     // Where the mirrored ray meets the wall, the wall is there, unlike without it; elsewhere, the same.
     expect(wall.filter((s) => !near(s.high, s.bare, 0.2)).length / wall.length).toBeGreaterThan(0.9);
     expect(sky.filter((s) => near(s.high, s.bare, 0.02)).length / sky.length).toBeGreaterThan(0.95);
+  });
+
+  test("the wall it reflects is lit as it is: the key's share its albedo's, by N·L, and its albedo its own", () => {
+    const pal = paletteData();
+    const albedo = (p: number) => [0, 1, 2].map((c) => pal[p * 8 + c]);
+    // The wall's face looks back along −z at the eye: the key's N·L there.
+    const ndl = -r.key[2];
+    const wall = r.samples.filter((s) => meetsWall(r, s));
+    const brick = albedo(P.BRICK);
+    const concrete = albedo(P.CONCRETE);
+    let keyed = 0;
+    let shaded = 0;
+    for (const s of wall) {
+      // With the key and without, the same sky: their difference the key's light on the brick.
+      const got = [0, 1, 2].map((c) => s.high[c] - s.unlit[c]);
+      const want = [0, 1, 2].map((c) => brick[c] * r.keyColour[c] * ndl);
+      if (Math.abs(luma(got) - luma(want)) <= 0.1 * luma(want)) keyed++;
+      // Concrete for brick, the same light: its albedo for brick's.
+      const ratio = [0, 1, 2].map((c) => s.concrete[c] / s.high[c]);
+      if ([0, 1, 2].every((c) => Math.abs(ratio[c] - concrete[c] / brick[c]) <= 0.05 * (concrete[c] / brick[c]))) shaded++;
+    }
+    console.log(`the wall lit: ${keyed} of ${wall.length} keyed within 10%, ${shaded} with concrete's albedo within 5%`);
+    expect(keyed / wall.length).toBeGreaterThan(0.9);
+    expect(shaded / wall.length).toBeGreaterThan(0.9);
   });
 
   test('beyond its reach, or where nothing is, the sky', () => {

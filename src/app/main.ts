@@ -43,7 +43,7 @@ import { battleDarkness, Director, noBattleEvents, type BattleEvents, type Battl
 import { fireChance, fireTunables } from '../battle/fires';
 import { CharQueue, fuelNear } from '../world/char';
 import { waterTunables } from '../battle/water';
-import { STILL_WATER, waterFrameTunables } from '../render/water-frame';
+import { glintsFrom, glintTerms, STILL_WATER, waterFrameTunables } from '../render/water-frame';
 import { flareTunables } from '../battle/flares';
 import { flashPower, flashTunables } from '../battle/barrages';
 import { farHeightM } from '../world/generation/farfield';
@@ -267,6 +267,7 @@ async function start(): Promise<void> {
   const flashT = flashTunables(tun);
   renderer.horizonTerms = horizonTerms(tun);
   renderer.waterTerms = { frame: waterFrameTunables(tun), ripples: waterTunables(tun) };
+  const glintT = glintTerms(tun);
   /** The distant shells' flashes the frame was last given. */
   let horizon: HorizonFlash[] = [];
   const flareT = flareTunables(tun);
@@ -363,8 +364,12 @@ async function start(): Promise<void> {
     }
     renderer.setLights(lit, sky.flares, eye);
     renderer.setHorizon(horizon);
-    // The battle's water: its rings and the wind on it; still at rest, and under a test's own lights.
-    renderer.setWater(lightsHeld === 'rest' || lights !== planned ? STILL_WATER : { rings: shownBattle.rings(), ...shownBattle.roughness(), seconds: shownBattle.seconds });
+    // The battle's water: its rings, the wind on it, and its flares' and fires' glints; still at rest, and under a test's own lights.
+    renderer.setWater(
+      lightsHeld === 'rest' || lights !== planned
+        ? STILL_WATER
+        : { rings: shownBattle.rings(), ...shownBattle.roughness(), seconds: shownBattle.seconds, glints: glintsFrom(shownBattle.flares(), shownBattle.fires(), sky.flares, glintT) },
+    );
   };
 
   const changeSettings = (next: Settings) => {

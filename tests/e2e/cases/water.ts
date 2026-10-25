@@ -11,7 +11,8 @@ import { GpuWorld } from '../../../src/render/gpu-world';
 import type { SceneLight } from '../../../src/render/lights';
 import type { Preset } from '../../../src/render/quality';
 import { Renderer } from '../../../src/render/renderer';
-import { STILL_WATER, type FrameWater } from '../../../src/render/water-frame';
+import { glintsFrom, glintTerms, STILL_WATER, type FrameWater } from '../../../src/render/water-frame';
+import type { FlareState } from '../../../src/battle/flares';
 import { ringAt, waterTunables } from '../../../src/battle/water';
 import { loadTunables } from '../../../src/core/tunables';
 import { BrickMap } from '../../../src/world/bricks';
@@ -30,6 +31,8 @@ const KEY: [number, number, number] = (() => {
   const l = Math.hypot(v[0], v[1], v[2]);
   return [v[0] / l, v[1] / l, v[2] / l];
 })();
+/** The low sun's light. */
+export const KEY_COLOUR: [number, number, number] = [3, 2.6, 2.2];
 /** The water's top, metres. */
 export const WATER_Y = 1.6;
 /** A flare over the pool, 2.9 m above the water. */
@@ -40,22 +43,22 @@ const FLARE: SceneLight = { position: [6.43, 4.5, 6.07], radius: 65, colour: [1,
  * a brick wall 9.6 m out; `striped`, in upright stripes of brick and concrete 0.3 m wide, so a
  * reflected ray turned a little meets another colour.
  */
-function world(wall: boolean, striped = false): BrickMap {
+function world(wall: boolean, striped = false, material: number = P.BRICK): BrickMap {
   const map = new BrickMap(DIMS);
   map.fillBox(0, 0, 0, 128, 16, 128, P.SOD);
   map.fillBox(16, 13, 16, 112, 16, 80, P.WATER);
-  if (wall) map.fillBox(0, 16, 96, 128, 64, 100, P.BRICK);
+  if (wall) map.fillBox(0, 16, 96, 128, 64, 100, material);
   if (wall && striped) for (let x = 3; x < 128; x += 6) map.fillBox(x, 16, 96, x + 3, 64, 100, P.CONCRETE);
   return map;
 }
 
 /** The reflection, depth and hit of the last frame of `frames` from POSE over `map`. */
-async function look(map: BrickMap, options: { preset?: Preset; reachM?: number; lights?: SceneLight[]; water?: FrameWater } = {}) {
+async function look(map: BrickMap, options: { preset?: Preset; reachM?: number; lights?: SceneLight[]; water?: FrameWater; keyColour?: [number, number, number] } = {}) {
   const g = await gpu();
   const gw = GpuWorld.create(g.device, { map, mirror: HeapMirror.fromMap(map) });
   const renderer = await Renderer.create(g, null, gw, null, { size: SIZE, preset: options.preset ?? 'high' });
   // The sky's own light a twentieth of dusk's, and no fog: the sunlit wall stands clear of the sky in the water.
-  renderer.sky = { ...PROBE_DUSK, keyDir: KEY, keyColour: [3, 2.6, 2.2], sunLight: [0.3, 0.3, 0.3], fogDensity: 0 };
+  renderer.sky = { ...PROBE_DUSK, keyDir: KEY, keyColour: options.keyColour ?? KEY_COLOUR, sunLight: [0.3, 0.3, 0.3], fogDensity: 0 };
   renderer.flags |= FLAGS.JITTER_OFF;
   if (options.reachM !== undefined) renderer.waterTerms = { ...renderer.waterTerms, frame: { ...renderer.waterTerms.frame, reflectM: options.reachM } };
   renderer.setLights(options.lights ?? [], 1);
@@ -66,12 +69,14 @@ async function look(map: BrickMap, options: { preset?: Preset; reachM?: number; 
   const depth = new Float32Array(await readTexture(renderer.texture('gDepth')));
   const hit = new Uint32Array(await readTexture(renderer.texture('gHit')));
   const colour = new Uint16Array(await readTexture(renderer.texture('colour')));
-  const w = renderer.texture('reflection').width;
-  const rgb = (px: number, py: number, data: Uint16Array) => [0, 1, 2].map((c) => halfToFloat(data[(py * w + px) * 4 + c]));
+  const w = renderer.texture('colour').width;
+  // The reflection is traced a pixel a 2 × 2 block, into a texture half the size: each pixel's is its block's.
+  const rw = renderer.texture('reflection').width;
+  const rgb = (px: number, py: number, data: Uint16Array, width: number) => [0, 1, 2].map((c) => halfToFloat(data[(py * width + px) * 4 + c]));
   return {
     w,
-    reflection: (px: number, py: number) => rgb(px, py, reflection),
-    colour: (px: number, py: number) => rgb(px, py, colour),
+    reflection: (px: number, py: number) => rgb(px >> 1, py >> 1, reflection, rw),
+    colour: (px: number, py: number) => rgb(px, py, colour, w),
     depth: (px: number, py: number) => depth[py * w + px],
     water: (px: number, py: number) => (hit[(py * w + px) * 2 + 1] >>> 16) === P.WATER,
     errors: [...g.errors],
@@ -88,7 +93,9 @@ export const cases = {
     const bare = await look(world(false));
     const low = await look(world(true), { preset: 'low' });
     const short = await look(world(true), { reachM: 1 });
-    const samples: { px: number; py: number; ray: number[]; depthM: number; high: number[]; bare: number[]; low: number[]; short: number[] }[] = [];
+    const unlit = await look(world(true), { keyColour: [0, 0, 0] });
+    const concrete = await look(world(true, false, P.CONCRETE));
+    const samples: { px: number; py: number; ray: number[]; depthM: number; high: number[]; bare: number[]; low: number[]; short: number[]; unlit: number[]; concrete: number[] }[] = [];
     for (let j = 0; j < 36; j++) {
       for (let i = 0; i < 64; i++) {
         const px = Math.floor(((i + 0.5) / 64) * SIZE[0]);
@@ -103,6 +110,8 @@ export const cases = {
           bare: bare.reflection(px, py),
           low: low.reflection(px, py),
           short: short.reflection(px, py),
+          unlit: unlit.reflection(px, py),
+          concrete: concrete.reflection(px, py),
         });
       }
     }
@@ -110,8 +119,11 @@ export const cases = {
     const image: [number, number, number] = [FLARE.position[0], 2 * WATER_Y - FLARE.position[1], FLARE.position[2]];
     const at = projectToPixel(POSE, SIZE, image);
     const glint = at && { px: Math.floor(at[0]), py: Math.floor(at[1]) };
-    const lit = await look(world(true), { lights: [FLARE] });
-    const lowLit = await look(world(true), { lights: [FLARE], preset: 'low' });
+    // The flare burning as the battle draws it: its light, and its disc's glint in the water.
+    const burning: FlareState = { id: 1, position: FLARE.position, glow: 1, stage: 'burning', colour: FLARE.colour };
+    const glinting: FrameWater = { ...STILL_WATER, glints: glintsFrom([burning], [], 1, glintTerms(loadTunables())) };
+    const lit = await look(world(true), { lights: [FLARE], water: glinting });
+    const lowLit = await look(world(true), { lights: [FLARE], preset: 'low', water: glinting });
     const glints = glint && {
       ...glint,
       water: lit.water(glint.px, glint.py),
@@ -120,7 +132,7 @@ export const cases = {
       low: lowLit.reflection(glint.px, glint.py),
       aside: lit.reflection(Math.min(SIZE[0] - 1, glint.px + 12), glint.py),
     };
-    return { pose: POSE, waterY: WATER_Y, samples, glint: glints, errors: [...walled.errors, ...bare.errors, ...low.errors, ...short.errors, ...lit.errors, ...lowLit.errors] };
+    return { pose: POSE, waterY: WATER_Y, key: KEY, keyColour: KEY_COLOUR, samples, glint: glints, errors: [...walled.errors, ...bare.errors, ...low.errors, ...short.errors, ...unlit.errors, ...concrete.errors, ...lit.errors, ...lowLit.errors] };
   },
 
   /**
@@ -131,14 +143,14 @@ export const cases = {
   async waterSurface() {
     const wt = waterTunables(loadTunables());
     const centre: [number, number, number] = [6.4, WATER_Y, 4.8];
-    const ring = (age: number): FrameWater => ({ rings: [ringAt({ at: centre, t0: 0, strength: 1 }, age, wt)!], wind: [0, 0], slope: 0, seconds: age });
+    const ring = (age: number): FrameWater => ({ rings: [ringAt({ at: centre, t0: 0, strength: 1 }, age, wt)!], wind: [0, 0], slope: 0, seconds: age, glints: [] });
     const map = () => world(true, true);
     const still = await look(map());
     const second = await look(map(), { water: ring(1) });
     const faded = await look(map(), { water: ring(1.99) });
-    const calm = await look(map(), { water: { rings: [], wind: [2, 0], slope: 0, seconds: 3 } });
-    const breeze = await look(map(), { water: { rings: [], wind: [2, 0], slope: 0.024, seconds: 3 } });
-    const wind = await look(map(), { water: { rings: [], wind: [2, 0], slope: 0.048, seconds: 3 } });
+    const calm = await look(map(), { water: { rings: [], wind: [2, 0], slope: 0, seconds: 3, glints: [] } });
+    const breeze = await look(map(), { water: { rings: [], wind: [2, 0], slope: 0.024, seconds: 3, glints: [] } });
+    const wind = await look(map(), { water: { rings: [], wind: [2, 0], slope: 0.048, seconds: 3, glints: [] } });
     const samples: { at: number[]; still: number[]; second: number[]; faded: number[]; calm: number[]; breeze: number[]; wind: number[] }[] = [];
     for (let j = 0; j < 45; j++) {
       for (let i = 0; i < 80; i++) {

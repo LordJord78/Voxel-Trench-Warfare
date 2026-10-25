@@ -57,7 +57,7 @@ import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
 import { rifleModel } from '../combat/rifle-model';
 import type { WaterTunables } from '../battle/water';
-import { glintsFrom, STILL_WATER, writeWater, type FrameWater, type Glint, type WaterFrameTunables } from './water-frame';
+import { STILL_WATER, writeWater, type FrameWater, type WaterFrameTunables } from './water-frame';
 import { Effects, effectsLook, type EffectsFrame, type EffectsPipelines, type SmokePuff, type TransientLight } from './effects';
 import { Rifle, type RifleDrawn, type RiflePipelines, type RiflePose } from './rifle';
 import { FarFieldGpu } from './farfield-gpu';
@@ -318,12 +318,11 @@ export class Renderer {
   private horizon: readonly HorizonFlash[] = [];
   /** How the water is reflected and rippled (water-frame.ts, battle/water.ts); none until set. */
   waterTerms: { frame: WaterFrameTunables; ripples: WaterTunables } = {
-    frame: { flareM: 0.4, fireM: 0.6, gain: 1, reflectM: 160 },
+    frame: { reflectM: 160 },
     ripples: { ringSpeedMps: 1, ringFadeS: 2, maxRings: 32, ringHeightM: 0.04, ringLogFull: 6, ringWavelengthM: 0.3, ringWidthM: 0.15, roughnessPerMps: 0 },
   };
-  /** setWater's, and the glints of the lights setLights was last given. */
+  /** setWater's. */
   private water: FrameWater = STILL_WATER;
-  private glints: Glint[] = [];
   stats: RenderStats = { gpuMs: null, gpuLastMs: null, gpuSamples: 0, passes: {}, own: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
 
   private readonly canvas: HTMLCanvasElement | null;
@@ -494,10 +493,9 @@ export class Renderer {
     this.device.queue.writeBuffer(this.compiled.lights, 0, lightBuffer(lights, flares, voxel));
     this.lightCount = lights.length;
     this.flareShadows.setFlares(lights, flares, voxel, eye && [eye[0] / voxel, eye[1] / voxel, eye[2] / voxel]);
-    this.glints = glintsFrom(lights, flares, this.waterTerms.frame);
   }
 
-  /** The battle's water this frame: its rings and roughness (STILL_WATER at rest). */
+  /** The battle's water this frame: its rings, roughness and glints (STILL_WATER at rest). */
   setWater(water: FrameWater): void {
     this.water = water;
   }
@@ -661,7 +659,7 @@ export class Renderer {
     make('gHit', 'rg32uint', this.alloc);
     make('gMotion', 'rgba16float', this.alloc);
     make('colour', 'rgba16float', this.alloc);
-    make('reflection', 'rgba16float', this.alloc);
+    make('reflection', 'rgba16float', [Math.ceil(this.alloc[0] / 2), Math.ceil(this.alloc[1] / 2)]);
     this.rifle.bind(this.textures.gDepth, this.textures.gMotion, this.textures.colour, this.alloc);
     make('taa0', 'rgba16float', this.alloc);
     make('taa1', 'rgba16float', this.alloc);
@@ -849,7 +847,7 @@ export class Renderer {
       w.set(`blasts.${k}.intensity`, f.intensity);
     });
     writeHorizon(w, this.horizonTerms, this.horizon, voxel, pose.position, this.sky.flashGlow);
-    writeWater(w, this.water, this.glints, voxel, this.waterTerms.frame, this.waterTerms.ripples);
+    writeWater(w, this.water, voxel, this.waterTerms.frame, this.waterTerms.ripples);
     w.set('far', this.far.info);
     const encoder = device.createCommandEncoder({ label: `frame ${this.frameIndex}` });
     // The sky views for this frame's sun and moon (the moon's while its light counts), from the
@@ -914,7 +912,8 @@ export class Renderer {
       p.setBindGroup(1, this.reflectCells);
       p.setBindGroup(2, this.keyShadow.group);
       p.setBindGroup(3, groups.reflect!);
-      p.dispatchWorkgroups(Math.ceil(this.res[0] / 8), Math.ceil(this.res[1] / 8));
+      // A thread a 2 × 2 block of pixels.
+      p.dispatchWorkgroups(Math.ceil(this.res[0] / 16), Math.ceil(this.res[1] / 16));
       p.end();
     }
     pass('shade', 'shade', this.res, [this.froxels.none, this.froxels.group]);

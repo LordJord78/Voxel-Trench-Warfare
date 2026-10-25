@@ -1,5 +1,5 @@
-// The water's reflection (renderer.ts's `reflect` pass, before shade): for each pixel of the
-// internal image whose G-buffer hit is a water voxel's top, what its surface (still, or bent by the
+// The water's reflection (renderer.ts's `reflect` pass, before shade): for each 2 × 2 block of the
+// internal image holding a water voxel's top, at half size, what its surface (still, or bent by the
 // battle's rings and the wind: waterNormal) reflects toward the eye. The reflected ray leaves a sixteenth of a voxel over the surface and is traced through the
 // world (the shared traversal) to frame.reflectReach; what it meets is shaded cheaply, as it has no
 // denoised light of its own: its albedo, the key light through the key's height map, the sky's
@@ -101,18 +101,37 @@ fn glintsAlong(ro: vec3f, r: vec3f, until: f32) -> vec3f {
   return light;
 }
 
+// Whether pixel q is a water voxel's top.
+fn waterTop(q: vec2u) -> bool {
+  if (q.x >= frame.res.x || q.y >= frame.res.y) {
+    return false;
+  }
+  let hit = textureLoad(gHit, vec2i(q), 0).xy;
+  return hitFace(hit) == 3u && kindOf(hit.y >> 16u) == KIND_WATER_REFLECT;
+}
+
+// A thread a 2 × 2 block of pixels: the reflection is traced for one water top of the block (a
+// different one each frame, so TAA gathers all four), into the half-size reflection texture, which
+// shade reads for each of the block's water tops.
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) g: vec3u) {
-  if (g.x >= frame.res.x || g.y >= frame.res.y) {
+  let block = g.xy * 2u;
+  if (block.x >= frame.res.x || block.y >= frame.res.y) {
     return;
   }
-  let hit = textureLoad(gHit, vec2i(g.xy), 0).xy;
-  let mat = hit.y >> 16u;
-  if (hitFace(hit) != 3u || kindOf(mat) != KIND_WATER_REFLECT) {
+  var px = vec2u(0xffffffffu);
+  for (var k = 0u; k < 4u; k++) {
+    let o = BAYER2[(frame.frame + k) & 3u];
+    if (waterTop(block + o)) {
+      px = block + o;
+      break;
+    }
+  }
+  if (px.x == 0xffffffffu) {
     return;
   }
-  let rd = cameraRay(frame.cam, vec2f(g.xy) + 0.5 + frameJitter(), vec2f(frame.res));
-  let depth = textureLoad(gDepth, vec2i(g.xy), 0).r;
+  let rd = cameraRay(frame.cam, vec2f(px) + 0.5 + frameJitter(), vec2f(frame.res));
+  let depth = textureLoad(gDepth, vec2i(px), 0).r;
   let p = frame.cam.origin + rd * depth;
   let n = waterNormal(p);
   var r = reflect(rd, n);

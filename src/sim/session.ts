@@ -23,7 +23,7 @@ import { ViewKick, viewKickProfile } from '../combat/viewkick';
 import { modelToView, viewBasis, viewmodelPose, viewmodelTunables, type ViewmodelKick, type ViewmodelPose, type ViewmodelTunables } from '../combat/viewmodel';
 import { Weapon, weaponSpec } from '../combat/weapon';
 import { FixedClock } from '../core/clock';
-import { exp, hypot } from '../core/dmath';
+import { cos, exp, hypot, sin, TAU } from '../core/dmath';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import { CharacterController, controllerTunables, letGoOfLedge, newCharacter, Stance, type CharacterState, type MoveIntent } from '../physics/character';
@@ -85,8 +85,8 @@ export interface CombatEvents {
   blasts: { tick: number; at: [number, number, number]; radiusM: number; material: number; crater: number | null }[];
   /** Each scoop the player dug: how many voxels, and where (metres). */
   scoops: (Scoop & { tick: number })[];
-  /** Where rounds went into water and shells landed on it (metres), and with how much energy. */
-  splashes: { tick: number; at: [number, number, number]; energyJ: number; kind: 'round' | 'shell' }[];
+  /** Where rounds went into water, shells landed on it and their debris fell into it (metres), and with how much energy. */
+  splashes: { tick: number; at: [number, number, number]; energyJ: number; kind: 'round' | 'shell' | 'debris' }[];
 }
 
 function noEvents(): CombatEvents {
@@ -162,6 +162,10 @@ export class Session {
   private readonly chipEnergyJ: number;
   /** A shell's splash's energy, at a crater of 3 m: by the cube of its radius. */
   private readonly splashEnergyJ: number;
+  /** A shell's debris thrown into water near it: over how many times its radius, how many points, each splash's energy, and how long the debris falls. */
+  private readonly debris: { reach: number; samples: number; energyJ: number; fallS: [number, number] };
+  /** Debris splashes due: when (the tick) and where (metres). */
+  private debrisFalling: { tick: number; at: [number, number, number] }[] = [];
   private events: CombatEvents = noEvents();
   private readonly particleRng: Rng;
   private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris', ParticleSpec>;
@@ -189,6 +193,12 @@ export class Session {
     this.suppressionRng = this.streams.derive('combat.suppression');
     this.chipEnergyJ = tun.f('destruction.chip_energy_j');
     this.splashEnergyJ = tun.f('artillery.splash_energy_j');
+    this.debris = {
+      reach: tun.f('artillery.debris_splash_reach'),
+      samples: tun.i('artillery.debris_splash_samples'),
+      energyJ: tun.f('artillery.debris_splash_j'),
+      fallS: tun.pair('artillery.debris_fall_s'),
+    };
     this.recoil = new Recoil(recoilProfile(tun, 'assault_rifle'));
     this.viewKick = new ViewKick(viewKickProfile(tun, 'assault_rifle'));
     this.suppression = new Suppression(suppressionTunables(tun));
@@ -318,6 +328,10 @@ export class Session {
     for (const c of this.rounds.cracks) this.suppression.crack(c.missM, this.suppressionRng);
     for (const c of this.rounds.passes) this.events.cracks.push({ tick: this.ticks, missM: c.missM, at: c.at });
     for (const w of this.rounds.splashes) this.events.splashes.push({ tick: this.ticks, at: w.position, energyJ: w.energyJ, kind: 'round' });
+    if (this.debrisFalling.length > 0) {
+      for (const f of this.debrisFalling) if (f.tick <= this.ticks) this.events.splashes.push({ tick: this.ticks, at: f.at, energyJ: this.debris.energyJ, kind: 'debris' });
+      this.debrisFalling = this.debrisFalling.filter((f) => f.tick > this.ticks);
+    }
     for (const hit of this.rounds.impacts) {
       this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
       if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
@@ -357,13 +371,36 @@ export class Session {
     if (kindOf(material) === K.WATER) {
       const k = radiusM / 3;
       this.events.splashes.push({ tick: this.ticks, at, energyJ: this.splashEnergyJ * k * k * k, kind: 'shell' });
-    }
+    } else this.throwDebrisIn(x, z, radiusM, seed);
     this.throwBlast(at, material);
     const p = this.player;
     const d = hypot(at[0] - p.position.x, at[1] - (p.position.y + this.controller.eyeHeight(p)), at[2] - p.position.z);
     this.blastShake.kick(d);
     this.suppression.blast(d);
     return id;
+  }
+
+  /**
+   * A shell's debris falling into water near it (the battle spec's §6: debris rings water too): the
+   * particles are cosmetic and never meet the world, so the shell itself throws `debris_splash_samples`
+   * points over a disc of `debris_splash_reach` times its radius, drawn from its own seed, and each
+   * that falls on water splashes there once the debris has fallen (`debris_fall_s`).
+   */
+  private throwDebrisIn(x: number, z: number, radiusM: number, seed: number): void {
+    const d = this.debris;
+    const v = this.voxel;
+    const rng = Rng.root(seed).derive('combat.debris_splashes');
+    const reach = d.reach * radiusM;
+    for (let k = 0; k < d.samples; k++) {
+      const a = rng.uniform(0, TAU);
+      const r = reach * Math.sqrt(rng.float());
+      const fall = rng.uniform(d.fallS[0], d.fallS[1]);
+      const px = x + r * cos(a);
+      const pz = z + r * sin(a);
+      const top = groundTop(this.map, px / v, pz / v);
+      if (top === null || kindOf(this.map.get(Math.floor(px / v), top - 1, Math.floor(pz / v))) !== K.WATER) continue;
+      this.debrisFalling.push({ tick: this.ticks + Math.max(1, Math.round(fall / this.clock.dt)), at: [px, top * v, pz] });
+    }
   }
 
   /**

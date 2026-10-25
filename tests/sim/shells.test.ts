@@ -72,6 +72,35 @@ describe('a shell landing', () => {
     expect(dry.drainEvents().splashes).toEqual([]);
   });
 
+  it('a shell landing beside water throws its debris in: splashes on the water a moment later, the same for the same seed; none with no water near', () => {
+    const top = Math.round(7.6 / 0.1);
+    const run = (pool: boolean) => {
+      const s = session();
+      // A pool's top level with the ground, 2 m to 7 m off along x from where the shell lands.
+      if (pool) s.map.fillBox(148, top - 2, 90, 198, top, 210, P.WATER);
+      s.land(12.8, 15.0, 3, 7);
+      const landed = s.ticks;
+      const out: { tick: number; at: number[]; energyJ: number; kind: string }[] = [];
+      for (let k = 0; k < 120; k++) {
+        s.tick();
+        out.push(...s.drainEvents().splashes);
+      }
+      return { landed, debris: out.filter((w) => w.kind === 'debris'), dt: s.clock.dt };
+    };
+    const a = run(true);
+    expect(a.debris.length).toBeGreaterThan(0);
+    for (const w of a.debris) {
+      // On the pool's top, after the debris' fall.
+      expect(w.at[0]).toBeGreaterThanOrEqual(14.8 - 1e-9);
+      expect(w.at[1]).toBeCloseTo(7.6, 6);
+      expect((w.tick - a.landed) * a.dt).toBeGreaterThanOrEqual(0.6 - 1e-9);
+      expect((w.tick - a.landed) * a.dt).toBeLessThanOrEqual(1.4 + a.dt);
+      expect(w.energyJ).toBeLessThan(1e4);
+    }
+    expect(run(true).debris).toEqual(a.debris);
+    expect(run(false).debris).toEqual([]);
+  });
+
   it('a shell with no ground under it lands nowhere', () => {
     const s = session();
     expect(s.land(-5, 15, 3, 7)).toBeNull();
