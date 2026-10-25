@@ -65,6 +65,7 @@ import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
 import { actionFor, nextTimeKey, stepTime, type KeyAction } from './keys';
 import { standardViews, VIEW_NAMES, type ViewName } from './views';
+import { fallbackReason, placeHere, showFallback, type FallbackReason } from './fallback';
 
 const SEED = 7;
 /** A canvas resize settles this long before the internal images are reallocated. */
@@ -109,6 +110,18 @@ function fail(error: unknown): void {
       ? 'TRENCHLINE needs WebGPU: use Chrome, Edge or Safari 26.'
       : `TRENCHLINE could not start: ${error instanceof Error ? error.message : String(error)}`,
   );
+  // Where the game cannot start, its video in its place (fallback.ts); a check reports instead.
+  if (!checkRun) fallBack(error instanceof GpuUnavailable && error.reason !== 'limits' ? error.reason : 'failed');
+}
+
+/** The game's video where it cannot run, once (fallback.ts); `tryAnyway` for touch. */
+function fallBack(reason: FallbackReason, tryAnyway?: () => void): void {
+  if (hooks.fallback) return;
+  hooks.fallback = reason;
+  showFallback(document, reason, tryAnyway && (() => {
+    hooks.fallback = undefined;
+    tryAnyway();
+  }));
 }
 
 /** The canvas in device pixels: its CSS size at up to twice the CSS pixel density (a check's, CHECK_CANVAS). */
@@ -1116,4 +1129,6 @@ async function start(): Promise<void> {
   }
 }
 
-start().catch(fail);
+// A phone or tablet (touch alone) is shown the game's video first, and may try it anyway (fallback.ts).
+if (!checkRun && fallbackReason(placeHere(window)) === 'touch') fallBack('touch', () => void start().catch(fail));
+else start().catch(fail);

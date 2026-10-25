@@ -17,8 +17,10 @@ describe('the fallback', () => {
     expect(fallbackReason({ gpu: false, coarse: true, fine: false })).toBe('no-webgpu');
   });
 
-  it('says what would run it, or how it is played', () => {
-    for (const reason of ['no-webgpu', 'no-adapter', 'failed'] as const) expect(fallbackLine(reason)).toMatch(/Chrome or Edge, or Safari 26/);
+  it('says what would run it, or how it is played, without repeating the failure', () => {
+    // Without WebGPU the failure itself names the browsers: the line under it does not again.
+    expect(fallbackLine('no-webgpu')).toBe('Here it is in motion.');
+    for (const reason of ['no-adapter', 'failed'] as const) expect(fallbackLine(reason)).toMatch(/Chrome or Edge, or Safari 26/);
     expect(fallbackLine('touch')).toMatch(/keyboard and mouse/);
   });
 });

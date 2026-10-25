@@ -38,9 +38,64 @@ export function placeHere(win: Window): Place {
   return { gpu: 'gpu' in win.navigator, coarse: win.matchMedia('(pointer: coarse)').matches, fine: win.matchMedia('(any-pointer: fine)').matches };
 }
 
-/** What the page says under the video, by why it shows it. */
+/** What the page says under the video, by why it shows it (without WebGPU, the failure itself names the browsers). */
 export function fallbackLine(reason: FallbackReason): string {
-  return reason === 'touch'
-    ? "It's played with a keyboard and mouse. Here it is in motion."
-    : 'Here it is in motion — or open it in Chrome or Edge, or Safari 26, on a computer.';
+  if (reason === 'touch') return "It's played with a keyboard and mouse. Here it is in motion.";
+  if (reason === 'no-webgpu') return 'Here it is in motion.';
+  return 'Here it is in motion — or open it in Chrome or Edge, or Safari 26, on a computer.';
+}
+
+/**
+ * The video behind the loading screen's block, where the still is, filling the page; and what the
+ * page says:
+ * - for a failure, a line under the failure's own status;
+ * - for touch, the status itself (nothing is loading), and a button that tries the game anyway: the
+ *   video goes, the progress comes back, and `tryAnyway` runs.
+ */
+export function showFallback(doc: Document, reason: FallbackReason, tryAnyway?: () => void): HTMLVideoElement {
+  const video = doc.createElement('video');
+  video.id = 'motion';
+  video.muted = true;
+  video.loop = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  // The attributes too: autoplay is allowed to a muted, inline video, and some browsers read them.
+  for (const a of ['muted', 'loop', 'autoplay', 'playsinline']) video.setAttribute(a, '');
+  video.poster = './stills/dusk.webp';
+  video.preload = 'auto';
+  for (const [src, type] of [['./video/trenchline.webm', 'video/webm'], ['./video/trenchline.mp4', 'video/mp4']]) {
+    const source = doc.createElement('source');
+    source.src = src;
+    source.type = type;
+    video.append(source);
+  }
+  doc.getElementById('still')?.after(video);
+  const status = doc.getElementById('status')!;
+  if (reason === 'touch') {
+    // An SVG element: hidden by its attribute (index.html's [hidden] rule), as SVG has no hidden property.
+    const trace = doc.querySelector('#loading .trace');
+    const was = status.textContent;
+    status.textContent = fallbackLine(reason);
+    trace?.setAttribute('hidden', '');
+    const button = doc.createElement('button');
+    button.id = 'anyway';
+    button.type = 'button';
+    button.textContent = 'Try it anyway';
+    button.onclick = () => {
+      video.pause();
+      video.remove();
+      button.remove();
+      status.textContent = was;
+      trace?.removeAttribute('hidden');
+      tryAnyway?.();
+    };
+    status.after(button);
+  } else {
+    const line = doc.createElement('p');
+    line.id = 'motion-line';
+    line.textContent = fallbackLine(reason);
+    status.after(line);
+  }
+  void video.play().catch(() => {});
+  return video;
 }

@@ -936,3 +936,21 @@ test('the loading screen over the still, and over the live world, at three windo
     await context.close();
   }
 });
+
+// The showcase's video fallback (artifacts/s3): a desktop browser without WebGPU, and a phone (touch
+// alone), each with the game's video playing behind the title, 3 s in.
+test('the video where the game cannot run: a desktop without WebGPU, and a phone', async ({ browser }) => {
+  test.setTimeout(120_000);
+  for (const [name, options] of [
+    ['desktop-no-webgpu', { viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 }],
+    ['phone', { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true }],
+  ] as const) {
+    const context = await browser.newContext(options);
+    const page = await context.newPage();
+    if (name === 'desktop-no-webgpu') await page.addInitScript(() => Object.defineProperty(Navigator.prototype, 'gpu', { get: () => undefined, configurable: true }));
+    await page.goto('/');
+    await page.waitForFunction(() => ((document.getElementById('motion') as HTMLVideoElement | null)?.currentTime ?? 0) > 3, null, { timeout: 30_000 });
+    await page.screenshot({ path: `artifacts/s3/fallback-${name}.png` });
+    await context.close();
+  }
+});

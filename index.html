@@ -42,6 +42,10 @@
          and centred, as the camera's field of view is horizontal; it fades as the live world takes its place. */
       #still { position: fixed; left: 0; top: 50%; width: 100vw; height: auto; transform: translateY(-50%); pointer-events: none; transition: opacity 0.8s ease-out; }
       #still.gone { opacity: 0; }
+      /* The game's video where it cannot run (fallback.ts): over the still, filling the page as the live world would. */
+      #motion { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: cover; pointer-events: none; }
+      #motion-line { margin: 0.4rem 0 0; color: var(--duckboard); font-style: italic; max-width: 30rem; }
+      #anyway { margin-top: 1.25rem; }
       .block { width: 100%; max-width: 34rem; }
       h1, h2 { font-weight: 400; margin: 0; line-height: 1; }
       h1 { font-size: clamp(2.6rem, 7.5vw, 4.75rem); letter-spacing: 0.16em; margin-left: -0.05em; }
