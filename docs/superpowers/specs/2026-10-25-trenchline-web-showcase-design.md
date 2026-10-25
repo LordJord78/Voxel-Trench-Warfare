@@ -42,7 +42,8 @@ It is built on what exists:
 
 ## 2. The first impression
 
-- **The still** is the first view the live world draws (the spawn, at the clock's dusk key), rendered by the game, converged, at the high preset. It is captured by a tool (`npm run stills`), never by hand, so it is made again when the look changes.
+- **The backdrop:** until the click, the live world is drawn from the firing step's view over the parapet at dusk (the standard `step` view, as approved: the sun low behind the shattered trees across no man's land). The click starts play at the spawn in the bay, as before; the view cuts there as the loading screen goes.
+- **The still** is that first view, rendered by the game, converged, at the high preset. It is captured by a tool (`npm run stills`), never by hand, so it is made again when the look changes.
 - **Its forms:**
   - a WebP at 1920 × 1200 for the loading screen (≤ 200 KB);
   - a 1200 × 630 JPEG for link previews;

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** From the first paint the page shows the title over a still of the game (the first view the live world draws, at dusk), which crossfades to the live world at the same view when it is drawn. Link previews carry a title, a description and an image. The production build still shows its prompt within 4 s.
+**Goal:** From the first paint the page shows the title over a still of the game (the first view the live world draws: the firing step's view over the parapet at dusk), which crossfades to the live world at the same view when it is drawn. Link previews carry a title, a description and an image. The production build still shows its prompt within 4 s.
 
 **Architecture:**
 - **The stills tool** (`tools/stills.mjs`, `npm run stills`) opens the game in Chrome through Playwright at 1920 × 1200 and hides the loading screen. Once the world's histories have settled, it photographs the first view the live world draws. It writes `public/stills/dusk.webp` (cwebp) and `public/stills/og.jpg`, a 1200 × 630 crop (ffmpeg).
@@ -40,12 +40,12 @@
 
 ---
 
-### Task 1: The stills tool and the stills
+### Task 1: The backdrop, the stills tool and the stills
 
 **Files:**
 - Create: `tools/stills.mjs`; `public/stills/dusk.webp`, `public/stills/og.jpg` (made by the tool); `tests/support/image-size.ts` (PNG, JPEG and WebP sizes from their headers).
-- Modify: `package.json` (`"stills": "node tools/stills.mjs"`).
-- Test: `tests/tools/stills.test.ts`.
+- Modify: `package.json` (`"stills": "node tools/stills.mjs"`); `src/app/main.ts` (until the click, the frame's pose is the `step` view at the settings' field of view).
+- Test: `tests/tools/stills.test.ts`; `tests/e2e/first-paint.spec.ts` (`'until the click the world is drawn from the firing step over the parapet, and the click starts play at the spawn'`).
 
 **Interfaces:**
 - Produces: `public/stills/dusk.webp` (1920 × 1200, ≤ 200 KB) and `public/stills/og.jpg` (1200 × 630, ≤ 150 KB), served at `./stills/…`; `imageSize(bytes: Uint8Array): { width: number; height: number; type: 'png' | 'jpeg' | 'webp' }`.

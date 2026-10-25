@@ -595,7 +595,10 @@ async function start(): Promise<void> {
         if (session.advance(ms / 1000) > 0) input.ticked();
         if (!session.player.onFiringStep) input.lowerPeriscope();
       }
-      pose = rig.pose(session, dt, settings.fov);
+      // Until the click, the world is drawn from the firing step over the parapet at dusk (the page's
+      // still is that view); the click starts play at the spawn, in the bay.
+      const step = views.step;
+      pose = mode === 'loading' || mode === 'ready' ? { position: [...step.position], yaw: step.yaw, pitch: step.pitch, fov: settings.fov } : rig.pose(session, dt, settings.fov);
       periscope.set((1 - rig.fovScale) / (1 - periscopeScale));
     }
     // The rifle in hand while playing (paused too), not through the periscope or flying.
