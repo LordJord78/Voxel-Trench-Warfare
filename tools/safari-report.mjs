@@ -3,15 +3,17 @@
 // "done" table: the click-to-play prompt within 8 s, the golden world bytes, every standard
 // view at each of the clock's four keys within the 14 ms GPU budget at the high preset's
 // 1.5 MP, the overview within it through the day, and every view at dusk and at night under
-// peak combat (the combat spec's row 6: the GPU within 14 ms at the 95th percentile, the main
-// thread within 8 ms at the 99th; no sound, as the check has no click).
+// peak combat on the battle's peak (the combat spec's row 6 on the battle spec's: the GPU within
+// 14 ms at the 95th percentile, the main thread within 8 ms at the 99th, the battle at its peak —
+// at night the most flares, a barrage and tracers, at dusk a barrage, and twelve fires; no sound,
+// as the check has no click).
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'vite';
 
 const PORT = 5340;
 const RUN = 'safari';
-const WAIT_MS = 8 * 60_000;
+const WAIT_MS = 10 * 60_000;
 const MAIN_BUDGET_MS = 8;
 const PROMPT_BUDGET_MS = 8000;
 const GPU_BUDGET_MS = 14;
@@ -80,11 +82,15 @@ try {
     for (const p of peak) {
       const by = p.gpu ? p.gpu : p.submitted;
       const gpu = by ? by.p95 : Number.NaN;
-      const ok = gpu <= GPU_BUDGET_MS && p.main.p99 <= MAIN_BUDGET_MS && p.main.max <= 20;
+      const b = p.battle;
+      const night = hhmm(p.hours) === '21:00';
+      const peaked = !!b && b.barrages > 0 && b.fires === 12 && (!night || (b.flares >= 15 && b.tracers > 0));
+      const ok = gpu <= GPU_BUDGET_MS && p.main.p99 <= MAIN_BUDGET_MS && p.main.max <= 20 && peaked;
       check(
         ok,
         `peak ${p.view} at ${hhmm(p.hours)}  GPU p95 ${gpu.toFixed(2)} ms, median ${by ? by.median.toFixed(2) : '?'}${p.gpu ? `, worst ${p.gpu.max.toFixed(2)}` : ' (submitted work)'}; ` +
-          `main thread p99 ${p.main.p99.toFixed(1)} ms, worst ${p.main.max.toFixed(1)}; ${p.frames} frames, ${p.shots} shots, ${p.shells} shells`,
+          `main thread p99 ${p.main.p99.toFixed(1)} ms, worst ${p.main.max.toFixed(1)}; ${p.frames} frames, ${p.shots} shots, ${p.shells} shells; ` +
+          (b ? `the battle ${b.at} s in: ${b.flares} flares, ${b.barrages} barrages, ${b.tracers} tracers, ${b.fires} fires` : 'not on the battle'),
       );
     }
   }
