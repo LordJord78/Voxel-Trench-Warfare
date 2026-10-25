@@ -185,9 +185,25 @@ export const cases = {
     device.queue.writeBuffer(frame, 0, writer.buffer);
     // No shell's blast lights these cases (blastCount 0): its texture is bound, never read.
     const blast = device.createTexture({ size: [8, 8], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING });
+    // What each water top reflects, as the reflect pass leaves it (reflect.wgsl, tested in the water
+    // spec): here the sky alone, the reference's own, so this spec tests shade's weighing of it.
+    const reflection = tex('rgba16float', RES);
+    const reflected = new Uint16Array(16 * 16 * 4);
+    args.regions.forEach((r, k) => {
+      if (kindOf(r.mat) !== K.WATER || r.face !== 3) return;
+      const rx = (k % 4) * 4;
+      const ry = Math.floor(k / 4) * 4;
+      for (let y = ry; y < ry + 4; y++) {
+        for (let x = rx; x < rx + 4; x++) {
+          const rd = rayDir(args.pose, RES, x + 0.5, y + 0.5);
+          reflected.set([...skyRef(sky, [rd[0], -rd[1], rd[2]]).map(floatToHalf), 0], (y * 16 + x) * 4);
+        }
+      }
+    });
+    device.queue.writeTexture({ texture: reflection }, reflected, { bytesPerRow: 16 * 8 }, RES);
     const group = device.createBindGroup({
       layout: compiled.layouts.shade,
-      entries: [gDepth.createView(), gHit.createView(), out.createView(), light.createView(), lightHit.createView(), blast.createView()].map((resource, binding) => ({ binding, resource })),
+      entries: [gDepth.createView(), gHit.createView(), out.createView(), light.createView(), lightHit.createView(), blast.createView(), reflection.createView()].map((resource, binding) => ({ binding, resource })),
     });
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
@@ -217,7 +233,7 @@ export const cases = {
       const fog = hazeRef(sky, rayDir(args.pose, RES, x + 0.5, y + 0.5));
       return { got: [px[i], px[i + 1], px[i + 2]], want: shadeRef(stored, args.pose, x, y, sky), fog };
     });
-    for (const t of [gDepth, gHit, out, light, lightHit]) t.destroy();
+    for (const t of [gDepth, gHit, out, light, lightHit, reflection]) t.destroy();
     return { results, errors: [...g.errors] };
   },
 };
