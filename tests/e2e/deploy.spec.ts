@@ -15,9 +15,16 @@ test('the production build, served under /Voxel-Trench-Warfare/, generates the w
     expect(readFileSync(`${site.outDir}/index.html`, 'utf8').match(/(?:src|href)="\/[^"]*"/g) ?? []).toEqual([]);
     const errors: string[] = [];
     page.on('console', (m) => {
-      if (m.type() === 'error') errors.push(m.text());
+      // The destruction worker's fallback to cutting craters in-process says so only as a warning.
+      if (m.type() === 'error' || (m.type() === 'warning' && m.text().startsWith('[destruction]'))) errors.push(m.text());
     });
     page.on('pageerror', (e) => errors.push(e.message));
+    // Everything the site asks for is there: its scripts, both workers, the still.
+    const missing: string[] = [];
+    page.on('response', (r) => {
+      if (r.status() >= 400) missing.push(`${r.status()} ${r.url()}`);
+    });
+    page.on('requestfailed', (r) => missing.push(`failed ${r.url()}`));
     await page.goto(site.url);
     await page.waitForFunction(() => (window as unknown as { __trenchline?: { ready?: boolean } }).__trenchline?.ready === true, null, { timeout: 90_000 });
     const state = await hooks(page, (h) => ({ error: h.error, promptMs: (h as unknown as { promptMs: number }).promptMs }));
@@ -31,6 +38,7 @@ test('the production build, served under /Voxel-Trench-Warfare/, generates the w
       return h.frames() - from;
     });
     expect(drawn).toBeGreaterThanOrEqual(60);
+    expect(missing).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await site.close();

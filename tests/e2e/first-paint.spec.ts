@@ -39,7 +39,7 @@ const ready = (page: import('@playwright/test').Page) =>
 test('the still is painted within 1 s of navigation', async ({ page }) => {
   test.setTimeout(240_000);
   const { servedBuild } = await import('./support/build');
-  const site = await servedBuild('/Voxel-Trench-Warfare/', 5332, 'artifacts/s2/site');
+  const site = await servedBuild('/Voxel-Trench-Warfare/', 5332);
   try {
     await page.goto(site.url);
     // By Element Timing: a full-viewport image is never a largest contentful paint (Chrome takes it

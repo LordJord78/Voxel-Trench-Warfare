@@ -14,7 +14,7 @@ Every wall, sandbag and duckboard is made of 10 cm voxels. A shell cuts into the
 
 ## Play
 
-Open it in a desktop browser with WebGPU: Chrome or Edge 113 or later, or Safari 26. Where WebGPU is missing, the page shows a video of the game instead. Click to play; the mouse looks around.
+Play it at [lordjord78.github.io/Voxel-Trench-Warfare](https://lordjord78.github.io/Voxel-Trench-Warfare/), in a desktop browser with WebGPU: Chrome or Edge 113 or later, or Safari 26. Where WebGPU is missing, the page shows a video of the game instead. Click to play; the mouse looks around.
 
 ## Controls
 
