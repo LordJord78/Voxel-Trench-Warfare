@@ -92,6 +92,8 @@ export interface PeakResult {
   drift: number;
   /** The battle's peak it was put under (peak-battle.ts), if asked; null without. */
   battle: BattlePeak | null;
+  /** Each pass's own GPU time, ms: its smoothed time averaged over the frames measured; none without timestamps. */
+  passes: Record<string, number>;
 }
 
 /** What the driver needs of the game: the battle's peak's too. */
@@ -111,7 +113,7 @@ export interface PeakGame extends BattleGame {
   /** Craters queued or out. */
   pending(): number;
   frames(): number;
-  stats(): { gpuLastMs: number | null; gpuSamples: number };
+  stats(): { gpuLastMs: number | null; gpuSamples: number; own: Record<string, number> };
   /** The main thread's time of each of the last frames (up to 600), ms. */
   mainMs(): number[];
   timestamps: boolean;
@@ -140,6 +142,7 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
   // Without timestamps, the submitted work of about as many frames as the peak will draw.
   const work = game.timestamps ? null : game.submittedWork(Math.round(seconds * 50));
   const gpu: number[] = [];
+  const own: Record<string, number> = {};
   let seen = game.stats().gpuSamples;
   const landings: Promise<unknown>[] = [];
   let skipped = 0;
@@ -161,7 +164,10 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
     // By the game's timer: without timestamps (or told not to use them), by submitted work alone.
     if (game.timestamps) {
       const s = game.stats();
-      if (s.gpuSamples > seen && s.gpuLastMs !== null) gpu.push(s.gpuLastMs);
+      if (s.gpuSamples > seen && s.gpuLastMs !== null) {
+        gpu.push(s.gpuLastMs);
+        for (const [pass, ms] of Object.entries(s.own)) own[pass] = (own[pass] ?? 0) + ms;
+      }
       seen = s.gpuSamples;
     }
   }
@@ -190,5 +196,6 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
     voices,
     drift,
     battle,
+    passes: Object.fromEntries(Object.entries(own).map(([pass, ms]) => [pass, ms / gpu.length])),
   };
 }
