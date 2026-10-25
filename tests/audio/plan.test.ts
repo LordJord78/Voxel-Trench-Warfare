@@ -175,6 +175,21 @@ describe('the sound of a frame', () => {
     expect(weak.gain).toBeCloseTo(0.5 * near.gain, 9);
   });
 
+  it("a round's splash is heard within impact_within_m, a shell's at any distance, late by it", () => {
+    expect([t.splashGain, t.splashShellGain]).toEqual([0.6, 1.2]);
+    const splash = (z: number, kind: 'round' | 'shell') => ({ tick: 1, at: [10, 2, 10 + z] as [number, number, number], energyJ: kind === 'round' ? 1500 : 3e6, kind });
+    const v = planVoices(t, { ...none(), splashes: [splash(3, 'round'), splash(t.impactWithinM + 5, 'round'), splash(200, 'shell')] }, ear);
+    expect(v.map((x) => x.kind)).toEqual(['splash', 'splash']);
+    const [round, shell] = v;
+    expect(round.delayS).toBeCloseTo(3 / 343, 9);
+    expect(round.gain).toBeCloseTo(t.splashGain * Math.min(1, Math.pow(t.referenceM / Math.max(t.referenceM, 3), t.rolloff)), 9);
+    expect(round.lengthS).toBeUndefined();
+    // A shell's: a long rush, late by its distance, heard far off as a blast is.
+    expect(shell.delayS).toBeCloseTo(200 / 343, 9);
+    expect(shell.lengthS).toBeGreaterThan(0.5);
+    expect(shell.gain).toBeGreaterThan(0);
+  });
+
   it('a scoop is a scrape where it was dug, at scrape_gain', () => {
     expect(t.scrapeGain).toBe(0.5);
     const scoop = { tick: 1, voxels: 24, at: [10.6, 1.4, 10.8] as [number, number, number] };

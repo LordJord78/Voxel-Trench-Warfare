@@ -148,6 +148,8 @@ export function voiceLength(v: VoicePlan, report: ReportShape): number {
       return (v.lengthS ?? 1) + 0.1;
     case 'crackle':
       return 0.05;
+    case 'splash':
+      return (v.lengthS ?? 0.06) + 0.05;
   }
 }
 
@@ -213,6 +215,17 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       // A fire's pop: a snap of highpassed noise, and a click.
       burst(ctx, noise, dull, when, { type: 'highpass', frequency: 2500 }, 0.7 * g, 0.0005, 0.03);
       tone(ctx, dull, when, 'square', 1700, 1100, 0.2 * g, 0.012);
+      break;
+    case 'splash':
+      if (v.lengthS === undefined) {
+        // A round into water: a short plip of bandpassed noise, falling.
+        burst(ctx, noise, dull, when, { type: 'bandpass', frequency: 1800, Q: 4 }, 0.8 * g, 0.002, 0.06);
+        tone(ctx, dull, when, 'sine', 1400, 600, 0.15 * g, 0.05);
+      } else {
+        // A shell on water: a thump, and the water thrown up rushing down over its length.
+        tone(ctx, dull, when, 'sine', 70, 40, 0.7 * g, 0.3);
+        burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 1200 }, 0.6 * g, 0.05, v.lengthS);
+      }
       break;
     case 'scrape':
       // The blade into the earth, rising for 0.04 s and falling over 0.18 s; then the shovelful thrown, landing low.

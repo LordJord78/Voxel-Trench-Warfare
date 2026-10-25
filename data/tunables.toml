@@ -571,6 +571,12 @@ thump_length_s      = [0.8, 1.5]
 chatter_gain        = 0.5      # at 60 m; quieter as 60 m over the distance
 chatter_range_m     = [60.0, 300.0]
 chatter_lowpass_hz  = [400.0, 2000.0]   # duller across the range, geometrically
+# A splash (the battle's water): a round going into water a short bandpassed "plip" at it, heard as
+# near as an impact is; a shell landing on water a rush of low noise over a second with a thump, heard
+# at any distance as a blast is. Each late by its distance, quieter and duller with it.
+splash_gain         = 0.6
+splash_shell_gain   = 1.2
+splash_shell_s      = 1.2
 # A fire's crackle (the battle's fires): each pop a highpassed burst and a click, at the fire, as
 # loud as the fire's strength, quieter and duller with distance as a shot's is; none past this.
 crackle_gain        = 0.4

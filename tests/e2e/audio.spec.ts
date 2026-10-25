@@ -211,3 +211,46 @@ test('a fire is heard crackling close by', async ({ page }) => {
   expect(heard.inHamlet).toBeGreaterThan(5);
   expect(errors).toEqual([]);
 });
+
+test('a round into water is heard splashing', async ({ page }) => {
+  const errors = await openGame(page);
+  await page.locator('#play').click();
+  test.skip(!(await audioRenders(page)), 'the audio clock stands still here (no output renders): what is played cannot be counted as heard');
+  await hooks(page, (h) => h.waitFrames(10));
+  // A pool 0.2 m deep poured on the bay's floor, 1–3 m ahead along it; the player looking down into it, firing.
+  const heard = await hooks(page, async (h, water) => {
+    const v = 0.1;
+    const s = h.world.spawn;
+    const ahead = (m: number) => {
+      const p = [...s.position];
+      p[s.bay.longAxis] += m;
+      return p;
+    };
+    const top = (x: number, z: number) => {
+      let y = Math.floor(s.position[1] / v) + 20;
+      while (y > 0 && h.world.map.get(Math.floor(x / v), y - 1, Math.floor(z / v)) === 0) y--;
+      return y;
+    };
+    for (let m = 1; m <= 3; m += 0.1) {
+      for (let side = -1; side <= 1; side += 0.1) {
+        const p = ahead(m);
+        p[s.bay.longAxis === 0 ? 2 : 0] += side;
+        const y = top(p[0], p[2]);
+        h.world.map.fillBox(Math.floor(p[0] / v), y, Math.floor(p[2] / v), Math.floor(p[0] / v) + 1, y + 2, Math.floor(p[2] / v) + 1, water as number);
+      }
+    }
+    h.teleport({ position: [s.position[0], s.position[1], s.position[2]], yaw: s.bay.longAxis === 0 ? 90 : 0, pitch: -35 });
+    await h.waitFrames(10);
+    const before = h.audio().kinds.splash ?? 0;
+    h.trigger(true);
+    await h.waitFrames(30);
+    h.trigger(false);
+    await h.waitFrames(30);
+    const a = h.audio();
+    return { splashes: (a.kinds.splash ?? 0) - before, state: a.state };
+  }, P.WATER);
+  console.log(`splashes heard: ${heard.splashes}`);
+  expect(heard.state).toBe('running');
+  expect(heard.splashes).toBeGreaterThan(0);
+  expect(errors).toEqual([]);
+});
