@@ -101,7 +101,7 @@ export interface Hooks {
   /** Stand the player at a standard view, their body clear of solid. */
   standAt(view: string): void;
   /** The battle brought to its peak where the player stands (src/app/peak-battle.ts): when, and what of it burns, runs and flies. */
-  battlePeak(): Promise<{ at: number; flares: number; barrages: number; tracers: number; fires: number }>;
+  battlePeak(): Promise<{ at: number; flares: number; barrages: number; tracers: number; fires: number; hamlet: number }>;
   /** A standard view at `hours` under peak combat for `seconds`, measured; under the battle's peak too, if asked (src/app/peak-combat.ts). */
   underFire(view: string, hours: number, seconds: number, options?: { battle?: boolean }): Promise<{
     view: string;
@@ -115,7 +115,7 @@ export interface Hooks {
     skipped: number;
     voices: number;
     drift: number;
-    battle: { at: number; flares: number; barrages: number; tracers: number; fires: number } | null;
+    battle: { at: number; flares: number; barrages: number; tracers: number; fires: number; hamlet: number } | null;
     passes: Record<string, number>;
   }>;
   /** The HUD as drawn: whether it shows, whether its crosshair does, and its words. */

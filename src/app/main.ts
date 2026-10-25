@@ -861,6 +861,7 @@ async function start(): Promise<void> {
       barrages: battle.barrages.running,
       tracers: battle.tracers().length,
       fires: battle.fires().filter((f) => !f.dying).length,
+      hamlet: battle.fires().filter((f) => !f.dying && f.hamlet).length,
     }),
   };
   Object.assign(hooks, {

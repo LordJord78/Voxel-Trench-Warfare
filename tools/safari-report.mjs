@@ -90,7 +90,7 @@ try {
         ok,
         `peak ${p.view} at ${hhmm(p.hours)}  GPU p95 ${gpu.toFixed(2)} ms, median ${by ? by.median.toFixed(2) : '?'}${p.gpu ? `, worst ${p.gpu.max.toFixed(2)}` : ' (submitted work)'}; ` +
           `main thread p99 ${p.main.p99.toFixed(1)} ms, worst ${p.main.max.toFixed(1)}; ${p.frames} frames, ${p.shots} shots, ${p.shells} shells; ` +
-          (b ? `the battle ${b.at} s in: ${b.flares} flares, ${b.barrages} barrages, ${b.tracers} tracers, ${b.fires} fires` : 'not on the battle'),
+          (b ? `the battle ${b.at} s in: ${b.flares} flares, ${b.barrages} barrages, ${b.tracers} tracers, ${b.fires} fires (${b.hamlet} the hamlet's)` : 'not on the battle'),
       );
     }
   }

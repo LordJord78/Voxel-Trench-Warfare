@@ -79,6 +79,9 @@ test('the battle at its peak: at night the most flares, a barrage, tracers and t
   expect(night.barrages).toBeGreaterThan(0);
   expect(night.tracers).toBeGreaterThan(0);
   expect(night.fires).toBe(12);
+  // The cap's twelve hold the hamlet's two to four at night, never put out for it.
+  expect(night.hamlet).toBeGreaterThanOrEqual(2);
+  expect(night.hamlet).toBeLessThanOrEqual(4);
   const dusk = await hooks(page, async (h) => {
     h.setTimeOfDay(17 + 35 / 60);
     return h.battlePeak();
@@ -87,5 +90,6 @@ test('the battle at its peak: at night the most flares, a barrage, tracers and t
   expect(dusk.flares).toBe(0);
   expect(dusk.barrages).toBeGreaterThan(0);
   expect(dusk.fires).toBe(12);
+  expect(dusk.hamlet).toBe(0);
   expect(errors).toEqual([]);
 });

@@ -363,8 +363,10 @@ test('every standard view at dusk and at night under peak combat, the battle at 
   // within 14 ms at the 95th percentile, the main thread within 8 ms at the 99th, and no frame over
   // 20 ms (row 3's). The battle spec's row 6 puts it on the battle at its peak (peak-battle.ts): at
   // night the most flares alight, a barrage in progress and tracers in flight, at dusk a barrage, and
-  // twelve fires burning in view. Every view is measured before any is judged, so the log has them
-  // all, each with its passes' own times.
+  // the battle's cap of twelve fires burning — struck across the view about the player, with the
+  // hamlet's two to four at night (where the hamlet is), and at the bay and the dugout beyond the
+  // walls. Every view is measured before any is judged, so the log has them all, each with its
+  // passes' own times.
   test.setTimeout(900_000);
   const errors = await openGame(page);
   await page.locator('#play').click();
@@ -388,7 +390,7 @@ test('every standard view at dusk and at night under peak combat, the battle at 
       const line =
         `${view} ${label}: GPU p95 ${g.p95.toFixed(2)} ms, median ${g.median.toFixed(2)}, worst ${g.max.toFixed(2)}; ` +
         `main thread p99 ${r.main.p99.toFixed(1)} ms, worst ${r.main.max.toFixed(1)}; ${r.frames} frames, ${r.shots} shots, ${r.shells} shells (${r.skipped} skipped), ${r.voices} voices${renders ? '' : ' (sound does not render here)'}; the feet strayed ${r.drift.toFixed(2)} m; ` +
-        `the battle ${b.at} s in: ${b.flares} flares, ${b.barrages} barrages, ${b.tracers} tracers, ${b.fires} fires; passes (ms) ${passes}`;
+        `the battle ${b.at} s in: ${b.flares} flares, ${b.barrages} barrages, ${b.tracers} tracers, ${b.fires} fires (${b.hamlet} the hamlet's); passes (ms) ${passes}`;
       lines.push(line);
       // Measured where the view stands: a body lifted onto a parapet, or pushed off, is a different view.
       if (g.p95 > BUDGET_MS || r.main.p99 > 8 || r.main.max > 20 || r.shots < 50 || r.shells < 5 || (renders && r.voices === 0) || r.drift > 0.2) over.push(line);

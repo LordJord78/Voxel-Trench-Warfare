@@ -24,7 +24,7 @@ interface Report {
     shells: number;
     voices: number;
     drift: number;
-    battle: { at: number; flares: number; barrages: number; tracers: number; fires: number } | null;
+    battle: { at: number; flares: number; barrages: number; tracers: number; fires: number; hamlet: number } | null;
   }[];
   errors: string[];
 }

@@ -10,7 +10,7 @@ const YAW = 30;
  * A battle as a script: what burns, runs and flies at each moment of it; a strike catching one time
  * in three, a fire counted from the step after it caught, the cap the newest twelve.
  */
-function scripted(script: (t: number) => Omit<BattleNow, 'seconds' | 'fires'>, dark: boolean, onMap: (x: number, z: number) => boolean = () => true) {
+function scripted(script: (t: number) => Omit<BattleNow, 'seconds' | 'fires' | 'hamlet'>, dark: boolean, onMap: (x: number, z: number) => boolean = () => true, hamlet = 0) {
   let t = 0;
   let fires: number[] = [];
   let caught = 0;
@@ -33,11 +33,12 @@ function scripted(script: (t: number) => Omit<BattleNow, 'seconds' | 'fires'>, d
         strikes.push(k);
         if (caught++ % 3 === 0) fires.push(t);
       }
-      fires = fires.slice(-PEAK_FIRES);
+      // The cap holds the hamlet's too, and never puts theirs out.
+      fires = fires.slice(-(PEAK_FIRES - hamlet));
       t += s;
     },
     // The script read at the millisecond, past the steps' rounding.
-    battleNow: () => ({ seconds: t, ...script(Math.round(t * 1000) / 1000), fires: fires.filter((t0) => t > t0).length }),
+    battleNow: () => ({ seconds: t, ...script(Math.round(t * 1000) / 1000), fires: fires.filter((t0) => t > t0).length + hamlet, hamlet }),
     waitFrames: async () => {},
   };
   return { game, seeks, strikes, fires: () => fires, now: () => t };
@@ -49,7 +50,7 @@ describe('the battle at its peak', () => {
   it('at night, the first moment with fifteen flares burning, a barrage in progress and tracers in flight', async () => {
     const b = scripted((t) => ({ flares: t >= 165 ? 16 : 10, barrages: t >= 150 ? 1 : 0, tracers: t === 170 ? 0 : 20 }), true);
     const peak = await battlePeak(b.game, 21);
-    expect(peak).toEqual({ at: 165, flares: 16, barrages: 1, tracers: 20, fires: PEAK_FIRES });
+    expect(peak).toEqual({ at: 165, flares: 16, barrages: 1, tracers: 20, fires: PEAK_FIRES, hamlet: 0 });
     expect(b.seeks.slice(0, 10)).toEqual([120, 125, 130, 135, 140, 145, 150, 155, 160, 165]);
     // Then sought again before it, the fires struck there and grown to the moment.
     expect(b.seeks.slice(10)).toEqual([165 - FIRES_GROW_S]);
@@ -59,7 +60,16 @@ describe('the battle at its peak', () => {
   it('at dusk, the first moment with a barrage in progress, the flares and tracers asked for nothing', async () => {
     const b = scripted((t) => ({ flares: 0, barrages: t >= 135 ? 2 : 0, tracers: 0 }), false);
     const peak = await battlePeak(b.game, 17.5);
-    expect(peak).toEqual({ at: 135, flares: 0, barrages: 2, tracers: 0, fires: PEAK_FIRES });
+    expect(peak).toEqual({ at: 135, flares: 0, barrages: 2, tracers: 0, fires: PEAK_FIRES, hamlet: 0 });
+  });
+
+  it("at night the cap holds the hamlet's fires too, never put out for it: the peak tells them apart", async () => {
+    const b = scripted(() => ({ flares: 16, barrages: 1, tracers: 9 }), true, () => true, 4);
+    const peak = await battlePeak(b.game, 21);
+    expect(peak.fires).toBe(PEAK_FIRES);
+    expect(peak.hamlet).toBe(4);
+    // Eight struck about the player, the rest the hamlet's.
+    expect(b.fires().length).toBe(PEAK_FIRES - 4);
   });
 
   it('none by 900 s: the best found, a barrage first, then the most flares', async () => {

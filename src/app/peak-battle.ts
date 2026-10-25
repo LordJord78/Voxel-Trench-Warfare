@@ -2,7 +2,10 @@
  * The battle at its peak, as the battle spec's done table defines it (row 6): the heavy intensity,
  * at night the most flares alight with a barrage in progress and the machine guns' tracers in flight
  * (at dusk a barrage alone: the battle fires flares and tracers only in the dark), and the most fires
- * burning where the player looks. The moment is sought from two minutes into the heavy battle in
+ * the battle holds, its cap of twelve: struck about the player, across the eye's view, with the
+ * hamlet's two to four at night, which the cap never puts out (so at night eight or so are the
+ * player's, and the hamlet's burn where the hamlet is; at the bay and the dugout the struck burn
+ * beyond the walls, their light within reach). The moment is sought from two minutes into the heavy battle in
  * steps of 5 s, to 900 s at most (else the best found); the battle is then sought again
  * FIRES_GROW_S before it, timber struck about the player's feet — 8–30 m off, across the eye's view —
  * in rounds until the most fires are burning, and run on to the moment, so that they burn at their
@@ -31,13 +34,14 @@ const ROUND_S = 0.1;
 const FIRE_POINTS = 256;
 const GOLDEN = 0.6180339887498949;
 
-/** The battle as it stands: its seconds, the flares burning, the barrages in progress, the tracers in flight, the fires burning (not dying down). */
+/** The battle as it stands: its seconds, the flares burning, the barrages in progress, the tracers in flight, the fires burning (not dying down), and of those the hamlet's. */
 export interface BattleNow {
   seconds: number;
   flares: number;
   barrages: number;
   tracers: number;
   fires: number;
+  hamlet: number;
 }
 
 /** The peak's moment (seconds into the battle), and what burns, runs and flies at it. */
@@ -108,6 +112,6 @@ export async function battlePeak(game: BattleGame, hours: number): Promise<Battl
     game.runBattle(ROUND_S, round);
   }
   game.runBattle(at - game.battleNow().seconds);
-  const { flares, barrages, tracers, fires } = game.battleNow();
-  return { at, flares, barrages, tracers, fires };
+  const { flares, barrages, tracers, fires, hamlet } = game.battleNow();
+  return { at, flares, barrages, tracers, fires, hamlet };
 }
