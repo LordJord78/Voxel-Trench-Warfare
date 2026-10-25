@@ -11,7 +11,7 @@ import type { StructDef, StructWriter } from './layout';
 import type { PyramidLevel } from './pyramid';
 
 /** Bits of `Frame.flags`. */
-export const FLAGS = { JITTER_OFF: 1, PYRAMID_OFF: 2, HISTORY_RESET: 4, DEBUG_SHADE: 8, BEAM_OFF: 16, SPATIAL_OFF: 32, RESERVOIR_HISTORY_OFF: 64, FROXELS_OFF: 128, BLOCKS_OFF: 256 } as const;
+export const FLAGS = { JITTER_OFF: 1, PYRAMID_OFF: 2, HISTORY_RESET: 4, DEBUG_SHADE: 8, BEAM_OFF: 16, SPATIAL_OFF: 32, RESERVOIR_HISTORY_OFF: 64, FROXELS_OFF: 128, BLOCKS_OFF: 256, REFLECT_SKY: 512 } as const;
 
 export const PYRAMID_LEVELS_MAX = 12;
 

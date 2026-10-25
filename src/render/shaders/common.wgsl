@@ -13,6 +13,8 @@ const FLAG_RESERVOIR_HISTORY_OFF: u32 = 64u;
 const FLAG_FROXELS_OFF: u32 = 128u;
 // The traversal walks a dense brick voxel by voxel, not over its empty 4³ and 2³ blocks (for tests).
 const FLAG_BLOCKS_OFF: u32 = 256u;
+// The water reflects the sky and the glints alone, tracing nothing (the low preset; reflect.wgsl).
+const FLAG_REFLECT_SKY: u32 = 512u;
 
 // The next of a sequence of random numbers in [0, 1): PCG (O'Neill 2014), from a state a pass seeds
 // (from its pixel and the frame, say) and carries.

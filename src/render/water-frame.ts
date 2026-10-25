@@ -12,7 +12,7 @@ import type { StructWriter } from './layout';
 import type { SceneLight } from './lights';
 
 export interface WaterFrameTunables {
-  /** A flare's glint's disc, and a fire's, metres across the middle; their light's gain. */
+  /** A flare's glint's disc's radius, and a fire's, metres; their light's gain. */
   flareM: number;
   fireM: number;
   gain: number;

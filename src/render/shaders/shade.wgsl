@@ -4,8 +4,8 @@
 //     plane; where none did, the best same-face texel nearby, or open sky.
 //   - Albedo is the palette's, varied per voxel as the probe did.
 //   - Colour = albedo × (key colour × key visibility × N·L + sky and point
-//     light) + emission. Water's top reflects the sky by Fresnel instead of
-//     being lit like mud.
+//     light) + emission. Water's top reflects what reflect.wgsl traced (the
+//     world, the sky, the glints) by Fresnel instead of being lit like mud.
 //   - The far field is lit analytically, with a coarse march toward the key
 //     light over its mips for the shadows of distant hills.
 //   - Everything, sky included, is seen through the haze: exponential height
@@ -31,6 +31,8 @@ const FAR_SKY_METRES: f32 = 2000.0;
 @group(1) @binding(4) var lightHit: texture_2d<u32>;
 // The shells' blasts' light, shadowed, at the lighting resolution (lighting.wgsl).
 @group(1) @binding(5) var lBlast: texture_2d<f32>;
+// What each water top reflects (reflect.wgsl); not written elsewhere.
+@group(1) @binding(6) var reflection: texture_2d<f32>;
 
 // The probe's per-voxel variation: fine grain, coarser blotches, a slight tint.
 fn varied(albedo: vec3f, cell: vec3i) -> vec3f {
@@ -143,7 +145,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
         colour = albedo * lit + emissionOf(mat);
         if (kindOf(mat) == KIND_WATER && face == 3u) {
           let fresnel = 0.02 + 0.98 * pow(1.0 - abs(dot(rd, n)), 5.0);
-          colour = albedo * lit * 0.6 + fresnel * skyWithBodies(reflect(rd, n));
+          colour = albedo * lit * 0.6 + fresnel * textureLoad(reflection, vec2i(g.xy), 0).rgb;
         }
       }
     }

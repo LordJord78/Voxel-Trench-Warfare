@@ -70,7 +70,7 @@ import { KeyShadow, keyShadowLayouts, type Key, type KeyShadowPipelines } from '
 import { cellGrid, LightCells } from './light-cells';
 import { lightBuffer, type SceneLight } from './lights';
 import { Restir, type RestirPipelines } from './restir';
-import { FROXEL_COLUMNS, HAZE_PUFFS, LIGHT_SCALE, scaledSize, SKY_VIEW_SIZE, type Preset, type RenderSettings } from './quality';
+import { FROXEL_COLUMNS, HAZE_PUFFS, LIGHT_SCALE, REFLECT_WORLD, scaledSize, SKY_VIEW_SIZE, type Preset, type RenderSettings } from './quality';
 import { sceneExtras, sceneGroup, sceneLayout, type SkyLuts } from './scene';
 import { moduleSource } from './shaders';
 import atrousSrc from './shaders/atrous.wgsl';
@@ -81,12 +81,13 @@ import lightingSrc from './shaders/lighting.wgsl';
 import presentSrc from './shaders/present.wgsl';
 import primarySrc from './shaders/primary.wgsl';
 import shadeSrc from './shaders/shade.wgsl';
+import reflectSrc from './shaders/reflect.wgsl';
 import taaSrc from './shaders/taa.wgsl';
 import temporalSrc from './shaders/temporal.wgsl';
 import { frameBudget, GpuTimer } from './timing';
 
-const PASSES = ['sky', 'beam', 'maps', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'froxels', 'shade', 'rifle', 'taa', 'cas', 'effects-light', 'effects', 'bloom', 'expose', 'present'] as const;
-type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'shade' | 'taa' | 'cas' | 'exposure';
+const PASSES = ['sky', 'beam', 'maps', 'primary', 'cells', 'restir', 'spatial', 'lighting', 'temporal', 'atrous1', 'atrous2', 'atrous3', 'froxels', 'reflect', 'shade', 'rifle', 'taa', 'cas', 'effects-light', 'effects', 'bloom', 'expose', 'present'] as const;
+type ComputePass = 'beam' | 'primary' | 'lighting' | 'temporal' | 'atrous' | 'reflect' | 'shade' | 'taa' | 'cas' | 'exposure';
 type Timed = (typeof PASSES)[number];
 
 /** A gap between frames longer than this (a hidden tab, a debugger) leaves histories too stale to blend. */
@@ -224,7 +225,12 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
     shade: device.createBindGroupLayout({
       label: 'shade',
-      entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), sampled(3, 'float'), sampled(4, 'uint'), sampled(5, 'float')],
+      entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float'), sampled(3, 'float'), sampled(4, 'uint'), sampled(5, 'float'), sampled(6, 'unfilterable-float')],
+    }),
+    // The water's reflection (group 3; the light cells and the key's map are groups 1 and 2).
+    reflect: device.createBindGroupLayout({
+      label: 'reflect',
+      entries: [sampled(0, 'unfilterable-float'), sampled(1, 'uint'), storageTexture(2, 'rgba16float')],
     }),
     taa: device.createBindGroupLayout({
       label: 'taa',
@@ -254,13 +260,14 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     }),
   };
   const presentModule = device.createShaderModule({ label: 'present', code: presentSrc });
-  const [beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects, rifle] = await Promise.all([
+  const [beam, primary, primaryKeyed, lighting, temporal, atrous, reflectPipeline, shade, taa, cas, exposure, present, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects, rifle] = await Promise.all([
     compute(device, 'beam', beamSrc, [scene, layouts.beam]),
     compute(device, 'primary', primarySrc, [scene, layouts.primary]),
     compute(device, 'primary keyed', primarySrc, [scene, layouts.primary, keyLayouts.write], 'keyed'),
     compute(device, 'lighting', lightingSrc, [scene, layouts.lighting]),
     compute(device, 'temporal', temporalSrc, [scene, layouts.temporal]),
     compute(device, 'atrous', atrousSrc, [scene, layouts.atrous]),
+    compute(device, 'reflect', reflectSrc, [scene, froxelLayout.cells, keyLayouts.read, layouts.reflect]),
     compute(device, 'shade', shadeSrc, [scene, layouts.shade, froxelLayout.none, froxelLayout.haze]),
     compute(device, 'taa', taaSrc, [scene, layouts.taa]),
     compute(device, 'cas', casSrc, [scene, layouts.cas]),
@@ -282,7 +289,7 @@ export async function compileFrame(device: GPUDevice): Promise<CompiledFrame> {
     Effects.compile(device, scene, keyLayouts.read, froxelLayout.haze),
     Rifle.compile(device, scene, keyLayouts.read),
   ]);
-  return { scene, layouts, pipelines: { beam, primary, primaryKeyed, lighting, temporal, atrous, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects, rifle, ...sceneExtras(device) };
+  return { scene, layouts, pipelines: { beam, primary, primaryKeyed, lighting, temporal, atrous, reflect: reflectPipeline, shade, taa, cas, exposure, present }, atmosphere, bloom, autoExposure, cells, restir, keyShadow, froxels, effects, rifle, ...sceneExtras(device) };
 }
 
 /** A half float's bits as the number they hold. */
@@ -342,6 +349,8 @@ export class Renderer {
   private readonly flareShadows: FlareShadows;
   private readonly keyShadow: KeyShadow;
   private readonly froxels: Froxels;
+  /** The light cells as the water's reflection reads them (group 1, the froxels' layout). */
+  private readonly reflectCells: GPUBindGroup;
   /** Tracers, the flash's star and the particles, over the sharpened image. */
   private readonly effects: Effects;
   /** The player's rifle, traced and lit after shade. */
@@ -421,6 +430,14 @@ export class Renderer {
     this.flareShadows = FlareShadows.create(device);
     this.keyShadow = KeyShadow.create(device, compiled.keyShadow, world.map.dims, this.voxelSize(), this.flareShadows);
     this.froxels = Froxels.create(device, compiled.froxels, this.cells, this.keyShadow, FROXEL_COLUMNS[this.preset]);
+    this.reflectCells = device.createBindGroup({
+      label: 'reflect cells',
+      layout: compiled.froxels.layouts.cells,
+      entries: [
+        { binding: 0, resource: { buffer: this.cells.grid } },
+        { binding: 1, resource: { buffer: this.cells.cells } },
+      ],
+    });
     this.effects = Effects.create(device, compiled.effects, this.frameBuffer, this.cells, this.keyShadow.group, effectsLook(loadTunables()));
     this.rifle = Rifle.create(device, compiled.rifle, rifleModel(), this.cells, this.keyShadow.group, loadTunables().f('effects.rifle_specular'));
     this.lightScale = LIGHT_SCALE[this.preset];
@@ -644,6 +661,7 @@ export class Renderer {
     make('gHit', 'rg32uint', this.alloc);
     make('gMotion', 'rgba16float', this.alloc);
     make('colour', 'rgba16float', this.alloc);
+    make('reflection', 'rgba16float', this.alloc);
     this.rifle.bind(this.textures.gDepth, this.textures.gMotion, this.textures.colour, this.alloc);
     make('taa0', 'rgba16float', this.alloc);
     make('taa1', 'rgba16float', this.alloc);
@@ -685,7 +703,8 @@ export class Renderer {
         atrous1: group('atrous', [view(`hColour${cur}`), view('variance'), view(`hHit${cur}`), view('filteredA'), view('varianceA'), { buffer: this.steps[0] }, view(`hDepth${cur}`)]),
         atrous2: group('atrous', [view('filteredA'), view('varianceA'), view(`hHit${cur}`), view('filteredB'), view('varianceB'), { buffer: this.steps[1] }, view(`hDepth${cur}`)]),
         atrous3: group('atrous', [view('filteredB'), view('varianceB'), view(`hHit${cur}`), view('denoised'), view('varianceA'), { buffer: this.steps[2] }, view(`hDepth${cur}`)]),
-        shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('denoised'), view(`hHit${cur}`), view('lBlast')]),
+        reflect: group('reflect', [view('gDepth'), view('gHit'), view('reflection')]),
+        shade: group('shade', [view('gDepth'), view('gHit'), view('colour'), view('denoised'), view(`hHit${cur}`), view('lBlast'), view('reflection')]),
         taa: group('taa', [view('colour'), view('gMotion'), view(`taa${prev}`), view(`taa${cur}`), this.sampler]),
         cas: group('cas', [view(`taa${cur}`), view('sharp')]),
         present: group('present', [view('sharp'), this.sampler, { buffer: this.presentBuffer }, this.compiled.noise.createView(), this.bloom.output.createView()]),
@@ -795,7 +814,7 @@ export class Renderer {
     w.set('frame', this.frameIndex);
     // A history from before a resize is in textures that no longer exist.
     // The low preset drops ReSTIR's spatial reuse.
-    w.set('flags', this.flags | (reset ? FLAGS.HISTORY_RESET : 0) | (this.preset === 'low' ? FLAGS.SPATIAL_OFF : 0));
+    w.set('flags', this.flags | (reset ? FLAGS.HISTORY_RESET : 0) | (this.preset === 'low' ? FLAGS.SPATIAL_OFF : 0) | (REFLECT_WORLD[this.preset] ? 0 : FLAGS.REFLECT_SKY));
     this.resetNext = false;
     w.set('lightCount', this.lightCount);
     w.set('voxel', voxel);
@@ -887,6 +906,17 @@ export class Renderer {
     pass('atrous2', 'atrous', light);
     pass('atrous3', 'atrous', light);
     this.froxels.encode(encoder, this.sceneGroup!, this.frameIndex & 1, this.timer.writes('froxels'));
+    {
+      // The water's reflection: the light cells (group 1) and the key's map (group 2) as the froxels take them.
+      const p = encoder.beginComputePass({ label: 'reflect', timestampWrites: this.timer.writes('reflect') });
+      p.setPipeline(this.compiled.pipelines.reflect);
+      p.setBindGroup(0, this.sceneGroup!);
+      p.setBindGroup(1, this.reflectCells);
+      p.setBindGroup(2, this.keyShadow.group);
+      p.setBindGroup(3, groups.reflect!);
+      p.dispatchWorkgroups(Math.ceil(this.res[0] / 8), Math.ceil(this.res[1] / 8));
+      p.end();
+    }
     pass('shade', 'shade', this.res, [this.froxels.none, this.froxels.group]);
     // Timed only when it runs, as the effects.
     this.rifle.encode(encoder, this.sceneGroup!, pose, this.res, (name) => this.timer.writes(name));
