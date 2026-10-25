@@ -1,0 +1,51 @@
+# Publishes the site to GitHub Pages (the showcase spec's §1), on a push to main or by hand. The unit
+# tests and the type check run before the build; the GPU suites need a GPU and run locally. Pages must
+# be turned on for the repository, with "GitHub Actions" as its source.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time: a newer push waits rather than cancelling one under way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run
+      - run: npx tsc --noEmit -p .
+      - id: pages
+        uses: actions/configure-pages@v5
+      # The site's address, for what must name it whole (a link preview's image).
+      - run: npm run build
+        env:
+          VITE_SITE_URL: ${{ steps.pages.outputs.base_url }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
