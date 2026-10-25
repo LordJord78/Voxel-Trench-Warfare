@@ -98,6 +98,8 @@ export interface Hooks {
   horizon(): { position: [number, number, number]; power: number; glow: boolean }[];
   /** The camera held at `pose` while the session runs as if playing; null to play again. */
   spectate(pose: { position: [number, number, number]; yaw: number; pitch: number } | null): void;
+  /** The flying camera moved to `pose` without starting its histories afresh (a camera moving smoothly, as the video's shots do). */
+  glide(pose: { position: [number, number, number]; yaw: number; pitch: number }): void;
   /** Stand the player at a standard view, their body clear of solid. */
   standAt(view: string): void;
   /** The battle brought to its peak where the player stands (src/app/peak-battle.ts): when, and what of it burns, runs and flies. */

@@ -32,12 +32,11 @@
 
 ## Rulings made in planning
 
-1. **The shots** (24 s, 720 frames), each set up and held 20 frames (unrecorded) for its histories, then flown:
-   1. the step view at dusk, panning 12° to the right over 5 s;
-   2. along the bay at dusk, at a walk (1 m/s) for 5 s;
-   3. no man's land at night (21:00), the front heavy, sought to fifteen flares burning, turned to where they hang and pushed forward 2 m over 5 s;
-   4. the hamlet burning (22:00), drawing 3 m toward the nearest fire over 5 s;
-   5. the overview at night, heavy, sinking 4 m over 4 s.
+1. **The shots** (24 s, 720 frames), each set up and held 20 frames (unrecorded) for its histories, then flown (as recorded, after two takes; the ledger has why):
+   1. over the parapet at dusk: rising 0.4 m to the step's eye in the first 3 s, then turning 12°, 10 s;
+   2. no man's land at night (21:00), the front heavy, sought to fifteen flares burning, turned to where they hang and panning 8°, 5 s;
+   3. the hamlet burning (22:00), drawing 3 m toward the nearest fire, 5 s;
+   4. the field from above at night, heavy, sinking 4 m, 4 s.
 2. **The fallback's sentence by reason:**
    - no WebGPU / no adapter / a failure: "This browser can't draw it: it needs WebGPU. Here it is in motion — or open it in Chrome or Edge, or Safari 26, on a computer."
    - touch: "It's played with a keyboard and mouse. Here it is in motion." plus a "Try it anyway" button.

@@ -896,6 +896,10 @@ async function start(): Promise<void> {
     flyTo(pose: { position: [number, number, number]; yaw: number; pitch: number }) {
       enterFly({ ...pose, fov: settings.fov });
     },
+    /** The flying camera moved to `pose` without starting its histories afresh: a camera moving smoothly (the video's shots, tools/record-video.mjs). */
+    glide(pose: { position: [number, number, number]; yaw: number; pitch: number }) {
+      fly.pose = { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch };
+    },
     /** The trigger, as the left button sets it with the pointer locked; for tests that play without the lock. */
     trigger(held: boolean) {
       input.trigger(held);

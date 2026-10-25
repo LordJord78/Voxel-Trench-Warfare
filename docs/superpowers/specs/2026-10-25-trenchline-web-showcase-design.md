@@ -68,12 +68,11 @@ It is built on what exists:
   - The video element is made only when the page falls back, so a visitor who can play downloads none of it.
 - **The recording** (`npm run video`, `tools/record-video.mjs`):
   - Chrome through Playwright, 1280 × 720, at the high preset, the game frozen and stepped two frames (1/60 s each) per video frame.
-  - It flies a scripted path in five shots, each held for 20 frames before it is recorded, so its histories settle:
-    1. along the bay at dusk;
-    2. rising over the parapet to no man's land at dusk, a barrage on the horizon;
-    3. no man's land at night under the heavy battle's flares and tracers;
-    4. the hamlet burning;
-    5. the overview at night.
+  - It flies a scripted path in four shots, each held for 20 frames before it is recorded, so its histories settle:
+    1. rising over the parapet to no man's land at dusk, and turning along it;
+    2. no man's land at night under the heavy battle's flares and tracers;
+    3. the hamlet burning;
+    4. the overview at night.
   - The frames are encoded with ffmpeg (H.264 at CRF 26 with faststart; VP9 at CRF 36) into `public/video/`. If either file is over 6 MB, the CRF is raised until it fits.
 - The fallback is also what the page shows when the renderer fails to start on a browser that has WebGPU (its device lost or refused while loading). The failure line stays, and the video plays below it.
 

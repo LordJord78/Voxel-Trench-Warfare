@@ -187,3 +187,23 @@ for (const paused of [false, true]) {
     await expect(page.locator('#controls')).toBeHidden();
   });
 }
+
+test('glide moves the flying camera without starting its histories afresh, where flying to a pose starts them', async ({ page }) => {
+  const errors = await openGame(page);
+  const r = await hooks(page, async (h) => {
+    const v = h.views.step;
+    h.flyTo({ position: v.position, yaw: v.yaw, pitch: v.pitch });
+    await h.waitFrames(1);
+    const flown = h.stats().reset;
+    await h.waitFrames(5);
+    const moved = { position: [v.position[0] + 0.05, v.position[1], v.position[2]] as [number, number, number], yaw: v.yaw + 0.5, pitch: v.pitch };
+    h.glide(moved);
+    await h.waitFrames(1);
+    return { flown, glided: h.stats().reset, camera: h.camera(), moved };
+  });
+  expect(r.flown).toBe(true);
+  expect(r.glided).toBe(false);
+  expect(r.camera.position[0]).toBeCloseTo(r.moved.position[0], 6);
+  expect(r.camera.yaw).toBeCloseTo(r.moved.yaw, 6);
+  expect(errors).toEqual([]);
+});
