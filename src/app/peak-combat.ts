@@ -94,6 +94,9 @@ export interface PeakResult {
   battle: BattlePeak | null;
   /** Each pass's own GPU time, ms: its smoothed time averaged over the frames measured; none without timestamps. */
   passes: Record<string, number>;
+  /** Each pass's own time, ms, in the frames at or over the 95th percentile, and in the middle fifth (40th–60th): where a slow frame's time went. */
+  tail: Record<string, number>;
+  middle: Record<string, number>;
 }
 
 /** What the driver needs of the game: the battle's peak's too. */
@@ -113,7 +116,7 @@ export interface PeakGame extends BattleGame {
   /** Craters queued or out. */
   pending(): number;
   frames(): number;
-  stats(): { gpuLastMs: number | null; gpuSamples: number; own: Record<string, number> };
+  stats(): { gpuLastMs: number | null; gpuSamples: number; own: Record<string, number>; ownLast: Record<string, number> };
   /** The main thread's time of each of the last frames (up to 600), ms. */
   mainMs(): number[];
   timestamps: boolean;
@@ -143,6 +146,7 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
   const work = game.timestamps ? null : game.submittedWork(Math.round(seconds * 50));
   const gpu: number[] = [];
   const own: Record<string, number> = {};
+  const raw: { ms: number; own: Record<string, number> }[] = [];
   let seen = game.stats().gpuSamples;
   const landings: Promise<unknown>[] = [];
   let skipped = 0;
@@ -167,6 +171,7 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
       if (s.gpuSamples > seen && s.gpuLastMs !== null) {
         gpu.push(s.gpuLastMs);
         for (const [pass, ms] of Object.entries(s.own)) own[pass] = (own[pass] ?? 0) + ms;
+        raw.push({ ms: s.gpuLastMs, own: s.ownLast });
       }
       seen = s.gpuSamples;
     }
@@ -197,5 +202,16 @@ export async function underFire(game: PeakGame, view: ViewName, hours: number, s
     drift,
     battle,
     passes: Object.fromEntries(Object.entries(own).map(([pass, ms]) => [pass, ms / gpu.length])),
+    tail: meanPasses(raw, 0.95, 1),
+    middle: meanPasses(raw, 0.4, 0.6),
   };
+}
+
+/** Each pass's mean own time over the frames from the `from` to the `to` quantile of their whole frame's time. */
+function meanPasses(frames: readonly { ms: number; own: Record<string, number> }[], from: number, to: number): Record<string, number> {
+  const sorted = [...frames].sort((a, b) => a.ms - b.ms);
+  const band = sorted.slice(Math.floor(from * sorted.length), Math.max(Math.floor(from * sorted.length) + 1, Math.ceil(to * sorted.length)));
+  const sum: Record<string, number> = {};
+  for (const f of band) for (const [pass, ms] of Object.entries(f.own)) sum[pass] = (sum[pass] ?? 0) + ms;
+  return Object.fromEntries(Object.entries(sum).map(([pass, ms]) => [pass, ms / band.length]));
 }

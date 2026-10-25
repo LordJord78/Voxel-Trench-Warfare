@@ -72,8 +72,9 @@ export class GpuTimer {
   passes: Record<string, number> = {};
   own: Record<string, number> = {};
   gpuMs: number | null = null;
-  /** The latest measured frame, unsmoothed, and how many frames have been measured. */
+  /** The latest measured frame, unsmoothed (its whole, and each pass's own time), and how many frames have been measured. */
   lastMs: number | null = null;
+  lastOwn: Record<string, number> = {};
   samples = 0;
   private readonly names: readonly string[];
   private readonly querySet: GPUQuerySet | null = null;
@@ -136,6 +137,7 @@ export class GpuTimer {
         );
         this.passes = smoothPasses(this.passes, passes);
         this.own = smoothPasses(this.own, own);
+        this.lastOwn = own;
         if (frameMs !== null) {
           this.gpuMs = this.gpuMs === null ? frameMs : this.gpuMs * 0.9 + frameMs * 0.1;
           this.lastMs = frameMs;

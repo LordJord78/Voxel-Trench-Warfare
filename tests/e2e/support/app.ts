@@ -119,6 +119,8 @@ export interface Hooks {
     drift: number;
     battle: { at: number; flares: number; barrages: number; tracers: number; fires: number; hamlet: number } | null;
     passes: Record<string, number>;
+    tail: Record<string, number>;
+    middle: Record<string, number>;
   }>;
   /** The HUD as drawn: whether it shows, whether its crosshair does, and its words. */
   hud(): { visible: boolean; crosshair: boolean; text: string };

@@ -102,6 +102,8 @@ export interface RenderStats {
   /** Each pass's share of the frame, and its own time (timing.ts's passTimes), smoothed. */
   passes: Record<string, number>;
   own: Record<string, number>;
+  /** Each pass's own time in the latest measured frame, unsmoothed: where a slow frame's time went. */
+  ownLast: Record<string, number>;
   /** The internal image this frame, the size its textures hold, and the canvas (device pixels). */
   res: [number, number];
   alloc: [number, number];
@@ -323,7 +325,7 @@ export class Renderer {
   };
   /** setWater's. */
   private water: FrameWater = STILL_WATER;
-  stats: RenderStats = { gpuMs: null, gpuLastMs: null, gpuSamples: 0, passes: {}, own: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
+  stats: RenderStats = { gpuMs: null, gpuLastMs: null, gpuSamples: 0, passes: {}, own: {}, ownLast: {}, res: [0, 0], alloc: [0, 0], canvas: [0, 0], scale: 1, preset: 'high', dynres: false, reset: false, frame: 0 };
 
   private readonly canvas: HTMLCanvasElement | null;
   private readonly context: GPUCanvasContext | null;
@@ -971,6 +973,7 @@ export class Renderer {
       gpuSamples: this.timer.samples,
       passes: { ...this.timer.passes },
       own: { ...this.timer.own },
+      ownLast: { ...this.timer.lastOwn },
       res: [...this.res],
       alloc: [...this.alloc],
       canvas: [...this.canvasSize],

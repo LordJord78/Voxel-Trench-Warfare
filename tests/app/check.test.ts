@@ -23,7 +23,7 @@ function game(over: Partial<CheckGame> = {}, seen: string[] = []): CheckGame {
     gpuErrors: () => [],
     underFire: async (view, hours, seconds, options) => {
       seen.push(`under fire ${view} ${clockText(hours)} ${seconds} s${options?.battle ? " on the battle's peak" : ''}`);
-      return { view, hours, frames: 360, gpu: { p95: 12, median: 11, max: 13 }, submitted: null, main: { p99: 5, max: 8 }, shots: 66, shells: 6, skipped: 0, voices: 0, drift: 0, battle: null, passes: {} };
+      return { view, hours, frames: 360, gpu: { p95: 12, median: 11, max: 13 }, submitted: null, main: { p99: 5, max: 8 }, shots: 66, shells: 6, skipped: 0, voices: 0, drift: 0, battle: null, passes: {}, tail: {}, middle: {} };
     },
     ...over,
   };
