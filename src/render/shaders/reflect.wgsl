@@ -6,7 +6,7 @@
 // ambient, the nearest four lights of its light cell unshadowed, and its emission, seen through the
 // analytic fog over the reflected path. Where it meets nothing, the sky. The low preset
 // (FLAG_REFLECT_SKY) traces nothing: the sky alone. Along the ray, the flares' and fires' glints:
-// where it passes through a glint's disc, short of anything it meets, that light. Shade weighs the
+// where it passes through a glint's disc, short of anything it meets, the disc as drawn. Shade weighs the
 // result against the water's own colour by Fresnel.
 #include "traverse.wgsl"
 #include "camera.wgsl"
@@ -93,10 +93,10 @@ fn glintsAlong(ro: vec3f, r: vec3f, until: f32) -> vec3f {
     if (off2 >= radius * radius) {
       continue;
     }
-    // A soft edge over the disc's outer quarter; as bright as its light is near.
+    // The disc as it is drawn, near or far (its radiance; its size is its disc's), with a soft edge
+    // over its outer quarter.
     let edge = 1.0 - smoothstep(0.75, 1.0, sqrt(off2) / radius);
-    let metres = along * frame.voxel;
-    light += frame.glints[2u * k + 1u].rgb * (edge / (metres * metres + 1.0));
+    light += frame.glints[2u * k + 1u].rgb * edge;
   }
   return light;
 }

@@ -132,7 +132,19 @@ export const cases = {
       low: lowLit.reflection(glint.px, glint.py),
       aside: lit.reflection(Math.min(SIZE[0] - 1, glint.px + 12), glint.py),
     };
-    return { pose: POSE, waterY: WATER_Y, key: KEY, keyColour: KEY_COLOUR, samples, glint: glints, errors: [...walled.errors, ...bare.errors, ...low.errors, ...short.errors, ...unlit.errors, ...concrete.errors, ...lit.errors, ...lowLit.errors] };
+    // A flare 12.6 m from the water where its mirror image lies (the near one is 4.6 m from it), over
+    // the bare pool, nothing between: its glint alone, where its mirror image is.
+    const far: [number, number, number] = [6.43, 8.6, 13.5];
+    const farAt = projectToPixel(POSE, SIZE, [far[0], 2 * WATER_Y - far[1], far[2]]);
+    const farLit = await look(world(false), { water: { ...STILL_WATER, glints: glintsFrom([{ ...burning, position: far }], [], 1, glintTerms(loadTunables())) } });
+    const farGlint = farAt && {
+      px: Math.floor(farAt[0]),
+      py: Math.floor(farAt[1]),
+      water: farLit.water(Math.floor(farAt[0]), Math.floor(farAt[1])),
+      with: farLit.reflection(Math.floor(farAt[0]), Math.floor(farAt[1])),
+      without: bare.reflection(Math.floor(farAt[0]), Math.floor(farAt[1])),
+    };
+    return { pose: POSE, waterY: WATER_Y, key: KEY, keyColour: KEY_COLOUR, samples, glint: glints, farGlint, errors: [...walled.errors, ...bare.errors, ...low.errors, ...short.errors, ...unlit.errors, ...concrete.errors, ...lit.errors, ...lowLit.errors, ...farLit.errors] };
   },
 
   /**

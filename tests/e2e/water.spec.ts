@@ -26,6 +26,7 @@ interface Reflected {
   waterY: number;
   samples: Sample[];
   glint: { px: number; py: number; water: boolean; with: number[]; without: number[]; low: number[]; aside: number[] } | null;
+  farGlint: { px: number; py: number; water: boolean; with: number[]; without: number[] } | null;
   errors: string[];
 }
 
@@ -100,6 +101,17 @@ test.describe("the water's reflection", () => {
     expect(g.water).toBe(true);
     expect(luma(g.with)).toBeGreaterThan(3 * luma(g.without));
     expect(luma(g.with)).toBeGreaterThan(3 * luma(g.aside));
+  });
+
+  test("a flare's glint is its disc as drawn, near or far: one 12.6 m from the water as bright as one 4.6 m from it", () => {
+    expect(r.farGlint).not.toBeNull();
+    const near = r.glint!;
+    const far = r.farGlint!;
+    const nearGain = luma(near.with) - luma(near.without);
+    const farGain = luma(far.with) - luma(far.without);
+    console.log(`glints: 4.6 m off ${nearGain.toFixed(2)}, 12.6 m off ${farGain.toFixed(2)} over the water's own`);
+    expect(far.water).toBe(true);
+    expect(farGain).toBeGreaterThan(0.5 * nearGain);
   });
 
   test('the low preset reflects the sky and the glints, and no wall', () => {
