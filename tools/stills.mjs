@@ -1,8 +1,10 @@
 // The game's stills (npm run stills; the showcase spec's §2): the first view the live world draws (the
-// spawn, at the clock's dusk key, at a first visit's defaults), photographed in Chrome with the loading
-// screen hidden once its histories have settled. They are written as the page's still
-// (public/stills/dusk.webp, 1920 × 1200, by cwebp) and the link previews' image (public/stills/og.jpg,
-// the still's middle 1200 × 630, by ffmpeg). Run it again when the look changes.
+// firing step's over the parapet, at the clock's dusk key, at a first visit's defaults), photographed in
+// Chrome with the loading screen hidden once its histories have settled. They are written as the page's still
+// (public/stills/dusk.webp, 1920 × 1440, by cwebp) and the link previews' image (public/stills/og.jpg,
+// the still's middle 1200 × 630, by ffmpeg). Run it again when the look changes. The still is 4:3: the
+// camera's field of view is horizontal, so its middle rows are what any wider window draws, and the
+// page fits it to the window's width.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,7 +13,7 @@ import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
-const SIZE = { width: 1920, height: 1200 };
+const SIZE = { width: 1920, height: 1440 };
 /** Frames drawn after the world is first drawn, for the denoiser's and TAA's histories to settle. */
 const SETTLE_FRAMES = 240;
 const PORT = 5311;
@@ -40,7 +42,7 @@ try {
   await page.screenshot({ path: png });
   mkdirSync('public/stills', { recursive: true });
   execFileSync('cwebp', ['-quiet', '-q', '72', '-m', '6', png, '-o', STILL]);
-  // Scaled to 1200 wide (750 high), its middle 630.
+  // Scaled to 1200 wide (900 high), its middle 630.
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', png, '-vf', 'scale=1200:-1,crop=1200:630', '-q:v', '4', OG]);
   for (const file of [STILL, OG]) console.log(`${file}: ${(statSync(file).size / 1024).toFixed(0)} KB`);
 } finally {

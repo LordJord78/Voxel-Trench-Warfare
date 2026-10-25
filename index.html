@@ -25,7 +25,12 @@
         padding: clamp(24px, 7vh, 72px) clamp(16px, 6vw, 88px);
         background: var(--night);
       }
-      .sheet.over-world { background: linear-gradient(to top right, rgba(23, 20, 31, 0.94) 0%, rgba(23, 20, 31, 0.72) 42%, rgba(23, 20, 31, 0.12) 100%); }
+      .sheet.over-world, #loading { background: linear-gradient(to top right, rgba(23, 20, 31, 0.94) 0%, rgba(23, 20, 31, 0.72) 42%, rgba(23, 20, 31, 0.12) 100%); }
+
+      /* The game's still (npm run stills): the first view the world is drawn from, at the window's width
+         and centred, as the camera's field of view is horizontal; it fades as the live world takes its place. */
+      #still { position: fixed; left: 0; top: 50%; width: 100vw; height: auto; transform: translateY(-50%); pointer-events: none; transition: opacity 0.8s ease-out; }
+      #still.gone { opacity: 0; }
       .block { width: 100%; max-width: 34rem; }
       h1, h2 { font-weight: 400; margin: 0; line-height: 1; }
       h1 { font-size: clamp(2.6rem, 7.5vw, 4.75rem); letter-spacing: 0.16em; margin-left: -0.05em; }
@@ -105,11 +110,12 @@
         position: fixed; right: 16px; top: 12px; margin: 0; padding: 8px 12px; white-space: pre; pointer-events: none;
         font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--haze); background: rgba(23, 20, 31, 0.78);
       }
-      @media (prefers-reduced-motion: reduce) { .trace .dug { transition: none; } }
+      @media (prefers-reduced-motion: reduce) { .trace .dug, #still { transition: none; } }
     </style>
   </head>
   <body>
     <canvas id="view"></canvas>
+    <img id="still" src="./stills/dusk.webp" alt="" width="1920" height="1440" fetchpriority="high" decoding="async" elementtiming="still" />
     <div id="periscope" hidden><div class="mirror"></div></div>
     <div id="hud" hidden>
       <div class="crosshair" aria-hidden="true"><i></i><i></i><i></i><i></i></div>

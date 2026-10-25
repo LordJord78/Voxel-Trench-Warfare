@@ -45,7 +45,7 @@ It is built on what exists:
 - **The backdrop:** until the click, the live world is drawn from the firing step's view over the parapet at dusk (the standard `step` view, as approved: the sun low behind the shattered trees across no man's land). The click starts play at the spawn in the bay, as before; the view cuts there as the loading screen goes.
 - **The still** is that first view, rendered by the game, converged, at the high preset. It is captured by a tool (`npm run stills`), never by hand, so it is made again when the look changes.
 - **Its forms:**
-  - a WebP at 1920 × 1200 for the loading screen (≤ 200 KB);
+  - a WebP at 1920 × 1440 (4:3) for the loading screen (≤ 200 KB): fitted to the window's width and centred, its middle rows are what any window from 4:3 to the widest draws, as the camera's field of view is horizontal;
   - a 1200 × 630 JPEG for link previews;
   - a square 1080 × 1080 crop for the portfolio card.
 - **On the page** the still lies behind the loading screen's title block and its scrim, from the first paint. When the world is first drawn, the still fades out over 0.8 s and the live world is there at the same view. It is a plain image in the HTML, preloaded, so it paints before the scripts run, and it does not hold up generation.

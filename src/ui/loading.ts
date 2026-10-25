@@ -16,6 +16,8 @@ export class LoadingScreen {
   private readonly dug: SVGPathElement;
   private readonly play: HTMLButtonElement;
   private readonly controls: HTMLElement;
+  /** The game's still behind the sheet until the world is drawn (index.html), if the page has one. */
+  private readonly still: HTMLElement | null;
   private failed = false;
 
   constructor(doc: Document) {
@@ -25,6 +27,7 @@ export class LoadingScreen {
     this.dug = this.root.querySelector('.trace .dug')!;
     this.play = doc.getElementById('play') as HTMLButtonElement;
     this.controls = doc.getElementById('controls')!;
+    this.still = doc.getElementById('still');
   }
 
   /** A phase, with a detail such as "strip 3 of 32", and the fraction of the whole load done. */
@@ -40,11 +43,19 @@ export class LoadingScreen {
     this.bar.setAttribute('aria-valuenow', String(Math.round(f * 100)));
   }
 
-  /** The world is drawing behind the sheet: offer the way in. */
+  /** The world is drawing behind the sheet: the still fades from over it, and the way in is offered. */
   ready(onPlay: () => void): void {
     if (this.failed) return;
     this.progress('Ready', null, 1);
     this.root.classList.add('over-world');
+    const still = this.still;
+    if (still) {
+      still.classList.add('gone');
+      // Gone from the page once faded (at once where motion is reduced: no transition ends).
+      const remove = () => (still.hidden = true);
+      still.addEventListener('transitionend', remove, { once: true });
+      setTimeout(remove, 1000);
+    }
     this.play.hidden = false;
     this.controls.hidden = false;
     this.play.onclick = onPlay;

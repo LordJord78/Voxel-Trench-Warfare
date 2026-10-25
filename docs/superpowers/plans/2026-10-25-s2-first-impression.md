@@ -48,7 +48,7 @@
 - Test: `tests/tools/stills.test.ts`; `tests/e2e/first-paint.spec.ts` (`'until the click the world is drawn from the firing step over the parapet, and the click starts play at the spawn'`).
 
 **Interfaces:**
-- Produces: `public/stills/dusk.webp` (1920 × 1200, ≤ 200 KB) and `public/stills/og.jpg` (1200 × 630, ≤ 150 KB), served at `./stills/…`; `imageSize(bytes: Uint8Array): { width: number; height: number; type: 'png' | 'jpeg' | 'webp' }`.
+- Produces: `public/stills/dusk.webp` (1920 × 1440, ≤ 200 KB) and `public/stills/og.jpg` (1200 × 630, ≤ 150 KB), served at `./stills/…`; `imageSize(bytes: Uint8Array): { width: number; height: number; type: 'png' | 'jpeg' | 'webp' }`.
 
 - [ ] **Step 1: Write the failing tests:**
   - `'image sizes are read from PNG, JPEG and WebP headers'` (small fixtures built in the test: a PNG IHDR, a JPEG SOF0, and a WebP VP8 / VP8L / VP8X header each);

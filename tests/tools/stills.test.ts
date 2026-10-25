@@ -34,7 +34,8 @@ describe("the game's stills", () => {
   it('the stills are the sizes the page and link previews use, and small', () => {
     const still = 'public/stills/dusk.webp';
     const og = 'public/stills/og.jpg';
-    expect(imageSize(readFileSync(still))).toEqual({ width: 1920, height: 1200, type: 'webp' });
+    // 4:3, so its middle rows cover every wider window (the camera's field of view is horizontal).
+    expect(imageSize(readFileSync(still))).toEqual({ width: 1920, height: 1440, type: 'webp' });
     expect(statSync(still).size).toBeLessThanOrEqual(200 * 1024);
     expect(imageSize(readFileSync(og))).toEqual({ width: 1200, height: 630, type: 'jpeg' });
     expect(statSync(og).size).toBeLessThanOrEqual(150 * 1024);

@@ -918,3 +918,21 @@ test("the battle's review captures", async ({ page }) => {
   }
   if (errors.length) throw new Error(errors.join('\n'));
 });
+
+// The showcase's first impression (artifacts/s2): the loading screen over the game's still while the
+// world is made, and over the live world once it is drawn, at three window shapes, for the framing to
+// be compared (the still is fitted to the window's width, as the camera's field of view is horizontal).
+test('the loading screen over the still, and over the live world, at three window shapes', async ({ browser }) => {
+  test.setTimeout(240_000);
+  for (const [name, viewport] of [['16x9', { width: 1600, height: 900 }], ['4x3', { width: 1400, height: 1050 }], ['21x9', { width: 2100, height: 900 }]] as const) {
+    const context = await browser.newContext({ viewport, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto('/');
+    await page.waitForFunction(() => (document.getElementById('still') as HTMLImageElement | null)?.complete === true);
+    await page.screenshot({ path: `artifacts/s2/loading-${name}.png` });
+    await page.waitForFunction(() => (window as unknown as { __trenchline?: { ready?: boolean } }).__trenchline?.ready === true, null, { timeout: 90_000 });
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: `artifacts/s2/ready-${name}.png` });
+    await context.close();
+  }
+});
