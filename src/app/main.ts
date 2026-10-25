@@ -66,7 +66,7 @@ import { Input } from './input';
 import { actionFor, nextTimeKey, stepTime, type KeyAction } from './keys';
 import { standardViews, VIEW_NAMES, type ViewName } from './views';
 import { fallbackReason, placeHere, showFallback, type FallbackReason } from './fallback';
-import { JUDGED_FRAMES, pickPreset, WARMUP_FRAMES } from './tiers';
+import { Warmup } from './tiers';
 
 const SEED = 7;
 /** A canvas resize settles this long before the internal images are reallocated. */
@@ -261,8 +261,14 @@ async function start(): Promise<void> {
   const backdropFov = defaultSettings(tun).fov;
   /** The frame the still fades from over the backdrop. */
   let revealAt = -1;
-  /** The warm-up (tiers.ts) while it runs: from which frame, the GPU samples seen, and the frames judged. */
-  let warmup: { from: number; seen: number; frames: { gpuMs: number | null; scale: number }[] } | null = null;
+  /** The warm-up (tiers.ts) while it runs: the GPU samples seen, and its judge. */
+  let warmup: { seen: number; judge: Warmup } | null = null;
+  /** The warm-up ended before its judgement (a preset picked, or set by a test): the still fades next frame. */
+  const endWarmup = () => {
+    if (!warmup) return;
+    warmup = null;
+    revealAt = frames + 1;
+  };
   // The front fires as the visitor chose; a check measures without it.
   session.front.intensity = checkRun ? 'off' : settings.intensity;
   session.artillery.intensity = session.front.intensity;
@@ -404,11 +410,16 @@ async function start(): Promise<void> {
     );
   };
 
-  /** The visitor's settings (the pause menu, the keys): a preset they pick is theirs, kept and never moved for them. */
-  const changeSettings = (change: Omit<Settings, 'presetChosen'>) => {
-    const picked = change.preset !== settings.preset;
-    if (picked) renderer.setQuality({ preset: change.preset });
-    const next: Settings = { ...change, presetChosen: settings.presetChosen || picked };
+  /**
+   * The visitor's settings (the pause menu, the keys): a preset they pick is theirs, kept and never moved
+   * for them, and ends the warm-up. Only a pick changes the preset: a menu left open across the warm-up's
+   * move still holds the preset it opened with.
+   */
+  const changeSettings = (change: Omit<Settings, 'presetChosen'>, picked: boolean) => {
+    const preset = picked ? change.preset : settings.preset;
+    if (preset !== renderer.quality.preset) renderer.setQuality({ preset });
+    if (picked) endWarmup();
+    const next: Settings = { ...change, preset, presetChosen: settings.presetChosen || picked };
     session.front.intensity = next.intensity;
     session.artillery.intensity = next.intensity;
     settings = next;
@@ -476,7 +487,7 @@ async function start(): Promise<void> {
         timeOfDay = stepTime(timeOfDay, a.by);
         break;
       case 'preset':
-        changeSettings({ ...settings, preset: settings.preset === 'high' ? 'low' : 'high' });
+        changeSettings({ ...settings, preset: settings.preset === 'high' ? 'low' : 'high' }, true);
         break;
       case 'dynres':
         renderer.setQuality({ dynres: !renderer.quality.dynres });
@@ -698,22 +709,23 @@ async function start(): Promise<void> {
       const spread = canvasStats(copy).std;
       copy.toBlob((png) => take({ png: png!, spread }), 'image/png');
     }
-    // The warm-up's frames: their scale, and their GPU time where a new one was measured.
+    // The warm-up's frames: each one's scale, and the GPU time newly measured with it (tiers.ts).
     if (warmup) {
       const s = renderer.stats;
-      const k = frames - warmup.from;
-      if (k >= WARMUP_FRAMES - JUDGED_FRAMES) warmup.frames.push({ gpuMs: s.gpuSamples > warmup.seen ? s.gpuLastMs : null, scale: s.scale });
+      warmup.judge.frame(s.scale, s.gpuSamples > warmup.seen ? s.gpuLastMs : null);
       warmup.seen = s.gpuSamples;
-      if (k >= WARMUP_FRAMES - 1) {
+      if (warmup.judge.done) {
         const q = renderer.quality;
-        if (!stopped && q.preset === 'high' && q.dynres && pickPreset(warmup.frames, render.budgetMs) === 'low') {
+        const moved = !stopped && !settings.presetChosen && q.preset === 'high' && q.dynres && warmup.judge.pick(render.budgetMs) === 'low';
+        if (moved) {
           renderer.setQuality({ preset: 'low' });
           // For this visit: not the visitor's own, so not kept (changeSettings saves the default).
           settings = { ...settings, preset: 'low' };
           showNote('Quality set to Low for this machine — change it in the pause menu (Esc).');
         }
         warmup = null;
-        revealAt = frames + 1;
+        // The preset's new textures start the histories afresh: the still waits for them again.
+        revealAt = frames + (moved ? render.denoise.historyMax + 8 : 1);
       }
     }
     // The still fades once the world behind it has settled (the denoiser's history and its margin), or the warm-up has judged it.
@@ -721,7 +733,7 @@ async function start(): Promise<void> {
     if (mode === 'loading') {
       mode = 'ready';
       // A first visit at the high preset, not the visitor's own, is warmed up (tiers.ts), the still over it meanwhile.
-      if (!checkRun && !settings.presetChosen && settings.preset === 'high' && gpu.timestamps && renderer.quality.dynres) warmup = { from: frames, seen: renderer.stats.gpuSamples, frames: [] };
+      if (!checkRun && !settings.presetChosen && settings.preset === 'high' && gpu.timestamps && renderer.quality.dynres) warmup = { seen: renderer.stats.gpuSamples, judge: new Warmup() };
       revealAt = warmup ? -1 : frames + render.denoise.historyMax + 8;
       loading.ready(() => play(true));
       hooks.promptMs = Math.round(performance.now());
@@ -1136,7 +1148,10 @@ async function start(): Promise<void> {
     fingerprint: () => fingerprint(world.map),
     setQuality: (q: Partial<Quality> & { budgetMs?: number }) => {
       renderer.setQuality(q);
-      if (q.preset) settings = { ...settings, preset: q.preset };
+      if (q.preset) {
+        settings = { ...settings, preset: q.preset };
+        endWarmup();
+      }
     },
     loseDevice: () => gpu.device.destroy(),
     simulateGap: (ms: number) => {

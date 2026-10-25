@@ -54,3 +54,46 @@ test('a machine that holds the budget is never moved', async ({ page }) => {
   expect(await hooks(page, (h) => h.stats().preset)).toBe('high');
   await expect(page.locator('#note')).toBeHidden();
 });
+
+test('a preset picked during the warm-up ends it: the pick stands, and is kept', async ({ page }) => {
+  await page.goto('/?budget=1');
+  await page.waitForFunction(() => (window as unknown as { __trenchline?: { ready?: boolean } }).__trenchline?.ready === true, null, { timeout: 90_000 });
+  // Within the warm-up's 120 frames: into play, the menu, Low and then High.
+  await page.locator('#play').click();
+  await page.keyboard.press('Escape');
+  await page.locator('#pause input[name="preset"][value="low"]').check();
+  await page.locator('#pause input[name="preset"][value="high"]').check();
+  await hooks(page, (h) => h.waitFrames(150));
+  expect(await hooks(page, (h) => h.stats().preset)).toBe('high');
+  await expect(page.locator('#note')).toBeHidden();
+  expect(await stored(page)).toMatchObject({ preset: 'high', presetChosen: true });
+});
+
+test('a pause menu left open across the move does not undo it when another setting changes', async ({ page }) => {
+  await page.goto('/?budget=1');
+  await page.waitForFunction(() => (window as unknown as { __trenchline?: { ready?: boolean } }).__trenchline?.ready === true, null, { timeout: 90_000 });
+  await page.locator('#play').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#pause')).toBeVisible();
+  // The move, under the open menu; then the field of view changed in it.
+  await expect(page.locator('#note')).toBeVisible({ timeout: 30_000 });
+  expect(await hooks(page, (h) => h.stats().preset)).toBe('low');
+  await page.locator('#fov').fill('80');
+  await hooks(page, (h) => h.waitFrames(5));
+  expect(await hooks(page, (h) => h.stats().preset)).toBe('low');
+  // Kept: the field of view; not the move, nor a choice the visitor did not make.
+  expect(await stored(page)).toMatchObject({ preset: 'high', presetChosen: false, fov: 80 });
+});
+
+test('after a move the still waits for the world to settle again before it fades', async ({ page }) => {
+  await page.goto('/?budget=1');
+  await expect(page.locator('#note')).toBeVisible({ timeout: 90_000 });
+  const r = await hooks(page, async (h) => {
+    const still = document.getElementById('still') as HTMLElement;
+    await h.waitFrames(20);
+    const early = still.classList.contains('gone');
+    await h.waitFrames(30);
+    return { early, gone: still.classList.contains('gone') };
+  });
+  expect(r).toEqual({ early: false, gone: true });
+});

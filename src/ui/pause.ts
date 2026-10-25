@@ -10,8 +10,8 @@ import type { Settings } from './settings';
 export interface PauseHandlers {
   resume(): void;
   /** A preference changed; the menu passes the whole set. */
-  /** The form's settings; whether the preset is the visitor's own is the game's to say (it was, or they changed it). */
-  change(settings: Omit<Settings, 'presetChosen'>): void;
+  /** The form's settings, and whether this input was the visitor picking a preset (the game decides what is theirs). */
+  change(settings: Omit<Settings, 'presetChosen'>, picked: boolean): void;
   /** The clock, in hours. */
   time(hours: number): void;
   /** How fast the clock runs, in game minutes a second (0: held). */
@@ -52,7 +52,7 @@ export class PauseMenu {
         return;
       }
       this.label();
-      handlers.change(this.read());
+      handlers.change(this.read(), e.target instanceof HTMLInputElement && e.target.name === 'preset');
     });
   }
 
