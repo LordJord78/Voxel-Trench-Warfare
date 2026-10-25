@@ -21,3 +21,36 @@ test("a preset picked in the pause menu is the visitor's own, and kept across a 
   expect(await hooks(page, (h) => h.stats().preset)).toBe('low');
   expect(await stored(page)).toMatchObject({ preset: 'low', presetChosen: true });
 });
+
+/** The warm-up's 120 frames after the world is first drawn, and a few more. */
+const warmedUp = async (page: import('@playwright/test').Page) => {
+  await page.waitForFunction(() => (window as unknown as { __trenchline?: { ready?: boolean } }).__trenchline?.ready === true, null, { timeout: 90_000 });
+  await hooks(page, (h) => h.waitFrames(150));
+};
+const NOTE = 'Quality set to Low for this machine — change it in the pause menu (Esc).';
+
+test('with an impossible budget a first visit moves to low as the world is drawn, and says so', async ({ page }) => {
+  await page.goto('/?budget=1');
+  await warmedUp(page);
+  expect(await hooks(page, (h) => h.stats().preset)).toBe('low');
+  await expect(page.locator('#note')).toBeVisible();
+  await expect(page.locator('#note')).toHaveText(NOTE);
+  // For this visit only: nothing kept.
+  expect(await stored(page)).toBeNull();
+  await expect(page.locator('#note')).toBeHidden({ timeout: 10_000 });
+});
+
+test('a visitor who chose high is never moved', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('trenchline.settings', JSON.stringify({ preset: 'high', presetChosen: true })));
+  await page.goto('/?budget=1');
+  await warmedUp(page);
+  expect(await hooks(page, (h) => h.stats().preset)).toBe('high');
+  await expect(page.locator('#note')).toBeHidden();
+});
+
+test('a machine that holds the budget is never moved', async ({ page }) => {
+  await page.goto('/');
+  await warmedUp(page);
+  expect(await hooks(page, (h) => h.stats().preset)).toBe('high');
+  await expect(page.locator('#note')).toBeHidden();
+});

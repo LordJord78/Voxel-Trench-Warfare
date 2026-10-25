@@ -954,3 +954,12 @@ test('the video where the game cannot run: a desktop without WebGPU, and a phone
     await context.close();
   }
 });
+
+// The showcase's quality tiers (artifacts/s4): the note over the loading screen after a first visit is
+// moved to low (an impossible budget forced with ?budget=1).
+test('the note after a first visit moves to low', async ({ page }) => {
+  await page.goto('/?budget=1');
+  await expect(page.locator('#note')).toBeVisible({ timeout: 90_000 });
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: 'artifacts/s4/note-low.png' });
+});

@@ -68,17 +68,18 @@ test('the still is painted within 1 s of navigation', async ({ page }) => {
 test.describe('at the still\'s own size', () => {
   test.use({ viewport: { width: 1920, height: 1200 }, deviceScaleFactor: 1 });
 
-  test('once the world has settled the still fades out over 0.8 s, and the live world is the same view', async ({ page }) => {
+  test("once the world has settled, and a first visit's warm-up has judged it, the still fades out over 0.8 s, and the live world is the same view", async ({ page }) => {
     test.setTimeout(180_000);
     await page.goto('/');
     await ready(page);
-    // Up over the world's first frames, while its histories settle (the denoiser's 32 and 8); then gone.
+    // Up over the world's first frames, while its histories settle (the denoiser's 32 and 8) and, on a
+    // first visit, the warm-up judges the machine (its 120: app/tiers.ts); then gone.
     const faded = await page.evaluate(async () => {
       const h = (window as unknown as { __trenchline: { waitFrames(n: number): Promise<void> } }).__trenchline;
       const still = document.getElementById('still') as HTMLImageElement;
       await h.waitFrames(10);
       const early = still.classList.contains('gone');
-      await h.waitFrames(40);
+      await h.waitFrames(120);
       const gone = still.classList.contains('gone');
       const duration = getComputedStyle(still).transitionDuration;
       await new Promise((r) => setTimeout(r, 1200));

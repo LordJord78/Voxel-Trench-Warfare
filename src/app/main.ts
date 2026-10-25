@@ -66,6 +66,7 @@ import { Input } from './input';
 import { actionFor, nextTimeKey, stepTime, type KeyAction } from './keys';
 import { standardViews, VIEW_NAMES, type ViewName } from './views';
 import { fallbackReason, placeHere, showFallback, type FallbackReason } from './fallback';
+import { JUDGED_FRAMES, pickPreset, WARMUP_FRAMES } from './tiers';
 
 const SEED = 7;
 /** A canvas resize settles this long before the internal images are reallocated. */
@@ -141,6 +142,15 @@ function lockPointer(): void {
   }
 }
 
+/** A line at the top of the page for 8 s, over the loading screen or the game (#note). */
+function showNote(text: string): void {
+  const note = document.getElementById('note');
+  if (!note) return;
+  note.textContent = text;
+  note.hidden = false;
+  setTimeout(() => (note.hidden = true), 8000);
+}
+
 /** The next paint, so the loading screen can show a phase before work that holds the page. */
 const nextPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
 
@@ -198,7 +208,9 @@ async function start(): Promise<void> {
   world.timings.compile = compileMs;
   [canvas.width, canvas.height] = canvasTarget();
   const tun = loadTunables();
-  const render = rendererTunables(tun);
+  // The GPU budget: the tunables', or ?budget=<ms> (a test's, to warm up a fast machine as a slow one).
+  const budgetParam = Number(new URLSearchParams(location.search).get('budget'));
+  const render = { ...rendererTunables(tun), ...(budgetParam > 0 ? { budgetMs: budgetParam } : {}) };
   const renderer = await Renderer.create(gpu, canvas, gpuWorld, world.plan, { ...render, far, compiled, dynres: true });
 
   const views = standardViews(world.plan, world.spawn);
@@ -249,6 +261,8 @@ async function start(): Promise<void> {
   const backdropFov = defaultSettings(tun).fov;
   /** The frame the still fades from over the backdrop. */
   let revealAt = -1;
+  /** The warm-up (tiers.ts) while it runs: from which frame, the GPU samples seen, and the frames judged. */
+  let warmup: { from: number; seen: number; frames: { gpuMs: number | null; scale: number }[] } | null = null;
   // The front fires as the visitor chose; a check measures without it.
   session.front.intensity = checkRun ? 'off' : settings.intensity;
   session.artillery.intensity = session.front.intensity;
@@ -684,11 +698,31 @@ async function start(): Promise<void> {
       const spread = canvasStats(copy).std;
       copy.toBlob((png) => take({ png: png!, spread }), 'image/png');
     }
-    // The still fades once the world behind it has settled (the denoiser's history and its margin).
+    // The warm-up's frames: their scale, and their GPU time where a new one was measured.
+    if (warmup) {
+      const s = renderer.stats;
+      const k = frames - warmup.from;
+      if (k >= WARMUP_FRAMES - JUDGED_FRAMES) warmup.frames.push({ gpuMs: s.gpuSamples > warmup.seen ? s.gpuLastMs : null, scale: s.scale });
+      warmup.seen = s.gpuSamples;
+      if (k >= WARMUP_FRAMES - 1) {
+        const q = renderer.quality;
+        if (!stopped && q.preset === 'high' && q.dynres && pickPreset(warmup.frames, render.budgetMs) === 'low') {
+          renderer.setQuality({ preset: 'low' });
+          // For this visit: not the visitor's own, so not kept (changeSettings saves the default).
+          settings = { ...settings, preset: 'low' };
+          showNote('Quality set to Low for this machine — change it in the pause menu (Esc).');
+        }
+        warmup = null;
+        revealAt = frames + 1;
+      }
+    }
+    // The still fades once the world behind it has settled (the denoiser's history and its margin), or the warm-up has judged it.
     if (mode === 'ready' && frames === revealAt) loading.reveal();
     if (mode === 'loading') {
       mode = 'ready';
-      revealAt = frames + render.denoise.historyMax + 8;
+      // A first visit at the high preset, not the visitor's own, is warmed up (tiers.ts), the still over it meanwhile.
+      if (!checkRun && !settings.presetChosen && settings.preset === 'high' && gpu.timestamps && renderer.quality.dynres) warmup = { from: frames, seen: renderer.stats.gpuSamples, frames: [] };
+      revealAt = warmup ? -1 : frames + render.denoise.historyMax + 8;
       loading.ready(() => play(true));
       hooks.promptMs = Math.round(performance.now());
       hooks.ready = true;
