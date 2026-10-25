@@ -1,5 +1,7 @@
 # TRENCHLINE
 
+![Over a trench's parapet at dusk: shattered trees and a blockhouse against the low sun](public/stills/dusk.webp)
+
 A front-line trench at dusk, ten centimetres to the voxel, ray traced live in your browser.
 
 You hold a fire bay on the shoulder of a dry ravine. Across fifty metres of shelled ground is another line exactly like yours. Dusk falls into night:
