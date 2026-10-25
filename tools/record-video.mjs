@@ -33,8 +33,9 @@ const OUT = 'public/video';
  * to 1 (in the page, from the pose it was set up at). Seconds each.
  */
 const SHOTS = [
-  // Over the parapet at dusk: rising 0.4 m to the step's eye in its first 3 s (eased), then turning 12°.
-  { name: 'over the parapet at dusk', seconds: 10, setup: { view: 'step', hours: DUSK, intensity: 'light', at: 120, below: 0.4 }, path: { kind: 'rise-pan', m: 0.4, deg: 12, rise: 0.3 } },
+  // Over the parapet at dusk: rising 0.2 m to the step's eye in its first 3 s (eased), the skyline in
+  // frame from the first, then turning 12°.
+  { name: 'over the parapet at dusk', seconds: 10, setup: { view: 'step', hours: DUSK, intensity: 'light', at: 120, below: 0.2 }, path: { kind: 'rise-pan', m: 0.2, deg: 12, rise: 0.3 } },
   { name: "no man's land at night under the flares", seconds: 5, setup: { view: 'nml-night', hours: 21, intensity: 'heavy', flares: true }, path: { kind: 'pan', deg: 8 } },
   { name: 'the hamlet burning', seconds: 5, setup: { view: 'hamlet', hours: 22, intensity: 'light', at: 60 }, path: { kind: 'approach', m: 3 } },
   { name: 'the field from above at night', seconds: 4, setup: { view: 'overview', hours: 21, intensity: 'heavy', flares: true }, path: { kind: 'sink', m: 4 } },

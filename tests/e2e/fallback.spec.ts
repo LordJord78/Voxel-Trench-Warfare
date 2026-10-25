@@ -29,7 +29,8 @@ test('without WebGPU the page shows the video playing, muted and looping, and sa
   expect(v.poster).toMatch(/\/stills\/dusk\.webp$/);
   // The failure names the browsers; the line under it does not again.
   expect(v.status).toContain('WebGPU');
-  expect(v.status).toContain('Safari 26');
+  // Its "Safari 26" kept on one line (a no-break space).
+  expect(v.status).toContain('Safari\u00a026');
   expect(v.line).toBe('Here it is in motion.');
   expect(v.progress).toBe(false);
   expect(await hooks(page, (h) => (h as unknown as { fallback?: string }).fallback)).toBe('no-webgpu');

@@ -44,7 +44,7 @@ TypeScript and raw WebGPU, with no engine:
 - **Destruction at 10 cm:** shells carve craters, soil slumps, and the player digs it out.
 - **Combat:** weapons with ballistics and recoil, suppression, and the effects of fire.
 - **The battle around the player:** a deterministic director fires flares, barrages, tracers and fires, and the water reflects them.
-- **Quality:** two quality presets and dynamic resolution hold a 14 ms GPU budget at 1.5 megapixels.
+- **Quality:** two quality presets and dynamic resolution hold a 14 ms GPU budget at 1.5 megapixels; a first visit whose machine cannot hold the high preset is moved to the low one.
 
 ## How it is tested
 
@@ -53,10 +53,12 @@ TypeScript and raw WebGPU, with no engine:
   - shaders against references;
   - the game played through its test hooks;
   - captures for review.
-- **Performance gates:** every standard view, at dusk and at night, holds its GPU time within 14 ms at the 95th percentile. That includes the battle at its peak, with the player firing on full auto under shellfire.
+- **Performance gates:** every standard view, at dusk and at night, holds its GPU time within 14 ms at the 95th percentile on an M1 Pro in Chrome, on mains power. That includes the battle at its peak, with the player firing on full auto under shellfire, where the overview at night sits at the budget's edge (13.4–13.6 ms).
 - **Safari:** the same check runs in Safari (`npm run safari`) and reports.
 
 ## Run it
+
+With Node 22.12 or later:
 
 ```sh
 npm install

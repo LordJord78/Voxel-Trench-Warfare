@@ -108,7 +108,7 @@ function stop(message: string): void {
 function fail(error: unknown): void {
   stop(
     error instanceof GpuUnavailable && error.reason === 'no-webgpu'
-      ? 'TRENCHLINE needs WebGPU: use Chrome, Edge or Safari 26.'
+      ? 'TRENCHLINE needs WebGPU: use Chrome, Edge or Safari\u00a026.'
       : `TRENCHLINE could not start: ${error instanceof Error ? error.message : String(error)}`,
   );
   // Where the game cannot start, its video in its place (fallback.ts); a check reports instead.
