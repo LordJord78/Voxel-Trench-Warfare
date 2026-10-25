@@ -1099,7 +1099,7 @@ async function start(): Promise<void> {
         shot: () => new Promise((resolve) => (shot = resolve)),
         submittedWork,
         gpuErrors: () => gpu.errors,
-        underFire: (view, hours, seconds) => underFire({ ...peakGame, timestamps }, view, hours, seconds),
+        underFire: (view, hours, seconds, options) => underFire({ ...peakGame, timestamps }, view, hours, seconds, options),
       },
       reporter(checkRun),
     );

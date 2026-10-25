@@ -24,6 +24,7 @@ interface Report {
     shells: number;
     voices: number;
     drift: number;
+    battle: { at: number; flares: number; barrages: number; tracers: number; fires: number } | null;
   }[];
   errors: string[];
 }
@@ -34,8 +35,8 @@ const PEAK = VIEWS.flatMap((v) => [`${v} dusk`, `${v} night`]);
 const KEYS = ['dusk', 'night', 'noon', 'dawn'];
 // The overview through the day: every second hour, and round sunrise and sunset, the sun 0–2° up.
 const DAY = ['00:00', '02:00', '04:00', '06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00', '06:40', '07:10', '17:50', '17:55'];
-// The check's wait for its report: 24 views and 16 hours, each settled and measured, and twelve peaks.
-const REPORT_MS = 560_000;
+// The check's wait for its report: 24 views and 16 hours, each settled and measured, and twelve peaks, each on the battle's.
+const REPORT_MS = 620_000;
 
 /** An hour of the clock as HH:MM. */
 function hhmm(hours: number): string {
@@ -64,10 +65,16 @@ test('the check reports the world, its timings, every view at the four keys and 
   expect(report.views.map((v) => v.shot)).toEqual(VIEWS.flatMap((name) => KEYS.map((key) => `${name}-${key}.png`)));
   expect(report.day.map((d) => hhmm(d.hours))).toEqual(DAY);
   for (const d of report.day) expect(d.gpuMs, hhmm(d.hours)).toBeGreaterThan(0);
-  // Peak combat, by timestamps, inside the budgets; the check has no click, so no sound.
+  // Peak combat on the battle's peak, by timestamps, inside the budgets; the check has no click, so no sound.
   expect(report.peak.map((p) => `${p.view} ${hhmm(p.hours) === '21:00' ? 'night' : 'dusk'}`)).toEqual(PEAK);
   for (const p of report.peak) {
     const at = JSON.stringify(p);
+    // At night the most flares, a barrage and tracers; at dusk the barrage; the twelve fires at both.
+    const night = hhmm(p.hours) === '21:00';
+    expect(p.battle!.barrages, at).toBeGreaterThan(0);
+    expect(p.battle!.fires, at).toBe(12);
+    if (night) expect(p.battle!.flares, at).toBeGreaterThanOrEqual(15);
+    if (night) expect(p.battle!.tracers, at).toBeGreaterThan(0);
     expect(p.submitted, at).toBeNull();
     expect(p.gpu!.p95, at).toBeLessThanOrEqual(14);
     expect(p.main.p99, at).toBeLessThanOrEqual(8);
@@ -110,9 +117,10 @@ test.describe('in a window of another shape', () => {
       expect(v.canvas, v.shot).toEqual([1600, 1000]);
       expect(v.res, v.shot).toEqual([1549, 968]);
     }
-    // Its peak too, timed by submitted work.
+    // Its peak too, timed by submitted work, on the battle's.
     expect(report.peak.length).toBe(PEAK.length);
     for (const p of report.peak) {
+      expect(p.battle!.fires, p.view).toBe(12);
       expect(p.gpu, p.view).toBeNull();
       expect(p.submitted!.p95, p.view).toBeGreaterThan(1);
       expect(p.submitted!.p95, p.view).toBeLessThan(50);

@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { FLARE_MAPS, FLARE_MAP_SIZE, FlareShadows } from '../../src/render/flare-shadows';
 import type { SceneLight } from '../../src/render/lights';
+import { FLARE_SHADOW_MAPS } from '../../src/render/quality';
 
 // The flares' shadow maps follow a flare, not its place in the frame's lights: the battle's flares
 // are fired and go out, so a flare's index changes under it while its map stays good; and the eight
@@ -36,5 +37,24 @@ describe("the flares' shadow maps", () => {
     maps.setFlares(twelve, 1, 0.1, [115 / 0.1, 0, 50 / 0.1]);
     expect(maps.mapped()).toHaveLength(FLARE_MAPS);
     expect(maps.mapped()).toEqual([7, 8, 9, 10, 11, 4, 5, 6].sort((x, y) => x - y));
+  });
+
+  it('the low preset holds four flare maps, for the nearest four burning', () => {
+    expect(FLARE_SHADOW_MAPS).toEqual({ high: FLARE_MAPS, low: FLARE_MAPS / 2 });
+    const maps = FlareShadows.create(device);
+    // The twelve again, the eye at x 115: the nearest four are x 90–120.
+    const twelve = Array.from({ length: 12 }, (_, i) => flare(i + 1, 10 + i * 10));
+    const eye = [115 / 0.1, 0, 50 / 0.1];
+    maps.setFlares(twelve, 1, 0.1, eye, FLARE_SHADOW_MAPS.low);
+    expect(maps.mapped()).toEqual([8, 9, 10, 11]);
+    expect(maps.next()).toBe(4 * ALL);
+    // Up to high: the next four nearest take maps, traced outright; the four held keep theirs.
+    maps.setFlares(twelve, 1, 0.1, eye, FLARE_SHADOW_MAPS.high);
+    expect(maps.mapped()).toEqual([4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(maps.next()).toBe(4 * ALL);
+    // Down to low again: the farther four let go, the nearest four kept, nothing traced again.
+    maps.setFlares(twelve, 1, 0.1, eye, FLARE_SHADOW_MAPS.low);
+    expect(maps.mapped()).toEqual([8, 9, 10, 11]);
+    expect(maps.next()).toBe(0);
   });
 });

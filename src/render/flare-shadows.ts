@@ -1,5 +1,5 @@
 /**
- * The flares' shadow maps (flare-shadow.wgsl): for each of the first FLARE_MAPS burning flares, the
+ * The flares' shadow maps (flare-shadow.wgsl): for each of up to FLARE_MAPS burning flares, the
  * hemisphere below it on a paraboloid, FLARE_MAP_SIZE² texels, each how far from the flare its ray
  * runs before the voxel world stops it, within the flare's reach. Flares hang over the field, so all
  * their light that a voxel could stop goes down from them. The maps lie in the key light's atlas
@@ -7,7 +7,8 @@
  * flare reaches a point, so its glow in the haze is cut into shafts by what stands between.
  *
  * The burning flares nearest the eye hold the maps, a flare by its id (the battle's are fired and go
- * out, so its place in the frame's lights changes under it), or its index if it has none.
+ * out, so its place in the frame's lights changes under it), or its index if it has none: FLARE_MAPS
+ * of them, or as many as the preset holds (quality.ts's FLARE_SHADOW_MAPS); the rest light unshadowed.
  *
  * A flare keeps its map while it burns. The map is traced as the key's is, a sixteenth a frame in
  * tiles of 8 × 8: each sixteenth again once its flare has moved a voxel since it was traced, or the
@@ -89,9 +90,10 @@ export class FlareShadows {
 
   /**
    * The frame's lights, flares burning at `flares` of their strength (lights.ts), at `voxel` metres a
-   * voxel: the FLARE_MAPS burning flares nearest `eye` (voxels) hold maps, or without an eye the first.
+   * voxel: the `maps` (at most FLARE_MAPS) burning flares nearest `eye` (voxels) hold maps, or without
+   * an eye the first.
    */
-  setFlares(lights: readonly SceneLight[], flares: number, voxel: number, eye?: readonly number[]): void {
+  setFlares(lights: readonly SceneLight[], flares: number, voxel: number, eye?: readonly number[], maps = FLARE_MAPS): void {
     let burning: number[] = [];
     lights.forEach((l, i) => {
       if (l.kind === 'flare' && l.intensity * flares > 0) burning.push(i);
@@ -104,7 +106,7 @@ export class FlareShadows {
       };
       burning.sort((a, b) => away(a) - away(b) || a - b);
     }
-    burning = burning.slice(0, FLARE_MAPS);
+    burning = burning.slice(0, Math.min(maps, FLARE_MAPS));
     const keyOf = (i: number) => lights[i].id ?? -1 - i;
     const keys = burning.map(keyOf);
     // A flare keeps its slot while it burns; a new one takes a free slot.

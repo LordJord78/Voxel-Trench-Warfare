@@ -5,7 +5,7 @@
  *   high — the internal image at 1.5 MP, lit at one pixel in four;
  *   low  — the same image, lit at one pixel in sixteen, with half the froxel grid across and down,
  *          no spatial reuse in ReSTIR, a sky view a quarter the size, half the haze's puffs of smoke,
- *          and water that reflects the sky and the glints alone.
+ *          half the flares' shadow maps, and water that reflects the sky and the glints alone.
  */
 
 import type { Tunables } from '../core/tunables';
@@ -24,6 +24,9 @@ export const REFLECT_WORLD: Record<Preset, boolean> = { high: true, low: false }
 
 /** The puffs of smoke a frame's haze takes per preset, the nearest the eye (smoke.wgsl): MAX_PUFFS on high. */
 export const HAZE_PUFFS: Record<Preset, number> = { high: 64, low: 32 };
+
+/** The flares' shadow maps per preset, held by the burning flares nearest the eye (flare-shadows.ts): FLARE_MAPS on high. */
+export const FLARE_SHADOW_MAPS: Record<Preset, number> = { high: 8, low: 4 };
 
 /** The sky view's texels per preset (atmosphere.ts). */
 export const SKY_VIEW_SIZE: Record<Preset, [number, number]> = { high: [192, 108], low: [96, 54] };

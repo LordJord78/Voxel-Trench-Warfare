@@ -21,8 +21,8 @@ function game(over: Partial<CheckGame> = {}, seen: string[] = []): CheckGame {
     shot: async () => ({ png: new Blob(['png']), spread: 0.2 }),
     submittedWork: async (count) => Array.from({ length: count }, (_, i) => (i % 3 === 0 ? 30 : 11)),
     gpuErrors: () => [],
-    underFire: async (view, hours, seconds) => {
-      seen.push(`under fire ${view} ${clockText(hours)} ${seconds} s`);
+    underFire: async (view, hours, seconds, options) => {
+      seen.push(`under fire ${view} ${clockText(hours)} ${seconds} s${options?.battle ? " on the battle's peak" : ''}`);
       return { view, hours, frames: 360, gpu: { p95: 12, median: 11, max: 13 }, submitted: null, main: { p99: 5, max: 8 }, shots: 66, shells: 6, skipped: 0, voices: 0, drift: 0, battle: null, passes: {} };
     },
     ...over,
@@ -52,12 +52,12 @@ describe('the check', () => {
     ]);
     expect(report.day.every((d) => d.gpuMs === 9.5)).toBe(true);
   });
-  it('reports every view under peak combat, at dusk and at night, after the day', async () => {
+  it("reports every view under peak combat on the battle's peak, at dusk and at night, after the day", async () => {
     const seen: string[] = [];
     const { report } = await run(game({}, seen));
     expect(report.peak.map((p) => `${p.view} ${clockText(p.hours)}`)).toEqual(CHECK_PEAK.map(([v, k]) => `${v} ${clockText(CLOCK_KEYS[k])}`));
     expect(CHECK_PEAK.length).toBe(VIEW_NAMES.length * 2);
-    expect(seen.slice(-CHECK_PEAK.length)).toEqual(CHECK_PEAK.map(([v, k]) => `under fire ${v} ${clockText(CLOCK_KEYS[k])} ${PEAK_S} s`));
+    expect(seen.slice(-CHECK_PEAK.length)).toEqual(CHECK_PEAK.map(([v, k]) => `under fire ${v} ${clockText(CLOCK_KEYS[k])} ${PEAK_S} s on the battle's peak`));
   });
   it("carries each view's and hour's passes, with timestamps, and the canvas each view was drawn to", async () => {
     const { report } = await run(game());
@@ -74,7 +74,7 @@ describe('the check', () => {
     await run(game({}, seen));
     const pairs = [...VIEW_NAMES.flatMap((n) => CHECK_KEYS.map((k) => [n, clockText(CLOCK_KEYS[k])])), ...DAY_HOURS.map((h) => ['overview', clockText(h)])];
     // Then the peak, which places its own views (peak-combat.ts).
-    expect(seen).toEqual([...pairs.flat(), ...CHECK_PEAK.map(([v, k]) => `under fire ${v} ${clockText(CLOCK_KEYS[k])} ${PEAK_S} s`)]);
+    expect(seen).toEqual([...pairs.flat(), ...CHECK_PEAK.map(([v, k]) => `under fire ${v} ${clockText(CLOCK_KEYS[k])} ${PEAK_S} s on the battle's peak`)]);
   });
   it('without timestamps, times each view and hour by the median of its submitted work', async () => {
     const { report } = await run(game({ timestamps: false }));

@@ -70,7 +70,7 @@ import { KeyShadow, keyShadowLayouts, type Key, type KeyShadowPipelines } from '
 import { cellGrid, LightCells } from './light-cells';
 import { lightBuffer, type SceneLight } from './lights';
 import { Restir, type RestirPipelines } from './restir';
-import { FROXEL_COLUMNS, HAZE_PUFFS, LIGHT_SCALE, REFLECT_WORLD, scaledSize, SKY_VIEW_SIZE, type Preset, type RenderSettings } from './quality';
+import { FLARE_SHADOW_MAPS, FROXEL_COLUMNS, HAZE_PUFFS, LIGHT_SCALE, REFLECT_WORLD, scaledSize, SKY_VIEW_SIZE, type Preset, type RenderSettings } from './quality';
 import { sceneExtras, sceneGroup, sceneLayout, type SkyLuts } from './scene';
 import { moduleSource } from './shaders';
 import atrousSrc from './shaders/atrous.wgsl';
@@ -492,7 +492,7 @@ export class Renderer {
     const voxel = this.voxelSize();
     this.device.queue.writeBuffer(this.compiled.lights, 0, lightBuffer(lights, flares, voxel));
     this.lightCount = lights.length;
-    this.flareShadows.setFlares(lights, flares, voxel, eye && [eye[0] / voxel, eye[1] / voxel, eye[2] / voxel]);
+    this.flareShadows.setFlares(lights, flares, voxel, eye && [eye[0] / voxel, eye[1] / voxel, eye[2] / voxel], FLARE_SHADOW_MAPS[this.preset]);
   }
 
   /** The battle's water this frame: its rings, roughness and glints (STILL_WATER at rest). */

@@ -2,7 +2,8 @@
  * The check (`?check=<run>`): once the game is ready, measure and photograph
  * the six standard views at each of the clock's four keys, then measure the
  * overview through the day, then every view under peak combat (peak-combat.ts)
- * at dusk and at night, at the high preset's full resolution
+ * on the battle's peak (peak-battle.ts) at dusk and at night — the views and the
+ * day measured at rest, as the approved look was — at the high preset's full resolution
  * with dynamic resolution off, and post a report and the PNGs to the dev server
  * (tools/vite-plugin-report.ts). Chrome runs it in the e2e
  * suite and Safari through `npm run safari`; whoever reads the report judges
@@ -35,8 +36,8 @@ export interface CheckGame {
   submittedWork(count: number): Promise<number[]>;
   /** The GPU's uncaptured errors so far (a format or binding a browser refuses only logs one). */
   gpuErrors(): readonly string[];
-  /** A view at an hour under peak combat for `seconds`, measured (peak-combat.ts). */
-  underFire(view: ViewName, hours: number, seconds: number): Promise<PeakResult>;
+  /** A view at an hour under peak combat for `seconds`, measured; on the battle's peak too, `battle` given (peak-combat.ts). */
+  underFire(view: ViewName, hours: number, seconds: number, options?: { battle?: boolean }): Promise<PeakResult>;
 }
 
 export interface CheckView {
@@ -166,7 +167,7 @@ export async function runCheck(run: string, game: CheckGame, post: Post): Promis
     }
     for (const [name, key] of CHECK_PEAK) {
       await progress(`peak combat at ${name} at ${key}`);
-      report.peak.push(await game.underFire(name, CLOCK_KEYS[key], PEAK_S));
+      report.peak.push(await game.underFire(name, CLOCK_KEYS[key], PEAK_S, { battle: true }));
     }
     await progress('done');
   } catch (e) {
