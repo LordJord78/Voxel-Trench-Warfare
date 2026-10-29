@@ -13,7 +13,8 @@
     "parity:export": "cd reference/python && ../../.venv/bin/python -m tools.export_parity ../../tests/fixtures/parity",
     "safari": "node tools/safari-report.mjs",
     "stills": "node tools/stills.mjs",
-    "video": "node tools/record-video.mjs"
+    "video": "node tools/record-video.mjs",
+    "gameplay": "node tools/record-gameplay.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
