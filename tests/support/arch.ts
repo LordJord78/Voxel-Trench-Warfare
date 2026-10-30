@@ -209,8 +209,9 @@ export function checkSource(file: string, source: string): Violation[] {
       return;
     }
     if (s.spec.startsWith('.')) {
-      const target = path.relative(REPO_ROOT, path.resolve(path.dirname(absolute), s.spec));
-      if (FORBIDDEN.some((dir) => target === dir || target.startsWith(dir + path.sep) || (s.computed && dir.startsWith(target)))) {
+      // Forward slashes on every platform, as FORBIDDEN is written (Windows' relative paths use backslashes).
+      const target = path.relative(REPO_ROOT, path.resolve(path.dirname(absolute), s.spec)).split(path.sep).join('/');
+      if (FORBIDDEN.some((dir) => target === dir || target.startsWith(dir + '/') || (s.computed && dir.startsWith(target)))) {
         add(node.start, 'import', s.spec);
         return;
       }

@@ -1,0 +1,2 @@
+# Fixtures compared byte for byte keep their LF endings on every checkout (Windows included).
+tests/core/fixtures/*.txt text eol=lf
