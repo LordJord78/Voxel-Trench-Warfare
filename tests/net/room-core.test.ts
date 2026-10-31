@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { encodeState, parseRoom, PROTOCOL, type RoomMsg } from '../../src/net/protocol';
-import { AWAY_MS, COUNTDOWN_MS, RoomCore, type Conn } from '../../src/net/room-core';
+import { encodeShot, encodeState, parseRoom, PROTOCOL, type RoomMsg } from '../../src/net/protocol';
+import { PROTECT_MS } from '../../src/net/match-rules';
+import { AWAY_MS, COUNTDOWN_MS, OVER_MS, RoomCore, type Conn } from '../../src/net/room-core';
 
 class Fake implements Conn {
   readonly got: RoomMsg[] = [];
@@ -123,5 +124,46 @@ describe('a room', () => {
     expect(mute.closed).toBe('no hello');
     for (let k = 0; k < 400; k++) say(room, a, { t: 'ping', c: k }, 1000);
     expect(a.closed).toBe('too many messages');
+  });
+
+  it("relays shots, takes a shooter's hits to a death and a score, and ends at the kill target", () => {
+    const room = new RoomCore('FIGHT');
+    const a = join(room, 'a');
+    const b = join(room, 'b');
+    say(room, a, { t: 'config', config: { killTarget: 1 } }, 0);
+    say(room, a, { t: 'start' }, 0);
+    const begun = COUNTDOWN_MS + PROTECT_MS + 1;
+    const shot = encodeShot({ tick: 5, origin: [1, 2, 3], dir: [1, 0, 0], tracer: false });
+    say(room, a, { t: 's', s: encodeState(state), sh: [shot] }, begun);
+    room.tick(begun + 10);
+    expect(b.last('f')!.sh).toEqual([[0, ...shot]]);
+    room.tick(begun + 60);
+    expect(b.last('f')!.sh).toEqual([]);
+    // A torso, then a head: hurt (told to the hurt alone), then dead, scored, and won.
+    say(room, a, { t: 'hit', v: 1, z: 'torso' }, begun + 100);
+    expect(b.last('hurt')).toEqual({ t: 'hurt', hp: 45, from: 0 });
+    expect(a.last('hurt')).toBeUndefined();
+    say(room, a, { t: 'hit', v: 1, z: 'head' }, begun + 200);
+    expect(a.last('death')).toEqual({ t: 'death', v: 1, k: 0, z: 'head', tk: false, c: 'round' });
+    expect(a.last('score')).toMatchObject({ red: 1, blue: 0 });
+    expect(b.last('over')).toEqual({ t: 'over', winner: 'red', red: 1, blue: 0 });
+    room.tick(begun + 200 + OVER_MS + 1);
+    expect(room.phase).toBe('lobby');
+    expect(b.last('end')).toEqual({ t: 'end' });
+  });
+
+  it('brings the dead back, and hears the battle hurt a player', () => {
+    const room = new RoomCore('AGAIN');
+    const a = join(room, 'a');
+    const b = join(room, 'b');
+    say(room, a, { t: 'config', config: { respawnS: 2 } }, 0);
+    say(room, a, { t: 'start' }, 0);
+    const t = COUNTDOWN_MS + PROTECT_MS + 1;
+    say(room, b, { t: 'hurt', a: 150, c: 'shell' }, t);
+    expect(a.last('death')).toEqual({ t: 'death', v: 1, k: -1, z: null, tk: false, c: 'shell' });
+    room.tick(t + 1999);
+    expect(a.last('respawn')).toBeUndefined();
+    room.tick(t + 2000);
+    expect(a.last('respawn')).toMatchObject({ id: 1 });
   });
 });

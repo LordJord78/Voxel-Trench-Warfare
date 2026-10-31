@@ -174,7 +174,8 @@ export class EffectsFrameBuilder {
   debugAt = 0;
   private readonly billboards = new Float32Array(MAX_BILLBOARDS * BILLBOARD_FLOATS);
   private readonly ribbons = new Float32Array(MAX_RIBBONS * RIBBON_FLOATS);
-  private flashes: { muzzle: V3; dir: V3; age: number }[] = [];
+  /** Shots' flashes, aging: the player's at the drawn rifle's muzzle; another player's (`remote`) at their own. */
+  private flashes: { muzzle: V3; dir: V3; age: number; remote?: boolean }[] = [];
   /** Shells landed, aged as the flashes are, while their light or their smoke lasts. */
   private landed: { at: V3; radiusM: number; age: number }[] = [];
   /** The world's time the last frame showed. */
@@ -196,6 +197,7 @@ export class EffectsFrameBuilder {
     for (const f of this.flashes) f.age += elapsed;
     this.flashes = this.flashes.filter((f) => f.age < t.flashS);
     for (const shot of events.shots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0 });
+    for (const shot of events.remoteShots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0, remote: true });
     for (const b of this.landed) b.age += elapsed;
     this.landed = this.landed.filter((b) => b.age < Math.max(t.blastLightS, t.smokeS));
     for (const b of events.blasts) this.landed.push({ at: b.at, radiusM: b.radiusM, age: 0 });
@@ -295,8 +297,8 @@ export class EffectsFrameBuilder {
     const lights: TransientLight[] = [];
     const flash = t.flashColour.map((c) => c * t.flashIntensity);
     for (const f of this.flashes) {
-      const at = muzzle ?? f.muzzle;
-      const d = bore ?? f.dir;
+      const at = f.remote ? f.muzzle : (muzzle ?? f.muzzle);
+      const d = f.remote ? f.dir : (bore ?? f.dir);
       let side: V3 = [d[2], 0, -d[0]];
       const level = Math.hypot(side[0], side[2]);
       side = level > 1e-6 ? [side[0] / level, 0, side[2] / level] : [1, 0, 0];

@@ -34,7 +34,7 @@ import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
 import { idleIntent, Session, type CombatEvents } from '../sim/session';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
-import { Gaits, relayUrl, Together, type Figure } from './together';
+import { relayUrl, Together, type Figure } from './together';
 import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
@@ -451,17 +451,20 @@ async function start(): Promise<void> {
     leave: () => together.leave(),
     endMatch: () => together.endMatch(),
   });
-  /** The other players' strides, and the soldiers a test stands in the world without a room (puppets). */
-  const gaits = new Gaits();
+  /** Soldiers a test stands in the world without a room (puppets). */
   let puppets: Figure[] = [];
+  /** A team's starts: the line its players start and come back in at. */
+  const startOf = (team: 'red' | 'blue', k: number) => {
+    const spawns = pickSpawns(session.map, world.plan, team === 'red' ? 'front' : 'enemy_front', 4);
+    return spawns[k % spawns.length];
+  };
   // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
   const searchParams = new URLSearchParams(location.search);
   const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
     showLobby: () => loading.hide(),
     deploy: (team, index, match) => {
-      const spawns = pickSpawns(session.map, world.plan, team === 'red' ? 'front' : 'enemy_front', 4);
-      const at = spawns[index % spawns.length];
-      session.teleport(at.position, facingYaw(at.bay), 0);
+      const at = startOf(team, index);
+      session.respawn(at.position, facingYaw(at.bay));
       timeOfDay = match.config.timeOfDay;
       lapse = match.config.lapse;
       // The battle's fire at players waits for the room to run it for everyone (the spec's §6).
@@ -476,6 +479,14 @@ async function start(): Promise<void> {
       if (document.pointerLockElement) document.exitPointerLock();
     },
     note: showNote,
+    killed: () => {
+      session.alive = false;
+    },
+    respawn: (team, spawn) => {
+      const at = startOf(team, spawn);
+      session.respawn(at.position, facingYaw(at.bay));
+      renderer.resetHistory();
+    },
   });
 
   const play = (lock: boolean) => {
@@ -552,6 +563,12 @@ async function start(): Promise<void> {
       return;
     }
     if (mode === 'paused' || mode === 'loading') return;
+    // In a match, Tab holds the board up (and does not move the page's focus).
+    if (e.code === 'Tab' && together.inMatch) {
+      e.preventDefault();
+      together.boardOpen = true;
+      return;
+    }
     // The developer keys (views, fly, time, quality) wait behind F3, so a visitor's 1 or T does nothing strange.
     const developer = overlay.visible || devMode;
     if (e.code === 'Backquote' && !e.repeat) {
@@ -569,6 +586,7 @@ async function start(): Promise<void> {
     act(action);
   });
   window.addEventListener('keyup', (e) => {
+    if (e.code === 'Tab') together.boardOpen = false;
     held.delete(e.code);
     input.keyUp(e.code);
   });
@@ -667,6 +685,8 @@ async function start(): Promise<void> {
     last = now;
     followCanvas(now);
     if (lapse > 0 && mode !== 'loading') timeOfDay = (timeOfDay + (lapse * dt) / 60) % 24;
+    // The others posed, given to the session to strike, and their shots fired, before its ticks run.
+    const draws = together.prepare(session, dt, puppets);
     let pose: CameraPose;
     if (mode === 'fly') {
       fly.sensitivity = settings.sensitivity;
@@ -698,11 +718,18 @@ async function start(): Promise<void> {
       // bay, at the visitor's own.
       const backdrop = views.step;
       pose = mode === 'loading' || mode === 'ready' ? { position: [...backdrop.position], yaw: backdrop.yaw, pitch: backdrop.pitch, fov: backdropFov } : rig.pose(session, dt, settings.fov);
+      // Killed: the view goes down with the body, and over.
+      const dead = together.deadFor(performance.now());
+      if (dead !== null && (mode === 'playing' || mode === 'paused')) {
+        const f = Math.min(1, dead / 0.7) ** 2;
+        const feet = session.player.position.y;
+        pose = { ...pose, position: [pose.position[0], feet + 0.6 + (pose.position[1] - feet - 0.6) * (1 - f), pose.position[2]], pitch: pose.pitch * (1 - f) + 12 * f, roll: 32 * f };
+      }
       periscope.set((1 - rig.fovScale) / (1 - periscopeScale));
     }
     // The rifle in hand while playing (paused too), not through the periscope or flying.
     let rifle: RiflePose | null = null;
-    if (rifleHeld && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) rifle = rig.rifle(session, pose);
+    if (rifleHeld && session.alive && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) rifle = rig.rifle(session, pose);
     else rig.hideRifle();
     renderer.setRifle(rifle);
     // Under fire the picture greys and closes in, while playing (and paused); not flying.
@@ -720,7 +747,8 @@ async function start(): Promise<void> {
     }
     // The battle seen (its flares, flashes, smoke, tracers, and fires' flames and plumes) as the lights last showed it; none at rest.
     const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
-    renderer.setSoldiers(gaits.pose([...together.figures(), ...puppets], dt));
+    renderer.setSoldiers(draws);
+    together.after(session, events, draws, performance.now());
     const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares);
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
@@ -815,7 +843,7 @@ async function start(): Promise<void> {
         digging: session.digging,
         digFraction: session.entrenching.fraction,
         digInReach: session.entrenching.inReach,
-        crosshair: p.stance !== Stance.PERISCOPE,
+        crosshair: p.stance !== Stance.PERISCOPE && session.alive,
       });
     }
     if (now - shown > 250) {
@@ -1009,6 +1037,9 @@ async function start(): Promise<void> {
       seats: () => together.net?.seats ?? [],
       phase: () => together.net?.phase ?? null,
       begun: () => together.begun,
+      deadFor: () => together.deadFor(performance.now()),
+      score: () => together.net?.score ?? null,
+      claimed: () => together.claimed,
       others: () => together.others().map(({ seat, state }) => ({ id: seat.id, team: seat.team, name: seat.name, position: state.position, stance: state.stance })),
     },
     /** Soldiers stood in the world without a room, for the tests and the perf gate (seat 100 on, so they never share a probe with a player's). */

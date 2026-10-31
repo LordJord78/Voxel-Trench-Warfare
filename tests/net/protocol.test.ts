@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanConfig, cleanName, decodeState, encodeState, NAME_MAX, parseClient, parseRoom, type PlayerState } from '../../src/net/protocol';
+import { cleanConfig, cleanName, decodeShot, decodeState, encodeShot, encodeState, NAME_MAX, parseClient, parseRoom, SHOTS_MAX, type PlayerState } from '../../src/net/protocol';
 
 const state: PlayerState = { tick: 1234, position: [128.4567, 13.05, 105.2], velocity: [-4.1, 0, 0.25], yaw: 271.25, pitch: -12.5, stance: 3, height: 1.8, flags: 33 };
 
@@ -22,14 +22,25 @@ describe('the protocol', () => {
     for (const bad of [null, 42, '{', '[]', '{"t":1}', 'x'.repeat(5000), JSON.stringify({ t: 'team', team: 'green' }), JSON.stringify({ t: 's', s: [1, 2, 3] }), JSON.stringify({ t: 's', s: [0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0] }), JSON.stringify({ t: 'ping', c: 'soon' }), JSON.stringify({ t: 'what' })]) {
       expect(parseClient(bad), String(bad).slice(0, 40)).toBeNull();
     }
-    expect(parseClient(JSON.stringify({ t: 's', s: encodeState(state) }))).toEqual({ t: 's', s: encodeState(state) });
+    expect(parseClient(JSON.stringify({ t: 's', s: encodeState(state) }))).toEqual({ t: 's', s: encodeState(state), sh: [] });
+    // Shots: well formed ones kept, at most SHOTS_MAX; a direction that is not near a unit dropped.
+    const shot = encodeShot({ tick: 9, origin: [1, 2, 3], dir: [0, 0.6, 0.8], tracer: true });
+    const parsed = parseClient(JSON.stringify({ t: 's', s: encodeState(state), sh: [shot, [1, 2], [9, 0, 0, 0, 0, 0, 0, 0], ...Array(9).fill(shot)] }));
+    expect(parsed).toMatchObject({ t: 's' });
+    expect((parsed as { sh: number[][] }).sh).toHaveLength(SHOTS_MAX - 2);
+    const back = decodeShot(shot)!;
+    expect(back.dir[1]).toBeCloseTo(0.6, 4);
+    expect(back.tracer).toBe(true);
+    expect(parseClient(JSON.stringify({ t: 'hit', v: 2, z: 'head' }))).toEqual({ t: 'hit', v: 2, z: 'head' });
+    expect(parseClient(JSON.stringify({ t: 'hit', v: 2, z: 'soul' }))).toBeNull();
+    expect(parseClient(JSON.stringify({ t: 'hurt', a: 500, c: 'shell' }))).toBeNull();
     expect(parseRoom(JSON.stringify({ t: 'roster', owner: 0, seats: [{ id: 9, name: 'x', team: 'red' }] }))).toBeNull();
-    expect(parseRoom(JSON.stringify({ t: 'f', s: 5, ps: [[1, ...encodeState(state)], [2, 1, 2], 'x'] }))).toEqual({ t: 'f', s: 5, ps: [[1, ...encodeState(state)]] });
+    expect(parseRoom(JSON.stringify({ t: 'f', s: 5, ps: [[1, ...encodeState(state)], [2, 1, 2], 'x'] }))).toEqual({ t: 'f', s: 5, ps: [[1, ...encodeState(state)]], sh: [] });
   });
 
   it('cleans names: no control or invisible characters, no runs of space, at most NAME_MAX', () => {
     expect(cleanName('  Jord   the\tGreat  ')).toBe('Jord the Great');
-    expect(cleanName('a\u0000b‮c​d')).toBe('abcd');
+    expect(cleanName('a\u0000b\u202ec\u200bd')).toBe('abcd');
     expect(cleanName('x'.repeat(40))).toHaveLength(NAME_MAX);
     expect(cleanName('')).toBe('Soldier');
     expect(cleanName(7)).toBe('Soldier');

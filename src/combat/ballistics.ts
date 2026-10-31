@@ -24,6 +24,7 @@ import { hypot } from '../core/dmath';
 import type { Tunables } from '../core/tunables';
 import type { BrickMap } from '../world/bricks';
 import { raycast, type WaterEntry } from '../world/raycast';
+import type { Zone } from './soldier-rig';
 
 /** What flies, as opposed to what fired it. */
 export interface ProjectileSpec {
@@ -66,6 +67,19 @@ export function ballisticsTunables(tun: Tunables): BallisticsTunables {
   };
 }
 
+/** Where a round stops in a body: how far along its segment (m), whose body, and where it struck. */
+export type BodyTest = (owner: number, from: readonly [number, number, number], dir: readonly [number, number, number], length: number) => { t: number; body: number; zone: Zone } | null;
+
+export interface BodyHit {
+  owner: number;
+  body: number;
+  zone: Zone;
+  position: [number, number, number];
+  dir: readonly [number, number, number];
+  /** How far the round had flown (m). */
+  distance: number;
+}
+
 /** A round stopped by the world. */
 export interface Impact {
   /** Where it entered the voxel, in metres. */
@@ -89,6 +103,14 @@ export class Rounds {
   count = 0;
   /** Shots the pool refused for being full. */
   dropped = 0;
+  /**
+   * The bodies a round may strike before the world (the multiplayer spec's §4): asked of each
+   * substep's segment, as far as the world lets it go, for the nearest a round of `owner` meets.
+   * None by default (solo play has no one to hit).
+   */
+  bodies: BodyTest | null = null;
+  /** The last step's rounds stopped by a body, in slot order. */
+  readonly bodyHits: BodyHit[] = [];
   /** The last step's impacts, in slot order. */
   readonly impacts: Impact[] = [];
   /** Where rounds entered water this step (metres), and with how much energy: a round splashes each time it goes in. */
@@ -175,6 +197,7 @@ export class Rounds {
   /** One tick of `dt` seconds in substeps: this step's impacts, cracks and passes, and rounds retired by range, age or the world's edge. */
   step(dt: number): void {
     this.impacts.length = 0;
+    this.bodyHits.length = 0;
     this.splashes.length = 0;
     this.cracks.length = 0;
     this.passes.length = 0;
@@ -278,6 +301,19 @@ export class Rounds {
       const v = this.voxel;
       this.water.t = -1;
       const hit = raycast(this.map, [this.pos[p] / v, this.pos[p + 1] / v, this.pos[p + 2] / v], dir, len / v, this.water);
+      const body = this.bodies?.(this.owner[i], [this.pos[p], this.pos[p + 1], this.pos[p + 2]], dir, hit ? hit.t * v : len) ?? null;
+      if (body) {
+        this.bodyHits.push({
+          owner: this.owner[i],
+          body: body.body,
+          zone: body.zone,
+          position: [this.pos[p] + dir[0] * body.t, this.pos[p + 1] + dir[1] * body.t, this.pos[p + 2] + dir[2] * body.t],
+          dir,
+          distance: this.distance[i] + body.t,
+        });
+        this.hearPass(i);
+        return true;
+      }
       if (this.water.t >= 0) {
         const m = this.water.t * v;
         this.splashes.push({ position: [this.pos[p] + dir[0] * m, this.pos[p + 1] + dir[1] * m, this.pos[p + 2] + dir[2] * m], energyJ: 0.5 * spec.massKg * speed * speed });

@@ -91,6 +91,14 @@ export class Suppression {
 
   constructor(readonly t: SuppressionTunables) {}
 
+  /** None at all: a soldier back in after being killed. */
+  calm(): void {
+    this.level = 0;
+    this.flinchPitch = 0;
+    this.flinchYaw = 0;
+    this.sinceEvent = Infinity;
+  }
+
   /** A round went past at `missM` metres. */
   crack(missM: number, rng: Rng): void {
     if (missM > this.t.crackRadiusM) return;

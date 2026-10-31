@@ -1,18 +1,22 @@
 /**
- * Playing with friends (the multiplayer spec's §2), as the game loop sees it: hosting or joining a
- * room, the lobby, the way into a match, this player's state sent twenty times a second, and the
- * others to draw.
+ * Playing with friends (the multiplayer spec's §2 and §4), as the game loop sees it: hosting or
+ * joining a room, the lobby, the way into a match; this player's state and shots sent twenty times
+ * a second; the others posed, drawn and given to the session for rounds to strike, their shots
+ * fired; this player's hits claimed (they decide what their rounds struck, as they saw it); and the
+ * match over the view: health, deaths and the way back in, the feed, the board, who won.
  *
  * It is made with the page but does nothing until the player hosts or follows a link: solo play
  * never opens a socket or asks the relay anything.
  */
 
-import { pose } from '../combat/soldier-rig';
-import { STATE, type MatchInfo, type PlayerState, type RoomConfig, type Team } from '../net/protocol';
+import { RIFLE_MUZZLE } from '../combat/rifle-model';
+import { hitParts, pose, toWorld } from '../combat/soldier-rig';
+import { MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type MatchInfo, type PlayerState, type RoomConfig, type ShotState, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
-import type { Session } from '../sim/session';
+import type { CombatEvents, Session } from '../sim/session';
 import { Lobby } from '../ui/lobby';
+import { MatchHud, type BoardRow } from '../ui/match-hud';
 import { makeRoom, NetClient } from './net-client';
 import type { RemotePlayer } from './net-players';
 
@@ -22,6 +26,12 @@ const NAME_KEY = 'trenchline.name';
 /** Strides a second at a walk (camera.head_bob_hz), and the walking speed they are at (stance.standing.speed). */
 const STRIDE_HZ = 1.9;
 const WALK_MS = 4.1;
+/** A teammate aimed at within this many metres is named under the crosshair. */
+const NAME_REACH_M = 30;
+/** Health comes back, as the room's rules have it (net/match-rules.ts), shown as it does. */
+const REGEN_DELAY_MS = 6000;
+const REGEN_PER_S = 10;
+const RAD = Math.PI / 180;
 
 /** Someone to draw as a soldier: where, how they stand and look, their team and seat. */
 export interface Figure {
@@ -73,6 +83,10 @@ export interface TogetherHooks {
   ended(): void;
   /** A line at the top of the page. */
   note(text: string): void;
+  /** This player was killed: they do nothing until they are back in. */
+  killed(): void;
+  /** This player is back in, at their team's `spawn`-th start. */
+  respawn(team: Team, spawn: number): void;
 }
 
 /** Where the relay is: `?relay=` on a development build (the tests'), the build's own, or the local one on localhost; null where there is none. */
@@ -90,6 +104,25 @@ export class Together {
   private sentAt = Number.NEGATIVE_INFINITY;
   /** Whether this player has gone in (clicked Go) this match. */
   private inPlay = false;
+  private readonly hud: MatchHud;
+  private readonly gaits = new Gaits();
+  /** This player's health as shown (the room's word, with its regeneration followed). */
+  private hp = 100;
+  private hurtAt = Number.NEGATIVE_INFINITY;
+  private shownAt = 0;
+  /** Others killed and not yet back: when (performance.now()). */
+  private readonly deaths = new Map<number, number>();
+  /** This player killed: by whom (null, the battle) and when. */
+  private fallen: { by: { name: string; team: Team } | null; at: number } | null = null;
+  private winner: { winner: Team; red: number; blue: number } | null = null;
+  /** This player's shots not yet sent. */
+  private shotsOut: ShotState[] = [];
+  /** Where this player stood and looked at the last frame, for where harm came from. */
+  private self: { position: readonly number[]; yaw: number } | null = null;
+  /** Tab held: the board shown. */
+  boardOpen = false;
+  /** Hits this player has claimed, this visit (for the tests). */
+  claimed = 0;
 
   constructor(
     private readonly doc: Document,
@@ -113,6 +146,12 @@ export class Together {
     doc.addEventListener('visibilitychange', () => {
       if (this.net) this.net.away(doc.hidden);
     });
+    this.hud = new MatchHud(doc);
+  }
+
+  /** Seconds this player has been dead, or null alive (or not in a match). */
+  deadFor(now: number): number | null {
+    return this.fallen ? (now - this.fallen.at) / 1000 : null;
   }
 
   /** In a room's match (starting, or on). */
@@ -159,6 +198,12 @@ export class Together {
       started: (match) => this.started(match),
       ended: () => this.ended(),
       lost: (why) => this.lost(why),
+      hurt: (hp, from) => this.hurt(hp, from),
+      death: (victim, killer, zone, teamkill, cause) => this.death(victim, killer, zone, teamkill, cause),
+      respawn: (id, spawn) => this.respawned(id, spawn),
+      over: (winner, red, blue) => {
+        this.winner = { winner, red, blue };
+      },
     });
     this.hooks.showLobby();
     this.lobby.status('Joining…');
@@ -177,7 +222,121 @@ export class Together {
     const now = performance.now();
     if (now - this.sentAt < 1000 / SEND_HZ) return;
     this.sentAt = now;
-    net.state(stateOf(session));
+    net.state(stateOf(session), this.shotsOut.splice(0, SHOTS_MAX));
+  }
+
+  /**
+   * Before the frame's ticks: the others (and any `extra` a test stands in the world) posed; the
+   * living among them given to the session for rounds to strike; their shots fired, each from its
+   * shooter's eye, its tracer and flash at their soldier's muzzle. What to draw.
+   */
+  prepare(session: Session, dt: number, extra: readonly Figure[] = []): SoldierDraw[] {
+    const figures = [...this.figures(), ...extra];
+    const draws = this.gaits.pose(figures, dt);
+    session.together = this.inMatch || extra.length > 0;
+    session.bodies = draws.filter((_, i) => figures[i].deadFor === null).map((d) => ({ id: d.seat, frames: d.frames, feet: d.feet }));
+    if (this.net && this.inMatch) {
+      for (const { seat, shot } of this.net.takeShots()) {
+        const d = draws.find((x) => x.seat === seat);
+        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, d ? toWorld(d.frames.rifle, RIFLE_MUZZLE) : shot.origin);
+      }
+    }
+    return draws;
+  }
+
+  /** After the frame's ticks: this player's shots kept to send, their hits claimed, and the match shown. */
+  after(session: Session, events: CombatEvents, draws: readonly SoldierDraw[], now: number): void {
+    const net = this.net;
+    if (!net || !this.inMatch) return;
+    for (const s of events.shots) if (this.shotsOut.length < 2 * SHOTS_MAX) this.shotsOut.push({ tick: s.tick, origin: s.origin, dir: s.dir, tracer: s.tracer });
+    for (const h of events.hits) {
+      if (h.owner !== 0 || h.body < 0 || h.body >= MAX_PLAYERS) continue;
+      net.hit(h.body, h.zone);
+      this.claimed++;
+      this.hud.marker('hit', now);
+    }
+    const p = session.player;
+    this.self = { position: p.position.toArray(), yaw: p.yaw };
+    // Health, coming back as the room's does.
+    const dt = Math.min(1, Math.max(0, (now - this.shownAt) / 1000));
+    this.shownAt = now;
+    if (!this.fallen && this.hp < 100 && now - this.hurtAt >= REGEN_DELAY_MS) this.hp = Math.min(100, this.hp + REGEN_PER_S * dt);
+    this.hud.health(this.fallen ? 0 : this.hp);
+    const respawnMs = (net.match?.config.respawnS ?? 5) * 1000;
+    this.hud.fallen(this.fallen?.by, this.fallen ? (this.fallen.at + respawnMs - now) / 1000 : null);
+    this.hud.won(this.winner?.winner ?? null, this.winner?.red, this.winner?.blue);
+    this.hud.board(this.boardOpen, this.rows(), net.score, net.match?.config.killTarget ?? 0);
+    this.hud.aimed(this.fallen ? null : this.teammateAimed(session, draws));
+    this.hud.tick(now);
+  }
+
+  /** The teammate the player's view rests on, within NAME_REACH_M: their name and team. */
+  private teammateAimed(session: Session, draws: readonly SoldierDraw[]): { name: string; team: Team } | null {
+    const net = this.net!;
+    const team = this.team;
+    const p = session.player;
+    const eye = [p.position.x, p.position.y + session.controller.eyeHeight(p), p.position.z];
+    const dir = [Math.sin(p.yaw * RAD) * Math.cos(p.pitch * RAD), Math.sin(p.pitch * RAD), Math.cos(p.yaw * RAD) * Math.cos(p.pitch * RAD)];
+    let best: { t: number; seat: number } | null = null;
+    for (const d of draws) {
+      if (d.team !== team || d.seat === net.you || this.deaths.has(d.seat)) continue;
+      const h = hitParts(d.frames, eye, dir, NAME_REACH_M);
+      if (h && (!best || h.t < best.t)) best = { t: h.t, seat: d.seat };
+    }
+    const seat = best ? net.seats.find((s) => s.id === best!.seat) : undefined;
+    return seat ? { name: seat.name, team: seat.team } : null;
+  }
+
+  private rows(): BoardRow[] {
+    const net = this.net!;
+    return net.seats.map((s) => ({ name: s.name, team: s.team, kills: net.tallies.get(s.id)?.kills ?? 0, deaths: net.tallies.get(s.id)?.deaths ?? 0, you: s.id === net.you }));
+  }
+
+  private hurt(hp: number, from: number): void {
+    const now = performance.now();
+    this.hp = hp;
+    this.hurtAt = now;
+    // Where it came from, clockwise from where the player looks.
+    const them = from >= 0 ? this.figures().find((f) => f.seat === from) : undefined;
+    let bearing: number | null = null;
+    if (them && this.self) {
+      const toward = Math.atan2(them.position[0] - this.self.position[0], them.position[2] - this.self.position[2]) / RAD;
+      bearing = ((((toward - this.self.yaw) % 360) + 540) % 360) - 180;
+    }
+    this.hud.harm(bearing, now);
+  }
+
+  private death(victim: number, killer: number, zone: Zone | null, teamkill: boolean, cause: Cause): void {
+    const net = this.net!;
+    const now = performance.now();
+    const who = (id: number) => {
+      const s = net.seats.find((x) => x.id === id);
+      return s ? { name: s.name, team: s.team } : null;
+    };
+    const v = who(victim);
+    const k = killer >= 0 ? who(killer) : null;
+    const how = teamkill ? 'team-killed' : killer < 0 ? (cause === 'shell' ? 'shelled' : cause === 'fire' ? 'burned' : 'shot from the line') : zone === 'head' ? 'headshot' : 'shot';
+    if (v) this.hud.killed({ killer: k, victim: v, how }, now);
+    if (victim === net.you) {
+      this.fallen = { by: k, at: now };
+      this.hp = 0;
+      this.hooks.killed();
+    } else {
+      this.deaths.set(victim, now);
+    }
+    if (killer === net.you && victim !== net.you) this.hud.marker('kill', now);
+  }
+
+  private respawned(id: number, spawn: number): void {
+    const net = this.net!;
+    if (id !== net.you) {
+      this.deaths.delete(id);
+      return;
+    }
+    this.fallen = null;
+    this.hp = 100;
+    this.hurtAt = Number.NEGATIVE_INFINITY;
+    this.hooks.respawn(this.team ?? 'red', spawn);
   }
 
   /** The others as they are drawn now. */
@@ -185,16 +344,20 @@ export class Together {
     return this.net && this.inMatch ? this.net.players.at(this.net.serverNow()) : [];
   }
 
-  /** The others, to be drawn as soldiers. */
+  /** The others, to be drawn as soldiers: the dead falling, and lying where they fell. */
   figures(): Figure[] {
-    return this.others().map(({ seat, state }) => ({ seat: seat.id, team: seat.team, position: state.position, velocity: state.velocity, yaw: state.yaw, pitch: state.pitch, height: state.height, deadFor: null }));
+    const now = performance.now();
+    return this.others().map(({ seat, state }) => {
+      const died = this.deaths.get(seat.id);
+      return { seat: seat.id, team: seat.team, position: state.position, velocity: state.velocity, yaw: state.yaw, pitch: state.pitch, height: state.height, deadFor: died === undefined ? null : (now - died) / 1000 };
+    });
   }
 
-  /** The HUD's line: the game, and how many a side. */
+  /** The HUD's line: each team's score, the game, and the kills that win it. */
   roomline(): { room: string; red: number; blue: number } | null {
     const net = this.net;
     if (!net || !this.inMatch) return null;
-    return { room: net.room, red: net.seats.filter((s) => s.team === 'red').length, blue: net.seats.filter((s) => s.team === 'blue').length };
+    return { room: `${net.room} \u00b7 first to ${net.match?.config.killTarget ?? 0}`, red: net.score.red, blue: net.score.blue };
   }
 
   get isOwner(): boolean {
@@ -227,11 +390,22 @@ export class Together {
     const team = net.seat?.team ?? 'red';
     const index = net.seats.filter((s) => s.team === team).findIndex((s) => s.id === net.you);
     this.inPlay = false;
+    this.deaths.clear();
+    this.fallen = null;
+    this.winner = null;
+    this.hp = 100;
+    this.hurtAt = Number.NEGATIVE_INFINITY;
+    this.shotsOut = [];
+    this.hud.clear();
     this.hooks.deploy(team, Math.max(0, index), match);
   }
 
   private ended(): void {
     this.inPlay = false;
+    this.deaths.clear();
+    this.fallen = null;
+    this.winner = null;
+    this.hud.clear();
     this.lobby.gather();
     this.hooks.ended();
     this.show();

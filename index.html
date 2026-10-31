@@ -130,6 +130,37 @@
       #hud .roomline .blue { color: #6a9be0; }
       @media (max-width: 560px) { .teams { grid-template-columns: 1fr; } }
 
+      /* The match over the view: health, the kill feed, the hit marker, where harm came from, the fallen's
+         count back in, the board on Tab, and who won. Set as the HUD is, its team colours the lobby's. */
+      #hud .shadowed, #hud .feed, #hud .fallen, #hud .board, #hud .won, #hud .aimed { text-shadow: 0 1px 2px rgba(23, 20, 31, 0.9), 0 0 10px rgba(23, 20, 31, 0.6); }
+      #hud .health .bar i.on { background: var(--haze); }
+      #hud .health.low .bar i.on { background: #e0644a; }
+      #hud .feed { position: absolute; top: clamp(44px, 7vh, 64px); right: clamp(16px, 4vw, 48px); margin: 0; padding: 0; list-style: none; text-align: right; font-size: 0.98rem; line-height: 1.55; }
+      #hud .feed .how { color: var(--duckboard); font-style: italic; margin: 0 0.45em; }
+      #hud .red { color: #e0644a; }
+      #hud .blue { color: #6a9be0; }
+      #hud .marker { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+      #hud .marker i { position: absolute; width: 1.3vh; height: max(2px, 0.2vh); background: var(--flare); box-shadow: 0 0 2px rgba(23, 20, 31, 0.8); }
+      #hud .marker.kill i { background: #e0644a; }
+      #hud .marker i:nth-child(1) { transform: translate(-1.9vh, -1.9vh) rotate(45deg); }
+      #hud .marker i:nth-child(2) { transform: translate(0.6vh, -1.9vh) rotate(-45deg); }
+      #hud .marker i:nth-child(3) { transform: translate(-1.9vh, 1.7vh) rotate(-45deg); }
+      #hud .marker i:nth-child(4) { transform: translate(0.6vh, 1.7vh) rotate(45deg); }
+      #hud .harm { position: absolute; left: 50%; top: 50%; width: 22vh; height: 22vh; margin: -11vh 0 0 -11vh; border-radius: 50%; border-top: 0.7vh solid rgba(200, 50, 30, 0.8); transition: opacity 0.9s ease-out; }
+      #hud .harm.fading { opacity: 0; }
+      #hud .aimed { position: absolute; left: 50%; top: calc(50% + 3.2vh); transform: translateX(-50%); margin: 0; font-size: 0.95rem; letter-spacing: 0.04em; }
+      #hud .fallen { position: absolute; left: 50%; top: 38%; transform: translateX(-50%); margin: 0; text-align: center; }
+      #hud .fallen .by { font-size: 1.6rem; letter-spacing: 0.06em; margin: 0; }
+      #hud .fallen .back { color: var(--duckboard); font-style: italic; margin: 0.4rem 0 0; }
+      #hud .won { position: absolute; left: 50%; top: 26%; transform: translateX(-50%); margin: 0; font-size: clamp(2rem, 5vw, 3.4rem); letter-spacing: 0.14em; white-space: nowrap; }
+      #hud .board { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); min-width: min(36rem, 90vw); padding: 1.1rem 1.5rem 1.3rem; background: rgba(23, 20, 31, 0.82); border-radius: 2px; }
+      #hud .board h3 { font-weight: 400; margin: 0 0 0.75rem; letter-spacing: 0.08em; text-align: center; }
+      #hud .board .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+      #hud .board table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+      #hud .board th { font-weight: 400; text-align: left; letter-spacing: 0.06em; padding-bottom: 0.3rem; }
+      #hud .board th.n, #hud .board td.n { text-align: right; width: 3.2em; color: var(--duckboard); }
+      #hud .board td.you { color: var(--flare); }
+
       /* Looking through a trench periscope: dark all round a long mirror. */
       #periscope { position: fixed; inset: 0; pointer-events: none; }
       #periscope .mirror {
@@ -178,7 +209,15 @@
     <div id="hud" hidden>
       <p class="roomline" id="roomline" hidden></p>
       <div class="crosshair" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <ol class="feed" aria-live="polite"></ol>
+      <div class="marker" aria-hidden="true" hidden><i></i><i></i><i></i><i></i></div>
+      <div class="harm" aria-hidden="true" hidden></div>
+      <p class="aimed" hidden></p>
+      <div class="fallen" hidden><p class="by"></p><p class="back"></p></div>
+      <p class="won" hidden></p>
+      <div class="board" hidden></div>
       <div class="readout">
+        <p class="health" hidden></p>
         <p class="stance"></p>
         <p class="exposure"></p>
         <p class="rifle"></p>

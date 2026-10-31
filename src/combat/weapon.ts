@@ -73,6 +73,14 @@ export class Weapon {
     return this.reloadLeft > 0;
   }
 
+  /** A full magazine, nothing under way: a soldier back in after being killed. */
+  rearm(): void {
+    this.rounds = this.spec.magazine;
+    this.reloadLeft = 0;
+    this.held = false;
+    this.sinceShot = this.interval;
+  }
+
   /** The timer, and a reload under way. */
   tick(dt: number): void {
     this.sinceShot += dt;

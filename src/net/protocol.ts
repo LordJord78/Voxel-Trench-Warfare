@@ -8,6 +8,8 @@
  * the link, and a client from whatever answers at the relay's address.
  */
 
+import { hypot } from '../core/dmath';
+
 export const PROTOCOL = 1;
 export const MAX_PLAYERS = 8;
 /** A name, at most this long once trimmed. */
@@ -70,6 +72,40 @@ export const STATE = { ON_GROUND: 1, FIRING: 2, RELOADING: 4, DIGGING: 8, CLIMBI
 
 export type WireState = number[];
 
+/** A shot as others need it: the sender's tick, where it left (the eye) and which way, and whether it is a tracer. */
+export interface ShotState {
+  tick: number;
+  origin: [number, number, number];
+  dir: [number, number, number];
+  tracer: boolean;
+}
+
+/** At most this many shots ride on one state message (a twentieth of a second of full auto is one). */
+export const SHOTS_MAX = 4;
+
+export function encodeShot(s: ShotState): number[] {
+  const mm = (m: number) => Math.round(m * 1000);
+  const unit = (u: number) => Math.round(u * 10000);
+  return [s.tick, ...s.origin.map(mm), ...s.dir.map(unit), s.tracer ? 1 : 0];
+}
+
+const SHOT_LENGTH = 8;
+
+export function decodeShot(w: unknown): ShotState | null {
+  if (!Array.isArray(w) || w.length !== SHOT_LENGTH || !w.every((n) => Number.isInteger(n) && Math.abs(n) < 2147483648)) return null;
+  const d = [w[4], w[5], w[6]].map((n) => (n as number) / 10000);
+  const l = hypot(d[0], d[1], d[2]);
+  if (!(l > 0.5 && l < 1.5)) return null;
+  return { tick: w[0] as number, origin: [(w[1] as number) / 1000, (w[2] as number) / 1000, (w[3] as number) / 1000], dir: [d[0] / l, d[1] / l, d[2] / l], tracer: w[7] === 1 };
+}
+
+/** Where a round struck a body. */
+export type Zone = 'head' | 'torso' | 'limb';
+const ZONES: readonly Zone[] = ['head', 'torso', 'limb'];
+/** What hurt a player that no player did: the battle's rounds, a shell, a fire. */
+export type Cause = 'round' | 'shell' | 'fire';
+const CAUSES: readonly Cause[] = ['round', 'shell', 'fire'];
+
 export function encodeState(s: PlayerState): WireState {
   const mm = (m: number) => Math.round(m * 1000);
   const cdeg = (d: number) => Math.round(d * 100);
@@ -99,7 +135,11 @@ export type ClientMsg =
   | { t: 'start' }
   | { t: 'end' }
   | { t: 'ping'; c: number }
-  | { t: 's'; s: WireState }
+  | { t: 's'; s: WireState; sh?: number[][] }
+  /** This player's round struck `v` in zone `z` (the shooter decides, as they saw it). */
+  | { t: 'hit'; v: number; z: Zone }
+  /** The battle hurt this player: `a` of health, by `c`. */
+  | { t: 'hurt'; a: number; c: Cause }
   | { t: 'away'; away: boolean };
 
 export type Refusal = 'full' | 'version' | 'no-room' | 'bad-hello';
@@ -113,8 +153,18 @@ export type RoomMsg =
   | { t: 'start'; match: MatchInfo }
   | { t: 'end' }
   | { t: 'pong'; c: number; s: number }
-  /** A frame: the room's clock, and each other player's latest state as [id, ...WireState]. */
-  | { t: 'f'; s: number; ps: number[][] };
+  /** A frame: the room's clock, each player's latest state as [id, ...WireState], and the shots fired since the last as [id, ...shot]. */
+  | { t: 'f'; s: number; ps: number[][]; sh: number[][] }
+  /** To the hurt alone: their health now, and who hurt them (−1 the battle). */
+  | { t: 'hurt'; hp: number; from: number }
+  /** Someone died: who, by whose hand (−1 the battle), where struck, whether a teammate's. */
+  | { t: 'death'; v: number; k: number; z: Zone | null; tk: boolean; c: Cause }
+  /** Someone is back, at their team's `spawn`-th start. */
+  | { t: 'respawn'; id: number; spawn: number }
+  /** The teams' scores, and each player's kills and deaths as [id, kills, deaths]. */
+  | { t: 'score'; red: number; blue: number; ps: number[][] }
+  /** The match is won. */
+  | { t: 'over'; winner: Team; red: number; blue: number };
 
 /** Control characters, and the invisible and direction-changing ones a name could hide behind. */
 function hidden(c: number): boolean {
@@ -182,8 +232,15 @@ export function parseClient(raw: unknown): ClientMsg | null {
       return { t: 'end' };
     case 'ping':
       return typeof m.c === 'number' && Number.isFinite(m.c) ? { t: 'ping', c: m.c } : null;
-    case 's':
-      return decodeState(m.s) ? { t: 's', s: m.s as WireState } : null;
+    case 's': {
+      if (!decodeState(m.s)) return null;
+      const sh = Array.isArray(m.sh) ? (m.sh as unknown[]).slice(0, SHOTS_MAX).filter((s): s is number[] => decodeShot(s) !== null) : [];
+      return { t: 's', s: m.s as WireState, sh };
+    }
+    case 'hit':
+      return Number.isInteger(m.v) && ZONES.includes(m.z as Zone) ? { t: 'hit', v: m.v as number, z: m.z as Zone } : null;
+    case 'hurt':
+      return typeof m.a === 'number' && Number.isFinite(m.a) && m.a > 0 && m.a <= 200 && CAUSES.includes(m.c as Cause) ? { t: 'hurt', a: m.a, c: m.c as Cause } : null;
     case 'away':
       return typeof m.away === 'boolean' ? { t: 'away', away: m.away } : null;
     default:
@@ -244,8 +301,24 @@ export function parseRoom(raw: unknown): RoomMsg | null {
     case 'f': {
       if (typeof m.s !== 'number' || !Array.isArray(m.ps)) return null;
       const ps = (m.ps as unknown[]).filter((p): p is number[] => Array.isArray(p) && p.length === STATE_LENGTH + 1 && Number.isInteger(p[0]) && decodeState(p.slice(1)) !== null);
-      return { t: 'f', s: m.s, ps };
+      const sh = Array.isArray(m.sh) ? (m.sh as unknown[]).filter((p): p is number[] => Array.isArray(p) && p.length === SHOT_LENGTH + 1 && Number.isInteger(p[0]) && decodeShot(p.slice(1)) !== null) : [];
+      return { t: 'f', s: m.s, ps, sh };
     }
+    case 'hurt':
+      return typeof m.hp === 'number' && Number.isInteger(m.from) ? { t: 'hurt', hp: m.hp, from: m.from as number } : null;
+    case 'death':
+      return Number.isInteger(m.v) && Number.isInteger(m.k) && (m.z === null || ZONES.includes(m.z as Zone)) && CAUSES.includes(m.c as Cause)
+        ? { t: 'death', v: m.v as number, k: m.k as number, z: m.z as Zone | null, tk: m.tk === true, c: m.c as Cause }
+        : null;
+    case 'respawn':
+      return Number.isInteger(m.id) && Number.isInteger(m.spawn) ? { t: 'respawn', id: m.id as number, spawn: m.spawn as number } : null;
+    case 'score': {
+      if (typeof m.red !== 'number' || typeof m.blue !== 'number' || !Array.isArray(m.ps)) return null;
+      const ps = (m.ps as unknown[]).filter((p): p is number[] => Array.isArray(p) && p.length === 3 && p.every(Number.isInteger));
+      return { t: 'score', red: m.red, blue: m.blue, ps };
+    }
+    case 'over':
+      return (m.winner === 'red' || m.winner === 'blue') && typeof m.red === 'number' && typeof m.blue === 'number' ? { t: 'over', winner: m.winner, red: m.red, blue: m.blue } : null;
     default:
       return null;
   }

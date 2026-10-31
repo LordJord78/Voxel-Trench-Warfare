@@ -53,7 +53,12 @@ test('from the spawn, W climbs onto the firing step and W with Space goes over t
   const { crest, duck } = await atSpawn(page, 1);
   const bench = await holdUntil(page, ['KeyW'], 4, (y) => y > duck + 1.0);
   expect(bench).toBeGreaterThan(duck + 1.0);
-  expect((await hooks(page, (h) => h.player())).stance).toBe(3);
+  // Standing on the bench makes the firing step on the next tick: a few frames on, it has.
+  const stance = await hooks(page, async (h) => {
+    await h.waitFrames(5);
+    return h.player().stance;
+  });
+  expect(stance).toBe(3);
   // W alone never takes anyone over the top.
   const leaning = await holdUntil(page, ['KeyW'], 1.5, () => false);
   expect(leaning).toBeLessThan(crest - 0.5);

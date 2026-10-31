@@ -11,13 +11,14 @@
  */
 
 import { Artillery, artilleryTunables, planShellSource, type ShellSource } from '../combat/artillery';
-import { ballisticsTunables, Rounds, type Impact } from '../combat/ballistics';
+import { ballisticsTunables, Rounds, type BodyHit, type Impact } from '../combat/ballistics';
 import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
 import { Entrenching, entrenchingTunables, type Scoop } from '../combat/entrenching';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
 import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
 import { Recoil, recoilProfile } from '../combat/recoil';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../combat/rifle-model';
+import { bodySphere, hitParts, pose, type Frame, type PartName } from '../combat/soldier-rig';
 import { Suppression, suppressionTunables } from '../combat/suppression';
 import { ViewKick, viewKickProfile } from '../combat/viewkick';
 import { modelToView, viewBasis, viewmodelPose, viewmodelTunables, type ViewmodelKick, type ViewmodelPose, type ViewmodelTunables } from '../combat/viewmodel';
@@ -32,10 +33,12 @@ import { brickGrid } from '../physics/grid';
 import { Vec3, ZERO } from '../physics/vec';
 import type { BrickMap } from '../world/bricks';
 import type { WorldPlan } from '../world/generation/plan';
-import { K, kindOf, paletteData } from '../world/materials';
+import { K, kindOf, P, paletteData } from '../world/materials';
 import { groundTop } from '../world/raycast';
 import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from './destruction';
 
+/** The uniform's colour, for the dust a round throws out of a body. */
+const P_KHAKI = P.SOLDIER_KHAKI;
 /** Kinds that throw sparks when struck. */
 const METAL = new Set<number>([K.PICKET, K.HULL, K.CORRUGATE, K.WIRE]);
 /** Voxels a body buried by the world's edits is lifted, at most, to stand on what came down (4 m at 10 cm). */
@@ -43,6 +46,16 @@ const LIFT_VOXELS = 40;
 /** The shot's particles are anchored to the rifle's muzzle and port, which the renderer draws elsewhere (Particles.billboards). */
 export const MUZZLE_ANCHOR = 1;
 export const PORT_ANCHOR = 2;
+
+/** The local player's body, among the bodies a round may strike. */
+export const LOCAL_BODY = -1;
+
+/** Another player's body as drawn this frame, for rounds to strike: their seat, their parts' frames, their feet. */
+export interface Body {
+  id: number;
+  frames: Record<PartName, Frame>;
+  feet: readonly [number, number, number];
+}
 
 export function idleIntent(): MoveIntent {
   return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false, dig: false };
@@ -85,12 +98,16 @@ export interface CombatEvents {
   blasts: { tick: number; at: [number, number, number]; radiusM: number; material: number; crater: number | null }[];
   /** Each scoop the player dug: how many voxels, and where (metres). */
   scoops: (Scoop & { tick: number })[];
+  /** Other players' shots, from their eyes, their tracers and flashes at their rifles' muzzles. */
+  remoteShots: (ShotEvent & { owner: number })[];
+  /** Rounds stopped by a body: whose, whose body (LOCAL_BODY the player's own), where struck. */
+  hits: (BodyHit & { tick: number })[];
   /** Where rounds went into water, shells landed on it and their debris fell into it (metres), and with how much energy. */
   splashes: { tick: number; at: [number, number, number]; energyJ: number; kind: 'round' | 'shell' | 'debris' }[];
 }
 
 function noEvents(): CombatEvents {
-  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [] };
+  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [] };
 }
 
 export interface SessionWorld {
@@ -151,6 +168,18 @@ export class Session {
   readonly particles: Particles;
   /** Times suppression has taken the player off the firing step. */
   ejected = 0;
+  /**
+   * Playing with others (the multiplayer spec's §4): rounds strike bodies, the others' (`bodies`,
+   * set each frame) and the player's own. Off in solo play, which has no one to hit.
+   */
+  together = false;
+  bodies: Body[] = [];
+  /** Killed, the player does nothing until they are back in (`respawn`). */
+  alive = true;
+  /** The intent the tick acts on: the player's, or idle while dead. */
+  private acting: MoveIntent = idleIntent();
+  /** The player's own parts' frames, posed once a tick when a round may strike them. */
+  private ownFrames: { tick: number; frames: Record<PartName, Frame> } | null = null;
   /** Ticks run. */
   ticks = 0;
   /** The last tick's shots: from the eye, their direction, the aim (yaw, pitch) before the cone, and whether each is a tracer. */
@@ -226,6 +255,56 @@ export class Session {
     this.destruction = new Destruction(world.map, world.runner ?? inProcessRunner(), destructionTunables(tun, waterTable));
     this.entrenching = new Entrenching(world.map, entrenchingTunables(tun), voxel, waterTable);
     this.artillery = new Artillery(artilleryTunables(tun), world.shells ?? (plan ? planShellSource(plan) : () => null), this.streams.derive('combat.shells'));
+    this.rounds.bodies = (owner, from, dir, length) => (this.together ? this.strikeBodies(owner, from, dir, length) : null);
+  }
+
+  /**
+   * The nearest body a round of `owner` meets along a segment, short of `length` metres: the
+   * player's own rounds the others'; another's (owner 2 + their seat) everyone's but their own,
+   * the player's included; the front's (owner 1) the player's alone.
+   */
+  private strikeBodies(owner: number, from: readonly [number, number, number], dir: readonly [number, number, number], length: number): { t: number; body: number; zone: 'head' | 'torso' | 'limb' } | null {
+    let best: { t: number; body: number; zone: 'head' | 'torso' | 'limb' } | null = null;
+    const test = (id: number, frames: Record<PartName, Frame>, feet: readonly number[]) => {
+      const { centre, radius } = bodySphere(feet);
+      // The segment's nearest approach to the body's sphere: past it, no part is met.
+      const along = Math.max(0, Math.min(length, (centre[0] - from[0]) * dir[0] + (centre[1] - from[1]) * dir[1] + (centre[2] - from[2]) * dir[2]));
+      const near = hypot(from[0] + dir[0] * along - centre[0], from[1] + dir[1] * along - centre[1], from[2] + dir[2] * along - centre[2]);
+      if (near > radius) return;
+      const h = hitParts(frames, from, dir, best ? best.t : length);
+      if (h && (!best || h.t < best.t)) best = { t: h.t, body: id, zone: h.zone };
+    };
+    if (owner !== 1) for (const b of this.bodies) if (b.id !== owner - 2) test(b.id, b.frames, b.feet);
+    if (owner !== 0 && this.alive) test(LOCAL_BODY, this.ownBody(), this.player.position.toArray());
+    return best;
+  }
+
+  /** The player's own parts' frames, as others draw them (soldier-rig.ts), this tick. */
+  private ownBody(): Record<PartName, Frame> {
+    if (this.ownFrames?.tick === this.ticks) return this.ownFrames.frames;
+    const p = this.player;
+    const frames = pose({ position: p.position.toArray(), yaw: p.yaw, pitch: p.pitch, height: p.height, speed: p.velocity.horizontalLength, bob: p.bobPhase, deadFor: null });
+    this.ownFrames = { tick: this.ticks, frames };
+    return frames;
+  }
+
+  /** Another player's shot (owner 2 + their seat), from their eye along `dir`, its tracer and flash at their rifle's `muzzle`. */
+  fireRemote(owner: number, origin: readonly [number, number, number], dir: readonly [number, number, number], tracer: boolean, muzzle: readonly [number, number, number]): void {
+    const spec = this.weapon.spec.projectile;
+    const v = spec.muzzleVelocity;
+    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, tracer, [muzzle[0], muzzle[1], muzzle[2]]) < 0) return;
+    this.events.remoteShots.push({ tick: this.ticks, owner, origin: [origin[0], origin[1], origin[2]], dir: [dir[0], dir[1], dir[2]], tracer, muzzle: [muzzle[0], muzzle[1], muzzle[2]] });
+    const { flash } = this.kinds;
+    this.particles.emit(muzzle, [dir[0] * flash.speed, dir[1] * flash.speed + flash.lift, dir[2] * flash.speed], flash, flash.count, this.particleRng);
+  }
+
+  /** Back in after being killed: at `position` (the foot, metres) facing `yaw`, armed and calm. */
+  respawn(position: readonly [number, number, number], yaw: number): void {
+    this.teleport(position, yaw, 0);
+    this.alive = true;
+    this.weapon.rearm();
+    this.suppression.calm();
+    this.digging = false;
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -237,6 +316,7 @@ export class Session {
 
   tick(): void {
     this.ticks++;
+    this.acting = this.alive ? this.intent : idleIntent();
     const p = this.player;
     // Suppression as the last tick left it slows the feet and pins the player off the step.
     p.speedScale = this.suppression.speedScale;
@@ -246,7 +326,7 @@ export class Session {
     this.prevView = this.view();
     this.prevKick = this.kick();
     this.prevRaised = this.raised;
-    this.controller.tick(p, this.intent, this.clock.dt);
+    this.controller.tick(p, this.acting, this.clock.dt);
     if (wasOnStep && p.pinned && p.stance !== Stance.FIRING_STEP) this.ejected++;
     // To the shoulder on the firing step, over the parapet; down off it.
     const raise = p.stance === Stance.FIRING_STEP ? 1 : 0;
@@ -267,7 +347,7 @@ export class Session {
    */
   private dig(dt: number): void {
     const p = this.player;
-    this.digging = this.intent.dig && p.onGround && p.climbTo === null && p.stance !== Stance.PRONE && p.stance !== Stance.PERISCOPE;
+    this.digging = this.acting.dig && p.onGround && p.climbTo === null && p.stance !== Stance.PRONE && p.stance !== Stance.PERISCOPE;
     if (!this.digging) return;
     const scoop = this.entrenching.work(p.position.toArray(), p.yaw, dt, (box) => !this.destruction.overlapsOut(box));
     if (!scoop) return;
@@ -301,9 +381,9 @@ export class Session {
     this.suppression.tick(dt);
     this.blastShake.tick(dt);
     this.viewKick.tick(dt);
-    if (this.intent.reload) w.beginReload();
+    if (this.acting.reload) w.beginReload();
     const eye: [number, number, number] = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
-    if (w.wants(this.intent.fire && p.stance !== Stance.PERISCOPE)) {
+    if (w.wants(this.acting.fire && p.stance !== Stance.PERISCOPE)) {
       const aim: [number, number] = [p.yaw + this.recoil.yaw + this.suppression.flinchYaw, p.pitch + this.recoil.pitch + this.suppression.flinchPitch];
       const dir = w.aim(aim[0], aim[1], sway * this.suppression.swayScale, this.dispersion);
       const v = w.spec.projectile.muzzleVelocity;
@@ -331,6 +411,12 @@ export class Session {
     if (this.debrisFalling.length > 0) {
       for (const f of this.debrisFalling) if (f.tick <= this.ticks) this.events.splashes.push({ tick: this.ticks, at: f.at, energyJ: this.debris.energyJ, kind: 'debris' });
       this.debrisFalling = this.debrisFalling.filter((f) => f.tick > this.ticks);
+    }
+    // Rounds into bodies: a puff of the uniform's dust where each struck.
+    for (const hit of this.rounds.bodyHits) {
+      this.events.hits.push({ ...hit, tick: this.ticks });
+      const { dust } = this.kinds;
+      this.particles.emit(hit.position, [-hit.dir[0] * dust.speed, dust.lift, -hit.dir[2] * dust.speed], dust, dust.count, this.particleRng, this.tints[P_KHAKI]);
     }
     for (const hit of this.rounds.impacts) {
       this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);

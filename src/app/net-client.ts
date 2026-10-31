@@ -7,7 +7,7 @@
  */
 
 import { ServerClock } from '../net/clock';
-import { defaultConfig, encodeState, parseRoom, PROTOCOL, type ClientMsg, type MatchInfo, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type Seat, type Team } from '../net/protocol';
+import { decodeShot, defaultConfig, encodeShot, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type MatchInfo, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
 import { RemotePlayers } from './net-players';
 
 export interface NetEvents {
@@ -19,6 +19,20 @@ export interface NetEvents {
   ended(): void;
   /** The room would not have this player, or the line went: why, in a sentence. */
   lost(why: string): void;
+  /** In the match: this player was hurt (their health now, and by whom, −1 the battle). */
+  hurt(hp: number, from: number): void;
+  /** Someone died: who, by whose hand (−1 the battle), where struck, whether a teammate's, by what. */
+  death(victim: number, killer: number, zone: Zone | null, teamkill: boolean, cause: Cause): void;
+  /** Someone is back in, at their team's `spawn`-th start. */
+  respawn(id: number, spawn: number): void;
+  /** The match is won. */
+  over(winner: Team, red: number, blue: number): void;
+}
+
+/** A shot another player fired, as the room relayed it. */
+export interface RemoteShot {
+  seat: number;
+  shot: ShotState;
 }
 
 const PING_MS = 500;
@@ -50,6 +64,11 @@ export class NetClient {
   match: MatchInfo | null = null;
   /** Whether the room has welcomed this player. */
   joined = false;
+  /** The match's score, and each player's kills and deaths, as the room last told them. */
+  score = { red: 0, blue: 0 };
+  tallies = new Map<number, { kills: number; deaths: number }>();
+  /** Others' shots heard since the game last took them. */
+  private shots: RemoteShot[] = [];
   private readonly ws: WebSocket;
   private pinger: ReturnType<typeof setInterval> | null = null;
   private closedByUs = false;
@@ -118,8 +137,26 @@ export class NetClient {
     if (!away) this.burst();
   }
 
-  state(s: PlayerState): void {
-    this.send({ t: 's', s: encodeState(s) });
+  /** This player's state, and the shots they fired since the last. */
+  state(s: PlayerState, shots: readonly ShotState[] = []): void {
+    this.send({ t: 's', s: encodeState(s), ...(shots.length ? { sh: shots.map(encodeShot) } : {}) });
+  }
+
+  /** This player's round struck seat `victim`'s `zone`. */
+  hit(victim: number, zone: Zone): void {
+    this.send({ t: 'hit', v: victim, z: zone });
+  }
+
+  /** The battle hurt this player by `amount`. */
+  hurt(amount: number, cause: Cause): void {
+    this.send({ t: 'hurt', a: amount, c: cause });
+  }
+
+  /** Others' shots heard since the last call. */
+  takeShots(): RemoteShot[] {
+    const out = this.shots;
+    this.shots = [];
+    return out;
   }
 
   close(): void {
@@ -178,6 +215,9 @@ export class NetClient {
       case 'start':
         this.phase = 'playing';
         this.match = m.match;
+        this.score = { red: 0, blue: 0 };
+        this.tallies.clear();
+        this.shots = [];
         this.players.clear();
         this.on.changed();
         this.on.started(m.match);
@@ -194,6 +234,28 @@ export class NetClient {
         return;
       case 'f':
         this.players.frame(m.s, m.ps);
+        for (const p of m.sh) {
+          const shot = decodeShot(p.slice(1));
+          if (shot && p[0] !== this.you && this.shots.length < 64) this.shots.push({ seat: p[0], shot });
+        }
+        return;
+      case 'hurt':
+        this.on.hurt(m.hp, m.from);
+        return;
+      case 'death':
+        this.on.death(m.v, m.k, m.z, m.tk, m.c);
+        return;
+      case 'respawn':
+        this.on.respawn(m.id, m.spawn);
+        return;
+      case 'score':
+        this.score = { red: m.red, blue: m.blue };
+        this.tallies = new Map(m.ps.map(([id, kills, deaths]) => [id, { kills, deaths }]));
+        this.on.changed();
+        return;
+      case 'over':
+        this.score = { red: m.red, blue: m.blue };
+        this.on.over(m.winner, m.red, m.blue);
         return;
     }
   }

@@ -145,6 +145,8 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
   };
   for (const s of events.shots) out.push({ kind: 'report', at: s.muzzle, delayS: 0, gain: 1, lowpassHz: t.openLowpassHz });
   for (const s of events.frontShots) out.push(afar(s.origin, t.frontReportGain, 'report'));
+  // Another player's rifle: heard where it is, as the front's are.
+  for (const s of events.remoteShots) out.push(afar(s.muzzle, t.frontReportGain, 'report'));
   for (const c of events.cracks) {
     out.push({ kind: 'crack', at: c.at, delayS: 0, gain: t.crackGain * Math.max(0, 1 - c.missM / t.crackRadiusM), lowpassHz: t.openLowpassHz });
   }
