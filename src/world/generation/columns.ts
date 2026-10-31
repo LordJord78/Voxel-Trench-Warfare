@@ -9,6 +9,7 @@
  * fills and a band another fills agree at their shared edge.
  */
 
+import { hash32x4 } from '../../core/hash';
 import { CraterField } from './craters';
 import type { WorldPlan } from './plan';
 import { ditchDepth, fieldHeight } from './terrain';
@@ -41,6 +42,57 @@ export interface ColumnModel {
   /** First air voxel above the column's ground mass: what the repose rule compares against. */
   top: Int16Array;
   flags: Uint8Array;
+}
+
+/** How far a rear wall is dug back past its plan, at most (voxels). */
+const REAR_WAVE = 2;
+
+/** A smooth value in [0, 1] along a bay at `a`, changing over about `span` voxels: a pure function of `a`, the bay's seed and `salt`, so every band agrees. */
+function along(a: number, seed: number, salt: number, span: number): number {
+  const i = Math.floor(a / span);
+  const f = a / span - i;
+  const h0 = (hash32x4(i, seed, salt, 0) & 1023) / 1023;
+  const h1 = (hash32x4(i + 1, seed, salt, 0) & 1023) / 1023;
+  return h0 + (h1 - h0) * f * f * (3 - 2 * f);
+}
+
+/** How far a bay's rear wall is dug back at `a` (0 to REAR_WAVE voxels), eased to nothing at its ends. */
+function rearWave(bay: BayPlan, a: number): number {
+  const ends = Math.min(a - bay.a0, bay.a1 - 1 - a);
+  if (ends < 2) return 0;
+  return Math.min(REAR_WAVE, Math.round(along(a, bay.seed, 61, 9) * (REAR_WAVE + 0.49)), ends - 1);
+}
+
+/** The gentlest a bank falls (voxels a voxel), and how far its flat top runs past `flat` at most. */
+const SLOPE_MIN = 0.7;
+const FLAT_MORE = 3;
+
+/** How far out from its face a bank `height` high, flat for about `flat`, can reach (voxels). */
+function bankReach(height: number, flat: number): number {
+  return flat + FLAT_MORE + Math.ceil(height / SLOPE_MIN + 1.5) + 1;
+}
+
+/**
+ * One column's bank outward from a face (`at(k)`, the k-th column out): `crest` for about `flat`
+ * voxels (more or less by up to three, slowly along the bay), then a shoulder that rounds over into
+ * a slope of 0.7 to 1 voxels a voxel, with a dent here and there, never falling more than a voxel
+ * a voxel; down to `ground`. Raised into `into` wherever it stands higher than what is there.
+ */
+function bankOut(m: ColumnModel, axis: 0 | 2, a: number, crest: number, ground: number, flat: number, seed: number, salt: number, at: (k: number) => number, into: Int16Array): void {
+  const level = flat + Math.round((along(a, seed, 71 + salt, 13) - 0.5) * (2 * FLAT_MORE - 1));
+  const slope = SLOPE_MIN + (1 - SLOPE_MIN) * along(a, seed, 73 + salt, 25);
+  let prev = crest;
+  for (let k = 0; ; k++) {
+    const over = Math.max(0, k - level);
+    const fall = over <= 3 ? (over * over * slope) / 6 : (over - 1.5) * slope;
+    const dent = over > 2 && along(a * 3 + k * 11, seed, 79 + salt, 4) > 0.8 ? 1 : 0;
+    const target = Math.max(prev - 1, crest - Math.floor(fall) - dent);
+    prev = target;
+    if (target <= ground) break;
+    forBox(m, axis, a, a + 1, at(k), at(k) + 1, (c) => {
+      if (into[c] < target) into[c] = target;
+    });
+  }
 }
 
 const fieldCache = new WeakMap<WorldPlan, CraterField>();
@@ -129,44 +181,46 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number, z0 = 0, z1 
 
     line.bays.forEach((bay, i) => {
       // Everything a bay touches lies within its footprint widened by its banks: skip it if that misses us.
-      const bank = Math.max(bay.crestY - bay.groundY, T.paradosH) + T.crestFlat + 2;
+      const bank = bankReach(Math.max(bay.crestY - bay.groundY, T.paradosH), T.crestFlat) + REAR_WAVE;
       if (!touches(m, axis, bay.a0, bay.a1 + T.leg, bay.b0 - bank, bay.b1 + bank)) return;
       const id = bayBase + i;
       forBox(m, axis, bay.a0, bay.a1, bay.b0, bay.b1, (c) => openTrench(m, c, floorOf(c, bay.floorY), id));
+      // The rear wall dug back unevenly, never narrowing the walkway (the multiplayer spec's §5).
+      const rear = (a: number) => (a >= bay.a0 && a < bay.a1 ? rearWave(bay, a) : 0);
+      for (let a = bay.a0; a < bay.a1; a++) {
+        const w = rear(a);
+        if (w === 0) continue;
+        const [r0, r1] = facing > 0 ? [bay.b0 - w, bay.b0] : [bay.b1, bay.b1 + w];
+        forBox(m, axis, a, a + 1, r0, r1, (c) => openTrench(m, c, floorOf(c, bay.floorY), id));
+      }
       if (bay.firingSteps) firingStep(m, p.trench, bay, axis, facing);
 
-      // Parapet courses outward from the face: flat for crestFlat, then 45° down to the field.
-      for (let k = 0; ; k++) {
-        const target = bay.crestY - Math.max(0, k - T.crestFlat);
-        if (target <= bay.groundY) break;
-        const b = facing > 0 ? bay.b1 + k : bay.b0 - 1 - k;
-        forBox(m, axis, bay.a0, bay.a1 + T.leg, b, b + 1, (c) => {
-          if (parapet[c] < target) parapet[c] = target;
-        });
-      }
-      // Parados behind, lower, the same profile.
-      for (let k = 0; ; k++) {
-        const target = bay.groundY + T.paradosH - Math.max(0, k - T.crestFlat);
-        if (target <= bay.groundY) break;
-        const b = facing > 0 ? bay.b0 - 1 - k : bay.b1 + k;
-        forBox(m, axis, bay.a0, bay.a1 + T.leg, b, b + 1, (c) => {
-          if (parados[c] < target) parados[c] = target;
-        });
+      // Banks outward from each face, column by column along the bay: the parapet flat at its crest
+      // for about crestFlat (the sightline over it is the crest's alone), then a rounded shoulder and
+      // a slope of its own, never steeper than a voxel a voxel; the parados lower, the same way.
+      for (let a = bay.a0; a < bay.a1 + T.leg; a++) {
+        if (!touches(m, axis, a, a + 1, bay.b0 - bank, bay.b1 + bank)) continue;
+        const w = rear(a);
+        bankOut(m, axis, a, bay.crestY, bay.groundY, T.crestFlat, bay.seed, 0, (k) => (facing > 0 ? bay.b1 + k : bay.b0 - 1 - k), parapet);
+        bankOut(m, axis, a, bay.groundY + T.paradosH, bay.groundY, T.crestFlat, bay.seed, 1, (k) => (facing > 0 ? bay.b0 - 1 - w - k : bay.b1 + w + k), parados);
       }
       // Both faces revetted from the duckboards to their own heights.
       const duck = bay.floorY + 1;
-      const faces: [number, number][] = [
-        [facing > 0 ? bay.b1 : bay.b0 - 1, bay.crestY],
-        [facing > 0 ? bay.b0 - 1 : bay.b1, bay.groundY + T.paradosH],
-      ];
-      for (const [b, height] of faces) {
-        forBox(m, axis, bay.a0, bay.a1 + T.leg, b, b + 1, (c) => {
-          if (m.flags[c] & FLAG.TRENCH) return;
-          if (m.revetTop[c] < height) m.revetTop[c] = height;
-          m.revetFrom[c] = m.revetFrom[c] < 0 ? duck : Math.min(m.revetFrom[c], duck);
-          if (m.bay[c] < 0) m.bay[c] = id;
-          m.flags[c] |= FLAG.REVET;
-        });
+      for (let a = bay.a0; a < bay.a1 + T.leg; a++) {
+        const w = rear(a);
+        const faces: [number, number][] = [
+          [facing > 0 ? bay.b1 : bay.b0 - 1, bay.crestY],
+          [facing > 0 ? bay.b0 - 1 - w : bay.b1 + w, bay.groundY + T.paradosH],
+        ];
+        for (const [b, height] of faces) {
+          forBox(m, axis, a, a + 1, b, b + 1, (c) => {
+            if (m.flags[c] & FLAG.TRENCH) return;
+            if (m.revetTop[c] < height) m.revetTop[c] = height;
+            m.revetFrom[c] = m.revetFrom[c] < 0 ? duck : Math.min(m.revetFrom[c], duck);
+            if (m.bay[c] < 0) m.bay[c] = id;
+            m.flags[c] |= FLAG.REVET;
+          });
+        }
       }
     });
     line.legs.forEach((leg: LegPlan, i) => {
@@ -196,7 +250,8 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number, z0 = 0, z1 
         const z = (c % nz) + z0;
         const dx = x < d.lo[0] ? d.lo[0] - x : x >= d.hi[0] ? x - d.hi[0] + 1 : 0;
         const dz = z < d.lo[2] ? d.lo[2] - z : z >= d.hi[2] ? z - d.hi[2] + 1 : 0;
-        const t = target - Math.max(dx, dz);
+        // A round mound, not a square pyramid.
+        const t = target - Math.round(Math.sqrt(dx * dx + dz * dz));
         if (t > m.surface[c] && t > m.spoilTop[c]) m.spoilTop[c] = t;
       });
     }

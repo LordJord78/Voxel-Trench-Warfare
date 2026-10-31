@@ -125,6 +125,10 @@ function patch(surface: Surface, longAxis: 0 | 2, dims: { x: number; z: number }
 
 const corridorDims = { x: Infinity, z: Infinity };
 
+/** How far a line wanders across from where it was planned (metres), and its largest step from bay to bay. */
+const WANDER_M = 1.5;
+const WANDER_STEP_M = 0.5;
+
 /**
  * How high the ground gets in the strip this bay has to see over: a high
  * percentile of the whole corridor, or the highest point of the near band if
@@ -173,9 +177,18 @@ export function planLine(p: GenParams, spec: LineSpec, surface: Surface, rng: Rn
 
   const drafts: Draft[] = [];
   let prevFloor: number | null = null;
+  // Dug by hand, not ruled (the multiplayer spec's §5): each bay its own length, and the line
+  // wandering as it goes, a random walk of its cross position held within WANDER of the plan's.
+  const shape = rng.derive('shape');
+  const wander = vx(WANDER_M, p.voxel);
+  const stride = vx(WANDER_STEP_M, p.voxel);
+  let drift = 0;
   for (let a = spec.aStart, index = 0; a < spec.aEnd; index++) {
-    const a1 = Math.min(a + T.bayLen, spec.aEnd);
-    const b0 = spec.crossBase + (index % 2 ? T.offset : 0);
+    const length = T.bayLen + shape.randint(-Math.floor(T.bayLen / 4), Math.floor(T.bayLen / 5) + 1);
+    // The end of the line does not leave a stub too short to be a bay.
+    const a1 = spec.aEnd - (a + length) < T.bayLen / 2 ? spec.aEnd : Math.min(a + length, spec.aEnd);
+    if (index > 0) drift = Math.max(-wander, Math.min(wander, drift + shape.randint(-stride, stride + 1)));
+    const b0 = spec.crossBase + drift + (index % 2 ? T.offset : 0);
     const b1 = b0 + T.width;
     const groundY = medianInt(patch(surface, spec.longAxis, dims, a, a1, b0, b1, 1));
     let floorY = groundY - T.depth;

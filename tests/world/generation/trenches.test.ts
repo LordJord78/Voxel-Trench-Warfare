@@ -27,8 +27,16 @@ describe('trench planner', () => {
       expect(front.bays[i - 1].stepTopY - front.bays[i].stepTopY).toBeLessThanOrEqual(p.trench.smooth);
     }
   });
-  it('crenellates by the traverse offset and ends inside the margin', () => {
-    expect(front.bays[1].b0 - front.bays[0].b0).toBe(p.trench.offset);
+  it('crenellates by the traverse offset, wandering a little, and ends inside the margin', () => {
+    // Each bay's cross position steps at most half a metre from the last, and never strays 1.5 m from the plan's.
+    const base = front.bays[0].b0;
+    for (let i = 1; i < front.bays.length; i++) {
+      const step = front.bays[i].b0 - front.bays[i - 1].b0 + (i % 2 ? -p.trench.offset : p.trench.offset);
+      expect(Math.abs(step)).toBeLessThanOrEqual(5);
+      expect(Math.abs(front.bays[i].b0 - base - (i % 2 ? p.trench.offset : 0))).toBeLessThanOrEqual(15);
+    }
+    // Bays of their own lengths, not one ruled length.
+    expect(new Set(front.bays.slice(0, -1).map((b) => b.a1 - b.a0)).size).toBeGreaterThan(3);
     expect(front.bays[0].a0).toBe(60);
     expect(front.bays.at(-1)!.a1).toBeLessThanOrEqual(2500);
     expect(front.legs).toHaveLength(front.bays.length - 1);

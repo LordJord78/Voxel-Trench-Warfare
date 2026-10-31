@@ -30,7 +30,7 @@ describe('the firing step in the generated world', () => {
     const T = params.trench;
     const timber: number[] = [P.BENCH];
     const bays = world.plan.lines.filter((l) => l.spec.side === 0 && l.spec.firingSteps).flatMap((l) => l.bays.filter((b) => b.firingSteps));
-    expect(bays.length).toBe(26);
+    expect(bays.length).toBe(27);
     const missed: string[] = [];
     let shotAway = 0;
     for (const bay of bays) {
@@ -103,13 +103,18 @@ describe('the firing step in the generated world', () => {
       const at = (a: number, b: number): [number, number] => (bay.longAxis === 0 ? [a, b] : [b, a]);
       const walkB = f > 0 ? (bay.b0 + lo - T.treadsAcross * T.treadDepth) / 2 : (hi + T.treadsAcross * T.treadDepth + bay.b1) / 2;
       // A face behind the walkway, shelled or not, and not a dugout's entrance or a comm trench's
-      // mouth (those are walked into, not climbed): solid at the shins in the four columns behind.
+      // mouth (those are walked into, not climbed), nor a crater's floor: solid at the shins and the
+      // chest in the four columns behind, wherever the rear wall was dug back to (up to two voxels
+      // past the plan's).
       const rear = f > 0 ? bay.b0 - 1 : bay.b1;
+      const solidAt = (a: number, d: number) => {
+        const [cx, cz] = at(a, rear - f * d);
+        return isSolid(world.map.get(cx, bay.floorY + 3, cz)) && isSolid(world.map.get(cx, bay.floorY + 12, cz));
+      };
       const wall = (a: number) => {
-        for (let d = 0; d < 4; d++) {
-          const [cx, cz] = at(a, rear - f * d);
-          if (!isSolid(world.map.get(cx, bay.floorY + 3, cz))) return false;
-        }
+        let back = 0;
+        while (back < 2 && !solidAt(a, back)) back++;
+        for (let d = back; d < back + 4; d++) if (!solidAt(a, d)) return false;
         return true;
       };
       const mid = Math.floor((bay.a0 + bay.a1) / 2);
