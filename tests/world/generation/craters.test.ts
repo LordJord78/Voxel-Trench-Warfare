@@ -33,6 +33,29 @@ describe('craters', () => {
       expect(Math.abs(craterSurface(f, 160, x + 1, 100) - craterSurface(f, 160, x, 100))).toBeLessThanOrEqual(1);
     }
   });
+  it('plans ragged craters: lobed bowls, rims heaped to one side, as gentle as round ones', () => {
+    const c = planCraters(p, t, Rng.root(7).derive('craters'), fronts);
+    expect(c.open.every((k) => k.ragged === 1)).toBe(true);
+    const f = new CraterField([{ x: 200, z: 200, r: 30, ragged: 1 }]);
+    // How far the bowl reaches along each of 16 directions: not one radius.
+    const reach: number[] = [];
+    for (let k = 0; k < 16; k++) {
+      const [ux, uz] = [Math.cos((k * Math.PI) / 8), Math.sin((k * Math.PI) / 8)];
+      let d = 0;
+      while (craterSurface(f, 160, Math.round(200 + ux * d), Math.round(200 + uz * d)) < 160 && d < 60) d++;
+      reach.push(d);
+    }
+    expect(Math.max(...reach) - Math.min(...reach)).toBeGreaterThanOrEqual(3);
+    expect(Math.max(...reach)).toBeLessThanOrEqual(Math.ceil(30 * 1.16) + 1);
+    // Nowhere a step of more than a voxel between neighbours, along x or z.
+    for (let x = 150; x < 250; x++) {
+      for (let z = 150; z < 250; z++) {
+        const h = craterSurface(f, 160, x, z);
+        expect(Math.abs(craterSurface(f, 160, x + 1, z) - h)).toBeLessThanOrEqual(2);
+        expect(Math.abs(craterSurface(f, 160, x, z + 1) - h)).toBeLessThanOrEqual(2);
+      }
+    }
+  });
   it('lets a later bowl cut an earlier rim', () => {
     const f = new CraterField([{ x: 100, z: 100, r: 20 }, { x: 125, z: 100, r: 10 }]);
     expect(craterSurface(f, 160, 125, 100)).toBe(153);
