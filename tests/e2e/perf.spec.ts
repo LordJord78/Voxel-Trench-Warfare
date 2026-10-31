@@ -631,3 +631,57 @@ test('a heavy night in play, with its sound, holds the main thread and the GPU',
   if (r.count > 0) expect(r.p95, line).toBeLessThanOrEqual(BUDGET_MS);
   expect(errors).toEqual([]);
 });
+
+// The other players (the multiplayer spec's §3): seven soldiers over the parapet at the step view,
+// at dusk and at night, from 3 m to 150 m out, one at arm's length; the soldiers' pass's own time
+// within 0.4 ms at the median, and the frame within the budget at the 95th percentile.
+test('seven soldiers stay within the frame budget', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  await hooks(page, (h) => h.play());
+  const lines: string[] = [];
+  for (const [label, hours] of [['dusk', TIMES.dusk], ['night', TIMES.night]] as const) {
+    const r = await hooks(
+      page,
+      async (h, arg) => {
+        const x = h as unknown as { puppets(l: unknown[]): void; soldiersDrawn(): unknown[] };
+        const v = h.views.step;
+        const feet: [number, number, number] = [v.position[0], v.position[1] - 1.62, v.position[2]];
+        h.teleport({ position: feet, yaw: v.yaw, pitch: 0 });
+        h.setTimeOfDay(arg as number);
+        const f = [Math.sin((v.yaw * Math.PI) / 180), Math.cos((v.yaw * Math.PI) / 180)];
+        x.puppets([3, 6, 10, 20, 40, 80, 150].map((d, i) => ({
+          team: i % 2 ? 'blue' : 'red',
+          position: [feet[0] + f[0] * d + (i - 3) * 0.8, feet[1] + 0.6, feet[2] + f[1] * d],
+          yaw: v.yaw + 180,
+          pitch: 0,
+          height: [1.8, 1.25, 1.8, 0.55, 1.8, 1.8, 1.8][i],
+        })));
+        await h.waitFrames(60);
+        const gpu: number[] = [];
+        const own: number[] = [];
+        let drawn = 0;
+        for (let k = 0; k < 240; k++) {
+          await h.waitFrames(1);
+          const s = h.stats();
+          drawn = Math.max(drawn, x.soldiersDrawn().length);
+          if (s.gpuMs === null) continue;
+          gpu.push(s.gpuMs);
+          own.push(s.own.soldiers ?? 0);
+        }
+        x.puppets([]);
+        const at = (xs: number[], q: number) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(q * xs.length))];
+        return { count: gpu.length, p95: at(gpu, 0.95), soldiers: at(own, 0.5), drawn };
+      },
+      hours,
+    );
+    if (r.count === 0) test.skip(true, 'no GPU timestamps');
+    lines.push(`${label}: p95 ${r.p95.toFixed(2)} ms, the soldiers ${r.soldiers.toFixed(3)} ms at the median (${r.drawn} drawn)`);
+    expect(r.drawn, lines.join('; ')).toBeGreaterThanOrEqual(5);
+    expect(r.soldiers, lines.join('; ')).toBeLessThanOrEqual(0.4);
+    expect(r.p95, lines.join('; ')).toBeLessThanOrEqual(BUDGET_MS);
+  }
+  console.log(`Seven soldiers, GPU ms: ${lines.join('; ')}`);
+  expect(errors).toEqual([]);
+});

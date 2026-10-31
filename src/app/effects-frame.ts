@@ -167,8 +167,6 @@ export class EffectsFrameBuilder {
   /** Quads and transient lights a test asks for, every frame until it asks for none. */
   debug: DebugQuad[] = [];
   debugRibbons: DebugRibbon[] = [];
-  /** The other players, until they are drawn as soldiers: a ribbon each, in their team's colour. */
-  players: DebugRibbon[] = [];
   debugLights: TransientLight[] = [];
   debugBlasts: TransientLight[] = [];
   debugSmoke: SmokePuff[] = [];
@@ -315,7 +313,6 @@ export class EffectsFrameBuilder {
       lights.push({ position: at, radiusM: t.flashLightRadiusM, colour: t.flashLightColour, intensity: t.flashLightIntensity });
     }
     for (const r of this.debugRibbons) ribbon(r.tail, r.head, r.width, r.colour, 1, 1);
-    for (const r of this.players) ribbon(r.tail, r.head, r.width, r.colour, 1, 1);
     lights.push(...this.debugLights);
 
     // The battle's tracers, after the session's own: drawn as theirs are, the head at the round and

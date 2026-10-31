@@ -61,7 +61,8 @@ export class Froxels {
   readonly none: GPUBindGroup;
   private readonly device: GPUDevice;
   private readonly pipelines: FroxelPipelines;
-  private readonly sampler: GPUSampler;
+  /** The haze's sampler, for a pass that binds the haze in a group of its own (soldiers.ts). */
+  readonly sampler: GPUSampler;
   /** Each froxel's samples, blended over frames (the point lights' glow, and how much of the key reaches it): frame k writes [k & 1] from the other. */
   private glow: GPUTexture[] = [];
   private readonly cells: GPUBindGroup;

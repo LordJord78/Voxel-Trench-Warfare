@@ -34,7 +34,7 @@ import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
 import { idleIntent, Session, type CombatEvents } from '../sim/session';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
-import { relayUrl, Together } from './together';
+import { Gaits, relayUrl, Together, type Figure } from './together';
 import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
@@ -451,6 +451,9 @@ async function start(): Promise<void> {
     leave: () => together.leave(),
     endMatch: () => together.endMatch(),
   });
+  /** The other players' strides, and the soldiers a test stands in the world without a room (puppets). */
+  const gaits = new Gaits();
+  let puppets: Figure[] = [];
   // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
   const searchParams = new URLSearchParams(location.search);
   const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
@@ -717,7 +720,7 @@ async function start(): Promise<void> {
     }
     // The battle seen (its flares, flashes, smoke, tracers, and fires' flames and plumes) as the lights last showed it; none at rest.
     const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
-    effects.players = together.ribbons();
+    renderer.setSoldiers(gaits.pose([...together.figures(), ...puppets], dt));
     const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares);
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
@@ -1008,6 +1011,11 @@ async function start(): Promise<void> {
       begun: () => together.begun,
       others: () => together.others().map(({ seat, state }) => ({ id: seat.id, team: seat.team, name: seat.name, position: state.position, stance: state.stance })),
     },
+    /** Soldiers stood in the world without a room, for the tests and the perf gate (seat 100 on, so they never share a probe with a player's). */
+    puppets(list: (Pick<Figure, 'team' | 'position' | 'yaw' | 'pitch' | 'height'> & Partial<Pick<Figure, 'velocity' | 'deadFor'>>)[]) {
+      puppets = list.map((p, i) => ({ seat: 100 + i, velocity: [0, 0, 0], deadFor: null, ...p }));
+    },
+    soldiersDrawn: () => renderer.soldiersDrawn(),
     /** The camera held at `pose` while the session runs (null: play again); peak-combat.ts's. */
     spectate(pose: CameraPose | null) {
       peakGame.spectate(pose);

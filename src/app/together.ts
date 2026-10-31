@@ -7,19 +7,60 @@
  * never opens a socket or asks the relay anything.
  */
 
+import { pose } from '../combat/soldier-rig';
 import { STATE, type MatchInfo, type PlayerState, type RoomConfig, type Team } from '../net/protocol';
 import { Stance } from '../physics/character';
+import type { SoldierDraw } from '../render/soldiers';
 import type { Session } from '../sim/session';
 import { Lobby } from '../ui/lobby';
-import type { DebugRibbon } from './effects-frame';
 import { makeRoom, NetClient } from './net-client';
 import type { RemotePlayer } from './net-players';
 
 /** States sent a second. */
 const SEND_HZ = 20;
 const NAME_KEY = 'trenchline.name';
-/** A team's colour for the stand-in ribbons drawn until soldiers are (an emissive scale, as a tracer's). */
-const RIBBON: Record<Team, [number, number, number]> = { red: [1.0, 0.16, 0.08], blue: [0.12, 0.36, 1.0] };
+/** Strides a second at a walk (camera.head_bob_hz), and the walking speed they are at (stance.standing.speed). */
+const STRIDE_HZ = 1.9;
+const WALK_MS = 4.1;
+
+/** Someone to draw as a soldier: where, how they stand and look, their team and seat. */
+export interface Figure {
+  seat: number;
+  team: Team;
+  position: [number, number, number];
+  velocity: [number, number, number];
+  yaw: number;
+  pitch: number;
+  height: number;
+  /** Seconds since killed, or null alive. */
+  deadFor: number | null;
+}
+
+/**
+ * Figures posed as soldiers for the renderer, each one's stride kept going from frame to frame by
+ * how fast they move (the room does not send it).
+ */
+export class Gaits {
+  private readonly phase = new Map<number, number>();
+
+  pose(figures: readonly Figure[], dt: number): SoldierDraw[] {
+    const seen = new Set<number>();
+    const out = figures.map((f) => {
+      seen.add(f.seat);
+      const speed = Math.hypot(f.velocity[0], f.velocity[2]);
+      const phase = ((this.phase.get(f.seat) ?? 0) + dt * STRIDE_HZ * 2 * Math.PI * (speed / WALK_MS)) % (2 * Math.PI);
+      this.phase.set(f.seat, phase);
+      return {
+        frames: pose({ position: f.position, yaw: f.yaw, pitch: f.pitch, height: f.height, speed, bob: phase, deadFor: f.deadFor }),
+        team: f.team,
+        seat: f.seat,
+        feet: f.position,
+      };
+    });
+    for (const seat of [...this.phase.keys()]) if (!seen.has(seat)) this.phase.delete(seat);
+    return out;
+  }
+}
 
 export interface TogetherHooks {
   /** The lobby is up: the loading screen goes. */
@@ -144,12 +185,9 @@ export class Together {
     return this.net && this.inMatch ? this.net.players.at(this.net.serverNow()) : [];
   }
 
-  /** The others as stand-in ribbons, from their feet to their heads. */
-  ribbons(): DebugRibbon[] {
-    return this.others().map(({ seat, state }) => {
-      const [x, y, z] = state.position;
-      return { tail: [x, y + 0.1, z], head: [x, y + Math.max(0.4, state.height), z], width: 0.5, colour: RIBBON[seat.team] };
-    });
+  /** The others, to be drawn as soldiers. */
+  figures(): Figure[] {
+    return this.others().map(({ seat, state }) => ({ seat: seat.id, team: seat.team, position: state.position, velocity: state.velocity, yaw: state.yaw, pitch: state.pitch, height: state.height, deadFor: null }));
   }
 
   /** The HUD's line: the game, and how many a side. */
