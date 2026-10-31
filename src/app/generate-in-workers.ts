@@ -9,7 +9,7 @@ import { loadTunables } from '../core/tunables';
 import { emptyFarField, type FarField } from '../world/generation/farfield';
 import type { BandResult } from '../world/generation/fill';
 import { generateWorld, type GeneratedWorld } from '../world/generation/generate';
-import { genParams } from '../world/generation/params';
+import { genParams, type MapId } from '../world/generation/params';
 import { planWorld, type WorldPlan } from '../world/generation/plan';
 
 export type Progress = (phase: string, done: number, total: number) => void;
@@ -21,9 +21,9 @@ type Job = { type: 'band'; band: number } | { type: 'farfield'; row0: number; ro
  * them and lands the shelling: a chance to show that phase before work that
  * holds the page.
  */
-export async function generateInWorkers(seed: number, onProgress?: Progress, onFilled?: () => Promise<void>): Promise<GeneratedWorld> {
+export async function generateInWorkers(seed: number, map: MapId, onProgress?: Progress, onFilled?: () => Promise<void>): Promise<GeneratedWorld> {
   const t0 = performance.now();
-  const plan: WorldPlan = planWorld(genParams(loadTunables()), seed);
+  const plan: WorldPlan = planWorld(genParams(loadTunables(), undefined, map), seed);
   const planMs = Math.round(performance.now() - t0);
   const count = Math.min(8, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   const workers = Array.from({ length: count }, () => new Worker(new URL('./workers/gen-worker.ts', import.meta.url), { type: 'module' }));

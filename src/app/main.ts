@@ -33,6 +33,7 @@ import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
 import { idleIntent, Session, type CombatEvents } from '../sim/session';
+import { MAP_SEEDS, isMapId, type MapId } from '../world/generation/params';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
 import { relayUrl, Together, type Figure } from './together';
 import { LoadingScreen } from '../ui/loading';
@@ -70,7 +71,12 @@ import { standardViews, VIEW_NAMES, type ViewName } from './views';
 import { fallbackReason, placeHere, showFallback, type FallbackReason } from './fallback';
 import { Warmup } from './tiers';
 
-const SEED = 7;
+/** The map this page plays (`?map=`, the Ravine if none), and its seed: every player of a map generates the same world. */
+const MAP: MapId = (() => {
+  const asked = new URLSearchParams(location.search).get('map');
+  return isMapId(asked) ? asked : 'ravine';
+})();
+const SEED = MAP_SEEDS[MAP];
 /** A canvas resize settles this long before the internal images are reallocated. */
 const RESIZE_SETTLE_MS = 150;
 
@@ -191,6 +197,7 @@ async function start(): Promise<void> {
   });
   const world = await generateInWorkers(
     SEED,
+    MAP,
     (phase, done, total) => {
       if (phase === 'fill') loading.progress('Digging the trenches', `strip ${done} of ${total}`, 0.05 + 0.6 * (done / total));
     },

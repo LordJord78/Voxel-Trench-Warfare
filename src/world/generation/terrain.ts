@@ -25,13 +25,23 @@ export interface TerrainModel {
   ditches: Ditch[];
 }
 
+/**
+ * The relief's raw noise at a column: on a symmetric map, the mean of the noise there and at the
+ * column half a turn about the centre, so the field is the same from either end.
+ */
+function reliefNoise(p: GenParams, salt: number, x: number, z: number): number {
+  const r = fbm(x, z, p.field.baseCell, p.field.octaves, p.field.persistence, salt);
+  if (!p.symmetric) return r;
+  return 0.5 * (r + fbm(p.dims.x - 1 - x, p.dims.z - 1 - z, p.field.baseCell, p.field.octaves, p.field.persistence, salt));
+}
+
 export function buildTerrain(p: GenParams, rng: Rng): TerrainModel {
   const salt = rng.derive('field.relief').nextU32();
   let reliefMin = Infinity;
   let reliefMax = -Infinity;
   for (let z = 0; z < p.dims.z; z += 16) {
     for (let x = 0; x < p.dims.x; x += 16) {
-      const r = fbm(x, z, p.field.baseCell, p.field.octaves, p.field.persistence, salt);
+      const r = reliefNoise(p, salt, x, z);
       if (r < reliefMin) reliefMin = r;
       if (r > reliefMax) reliefMax = r;
     }
@@ -62,7 +72,7 @@ export function swale(p: GenParams, z: number): number {
 
 /** Height of the undisturbed field, in voxels: relief about the ground level, plus the swale. */
 export function fieldHeight(t: TerrainModel, p: GenParams, x: number, z: number): number {
-  const r = fbm(x, z, p.field.baseCell, p.field.octaves, p.field.persistence, t.salt);
+  const r = reliefNoise(p, t.salt, x, z);
   const span = t.reliefMax - t.reliefMin;
   const relief = span > 1e-12 ? (r - t.reliefMin) / span : 0.5;
   return p.ground + (relief - 0.5) * 2 * p.field.amplitude + swale(p, z);

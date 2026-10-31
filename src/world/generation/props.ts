@@ -21,7 +21,7 @@ import { columnTopAt } from './columns';
 import type { DirectHit } from './craters';
 import { vx } from './params';
 import type { PropPlan, WorldPlan } from './plan';
-import { meanderAt } from './trenches';
+import { clearOfTrenches, meanderAt } from './trenches';
 
 const WIDE = 1e9;
 
@@ -96,12 +96,7 @@ export function planProps(plan: WorldPlan, root: Rng): PropPlan[] {
     return line ? Math.round(meanderAt(line.meander ?? [], x)) : 0;
   };
   // No tree stands in a trench: those planted where a line has bent into their belt are not.
-  const dug = plan.lines.flatMap((l) => [
-    ...l.bays.map((b) => [b.x0, b.x1, b.z0, b.z1]),
-    ...l.legs.map((g) => (g.longAxis === 0 ? [g.a0, g.a1, g.b0, g.b1] : [g.b0, g.b1, g.a0, g.a1])),
-  ]);
-  const clear = m(1.5);
-  const open = (x: number, z: number) => !dug.some(([x0, x1, z0, z1]) => x > x0 - clear && x < x1 + clear && z > z0 - clear && z < z1 + clear);
+  const open = clearOfTrenches(plan.lines, m(1.5));
 
   // Shelterbelts: the shattered windbreaks between fields, Python's spacing in metres.
   const belts = root.derive('props.tree');
@@ -300,6 +295,8 @@ export function propReach(prop: PropPlan): number {
       return WIDE;
     case 'tree':
       return 80;
+    case 'brush':
+      return 20;
     case 'pole':
     case 'church':
       return 30;
@@ -315,6 +312,7 @@ export function propReach(prop: PropPlan): number {
 export function stampProp(sink: VoxelSink, clip: Clip, plan: WorldPlan, prop: PropPlan): void {
   switch (prop.kind) {
     case 'tree': return stampTree(sink, clip, plan, prop);
+    case 'brush': return stampBrush(sink, clip, plan, prop);
     case 'wire': return stampWire(sink, clip, plan, prop);
     case 'pole': return stampPole(sink, clip, plan, prop);
     case 'fence': return stampFence(sink, clip, plan, prop);
@@ -472,7 +470,7 @@ function stampTree(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan): v
   const dry = r.chance(0.5);
   const crowns: Vec3[] = [];
   if (big) {
-    const branches = r.randint(2, 6);
+    const branches = ((q.b ?? 0) & 4) !== 0 ? r.randint(4, 8) : r.randint(2, 6);
     for (let i = 0; i < branches; i++) {
       const t = r.uniform(0.4, 0.92);
       const at: Vec3 = [q.x + 0.5 + lx * lean * t * t, base + h * t, q.z + 0.5 + lz * lean * t * t];
@@ -503,7 +501,9 @@ function stampTree(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan): v
     crowns.push(top);
   }
   if (leafy) {
-    for (const c of crowns) leaves(sink, clip, c, r.uniform(2.5, 4.5), ((q.b ?? 0) & 4) !== 0 ? 0.6 : 0.4, dry, q.seed + crowns.indexOf(c));
+    // A tree still in leaf (b & 4) has a crown worth the name; the rest, a few tufts.
+    const full = ((q.b ?? 0) & 4) !== 0;
+    for (const c of crowns) leaves(sink, clip, c, full ? r.uniform(4, 7) : r.uniform(2.5, 4.5), full ? 0.55 : 0.4, dry, q.seed + crowns.indexOf(c));
   }
   if ((q.b ?? 0) & 1) {
     const [dx, dz] = bearing(r);
@@ -529,6 +529,25 @@ function stampTree(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan): v
       const bz = Math.floor(z + 0.5 + uz * k);
       putAir(sink, clip, bx, columnTopAt(plan, bx, bz), bz, P.BRANCH);
     }
+  }
+}
+
+/** Undergrowth: a low, loose mound of leaves `a` voxels across, a few dead sticks through it. */
+function stampBrush(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan): void {
+  const r = Rng.root(q.seed);
+  const size = q.a ?? 8;
+  const ground = columnTopAt(plan, q.x, q.z);
+  const clumps = r.randint(1, 4);
+  for (let i = 0; i < clumps; i++) {
+    const c: Vec3 = [q.x + 0.5 + r.uniform(-size, size) * 0.6, ground + size * r.uniform(0.25, 0.5), q.z + 0.5 + r.uniform(-size, size) * 0.6];
+    leaves(sink, clip, c, size * r.uniform(0.6, 1.0), 0.55, r.chance(0.3), q.seed + i);
+  }
+  const sticks = r.randint(1, 4);
+  for (let i = 0; i < sticks; i++) {
+    const [ux, uz] = bearing(r);
+    const from: Vec3 = [q.x + 0.5, ground, q.z + 0.5];
+    const len = size * r.uniform(0.8, 1.4);
+    limb(sink, clip, from, [from[0] + ux * len, ground + len * r.uniform(0.3, 0.9), from[2] + uz * len], 0.4, 0.4, P.BRANCH);
   }
 }
 

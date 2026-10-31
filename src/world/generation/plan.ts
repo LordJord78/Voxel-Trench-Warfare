@@ -12,8 +12,9 @@ import { Rng } from '../../core/rng';
 import { REACH as CRATER_REACH, planCraters, type Crater, type DirectHit } from './craters';
 import { vx, type GenParams, type LineSpec } from './params';
 import { buildTerrain, surfaceAt, type TerrainModel } from './terrain';
+import { planCorridorCraters, planCorridorProps, planCorridorShape, turnLine, type CorridorPlan } from './corridor';
 import { planProps, propHits, structureFootprints } from './props';
-import { meanderAt, planDugout, planLine, type DugoutPlan, type LinePlan, type PlanLineOptions, type Wave } from './trenches';
+import { clearOfTrenches, meanderAt, planDugout, planLine, type DugoutPlan, type LinePlan, type PlanLineOptions, type Wave } from './trenches';
 
 export interface PropPlan {
   kind: string;
@@ -33,9 +34,12 @@ export interface WorldPlan {
   direct: DirectHit[];
   lines: LinePlan[];
   props: PropPlan[];
+  /** The Corridor's wood, on that map. */
+  corridor?: CorridorPlan;
 }
 
 export function planWorld(params: GenParams, seed: number): WorldPlan {
+  if (params.map === 'corridor') return planCorridor(params, seed);
   const root = Rng.root(seed);
   const terrain = buildTerrain(params, root);
   const surface = (x: number, z: number) => surfaceAt(terrain, params, x, z);
@@ -68,6 +72,44 @@ export function planWorld(params: GenParams, seed: number): WorldPlan {
     const reach = Math.ceil(CRATER_REACH * c.r) + 1;
     return !structures.some((s) => c.x - reach < s.x1 && s.x0 < c.x + reach && c.z - reach < s.z1 && s.z0 < c.z + reach);
   });
+  plan.direct = [...direct, ...propHits(plan)];
+  return plan;
+}
+
+/**
+ * The Corridor (corridor.ts): Red's lines planned as the Ravine's are, Blue's turned from them,
+ * then the wood, the shell holes and the rest, each half the other's turned.
+ */
+function planCorridor(params: GenParams, seed: number): WorldPlan {
+  const root = Rng.root(seed);
+  const terrain = buildTerrain(params, root);
+  const surface = (x: number, z: number) => surfaceAt(terrain, params, x, z);
+  const red: LinePlan[] = [];
+  const bend = sideBend(params, root.derive('meander.0'));
+  for (const planned of params.lines) {
+    const rng = root.derive(`trench.${planned.name}`);
+    if (red.some((l) => l.spec.longAxis !== planned.longAxis)) {
+      const { spec, ends } = junctions(params, planned, red);
+      red.push(planLine(params, spec, surface, rng, red, { ends }));
+    } else {
+      red.push(planLine(params, planned, surface, rng, red, { meander: lineBends(params, bend, root.derive(`meander.${planned.name}`)) }));
+    }
+  }
+  placeDugouts(params, red);
+  const lines = [...red, ...red.map((l) => turnLine(params, l))];
+  const corridor = planCorridorShape(params, root.derive('corridor'));
+  const front = red.find((l) => l.spec.firingSteps)!;
+  const { open, direct } = planCorridorCraters(params, terrain, root.derive('craters'), front);
+  const plan: WorldPlan = { seed, params, terrain, craters: open, direct, lines, props: [], corridor };
+  plan.props = planCorridorProps(params, corridor, lines, root, clearOfTrenches(lines, vx(1.5, params.voxel)));
+  // As on the Ravine, nothing built stands over an open crater; a crater goes with its twin.
+  const structures = structureFootprints(plan, false);
+  const clash = (c: Crater) => {
+    const reach = Math.ceil(CRATER_REACH * c.r) + 1;
+    return structures.some((s) => c.x - reach < s.x1 && s.x0 < c.x + reach && c.z - reach < s.z1 && s.z0 < c.z + reach);
+  };
+  const n = open.length / 2;
+  plan.craters = open.filter((_, i) => !clash(open[i % n]) && !clash(open[(i % n) + n]));
   plan.direct = [...direct, ...propHits(plan)];
   return plan;
 }

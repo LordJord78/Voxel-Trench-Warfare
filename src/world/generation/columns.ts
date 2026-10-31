@@ -13,7 +13,7 @@ import { hash32x4 } from '../../core/hash';
 import { CraterField } from './craters';
 import type { WorldPlan } from './plan';
 import { ditchDepth, fieldHeight } from './terrain';
-import type { BayPlan, LegPlan } from './trenches';
+import { bayNoiseAt, type BayPlan, type LegPlan } from './trenches';
 
 export const FLAG = { DITCH: 1, CRATER: 2, TRENCH: 4, PARAPET: 8, PARADOS: 16, REVET: 32 } as const;
 
@@ -60,7 +60,7 @@ function along(a: number, seed: number, salt: number, span: number): number {
 function rearWave(bay: BayPlan, a: number): number {
   const ends = Math.min(a - bay.a0, bay.a1 - 1 - a);
   if (ends < 2) return 0;
-  return Math.min(REAR_WAVE, Math.round(along(a, bay.seed, 61, 9) * (REAR_WAVE + 0.49)), ends - 1);
+  return Math.min(REAR_WAVE, Math.round(along(bayNoiseAt(bay, a), bay.seed, 61, 9) * (REAR_WAVE + 0.49)), ends - 1);
 }
 
 /** The gentlest a bank falls (voxels a voxel), and how far its flat top runs past `flat` at most. */
@@ -78,14 +78,14 @@ function bankReach(height: number, flat: number): number {
  * a slope of 0.7 to 1 voxels a voxel, with a dent here and there, never falling more than a voxel
  * a voxel; down to `ground`. Raised into `into` wherever it stands higher than what is there.
  */
-function bankOut(m: ColumnModel, axis: 0 | 2, a: number, crest: number, ground: number, flat: number, seed: number, salt: number, at: (k: number) => number, into: Int16Array): void {
-  const level = flat + Math.round((along(a, seed, 71 + salt, 13) - 0.5) * (2 * FLAT_MORE - 1));
-  const slope = SLOPE_MIN + (1 - SLOPE_MIN) * along(a, seed, 73 + salt, 25);
+function bankOut(m: ColumnModel, axis: 0 | 2, a: number, u: number, crest: number, ground: number, flat: number, seed: number, salt: number, at: (k: number) => number, into: Int16Array): void {
+  const level = flat + Math.round((along(u, seed, 71 + salt, 13) - 0.5) * (2 * FLAT_MORE - 1));
+  const slope = SLOPE_MIN + (1 - SLOPE_MIN) * along(u, seed, 73 + salt, 25);
   let prev = crest;
   for (let k = 0; ; k++) {
     const over = Math.max(0, k - level);
     const fall = over <= 3 ? (over * over * slope) / 6 : (over - 1.5) * slope;
-    const dent = over > 2 && along(a * 3 + k * 11, seed, 79 + salt, 4) > 0.8 ? 1 : 0;
+    const dent = over > 2 && along(u * 3 + k * 11, seed, 79 + salt, 4) > 0.8 ? 1 : 0;
     const target = Math.max(prev - 1, crest - Math.floor(fall) - dent);
     prev = target;
     if (target <= ground) break;
@@ -201,8 +201,9 @@ export function columnModel(plan: WorldPlan, x0: number, x1: number, z0 = 0, z1 
       for (let a = bay.a0; a < bay.a1 + T.leg; a++) {
         if (!touches(m, axis, a, a + 1, bay.b0 - bank, bay.b1 + bank)) continue;
         const w = rear(a);
-        bankOut(m, axis, a, bay.crestY, bay.groundY, T.crestFlat, bay.seed, 0, (k) => (facing > 0 ? bay.b1 + k : bay.b0 - 1 - k), parapet);
-        bankOut(m, axis, a, bay.groundY + T.paradosH, bay.groundY, T.crestFlat, bay.seed, 1, (k) => (facing > 0 ? bay.b0 - 1 - w - k : bay.b1 + w + k), parados);
+        const u = bayNoiseAt(bay, a);
+        bankOut(m, axis, a, u, bay.crestY, bay.groundY, T.crestFlat, bay.seed, 0, (k) => (facing > 0 ? bay.b1 + k : bay.b0 - 1 - k), parapet);
+        bankOut(m, axis, a, u, bay.groundY + T.paradosH, bay.groundY, T.crestFlat, bay.seed, 1, (k) => (facing > 0 ? bay.b0 - 1 - w - k : bay.b1 + w + k), parados);
       }
       // Both faces revetted from the duckboards to their own heights.
       const duck = bay.floorY + 1;
@@ -322,10 +323,16 @@ function firingStep(m: ColumnModel, T: WorldPlan['params']['trench'], bay: BayPl
   const climb = stepH - T.treadsAcross * T.treadRise;
   if (climb <= 0) return;
   const flights = Math.ceil(climb / T.treadRise);
+  // From the a0 end; a turned bay's from its a1 end, as the bay it was turned from had it.
   for (let k = 0; k < flights; k++) {
     const top = bay.stepTopY - (flights - 1 - k) * T.treadRise;
-    const a0 = bay.a0 + k * T.treadDepth;
-    forBox(m, axis, a0, Math.min(a0 + T.treadDepth, bay.a1), lo, hi, (c) => (m.solidTop[c] = top));
+    if (bay.turned === undefined) {
+      const a0 = bay.a0 + k * T.treadDepth;
+      forBox(m, axis, a0, Math.min(a0 + T.treadDepth, bay.a1), lo, hi, (c) => (m.solidTop[c] = top));
+    } else {
+      const a1 = bay.a1 - k * T.treadDepth;
+      forBox(m, axis, Math.max(a1 - T.treadDepth, bay.a0), a1, lo, hi, (c) => (m.solidTop[c] = top));
+    }
   }
 }
 

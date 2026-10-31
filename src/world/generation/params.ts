@@ -11,6 +11,54 @@
 import { Tunables } from '../../core/tunables';
 import type { Dims } from '../bricks';
 
+/**
+ * The maps: Sukhyi Yar, the original (two systems of lines across the field, the ravine between),
+ * and the Corridor (one wood down the middle, a side dug in at each end of it).
+ */
+export type MapId = 'ravine' | 'corridor';
+export const MAP_IDS: readonly MapId[] = ['ravine', 'corridor'];
+export const MAP_NAMES: Record<MapId, string> = { ravine: 'Sukhyi Yar', corridor: 'The Corridor' };
+/** Each map's world seed (the room's, net/room-core.ts, says the same). */
+export const MAP_SEEDS: Record<MapId, number> = { ravine: 7, corridor: 11 };
+
+export function isMapId(value: unknown): value is MapId {
+  return typeof value === 'string' && (MAP_IDS as readonly string[]).includes(value);
+}
+
+/**
+ * The Corridor's layout, over the same 256 m square: Red's lines across the wood's south end
+ * (fire trench at 34 m, support at 16 m, two communication trenches between), Blue's the same
+ * turned half a turn about the centre. No swale, no drains: the ground is the same either way.
+ */
+function corridorTunables(raw: Record<string, any>): void {
+  const w = raw.world;
+  const size = w.size_z_m as number;
+  const width = w.trench.width_m as number;
+  const turn = (z: number) => size - z - width;
+  w.field.swale_depth_m = 0;
+  w.field.ditches = 0;
+  // Rougher ground than the Ravine's: the flanks are crossed, not peeked over, and a smooth
+  // field there reads as contour lines.
+  w.field.relief_octaves = 5;
+  w.field.relief_persistence = 0.45;
+  w.field.relief_amplitude_m = 2.4;
+  w.layout.front_line_m = 34;
+  w.layout.support_line_m = 16;
+  w.layout.reserve_line_m = 16;
+  w.layout.enemy_front_m = turn(34);
+  w.layout.enemy_support_m = turn(16);
+  w.layout.enemy_reserve_m = turn(16);
+  w.layout.comm_trench_x_m = [96, turn(96)];
+  w.layout.enemy_comm_trench_x_m = [96, turn(96)];
+  w.layout.shelterbelt_z_m = [];
+  w.layout.hamlet_z_m = [0, 0];
+  w.layout.wood_z_m = [50, size - 50];
+  w.clutter.fence_lines = 0;
+  w.clutter.poles = 8;
+  w.craters.nml_count = 340;
+  w.craters.rear_count = 40;
+}
+
 /** Voxels spanning `metres`, rounded half up (not to even), as Python's `grid.vx`. */
 export function vx(metres: number, voxel: number): number {
   return Math.floor(metres / voxel + 0.5);
@@ -31,6 +79,9 @@ export interface LineSpec {
 }
 
 export interface GenParams {
+  map: MapId;
+  /** True if the map is the same turned half a turn about its centre (the Corridor): the field is made so. */
+  symmetric: boolean;
   voxel: number;
   dims: Dims;
   ground: number;
@@ -82,10 +133,11 @@ function pair(tun: Tunables, key: string, v: (m: number) => number): [number, nu
   return [v(list[0]), v(list[1])];
 }
 
-export function genParams(tun: Tunables, override?: (raw: Record<string, unknown>) => void): GenParams {
-  if (override) {
+export function genParams(tun: Tunables, override?: (raw: Record<string, unknown>) => void, map: MapId = 'ravine'): GenParams {
+  if (override || map !== 'ravine') {
     const raw = tun.raw();
-    override(raw);
+    if (map === 'corridor') corridorTunables(raw);
+    override?.(raw);
     tun = new Tunables(raw);
   }
   const voxel = tun.f('world.voxel_size');
@@ -168,7 +220,15 @@ export function genParams(tun: Tunables, override?: (raw: Record<string, unknown
   const along = (name: string, side: 0 | 1, z: number, facing: 1 | -1, firingSteps: boolean, dugoutEvery: number): LineSpec => ({
     name, side, longAxis: 0, crossBase: z, aStart: trench.lineMargin, aEnd: dims.x - trench.lineMargin, facing, firingSteps, dugoutEvery,
   });
-  const lines: LineSpec[] = [
+  const lines: LineSpec[] = map === 'corridor' ? [
+    // Red's only: Blue's are Red's turned (plan.ts), named as the enemy's are.
+    { ...along('front', 0, layout.front, 1, true, 3), aStart: m(30), aEnd: dims.x - m(30) },
+    { ...along('support', 0, layout.support, 1, false, 2), aStart: m(50), aEnd: dims.x - m(50) },
+    ...layout.comm.map((x, i): LineSpec => ({
+      name: `comm_${i}`, side: 0, longAxis: 2, crossBase: x, aStart: layout.support - 1, aEnd: layout.front + m(3.0),
+      facing: 1, firingSteps: false, dugoutEvery: 0,
+    })),
+  ] : [
     along('front', 0, layout.front, 1, true, 3),
     along('support', 0, layout.support, 1, false, 4),
     along('reserve', 0, layout.reserve, 1, false, 2),
@@ -186,6 +246,8 @@ export function genParams(tun: Tunables, override?: (raw: Record<string, unknown
   ];
 
   return {
+    map,
+    symmetric: map === 'corridor',
     voxel,
     dims,
     ground: v('world.ground_level_m'),

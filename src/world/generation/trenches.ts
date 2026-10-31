@@ -42,6 +42,25 @@ export interface BayPlan {
   firingSteps: boolean;
   revet: RevetStyle;
   seed: number;
+  /**
+   * On a bay turned half a turn from another's (the Corridor's Blue lines), the length of its long
+   * axis: what varies along it is drawn from `turned - 1 - a`, so it is the other bay's, turned.
+   */
+  turned?: number;
+}
+
+/** Whether (x, z) stands at least `margin` voxels clear of every bay and leg of `lines`. */
+export function clearOfTrenches(lines: readonly LinePlan[], margin: number): (x: number, z: number) => boolean {
+  const dug = lines.flatMap((l) => [
+    ...l.bays.map((b) => [b.x0, b.x1, b.z0, b.z1]),
+    ...l.legs.map((g) => (g.longAxis === 0 ? [g.a0, g.a1, g.b0, g.b1] : [g.b0, g.b1, g.a0, g.a1])),
+  ]);
+  return (x, z) => !dug.some(([x0, x1, z0, z1]) => x > x0 - margin && x < x1 + margin && z > z0 - margin && z < z1 + margin);
+}
+
+/** Where along a bay its variations are drawn from: `a` itself, or the turned bay's own `a`. */
+export function bayNoiseAt(bay: BayPlan, a: number): number {
+  return bay.turned === undefined ? a : bay.turned - 1 - a;
 }
 
 export interface LegPlan {

@@ -23,6 +23,10 @@ export interface Crater {
   r: number;
   /** How far from round, 0 (a perfect bowl, as in Python) to 1 (lobed, its rim heaped to one side). */
   ragged?: number;
+  /** The seed of its outline, if not its own position and size: a crater turned from another keeps the other's. */
+  shape?: number;
+  /** True if its outline is the shape's turned half a turn (the Corridor's mirrored half). */
+  turned?: boolean;
 }
 
 export interface DirectHit {
@@ -33,7 +37,7 @@ export interface DirectHit {
   seed: number;
 }
 
-function radius(p: GenParams, rng: Rng, cap: number): number {
+export function radius(p: GenParams, rng: Rng, cap: number): number {
   return Math.min(cap, p.craters.radiusMin + rng.gamma(p.craters.gammaShape, p.craters.gammaScale));
 }
 
@@ -128,15 +132,23 @@ interface Outline {
 /** A crater's outline, from its own position and size: a pure function of the crater, so the plan's random streams are untouched. */
 function outline(c: Crater): Outline {
   const ragged = c.ragged ?? 0;
-  const phase = (k: number) => (hash32x4(Math.floor(c.x * 16), Math.floor(c.z * 16), Math.floor(c.r * 16), k) / 4294967296) * TAU;
+  const seed = craterShape(c);
+  const phase = (k: number) => (hash32x4(seed, k, 0x51, 0) / 4294967296) * TAU;
   const [p2, p3, p5, ph] = [phase(2), phase(3), phase(5), phase(7)];
+  // Half a turn leaves the even harmonics as they are and turns the odd ones, and the heap, round.
+  const odd = c.turned ? -1 : 1;
   return {
     c2: ragged * A2 * cos(p2), s2: ragged * A2 * sin(p2),
-    c3: ragged * A3 * cos(p3), s3: ragged * A3 * sin(p3),
-    c5: ragged * A5 * cos(p5), s5: ragged * A5 * sin(p5),
-    hx: cos(ph), hz: sin(ph),
+    c3: odd * ragged * A3 * cos(p3), s3: odd * ragged * A3 * sin(p3),
+    c5: odd * ragged * A5 * cos(p5), s5: odd * ragged * A5 * sin(p5),
+    hx: odd * cos(ph), hz: odd * sin(ph),
     ragged,
   };
+}
+
+/** The seed of a crater's outline: its own, or a hash of its position and size. */
+export function craterShape(c: Crater): number {
+  return c.shape ?? hash32x4(Math.floor(c.x * 16), Math.floor(c.z * 16), Math.floor(c.r * 16), 0);
 }
 
 /** The radius scale of outline `o` in the direction (ux, uz), a unit vector: the harmonics by the multiple-angle formulas, no trigonometry per column. */

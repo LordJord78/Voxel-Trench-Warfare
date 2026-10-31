@@ -53,7 +53,7 @@ describe('generating in workers', () => {
     (globalThis as { Worker?: unknown }).Worker = StubWorker;
     const { generateInWorkers } = await import('../../src/app/generate-in-workers');
     const outcome = await Promise.race([
-      generateInWorkers(7).then(
+      generateInWorkers(7, 'ravine').then(
         () => 'resolved',
         (error: unknown) => `rejected: ${String(error)}`,
       ),
