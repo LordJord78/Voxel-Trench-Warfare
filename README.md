@@ -16,6 +16,15 @@ Every wall, sandbag and duckboard is made of 10 cm voxels. A shell cuts into the
 
 Play it at [lordjord78.github.io/Voxel-Trench-Warfare](https://lordjord78.github.io/Voxel-Trench-Warfare/), in a desktop browser with WebGPU: Chrome or Edge 113 or later, or Safari 26. Where WebGPU is missing, the page shows a video of the game instead. Click to play; the mouse looks around.
 
+## Play with friends
+
+Up to eight players, Red against Blue:
+1. Click **Host a game with friends** and send the link it gives you (Discord works well). Friends who open it land in your lobby.
+2. Everyone names themselves and picks Red or Blue. The host sets the kills to win, the time of day and the battle, then starts the match.
+3. Each side wears its colour on the arm and the helmet; friendly fire is on, and a team kill costs your side a point. The first side to the kill target wins.
+
+The rooms run on a small Cloudflare Worker ([server/](server/)). Everyone needs a desktop browser with WebGPU, and the same version of the page (reload if the lobby says otherwise).
+
 ## Controls
 
 | Keys | |
