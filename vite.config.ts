@@ -11,6 +11,9 @@ export default defineConfig({
   // The report endpoint exists only in the dev server, for the browser checks (npm run safari).
   // The site's address, where the page needs it whole (VITE_SITE_URL, from the Pages workflow).
   plugins: [tomlPlugin(), wgslPlugin(), reportPlugin(), sitePlugin()],
+  // The build players must share to play together (net/room-core.ts refuses another): the commit
+  // the Pages workflow built, or 'dev'.
+  define: { __TRENCHLINE_BUILD__: JSON.stringify(process.env.GITHUB_SHA?.slice(0, 12) ?? 'dev') },
   // Workers are bundled separately and need the same plugins: generation
   // workers read tunables too.
   worker: { format: 'es', plugins: () => [tomlPlugin(), wgslPlugin()] },

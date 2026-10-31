@@ -15,6 +15,7 @@ export class LoadingScreen {
   private readonly bar: SVGElement;
   private readonly dug: SVGPathElement;
   private readonly play: HTMLButtonElement;
+  private readonly together: HTMLElement | null;
   private readonly controls: HTMLElement;
   /** The game's still behind the sheet until the world is drawn (index.html), if the page has one. */
   private readonly still: HTMLElement | null;
@@ -26,6 +27,7 @@ export class LoadingScreen {
     this.bar = this.root.querySelector('.trace')!;
     this.dug = this.root.querySelector('.trace .dug')!;
     this.play = doc.getElementById('play') as HTMLButtonElement;
+    this.together = doc.getElementById('together');
     this.controls = doc.getElementById('controls')!;
     this.still = doc.getElementById('still');
   }
@@ -43,14 +45,30 @@ export class LoadingScreen {
     this.bar.setAttribute('aria-valuenow', String(Math.round(f * 100)));
   }
 
-  /** The world is drawing behind the sheet (the still over it until reveal): the way in is offered. */
-  ready(onPlay: () => void): void {
+  /**
+   * The world is drawing behind the sheet (the still over it until reveal): the way in is offered,
+   * alone, or with friends where there is a relay to play through (`together`).
+   */
+  ready(onPlay: () => void, together?: { host(): void; join(code: string): void }): void {
     if (this.failed) return;
     this.progress('Ready', null, 1);
     this.root.classList.add('over-world');
     this.play.hidden = false;
     this.controls.hidden = false;
     this.play.onclick = onPlay;
+    if (together && this.together) {
+      this.together.hidden = false;
+      const host = this.together.querySelector<HTMLButtonElement>('#host');
+      const join = this.together.querySelector<HTMLFormElement>('#join');
+      const code = this.together.querySelector<HTMLInputElement>('#join-code');
+      if (host) host.onclick = () => together.host();
+      if (join && code) {
+        join.onsubmit = (e) => {
+          e.preventDefault();
+          together.join(code.value);
+        };
+      }
+    }
     this.play.focus();
   }
 
@@ -77,6 +95,7 @@ export class LoadingScreen {
     this.root.classList.add('failed');
     this.status.textContent = message;
     this.play.hidden = true;
+    if (this.together) this.together.hidden = true;
     this.controls.hidden = true;
   }
 }

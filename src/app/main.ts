@@ -32,7 +32,9 @@ import { battleFireLights, battleFlareLights, sceneLights, type SceneLight } fro
 import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
-import { Session, type CombatEvents } from '../sim/session';
+import { idleIntent, Session, type CombatEvents } from '../sim/session';
+import { facingYaw, pickSpawns } from '../world/generation/spawn';
+import { relayUrl, Together } from './together';
 import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
@@ -328,7 +330,9 @@ async function start(): Promise<void> {
   };
   const battleInputs = (): BattleInputs => {
     const s = skyNow();
-    return { intensity: session.front.intensity, darkness: battleDarkness(s.sunElevationDeg, s.flares, flareT), player: session.player.position.toArray() };
+    // With friends the battle's tempo is the room's; its fire at the player stays off until the room runs it.
+    const intensity = together.config?.intensity ?? session.front.intensity;
+    return { intensity, darkness: battleDarkness(s.sunElevationDeg, s.flares, flareT), player: session.player.position.toArray() };
   };
   /**
    * The clock and the dark when the battle last ran live. A jump of the clock into the dark from there
@@ -382,7 +386,7 @@ async function start(): Promise<void> {
   const light = (dt: number, eye: readonly number[], strikes: readonly Strike[] = [], splashes: NonNullable<BattleInputs['splashes']> = []) => {
     skyNow();
     battleEvents = noBattleEvents();
-    if (mode !== 'paused') {
+    if (mode !== 'paused' || together.inMatch) {
       lightSeconds += dt;
       if (lightsHeld === null) {
         const inputs = { ...battleInputs(), strikes, splashes };
@@ -427,8 +431,11 @@ async function start(): Promise<void> {
     if (preset !== renderer.quality.preset) renderer.setQuality({ preset });
     if (picked) endWarmup();
     const next: Settings = { ...change, preset, presetChosen: settings.presetChosen || picked };
-    session.front.intensity = next.intensity;
-    session.artillery.intensity = next.intensity;
+    // With friends the battle is the room's: the menu does not set it.
+    if (!together.inMatch) {
+      session.front.intensity = next.intensity;
+      session.artillery.intensity = next.intensity;
+    }
     settings = next;
     // A preset not their own (the warm-up's move, for this visit) is kept as the default.
     saveSettings(storage, settings.presetChosen ? settings : { ...settings, preset: defaultSettings(tun).preset });
@@ -441,6 +448,31 @@ async function start(): Promise<void> {
     change: changeSettings,
     time: (value) => (timeOfDay = value),
     lapse: (speed) => (lapse = speed),
+    leave: () => together.leave(),
+    endMatch: () => together.endMatch(),
+  });
+  // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
+  const searchParams = new URLSearchParams(location.search);
+  const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
+    showLobby: () => loading.hide(),
+    deploy: (team, index, match) => {
+      const spawns = pickSpawns(session.map, world.plan, team === 'red' ? 'front' : 'enemy_front', 4);
+      const at = spawns[index % spawns.length];
+      session.teleport(at.position, facingYaw(at.bay), 0);
+      timeOfDay = match.config.timeOfDay;
+      lapse = match.config.lapse;
+      // The battle's fire at players waits for the room to run it for everyone (the spec's §6).
+      session.front.intensity = 'off';
+      session.artillery.intensity = 'off';
+    },
+    play: () => play(true),
+    ended: () => {
+      pauseMenu.close();
+      input.blur();
+      mode = 'ready';
+      if (document.pointerLockElement) document.exitPointerLock();
+    },
+    note: showNote,
   });
 
   const play = (lock: boolean) => {
@@ -463,6 +495,7 @@ async function start(): Promise<void> {
     if (document.pointerLockElement) document.exitPointerLock();
     audio.suspend();
     pauseMenu.open(settings, timeOfDay, lapse);
+    pauseMenu.together(together.inMatch, together.isOwner);
   };
   const resume = () => {
     if (stopped || mode !== 'paused') return;
@@ -644,12 +677,19 @@ async function start(): Promise<void> {
         if (session.advance(ms / 1000) > 0) input.ticked();
       }
     } else {
-      if (mode === 'playing') {
-        input.look(session.player, settings.sensitivity, pitchLimit);
-        session.intent = input.intent();
-        if (session.advance(ms / 1000) > 0) input.ticked();
+      // With friends the world does not wait for a paused player: they stand while the menu is open.
+      const live = mode === 'playing' || (mode === 'paused' && together.inMatch);
+      if (live) {
+        if (mode === 'playing') {
+          input.look(session.player, settings.sensitivity, pitchLimit);
+          session.intent = input.intent();
+        } else {
+          session.intent = idleIntent();
+        }
+        if (session.advance(ms / 1000) > 0 && mode === 'playing') input.ticked();
         if (!session.player.onFiringStep) input.lowerPeriscope();
       }
+      together.frame(session, live);
       // Until the click, the world is drawn from the firing step over the parapet at dusk at the default
       // field of view, as the page's still is (npm run stills); the click starts play at the spawn, in the
       // bay, at the visitor's own.
@@ -677,6 +717,7 @@ async function start(): Promise<void> {
     }
     // The battle seen (its flares, flashes, smoke, tracers, and fires' flames and plumes) as the lights last showed it; none at rest.
     const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
+    effects.players = together.ribbons();
     const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares);
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
@@ -742,7 +783,10 @@ async function start(): Promise<void> {
       // A first visit at the high preset, not the visitor's own, is warmed up (tiers.ts), the still over it meanwhile.
       if (!checkRun && !settings.presetChosen && settings.preset === 'high' && gpu.timestamps && renderer.quality.dynres) warmup = { seen: renderer.stats.gpuSamples, judge: new Warmup() };
       revealAt = warmup ? -1 : frames + render.denoise.historyMax + 8;
-      loading.ready(() => play(true));
+      loading.ready(() => play(true), together.relay ? { host: () => void together.host(), join: (code) => together.join(code) } : undefined);
+      // A friend's link: straight to their game's lobby.
+      const room = searchParams.get('room');
+      if (room && together.relay) together.join(room);
       hooks.promptMs = Math.round(performance.now());
       hooks.ready = true;
       hooks.ms = Math.round(now);
@@ -755,6 +799,7 @@ async function start(): Promise<void> {
     }
     // The HUD only in play (not over the loading screen, the pause menu or flying), redrawn ten times a second.
     hud.visible = mode === 'playing';
+    hud.room(hud.visible ? together.roomline() : null);
     if (hud.visible && now - hudShown >= 100) {
       hudShown = now;
       const p = session.player;
@@ -952,6 +997,17 @@ async function start(): Promise<void> {
     renderer,
     session,
     views,
+    /** Playing with friends: the room, this player's seat, the seats, and the others as drawn. */
+    together: {
+      relay: () => together.relay,
+      room: () => together.net?.room ?? null,
+      you: () => together.net?.you ?? -1,
+      owner: () => together.net?.owner ?? -1,
+      seats: () => together.net?.seats ?? [],
+      phase: () => together.net?.phase ?? null,
+      begun: () => together.begun,
+      others: () => together.others().map(({ seat, state }) => ({ id: seat.id, team: seat.team, name: seat.name, position: state.position, stance: state.stance })),
+    },
     /** The camera held at `pose` while the session runs (null: play again); peak-combat.ts's. */
     spectate(pose: CameraPose | null) {
       peakGame.spectate(pose);

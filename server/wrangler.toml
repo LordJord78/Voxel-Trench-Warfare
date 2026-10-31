@@ -1,0 +1,18 @@
+# The rooms' relay (the multiplayer spec's §2): a Worker that hands out room codes, and a Durable
+# Object a room, which runs src/net/room-core.ts for the players in it. SQLite-backed, as the
+# Workers Free plan requires of Durable Objects.
+name = "trenchline-relay"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+[vars]
+# Pages that may open rooms, besides any localhost: the game's GitHub Pages site.
+ALLOWED_ORIGINS = "https://lordjord78.github.io"

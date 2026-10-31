@@ -14,10 +14,19 @@ export default defineConfig({
     headless: true,
     launchOptions: { args: ['--enable-unsafe-webgpu', '--enable-webgpu-developer-features'] },
   },
-  webServer: {
-    command: 'npx vite --port 5320 --strictPort',
-    url: 'http://localhost:5320',
-    reuseExistingServer: true,
-    timeout: 60_000,
-  },
+  webServer: [
+    {
+      command: 'npx vite --port 5320 --strictPort',
+      url: 'http://localhost:5320',
+      reuseExistingServer: true,
+      timeout: 60_000,
+    },
+    // The rooms' relay (server/), for the games with friends (together.spec.ts).
+    {
+      command: 'npm --prefix server run dev',
+      url: 'http://127.0.0.1:8787',
+      reuseExistingServer: true,
+      timeout: 60_000,
+    },
+  ],
 });

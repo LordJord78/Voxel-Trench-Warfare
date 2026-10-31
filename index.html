@@ -91,6 +91,44 @@
       .choice label { display: flex; gap: 0.4rem; align-items: center; cursor: pointer; }
       .choice input { accent-color: var(--haze); margin: 0; }
       #resume { margin-top: 0.5rem; }
+      #pause-match { display: flex; gap: 0.75rem; margin-top: 1rem; }
+      #pause.together .solo-only { display: none; }
+
+      /* Playing with friends: the way in on the loading screen, and the lobby's two teams. */
+      button.quiet { background: transparent; color: var(--haze); border: 1px solid rgba(231, 211, 184, 0.45); }
+      button.quiet:hover { background: rgba(231, 211, 184, 0.12); }
+      button:disabled { opacity: 0.45; cursor: default; }
+      #together { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-top: 0.9rem; }
+      #join { display: flex; gap: 0.5rem; }
+      input.code { font: inherit; width: 5.5em; padding: 0.4em 0.6em; background: rgba(23, 20, 31, 0.6); color: var(--haze); border: 1px solid rgba(231, 211, 184, 0.45); border-radius: 2px; letter-spacing: 0.2em; text-transform: uppercase; }
+      #lobby .block { max-width: 40rem; }
+      #lobby .invite { display: flex; gap: 0.5rem; margin: 0 0 1.25rem; flex-wrap: wrap; }
+      #lobby .invite input { flex: 1 1 16rem; font: 0.95rem var(--serif); padding: 0.4em 0.6em; background: rgba(23, 20, 31, 0.6); color: var(--duckboard); border: 1px solid rgba(231, 211, 184, 0.3); border-radius: 2px; }
+      #lobby .who { display: flex; gap: 0.6rem; align-items: baseline; margin: 0 0 1.1rem; }
+      #lobby .who input { font: inherit; padding: 0.3em 0.6em; background: rgba(23, 20, 31, 0.6); color: var(--haze); border: 1px solid rgba(231, 211, 184, 0.45); border-radius: 2px; width: 12rem; }
+      .teams { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin: 0 0 1.25rem; }
+      .team { border-top: 3px solid var(--team); padding-top: 0.5rem; }
+      .team.red { --team: #c4472f; }
+      .team.blue { --team: #3f76c4; }
+      .team h3 { font-weight: 400; margin: 0 0 0.4rem; letter-spacing: 0.08em; color: var(--team); filter: brightness(1.35); }
+      .team ul { list-style: none; margin: 0 0 0.6rem; padding: 0; min-height: 4.5rem; }
+      .team li { display: flex; justify-content: space-between; gap: 0.5rem; }
+      .team li .tags { color: var(--duckboard); font-style: italic; font-size: 0.9rem; }
+      .team li.you { color: var(--flare); }
+      #lobby .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.75rem 1.25rem; margin: 0 0 1.25rem; color: var(--duckboard); }
+      #lobby .settings label { display: grid; gap: 0.2rem; font-size: 0.92rem; }
+      #lobby .settings select, #lobby .settings input { font: inherit; padding: 0.25em 0.4em; background: rgba(23, 20, 31, 0.6); color: var(--haze); border: 1px solid rgba(231, 211, 184, 0.35); border-radius: 2px; }
+      #lobby .actions { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+      #lobby-status { margin: 0 0 1rem; min-height: 1.5em; color: var(--duckboard); font-style: italic; }
+      #lobby.deploying .gather { display: none; }
+      #lobby .deploy { display: none; }
+      #lobby.deploying .deploy { display: block; }
+      #lobby .deploy p { margin: 0 0 1.25rem; font-size: 1.2rem; }
+      #go { font-size: 1.15rem; }
+      #hud .roomline { position: absolute; top: clamp(12px, 3vh, 28px); left: 50%; transform: translateX(-50%); margin: 0; font-size: 1.05rem; letter-spacing: 0.04em; text-shadow: 0 1px 2px rgba(23, 20, 31, 0.9), 0 0 10px rgba(23, 20, 31, 0.6); white-space: nowrap; }
+      #hud .roomline .red { color: #e0644a; }
+      #hud .roomline .blue { color: #6a9be0; }
+      @media (max-width: 560px) { .teams { grid-template-columns: 1fr; } }
 
       /* Looking through a trench periscope: dark all round a long mirror. */
       #periscope { position: fixed; inset: 0; pointer-events: none; }
@@ -138,6 +176,7 @@
     <img id="still" src="./stills/dusk.webp" alt="" width="1920" height="1440" fetchpriority="high" decoding="async" elementtiming="still" />
     <div id="periscope" hidden><div class="mirror"></div></div>
     <div id="hud" hidden>
+      <p class="roomline" id="roomline" hidden></p>
       <div class="crosshair" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
       <div class="readout">
         <p class="stance"></p>
@@ -155,7 +194,14 @@
           <path class="dug" pathLength="1" d="M0 18 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h18 v-9 h9 v9 h12" />
         </svg>
         <p id="status" aria-live="polite">Starting</p>
-        <button id="play" type="button" hidden>Click to play</button>
+        <button id="play" type="button" hidden>Play solo</button>
+        <div id="together" hidden>
+          <button id="host" type="button" class="quiet">Host a game with friends</button>
+          <form id="join" autocomplete="off">
+            <input id="join-code" class="code" maxlength="5" placeholder="CODE" spellcheck="false" aria-label="A friend's game code" />
+            <button type="submit" class="quiet">Join</button>
+          </form>
+        </div>
         <dl class="legend" id="controls" hidden>
           <dt><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></dt><dd>Move</dd>
           <dt><kbd>Shift</kbd></dt><dd>Sprint</dd>
@@ -169,7 +215,68 @@
           <dt><kbd>F</kbd>, held</dt><dd>Dig out loose earth</dd>
           <dt><kbd>Esc</kbd></dt><dd>Pause</dd>
           <dt><kbd>F3</kbd></dt><dd>Frame timings</dd>
+          <dt><kbd>W</kbd> + <kbd>Space</kbd> at a wall</dt><dd>Climb out of the trench</dd>
         </dl>
+      </div>
+    </section>
+    <section id="lobby" class="sheet over-world" aria-label="Lobby" hidden>
+      <div class="block">
+        <h2 id="lobby-title">Game</h2>
+        <div class="gather">
+          <div class="invite">
+            <input id="invite" readonly aria-label="The link to this game" />
+            <button id="copy" type="button" class="quiet">Copy link</button>
+          </div>
+          <div class="who">
+            <label for="name">Your name</label>
+            <input id="name" maxlength="16" spellcheck="false" />
+          </div>
+          <div class="teams">
+            <div class="team red">
+              <h3>RED</h3>
+              <ul id="red-list"></ul>
+              <button type="button" class="quiet" data-team="red">Join Red</button>
+            </div>
+            <div class="team blue">
+              <h3>BLUE</h3>
+              <ul id="blue-list"></ul>
+              <button type="button" class="quiet" data-team="blue">Join Blue</button>
+            </div>
+          </div>
+          <form class="settings" id="match-settings" autocomplete="off">
+            <label>Map
+              <select name="map"><option value="ravine">The ravine</option></select>
+            </label>
+            <label>Kills to win
+              <input name="killTarget" type="number" min="1" max="200" step="1" />
+            </label>
+            <label>Time of day
+              <select name="timeOfDay">
+                <option value="5.5">Dawn</option>
+                <option value="12">Noon</option>
+                <option value="19.5">Dusk</option>
+                <option value="22">Night</option>
+              </select>
+            </label>
+            <label>The battle
+              <select name="intensity">
+                <option value="off">Quiet</option>
+                <option value="light">Light fire</option>
+                <option value="heavy">Heavy fire</option>
+              </select>
+            </label>
+          </form>
+          <p id="lobby-status" aria-live="polite"></p>
+          <div class="actions">
+            <button id="ready" type="button">Ready</button>
+            <button id="start" type="button" hidden>Start the match</button>
+            <button id="leave" type="button" class="quiet">Leave</button>
+          </div>
+        </div>
+        <div class="deploy">
+          <p id="deploy-line" aria-live="polite"></p>
+          <button id="go" type="button">Go</button>
+        </div>
       </div>
     </section>
     <section id="pause" class="sheet over-world" aria-label="Paused" hidden>
@@ -182,7 +289,7 @@
             <label><input type="radio" name="preset" value="low" /> Low</label>
           </div>
         </div>
-        <div class="setting">
+        <div class="setting solo-only">
           <span class="name" id="intensity-name">Incoming fire</span>
           <div class="choice" role="radiogroup" aria-labelledby="intensity-name">
             <label><input type="radio" name="intensity" value="off" /> Off</label>
@@ -200,13 +307,13 @@
           <output for="fov" id="fov-value"></output>
           <input id="fov" type="range" min="60" max="110" step="1" />
         </div>
-        <div class="setting">
+        <div class="setting solo-only">
           <label for="time">Time of day</label>
           <output for="time" id="time-value"></output>
           <input id="time" type="range" min="0" max="24" step="0.25" />
           <div class="ends" aria-hidden="true"><span>Midnight</span><span>Noon</span><span>Midnight</span></div>
         </div>
-        <div class="setting">
+        <div class="setting solo-only">
           <span class="name" id="lapse-name">Time passing</span>
           <div class="choice" role="radiogroup" aria-labelledby="lapse-name">
             <label><input type="radio" name="lapse" value="0" /> Held</label>
@@ -215,6 +322,10 @@
           </div>
         </div>
         <button id="resume" type="button">Resume</button>
+        <div class="actions" id="pause-match" hidden>
+          <button id="end-match" type="button" class="quiet" hidden>End the match</button>
+          <button id="leave-match" type="button" class="quiet">Leave the game</button>
+        </div>
       </form>
     </section>
     <script type="module" src="/src/app/main.ts"></script>

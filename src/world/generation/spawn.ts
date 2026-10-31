@@ -33,30 +33,64 @@ function benchIntact(map: BrickMap, bay: BayPlan, bench: number): number {
   return total === 0 ? 0 : timber / total;
 }
 
-export function pickSpawn(map: BrickMap, plan: WorldPlan): Spawn {
+/** Where to start in a bay: duckboard underfoot, 2 m of air over it, and its firing step (if it has one) mostly standing; or null. */
+function inBay(map: BrickMap, plan: WorldPlan, bay: BayPlan): Spawn | null {
   const p = plan.params;
-  const front = plan.lines.find((l) => l.spec.name === 'front') ?? plan.lines[0];
-  const bays = front.bays;
-  const middle = bays.length >> 1;
-  const order = bays.map((_, i) => i).sort((a, b) => Math.abs(a - middle) - Math.abs(b - middle) || a - b);
   const headroom = vx(2.0, p.voxel);
-  const at = (bay: BayPlan, x: number, z: number): Spawn => ({
-    position: [(x + 0.5) * p.voxel, (bay.floorY + 1) * p.voxel + 0.05, (z + 0.5) * p.voxel],
-    bay,
-  });
-  for (const i of order) {
-    const bay = bays[i];
-    const z = Math.floor(bay.walkZ);
-    for (const x of [Math.floor(bay.walkX), Math.floor(bay.walkX) + 1, Math.floor(bay.walkX) - 1]) {
-      const deck = map.get(x, bay.floorY, z);
-      if (deck !== P.DUCKBOARD && deck !== P.DUCKBOARD_WORN) continue;
-      let clear = true;
-      for (let k = 1; k <= headroom && clear; k++) clear = map.get(x, bay.floorY + k, z) === P.AIR;
-      if (!clear) continue;
-      if (bay.firingSteps && benchIntact(map, bay, p.trench.bench) < 0.5) break;
-      return at(bay, x, z);
-    }
+  const z = Math.floor(bay.walkZ);
+  for (const x of [Math.floor(bay.walkX), Math.floor(bay.walkX) + 1, Math.floor(bay.walkX) - 1]) {
+    const deck = map.get(x, bay.floorY, z);
+    if (deck !== P.DUCKBOARD && deck !== P.DUCKBOARD_WORN) continue;
+    let clear = true;
+    for (let k = 1; k <= headroom && clear; k++) clear = map.get(x, bay.floorY + k, z) === P.AIR;
+    if (!clear) continue;
+    if (bay.firingSteps && benchIntact(map, bay, p.trench.bench) < 0.5) return null;
+    return at(plan, bay, x, z);
   }
-  const bay = bays[middle];
-  return at(bay, Math.floor(bay.walkX), Math.floor(bay.walkZ));
+  return null;
+}
+
+function at(plan: WorldPlan, bay: BayPlan, x: number, z: number): Spawn {
+  const v = plan.params.voxel;
+  return { position: [(x + 0.5) * v, (bay.floorY + 1) * v + 0.05, (z + 0.5) * v], bay };
+}
+
+/** A line's bays, the middle one first and then outward, the nearer to the start first on a tie. */
+function outward(plan: WorldPlan, line: string): BayPlan[] {
+  const found = plan.lines.find((l) => l.spec.name === line) ?? plan.lines[0];
+  const middle = found.bays.length >> 1;
+  return found.bays.map((_, i) => i).sort((a, b) => Math.abs(a - middle) - Math.abs(b - middle) || a - b).map((i) => found.bays[i]);
+}
+
+export function pickSpawn(map: BrickMap, plan: WorldPlan): Spawn {
+  const bays = outward(plan, 'front');
+  for (const bay of bays) {
+    const s = inBay(map, plan, bay);
+    if (s) return s;
+  }
+  const bay = bays[0];
+  return at(plan, bay, Math.floor(bay.walkX), Math.floor(bay.walkZ));
+}
+
+/**
+ * Up to `count` places a team starts from (the multiplayer spec's §4), in line `line`'s bays that
+ * still work, the middle bay's first and a bay apiece; fewer only if the line has fewer.
+ */
+export function pickSpawns(map: BrickMap, plan: WorldPlan, line: string, count: number): Spawn[] {
+  const out: Spawn[] = [];
+  for (const bay of outward(plan, line)) {
+    if (out.length >= count) break;
+    const s = inBay(map, plan, bay);
+    if (s) out.push(s);
+  }
+  if (out.length === 0) {
+    const bay = outward(plan, line)[0];
+    out.push(at(plan, bay, Math.floor(bay.walkX), Math.floor(bay.walkZ)));
+  }
+  return out;
+}
+
+/** The way a bay's soldiers face: toward the enemy, over their parapet (degrees, as the views'). */
+export function facingYaw(bay: BayPlan): number {
+  return bay.longAxis === 0 ? (bay.facing > 0 ? 0 : 180) : bay.facing > 0 ? 90 : -90;
 }

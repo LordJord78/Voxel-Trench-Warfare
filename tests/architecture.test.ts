@@ -66,8 +66,10 @@ describe('architecture rules', () => {
   it('checks the real tree from the repo root, wherever the tests run from', () => {
     expect(listFiles('src', ['core']).length).toBeGreaterThan(4);
     expect(checkSource(path.join(REPO_ROOT, 'src/world/x.ts'), "import { a } from '../render/gpu';")).toHaveLength(1);
-    expect(checkTree('src', ['core', 'world', 'physics', 'sim', 'combat', 'battle'])).toEqual([]);
-    // The battle is a simulation too (the battle spec's §1): it has files for the rules to check.
+    expect(checkTree('src', ['core', 'world', 'physics', 'sim', 'combat', 'battle', 'net'])).toEqual([]);
+    // The battle is a simulation too (the battle spec's §1), and the room's rules are shared with the
+    // server (the multiplayer spec's §2): both have files for the rules to check.
     expect(listFiles('src', ['battle']).length).toBeGreaterThan(0);
+    expect(listFiles('src', ['net']).length).toBeGreaterThan(0);
   });
 });

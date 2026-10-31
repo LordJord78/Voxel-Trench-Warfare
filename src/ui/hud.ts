@@ -74,6 +74,7 @@ export class Hud {
   private readonly exposureEl: HTMLElement;
   private readonly rifleEl: HTMLElement;
   private readonly digEl: HTMLElement;
+  private readonly roomEl: HTMLElement | null;
   private last = '';
 
   constructor(doc: Document) {
@@ -84,6 +85,26 @@ export class Hud {
     this.exposureEl = part('.exposure');
     this.rifleEl = part('.rifle');
     this.digEl = part('.dig');
+    this.roomEl = this.root.querySelector<HTMLElement>('.roomline');
+  }
+
+  /** In a game with friends: its code and how many a side, over the middle of the view; null hides it. */
+  room(line: { room: string; red: number; blue: number } | null): void {
+    const el = this.roomEl;
+    if (!el) return;
+    el.hidden = line === null;
+    if (!line) return;
+    const key = `${line.room}:${line.red}:${line.blue}`;
+    if (el.dataset.key === key) return;
+    el.dataset.key = key;
+    const doc = el.ownerDocument;
+    const side = (cls: string, text: string) => {
+      const span = doc.createElement('span');
+      span.className = cls;
+      span.textContent = text;
+      return span;
+    };
+    el.replaceChildren(side('red', `RED ${line.red}`), doc.createTextNode(` · Game ${line.room} · `), side('blue', `BLUE ${line.blue}`));
   }
 
   get visible(): boolean {
