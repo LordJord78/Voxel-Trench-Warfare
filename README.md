@@ -22,9 +22,10 @@ Play it at [lordjord78.github.io/Voxel-Trench-Warfare](https://lordjord78.github
 |---|---|
 | <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | Move |
 | <kbd>Shift</kbd> | Sprint |
-| <kbd>Space</kbd> | Jump |
+| <kbd>Space</kbd> | Jump; stand up from crouching or lying down |
 | <kbd>C</kbd> / <kbd>Z</kbd> | Crouch / go prone |
 | <kbd>W</kbd> into the bench | Climb onto the firing step |
+| <kbd>W</kbd> + <kbd>Space</kbd> at a wall | Climb over it: out of the trench, over the parapet or the parados |
 | <kbd>Q</kbd> | Periscope, on a firing step |
 | Left mouse | Fire |
 | <kbd>R</kbd> | Reload |
@@ -72,11 +73,11 @@ The build works from any path. [The Pages workflow](.github/workflows/pages.yml)
 
 ## Design
 
-The design is in five specs, from [the world](docs/superpowers/specs/2026-10-21-trenchline-web-world-design.md) to [the showcase](docs/superpowers/specs/2026-10-25-trenchline-web-showcase-design.md). The build plans are in [docs/superpowers/plans/](docs/superpowers/plans/).
+The design is in six specs, from [the world](docs/superpowers/specs/2026-10-21-trenchline-web-world-design.md) to [the showcase](docs/superpowers/specs/2026-10-25-trenchline-web-showcase-design.md) and [playing it together](docs/superpowers/specs/2026-10-30-trenchline-multiplayer-design.md). The build plans are in [docs/superpowers/plans/](docs/superpowers/plans/).
 
 ## Python reference
 
-The original Python/Ursina game lives in [reference/python/](reference/python/). It stays runnable, and its tests stay green, until the web version has ported everything it does. Run it from that folder with the repo's virtual environment:
+The original Python/Ursina game lives in [reference/python/](reference/python/). It stays runnable, and its tests stay green, until the web version has ported everything it does. The web game's movement has since gone its own way (climbing out of any trench, the firing step only on the bench, no getting stuck); the parity tests still replay Python's recorded scenarios, on Python's own numbers, with those additions off. Run it from that folder with the repo's virtual environment:
 
 ```sh
 cd reference/python

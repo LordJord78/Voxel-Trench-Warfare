@@ -26,7 +26,7 @@ describe('fillBand', () => {
     const floorRow = [0, 1, 2].map((k) => map.get(lx + k, bay.floorY, wz));
     expect(floorRow.filter((v) => v === P.DUCKBOARD || v === P.DUCKBOARD_WORN).length).toBeGreaterThanOrEqual(2);
     for (let y = bay.floorY + 1; y < bay.floorY + 21; y++) expect(map.get(lx, y, wz)).toBe(P.AIR);
-    expect([P.TIMBER, P.TIMBER_WEATHERED, P.TIMBER_DARK]).toContain(map.get(lx, bay.stepTopY - 1, bay.stepLo));
+    expect(map.get(lx, bay.stepTopY - 1, bay.stepLo)).toBe(P.BENCH);
     expect(map.get(lx, bay.crestY - 1, bay.b1)).not.toBe(P.AIR);
     expect(map.get(lx, bay.crestY + 1, bay.b1 + 1)).toBe(P.AIR);
   });

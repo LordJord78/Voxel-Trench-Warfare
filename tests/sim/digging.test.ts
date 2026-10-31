@@ -23,7 +23,7 @@ const DIG: MoveIntent = { ...idleIntent(), dig: true };
 function yard(step = false): BrickMap {
   const map = new BrickMap({ x: 128, y: 64, z: 128 });
   map.fillBox(0, 0, 0, 128, 4, 128, P.CLAY);
-  if (step) map.fillBox(0, 3, 0, 128, 4, 128, P.TIMBER);
+  if (step) map.fillBox(0, 3, 0, 128, 4, 128, P.BENCH);
   map.fillBox(56, 4, 26, 72, 12, 40, P.SPOIL);
   map.takeDirty();
   return map;

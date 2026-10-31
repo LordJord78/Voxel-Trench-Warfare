@@ -11,12 +11,18 @@
  * prone body falling a metre a tick would pass clean through a duckboard;
  * Python's 0.5 m voxels never needed it, and a move of a voxel or less (every
  * tick of the parity fixtures) is checked exactly as Python checks it.
+ *
+ * The rest are the port's own (the multiplayer spec's M1, so nobody is ever
+ * trapped in a trench): a step-up needs room only for the rise it makes; a jump
+ * catches a ledge's lip; the mantle climbs onto the bench by walking into it,
+ * and onto anything in reach with jump held; and a body left inside the world
+ * is moved to the nearest free space. Each is off without its tunable, as in
+ * Python's fixtures, which keeps the parity scenarios Python's.
  */
 
 import { copysign, TAU } from '../core/dmath';
 import type { Tunables } from '../core/tunables';
-import { K } from '../world/materials';
-import { boxHitsSolid, groundHeightUnder, submergedDepth, supportIs, supportShare } from './collision';
+import { benchShare, boxHitsSolid, groundHeightUnder, submergedDepth, supportIsBench } from './collision';
 import type { VoxelGrid } from './grid';
 import { Vec3, ZERO, yawBasis } from './vec';
 
@@ -24,9 +30,6 @@ export const Stance = { STANDING: 0, CROUCHED: 1, PRONE: 2, FIRING_STEP: 3, PERI
 export type Stance = (typeof Stance)[keyof typeof Stance];
 
 const STANCE_KEYS = ['standing', 'crouched', 'prone', 'firing_step', 'periscope'] as const;
-
-/** A climb lets go of its ledge when the player turns further than 60° from it (cos 60°). */
-const CLIMB_FACING = 0.5;
 
 export interface StanceProfile {
   height: number;
@@ -51,10 +54,15 @@ export interface ControllerTunables {
   friction: number;
   maxFall: number;
   headBobHz: number;
-  /** Firing-step timber this high over the feet is climbed when walked into from the step (0, or absent as in Python's, climbs nothing). */
+  /** A ledge this high over the feet is mantled: a bench by walking into it, anything with jump held (0, or absent as in Python's, climbs nothing). */
   climbM: number;
   /** Metres a second up a ledge's face. */
   climbSpeed: number;
+  /** How high a body moving in the air steps onto a lip it meets (absent, as in Python's: none). */
+  airStepUp?: number;
+  /** Ticks a body may stay inside the world before it is moved to the nearest free space, and how far that may be (absent, as in Python's: never). */
+  unstickTicks?: number;
+  unstickM?: number;
   /** By Stance. */
   stances: StanceProfile[];
 }
@@ -74,6 +82,9 @@ export function controllerTunables(tun: Tunables): ControllerTunables {
     headBobHz: tun.f('camera.head_bob_hz'),
     climbM: tun.f('player.climb_m'),
     climbSpeed: tun.f('player.climb_speed'),
+    airStepUp: tun.f('player.air_step_up'),
+    unstickTicks: tun.i('player.unstick_ticks'),
+    unstickM: tun.f('player.unstick_m'),
     stances: STANCE_KEYS.map((key, i) => {
       const s = `stance.${key}`;
       return {
@@ -132,6 +143,8 @@ export interface CharacterState {
   /** The level way the climb faces, fixed when it began, and how far it has gone over the edge (metres). */
   climbDir: Vec3 | null;
   climbOver: number;
+  /** Ticks in a row the body has been inside the world. */
+  embedded: number;
 }
 
 export function newCharacter(position: Vec3, yaw = 0, pitch = 0): CharacterState {
@@ -153,6 +166,7 @@ export function newCharacter(position: Vec3, yaw = 0, pitch = 0): CharacterState
     climbTo: null,
     climbDir: null,
     climbOver: 0,
+    embedded: 0,
   };
 }
 
@@ -188,6 +202,7 @@ export class CharacterController {
   }
 
   tick(state: CharacterState, intent: MoveIntent, dt: number): void {
+    this.unstick(state);
     this.resolveStance(state, intent, dt);
     const profile = this.t.stances[state.stance];
     if (this.climb(state, intent, dt)) {
@@ -202,24 +217,27 @@ export class CharacterController {
   }
 
   /**
-   * The climb onto a firing step's bench: out of a step-up's reach from the treads (1.0–2.2 m
-   * over them), so a player standing on the step who walks into firing-step timber within
-   * `climbM` climbs it — straight up its face at `climbSpeed`, then over the edge the way it
-   * began facing, at that speed, held at the ledge's height, until the ledge bears the body.
-   * Letting go of forward, turning more than 60° from the ledge, being pinned, crouching or going
-   * prone, meeting anything on the way, or going further over than the body's radius and two
-   * voxels without finding the ledge (it is gone) lets go. Whether this tick was spent climbing.
+   * The mantle: a body against a ledge's face, pushing into it, climbs it — straight up its face at
+   * `climbSpeed`, then over the edge the way it began, at that speed, held at the ledge's height,
+   * until the ledge bears the body. Walking into a firing step's bench climbs it; with jump held,
+   * anything in reach does, from the ground or in the air (a jump at a parados reaches its top),
+   * standing or crouched. Once begun it is not let go of for looking round, letting go of forward or
+   * being pinned: backing off (S) or meeting anything on the way does, and so does going further
+   * over than the body's radius and two voxels without finding the ledge (it is gone). Whether this
+   * tick was spent climbing.
    */
   private climb(state: CharacterState, intent: MoveIntent, dt: number): boolean {
-    const facing = yawBasis(state.yaw)[0];
-    const letGo = intent.forward <= 0 || state.pinned || intent.stance === Stance.CROUCHED || intent.stance === Stance.PRONE;
     if (state.climbTo === null) {
-      if (letGo || !state.onGround || !state.onFiringStep || state.stance !== Stance.FIRING_STEP) return false;
-      state.climbTo = this.ledgeAhead(state);
+      const posture = state.stance === Stance.STANDING || state.stance === Stance.FIRING_STEP || state.stance === Stance.CROUCHED;
+      // W alone climbs only the bench, which a body on the treads walks into on its feet.
+      if (intent.forward <= 0 || !posture || (!intent.jump && !state.onGround)) return false;
+      const [forward, right] = yawBasis(state.yaw);
+      const wish = forward.mul(intent.forward).add(right.mul(intent.strafe)).normalised();
+      state.climbTo = this.ledgeAhead(state, wish, intent.jump);
       if (state.climbTo === null) return false;
-      state.climbDir = facing;
+      state.climbDir = wish;
       state.climbOver = 0;
-    } else if (letGo || state.climbDir === null || facing.dot(state.climbDir) < CLIMB_FACING) {
+    } else if (intent.forward < 0 || state.climbDir === null) {
       letGoOfLedge(state);
       return false;
     }
@@ -243,24 +261,72 @@ export class CharacterController {
     return true;
   }
 
-  /** The top of firing-step timber the body is walking into, within reach and with room to stand on it and to rise to it; or null. */
-  private ledgeAhead(state: CharacterState): number | null {
+  /**
+   * Where a body pushing into a ledge along `dir` would stand on it: the ledge's lip, or the ground
+   * past the lip where that is higher (a slumped parados rises behind its lip), within reach and
+   * with room to stand there and to rise to it; or null. Unless `anything`, only a bench's top
+   * counts: mostly firing-step timber three voxels in, so a parapet faced with a voxel of wattle is
+   * not one.
+   */
+  private ledgeAhead(state: CharacterState, dir: Vec3, anything: boolean): number | null {
     if (!(this.t.climbM > this.t.stepUp)) return null;
-    const [forward] = yawBasis(state.yaw);
     const pos = state.position;
     const v = this.grid.voxel;
     // A voxel ahead: only a body already against the ledge's face climbs it.
-    const probe = pos.add(forward.mul(v));
+    const probe = pos.add(dir.mul(v));
     if (!boxHitsSolid(this.grid, probe, this.t.radius, state.height)) return null;
-    const top = groundHeightUnder(this.grid, probe.withY(pos.y + this.t.climbM + v), this.t.radius, this.t.climbM + v);
-    if (top === null || top - pos.y <= this.t.stepUp || top - pos.y > this.t.climbM) return null;
-    // A bench's top, three voxels in: mostly timber, with room to stand. A parapet faced with a
-    // voxel of wattle is not one: its crest is sandbags and spoil behind the facing.
-    const on = pos.add(forward.mul(3 * v)).withY(top);
-    if (supportShare(this.grid, on, this.t.radius, K.TIMBER) <= 0.5) return null;
+    const reach = pos.y + this.t.climbM + v;
+    const lip = groundHeightUnder(this.grid, probe.withY(reach), this.t.radius, this.t.climbM + v);
+    if (lip === null || lip - pos.y <= this.t.stepUp) return null;
+    const ahead = pos.add(dir.mul(3 * v));
+    const beyond = groundHeightUnder(this.grid, ahead.withY(reach), this.t.radius, this.t.climbM + v);
+    const top = Math.max(lip, beyond ?? lip);
+    if (top - pos.y > this.t.climbM) return null;
+    const on = ahead.withY(top);
+    if (!anything && benchShare(this.grid, on, this.t.radius) <= 0.5) return null;
     if (boxHitsSolid(this.grid, on, this.t.radius, state.height)) return null;
     if (boxHitsSolid(this.grid, pos, this.t.radius, top - pos.y + state.height)) return null;
     return top;
+  }
+
+  /**
+   * A body inside the world for `unstickTicks` ticks running (a slump, a collapse, a view placed a
+   * voxel into a face, anything the moves below could not walk it out of) goes to the nearest free
+   * space within `unstickM`: the nearest shell of voxels first, and in each the lowest, then the
+   * nearest to straight up, so a body against a face steps back off it and a buried one rises.
+   */
+  private unstick(state: CharacterState): void {
+    const ticks = this.t.unstickTicks ?? 0;
+    if (!(ticks > 0)) return;
+    if (!boxHitsSolid(this.grid, state.position, this.t.radius, state.height)) {
+      state.embedded = 0;
+      return;
+    }
+    if (++state.embedded < ticks) return;
+    state.embedded = 0;
+    const v = this.grid.voxel;
+    const pos = state.position;
+    const reach = Math.round((this.t.unstickM ?? 0) / v);
+    for (let r = 1; r <= reach; r++) {
+      const shell: [number, number, number][] = [];
+      for (let dy = 0; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          for (let dz = -r; dz <= r; dz++) if (Math.max(Math.abs(dx), dy, Math.abs(dz)) === r) shell.push([dx, dy, dz]);
+        }
+      }
+      shell.sort((a, b) => a[1] - b[1] || Math.abs(a[0]) + Math.abs(a[2]) - (Math.abs(b[0]) + Math.abs(b[2])));
+      for (const [dx, dy, dz] of shell) {
+        const at = new Vec3(pos.x + dx * v, pos.y + dy * v, pos.z + dz * v);
+        if (boxHitsSolid(this.grid, at, this.t.radius, state.height)) continue;
+        state.position = at;
+        if (dy > 0) {
+          state.velocity = ZERO;
+          state.onGround = false;
+        }
+        letGoOfLedge(state);
+        return;
+      }
+    }
   }
 
   private resolveStance(state: CharacterState, intent: MoveIntent, dt: number): void {
@@ -337,7 +403,7 @@ export class CharacterController {
 
   private applyGravity(state: CharacterState, intent: MoveIntent, dt: number): void {
     let vy = state.velocity.y;
-    if (state.onGround && intent.jump && state.stance === Stance.STANDING) {
+    if (state.onGround && intent.jump && (state.stance === Stance.STANDING || state.stance === Stance.FIRING_STEP)) {
       vy = this.t.jumpSpeed;
       state.onGround = false;
     } else {
@@ -399,18 +465,22 @@ export class CharacterController {
     return false;
   }
 
-  /** Move one horizontal axis, climbing a single step if blocked. */
+  /**
+   * Move one horizontal axis, climbing a single step if blocked: on the ground, a rise of up to
+   * `stepUp`, wherever the body fits over the step's top (not over the full step-up, which no
+   * dugout's lintel leaves room for); in the air, a lip of up to `airStepUp`.
+   */
   private slide(pos: Vec3, delta: Vec3, height: number, grounded: boolean, axisVel: number): [Vec3, number] {
     if (Math.abs(delta.x) < 1e-9 && Math.abs(delta.z) < 1e-9) return [pos, axisVel];
     const candidate = pos.add(delta);
     if (!boxHitsSolid(this.grid, candidate, this.t.radius, height)) return [candidate, axisVel];
     // Penetration recovery: already inside geometry (a bad spawn, collapsed dirt), never refuse to move.
     if (boxHitsSolid(this.grid, pos, this.t.radius, height)) return [candidate, axisVel];
-    if (grounded) {
-      const raised = candidate.withY(candidate.y + this.t.stepUp);
-      if (!boxHitsSolid(this.grid, raised, this.t.radius, height)) {
-        const ground = groundHeightUnder(this.grid, raised, this.t.radius, this.t.stepUp + 0.2);
-        if (ground !== null && -1e-3 <= ground - pos.y && ground - pos.y <= this.t.stepUp) return [candidate.withY(ground), axisVel];
+    const rise = grounded ? this.t.stepUp : (this.t.airStepUp ?? 0);
+    if (rise > 0) {
+      const ground = groundHeightUnder(this.grid, candidate.withY(candidate.y + rise), this.t.radius, rise + 0.2);
+      if (ground !== null && -1e-3 <= ground - pos.y && ground - pos.y <= rise && !boxHitsSolid(this.grid, candidate.withY(ground), this.t.radius, height)) {
+        return [candidate.withY(ground), axisVel];
       }
     }
     return [pos, 0];
@@ -419,7 +489,7 @@ export class CharacterController {
   private postMove(state: CharacterState, profile: StanceProfile, dt: number): void {
     const pos = state.position;
     state.wadeDepth = submergedDepth(this.grid, pos, state.height);
-    state.onFiringStep = state.onGround && supportIs(this.grid, pos, this.t.radius, K.TIMBER);
+    state.onFiringStep = state.onGround && supportIsBench(this.grid, pos, this.t.radius);
     const speed = state.velocity.horizontalLength;
     if (state.onGround && speed > 0.2) {
       state.bobPhase += dt * this.t.headBobHz * (speed / Math.max(profile.speed, 0.1)) * TAU;

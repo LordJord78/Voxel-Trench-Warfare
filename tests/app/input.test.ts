@@ -43,6 +43,26 @@ describe('input', () => {
     expect(stances).toEqual([Stance.CROUCHED, Stance.STANDING, Stance.PRONE, Stance.CROUCHED, Stance.PRONE, Stance.STANDING]);
   });
 
+  it('stands up from crouching or lying down with Space (not a jump until it is pressed again), or by sprinting forward', () => {
+    for (const lie of ['KeyC', 'KeyZ']) {
+      const i = new Input();
+      press(i, lie);
+      i.keyDown('Space', false);
+      expect(i.intent().stance).toBe(Stance.STANDING);
+      expect(i.intent().jump).toBe(false);
+      i.keyUp('Space');
+      i.keyDown('Space', false);
+      expect(i.intent().jump).toBe(true);
+      i.keyUp('Space');
+
+      press(i, lie);
+      i.keyDown('ShiftLeft', false);
+      expect(i.intent().stance).not.toBe(Stance.STANDING);
+      i.keyDown('KeyW', false);
+      expect(i.intent().stance).toBe(Stance.STANDING);
+    }
+  });
+
   it('raises and lowers the periscope with Q, and lowers it when told', () => {
     const i = new Input();
     press(i, 'KeyQ');

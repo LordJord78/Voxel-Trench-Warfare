@@ -110,6 +110,8 @@ const DEFS: readonly Def[] = [
   // What a fire burned (world/char.ts): each of the kind it was, so only its colour changes.
   ['CHAR_TIMBER', K.TIMBER, 34, 28, 24], ['CHAR_DUCKBOARD', K.DUCKBOARD, 34, 28, 24],
   ['CHAR_CLOTH', K.CLOTH, 40, 36, 32], ['CHAR_HULL', K.HULL, 44, 34, 30, 0.8],
+  // A firing step's bench top: timber as TIMBER_DARK is, but the controller knows it for the step.
+  ['BENCH', K.TIMBER, 84, 68, 52],
 ];
 
 /** Palette ids by name. Kept explicit so ids are stable and greppable; checked against DEFS below. */
@@ -123,7 +125,7 @@ export const P = {
   WIRE: 37, WIRE_RUST: 38, HULL: 39, HULL_RUST: 40, PICKET: 41, PICKET_RUST: 42, CLOTH: 43,
   CLOTH_DARK: 44, LANTERN_GLOW: 45, EMBER: 46, RIFLE_STEEL: 47, RIFLE_STEEL_WORN: 48,
   RIFLE_FURNITURE: 49, RIFLE_MAG: 50, RIFLE_GRIP: 51, CHAR_TIMBER: 52, CHAR_DUCKBOARD: 53,
-  CHAR_CLOTH: 54, CHAR_HULL: 55,
+  CHAR_CLOTH: 54, CHAR_HULL: 55, BENCH: 56,
 } as const;
 
 export const PALETTE: readonly PaletteEntry[] = DEFS.map(([name, kind, r, g, b, roughness, emission]) => ({

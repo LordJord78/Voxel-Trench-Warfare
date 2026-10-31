@@ -56,7 +56,7 @@ describe('the viewmodel', () => {
     };
     const height = (s: Session) => s.muzzle()[1] - (s.player.position.y + s.controller.eyeHeight(s.player));
     const ground = on(P.SOD);
-    const step = on(P.TIMBER);
+    const step = on(P.BENCH);
     for (let k = 0; k < 6; k++) {
       ground.tick();
       step.tick();

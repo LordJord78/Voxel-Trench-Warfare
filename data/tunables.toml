@@ -158,10 +158,15 @@ eye_height_periscope = 2.20    # the mirror head, not your eye. 0.58 m over a
                                # over the crest against standing's 0.12 m
 radius              = 0.30
 step_up             = 0.55     # one voxel plus tolerance: climb the firing step
-climb_m             = 2.50     # firing-step timber this high over your feet is
-                               # climbed when walked into from the step: a bench
-                               # stands 1.0-2.2 m over the treads that lead to it
-climb_speed         = 1.60     # m/s up the bench's face
+climb_m             = 3.00     # a ledge this high over your feet is mantled:
+                               # the bench (1.0-2.6 m over its treads) by walking
+                               # into it; anything, with jump held. A jump puts
+                               # every parados (2.9-3.5 m) in reach from the
+                               # duckboards
+climb_speed         = 2.60     # m/s up a ledge's face
+air_step_up         = 0.30     # a jump onto a lip this high steps onto it
+unstick_ticks       = 10       # a body inside the world this long is moved...
+unstick_m           = 1.50     # ...to the nearest free space this near
 gravity             = -19.6    # 2 g — arcade-leaning, keeps jumps snappy
 jump_speed          = 5.0
 ground_accel        = 62.0
@@ -196,14 +201,14 @@ speed               = 0.75
 sprint_speed        = 0.75
 sway_scale          = 0.38
 exposure            = 0.28
-transition_time     = 0.75
+transition_time     = 0.45
 
 # Standing on the firing step: full vision, full exposure, and the trench no
 # longer protects you. This is the fast/dangerous option against the periscope.
 [stance.firing_step]
 height              = 1.80
-speed               = 1.2
-sprint_speed        = 1.2
+speed               = 2.2
+sprint_speed        = 2.2
 sway_scale          = 0.85
 exposure            = 1.35
 transition_time     = 0.30
@@ -694,7 +699,7 @@ hold_s              = 0.55
 max_level           = 1.00
 
 sway_at_full        = 4.20     # the dispersion cone at full suppression
-speed_at_full       = 0.40     # pinned should mean pinned
+speed_at_full       = 0.60     # pinned slows you, never strands you
 flinch_deg          = 1.35     # muzzle dragged off by a near miss
 flinch_recovery_s   = 0.45
 eject_from_step_at  = 0.55     # above this you cannot stay head-up. Not a

@@ -6,13 +6,15 @@
  */
 
 import type { BrickMap } from '../world/bricks';
-import { K, kindOf } from '../world/materials';
+import { K, kindOf, P } from '../world/materials';
 
 export interface VoxelGrid {
   /** Metres per voxel. */
   readonly voxel: number;
   /** The material kind at a voxel. */
   kindAt(x: number, y: number, z: number): number;
+  /** Whether a voxel is a firing step's bench top. A grid without it counts any timber, as Python did. */
+  benchAt?(x: number, y: number, z: number): boolean;
 }
 
 export function brickGrid(map: BrickMap, voxel: number): VoxelGrid {
@@ -22,6 +24,9 @@ export function brickGrid(map: BrickMap, voxel: number): VoxelGrid {
     kindAt(x, y, z) {
       if (x < 0 || y < 0 || z < 0 || x >= nx || y >= ny || z >= nz) return y >= ny ? K.AIR : K.SUBSOIL;
       return kindOf(map.get(x, y, z));
+    },
+    benchAt(x, y, z) {
+      return x >= 0 && y >= 0 && z >= 0 && x < nx && y < ny && z < nz && map.get(x, y, z) === P.BENCH;
     },
   };
 }

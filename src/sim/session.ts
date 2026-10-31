@@ -540,6 +540,7 @@ export class Session {
     p.onFiringStep = false;
     p.landingImpact = 0;
     letGoOfLedge(p);
+    p.embedded = 0;
     p.bobPhase = 0;
     this.prevPosition = p.position;
   }

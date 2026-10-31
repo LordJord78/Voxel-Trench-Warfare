@@ -26,7 +26,7 @@ function benchIntact(map: BrickMap, bay: BayPlan, bench: number): number {
         const [x, z] = bay.longAxis === 0 ? [a, b] : [b, a];
         const v = map.get(x, y, z);
         total++;
-        if (v === P.TIMBER || v === P.TIMBER_WEATHERED || v === P.TIMBER_DARK) timber++;
+        if (v === P.TIMBER || v === P.TIMBER_WEATHERED || v === P.TIMBER_DARK || v === P.BENCH) timber++;
       }
     }
   }

@@ -43,11 +43,11 @@ describe('the controller at 10 cm', () => {
 });
 
 describe('the periscope at 10 cm', () => {
-  // A timber step under a roof: a dugout's stairs, where Python's rule (standing on timber) also applies.
+  // A bench under a roof (a step where a dugout's stairs come up beside it).
   function stepUnder(roofY: number | null) {
     const map = new BrickMap({ x: 64, y: 64, z: 64 });
     map.fillBox(0, 0, 0, 64, 20, 64, P.SOD);
-    map.fillBox(0, 20, 0, 64, 21, 64, P.TIMBER);
+    map.fillBox(0, 20, 0, 64, 21, 64, P.BENCH);
     if (roofY !== null) map.fillBox(0, roofY, 0, 64, roofY + 1, 64, P.TIMBER);
     const c = new CharacterController(brickGrid(map, 0.1), controllerTunables(loadTunables()));
     const s = newCharacter(new Vec3(3.2, 2.1, 3.2));

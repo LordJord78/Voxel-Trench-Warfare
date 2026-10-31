@@ -130,7 +130,7 @@ function writeColumn(ctx: Context, m: ColumnModel, c: number, x: number, z: numb
     if (trench) {
       if (y < floor) v = strata(ctx, ground, x, y, z);
       else if (y === floor) v = along % 3 === 2 ? P.AIR : shade(x, y, z, 4) < 64 ? P.DUCKBOARD_WORN : P.DUCKBOARD;
-      else if (y < solidTop) v = y === solidTop - 1 ? P.TIMBER_DARK : ((y - floor) >> 1) % 2 === 0 ? P.TIMBER : P.TIMBER_WEATHERED;
+      else if (y < solidTop) v = y === solidTop - 1 ? (bay && solidTop === bay.stepTopY ? P.BENCH : P.TIMBER_DARK) : ((y - floor) >> 1) % 2 === 0 ? P.TIMBER : P.TIMBER_WEATHERED;
       else v = P.AIR;
     } else if (revetTop >= 0 && y >= revetFrom && y < revetTop) {
       v = revetment(ctx, bay, x, y, z, revetFrom);

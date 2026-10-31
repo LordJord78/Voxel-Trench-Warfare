@@ -62,6 +62,47 @@ export function supportIs(g: VoxelGrid, centre: Vec3, halfX: number, kind: numbe
   return false;
 }
 
+/** Whether a voxel is a bench's top: by the grid's own word, or, where it has none, any timber. */
+function benchVoxel(g: VoxelGrid, x: number, y: number, z: number): boolean {
+  return g.benchAt ? g.benchAt(x, y, z) : g.kindAt(x, y, z) === K.TIMBER;
+}
+
+/** Is any of what the body stands on a firing step's bench? (One boot on it is on the step.) */
+export function supportIsBench(g: VoxelGrid, centre: Vec3, halfX: number): boolean {
+  const s = g.voxel;
+  const x0 = Math.floor((centre.x - halfX + EPS) / s);
+  const x1 = Math.floor((centre.x + halfX - EPS) / s) + 1;
+  const z0 = Math.floor((centre.z - halfX + EPS) / s);
+  const z1 = Math.floor((centre.z + halfX - EPS) / s) + 1;
+  const y = Math.floor((centre.y - s * 0.5) / s);
+  for (let x = x0; x < x1; x++) {
+    for (let z = z0; z < z1; z++) {
+      if (benchVoxel(g, x, y, z)) return true;
+    }
+  }
+  return false;
+}
+
+/** Of the solid voxels a body would stand on at `centre`, the share that are a bench's top (0 if it would stand on nothing). */
+export function benchShare(g: VoxelGrid, centre: Vec3, halfX: number): number {
+  const s = g.voxel;
+  const x0 = Math.floor((centre.x - halfX + EPS) / s);
+  const x1 = Math.floor((centre.x + halfX - EPS) / s) + 1;
+  const z0 = Math.floor((centre.z - halfX + EPS) / s);
+  const z1 = Math.floor((centre.z + halfX - EPS) / s) + 1;
+  const y = Math.floor((centre.y - s * 0.5) / s);
+  let solid = 0;
+  let of = 0;
+  for (let x = x0; x < x1; x++) {
+    for (let z = z0; z < z1; z++) {
+      if (!KIND_SOLID[g.kindAt(x, y, z)]) continue;
+      solid++;
+      if (benchVoxel(g, x, y, z)) of++;
+    }
+  }
+  return solid === 0 ? 0 : of / solid;
+}
+
 /** Of the solid voxels a body would stand on at `centre`, the share that are of `kind` (0 if it would stand on nothing). */
 export function supportShare(g: VoxelGrid, centre: Vec3, halfX: number, kind: number): number {
   const s = g.voxel;

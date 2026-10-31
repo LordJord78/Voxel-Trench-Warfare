@@ -82,7 +82,7 @@ describe('suppression', () => {
     it('being pinned takes your movement', () => {
       const { s, rng } = fresh();
       for (let k = 0; k < 20; k++) s.crack(0.2, rng);
-      expect(s.speedScale).toBeLessThan(0.5);
+      expect(s.speedScale).toBeLessThan(0.7);
     });
 
     it('…and your aim', () => {

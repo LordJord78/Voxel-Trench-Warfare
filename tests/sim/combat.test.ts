@@ -12,7 +12,7 @@ const tun = loadTunables();
 function arena(step = false): BrickMap {
   const map = new BrickMap({ x: 256, y: 64, z: 256 });
   map.fillBox(0, 0, 0, 256, 4, 256, P.SOD);
-  if (step) map.fillBox(0, 3, 0, 256, 4, 256, P.TIMBER);
+  if (step) map.fillBox(0, 3, 0, 256, 4, 256, P.BENCH);
   map.fillBox(0, 4, 150, 256, 64, 180, P.CLAY);
   return map;
 }

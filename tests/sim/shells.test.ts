@@ -147,5 +147,6 @@ describe('a shell landing', () => {
         }
       }
     }
-  });
+    // 36 sessions of 6 s each: over the default timeout on a slower machine than the M1 Pro.
+  }, 120_000);
 });

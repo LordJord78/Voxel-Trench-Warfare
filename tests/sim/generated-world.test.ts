@@ -9,11 +9,12 @@ import { fillBand } from '../../src/world/generation/fill';
 import { generateWorld, type GeneratedWorld } from '../../src/world/generation/generate';
 import { genParams } from '../../src/world/generation/params';
 import { planWorld } from '../../src/world/generation/plan';
-import { P } from '../../src/world/materials';
+import { isSolid, P } from '../../src/world/materials';
 
 // Play over the generated world: every friendly bench is climbed by walking at it from its treads,
-// and the front's light fire, the visitor's default, is heard without pinning (the spec's Light),
-// even with the head over the crest.
+// never the parapet behind it unless jump is held, and then every bay is left in seconds, over the
+// parapet or the parados (the multiplayer spec's M1); and the front's light fire, the visitor's
+// default, is heard without pinning (the spec's Light), even with the head over the crest.
 const tun = loadTunables();
 const params = genParams(tun);
 const plan = planWorld(params, 7);
@@ -24,10 +25,10 @@ beforeAll(async () => {
 }, 120_000);
 
 describe('the firing step in the generated world', () => {
-  it('every friendly bench is climbed by walking at it from its treads', () => {
+  it('every friendly bench is climbed by walking at it from its treads, and the parapet over it only with jump held', () => {
     const v = params.voxel;
     const T = params.trench;
-    const timber: number[] = [P.TIMBER, P.TIMBER_WEATHERED, P.TIMBER_DARK];
+    const timber: number[] = [P.BENCH];
     const bays = world.plan.lines.filter((l) => l.spec.side === 0 && l.spec.firingSteps).flatMap((l) => l.bays.filter((b) => b.firingSteps));
     expect(bays.length).toBe(26);
     const missed: string[] = [];
@@ -73,10 +74,68 @@ describe('the firing step in the generated world', () => {
       }
       if (Math.abs(y - bench) > 0.01 || stance !== Stance.FIRING_STEP || highest > bench + 0.01) {
         missed.push(`${bay.line}#${bay.index}: ${y.toFixed(2)} for ${bench.toFixed(2)}, then at most ${highest.toFixed(2)}, stance ${stance}`);
+        continue;
       }
+      // Jump held: over the parapet and standing on its crest within 3 s.
+      const crest = bay.crestY * v;
+      s.intent = { ...s.intent, forward: 1, jump: true };
+      let over = -1;
+      for (let j = 0; j < 180 && over < 0; j++) {
+        s.tick();
+        if (s.player.onGround && s.player.position.y > crest - 0.05) over = j;
+      }
+      if (over < 0) missed.push(`${bay.line}#${bay.index}: not over the parapet (${crest.toFixed(2)}) in 3 s, at ${s.player.position.y.toFixed(2)}`);
     }
     expect(missed, missed.join('\n')).toEqual([]);
     expect(shotAway).toBeLessThanOrEqual(2);
+  }, 120_000);
+
+  it('from the duckboards of every friendly bay, a jump held at the parados is out of the trench within 3 s', () => {
+    const v = params.voxel;
+    const T = params.trench;
+    const bays = world.plan.lines.filter((l) => l.spec.side === 0 && l.spec.firingSteps).flatMap((l) => l.bays.filter((b) => b.firingSteps));
+    const stuck: string[] = [];
+    let open = 0;
+    for (const bay of bays) {
+      const f = bay.facing;
+      const lo = bay.stepLo;
+      const hi = bay.stepLo + T.bench;
+      const at = (a: number, b: number): [number, number] => (bay.longAxis === 0 ? [a, b] : [b, a]);
+      const walkB = f > 0 ? (bay.b0 + lo - T.treadsAcross * T.treadDepth) / 2 : (hi + T.treadsAcross * T.treadDepth + bay.b1) / 2;
+      // A face behind the walkway, shelled or not, and not a dugout's entrance or a comm trench's
+      // mouth (those are walked into, not climbed): solid at the shins in the four columns behind.
+      const rear = f > 0 ? bay.b0 - 1 : bay.b1;
+      const wall = (a: number) => {
+        for (let d = 0; d < 4; d++) {
+          const [cx, cz] = at(a, rear - f * d);
+          if (!isSolid(world.map.get(cx, bay.floorY + 3, cz))) return false;
+        }
+        return true;
+      };
+      const mid = Math.floor((bay.a0 + bay.a1) / 2);
+      const along: number[] = [];
+      for (let d = 0; d <= bay.a1 - bay.a0; d += 3) along.push(mid + d, mid - d);
+      const a = along.find((c) => c - 4 > bay.a0 && c + 4 < bay.a1 && [-3, 0, 3].every((d) => wall(c + d)));
+      if (a === undefined) {
+        open++;
+        continue;
+      }
+      const [x, z] = at(a + 0.5, walkB);
+      const duck = (bay.floorY + 1) * v;
+      const s = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn }, tun, 7, 0);
+      // Facing away from the firing step: the parados is behind the walkway.
+      s.teleport([x * v, duck + 0.2, z * v], bay.longAxis === 0 ? (f > 0 ? 180 : 0) : f > 0 ? -90 : 90, 0);
+      for (let k = 0; k < 30; k++) s.tick();
+      s.intent = { ...s.intent, forward: 1, jump: true };
+      let out = -1;
+      for (let j = 0; j < 180 && out < 0; j++) {
+        s.tick();
+        if (s.player.onGround && s.player.position.y > duck + 2.2) out = j;
+      }
+      if (out < 0) stuck.push(`${bay.line}#${bay.index}: ${(s.player.position.y - duck).toFixed(2)} m over the duckboards after 3 s`);
+    }
+    expect(stuck, stuck.join('\n')).toEqual([]);
+    expect(open).toBeLessThanOrEqual(4);
   }, 120_000);
 });
 
