@@ -41,8 +41,14 @@ export function planCraters(
   p: GenParams,
   t: TerrainModel,
   rng: Rng,
-  frontLines: { z: number; facing: 1 | -1 }[],
+  frontLines: { z: number; facing: 1 | -1; at?: (x: number) => number }[],
 ): { open: Crater[]; direct: DirectHit[] } {
+  // Where each fire trench runs at x, bends and all (where it was planned, if it is straight).
+  const lineAt = (line: (typeof frontLines)[number] | undefined, x: number, fallback: number) => (line ? (line.at ? line.at(x) : line.z) : fallback);
+  const ours = frontLines.find((l) => l.facing > 0);
+  const theirs = frontLines.find((l) => l.facing < 0);
+  const frontAt = (x: number) => lineAt(ours, x, p.layout.front);
+  const enemyAt = (x: number) => lineAt(theirs, x, p.layout.enemyFront);
   const edge = vx(1.5, p.voxel);
   const open: Crater[] = [];
   // Pull a crater in from the map's sides until its rim clears them: the far
@@ -54,10 +60,10 @@ export function planCraters(
 
   // No man's land, densest near the parapets: the ground nobody crosses twice.
   const nml = rng.derive('craters.nml');
-  const zLo = p.layout.front + vx(2.0, p.voxel);
-  const zHi = p.layout.enemyFront - vx(2.0, p.voxel);
   for (let i = 0; i < p.craters.nml; i++) {
     const x = nml.randint(edge, p.dims.x - edge);
+    const zLo = frontAt(x) + vx(2.0, p.voxel);
+    const zHi = enemyAt(x) - vx(2.0, p.voxel);
     const z = zLo + nml.beta(0.7, 0.7) * (zHi - zLo);
     const r = radius(p, nml, p.craters.radiusCap);
     open.push({ x: inside(x, r, p.dims.x), z, r, ragged: 1 });
@@ -68,7 +74,7 @@ export function planCraters(
   for (let i = 0; i < p.craters.rear; i++) {
     const x = rear.randint(edge, p.dims.x - edge);
     let z = rear.randint(edge, p.dims.z - edge);
-    while (z >= p.layout.front && z <= p.layout.enemyFront) z = rear.randint(edge, p.dims.z - edge);
+    while (z >= frontAt(x) && z <= enemyAt(x)) z = rear.randint(edge, p.dims.z - edge);
     const r = radius(p, rear, p.craters.radiusCap);
     open.push({ x: inside(x, r, p.dims.x), z: inside(z, r, p.dims.z), r, ragged: 1 });
   }
@@ -83,7 +89,7 @@ export function planCraters(
     const hi = line.facing > 0 ? line.z + far : line.z + near;
     for (let i = 0; i < p.craters.directPerLine; i++) {
       const x = p.trench.lineMargin + hits.float() * (p.dims.x - 2 * p.trench.lineMargin);
-      const z = lo + hits.float() * (hi - lo);
+      const z = lineAt(line, x, line.z) - line.z + lo + hits.float() * (hi - lo);
       const r = radius(p, hits, p.craters.directCap);
       const y = surfaceAt(t, p, Math.floor(x), Math.floor(z)) - Math.trunc(r * 0.55);
       direct.push({ x, y, z, r, seed: hits.nextU32() });
@@ -109,7 +115,7 @@ const A3 = 0.05;
 const A5 = 0.025;
 const LOBES = A2 + A3 + A5;
 /** How far a crater reaches, rim and all, in radii. */
-const REACH = 1.4 * (1 + LOBES);
+export const REACH = 1.4 * (1 + LOBES);
 
 /** One crater's outline: harmonic weights (cos, sin of each phase, times its amplitude) and the way its rim is heaped. */
 interface Outline {

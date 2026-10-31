@@ -11,6 +11,7 @@
  * is laid as packed mud instead, so nothing needs to fall.
  */
 
+import { HALF_PI, PI, cos, sin } from '../../core/dmath';
 import { hash32x4 } from '../../core/hash';
 import { BrickMap, UNIFORM } from '../bricks';
 import { encodeBrick, formatOfLength } from '../encode';
@@ -22,7 +23,7 @@ import { vx } from './params';
 import { bayList } from './bays';
 import type { WorldPlan } from './plan';
 import { propReach, stampProp } from './props';
-import type { BayPlan } from './trenches';
+import { meanderAt, type BayPlan } from './trenches';
 
 export const BAND = 32;
 
@@ -54,26 +55,105 @@ interface Context {
   sod: number;
   mud: number;
   clay: number;
-  ploughPeriod: number;
-  ploughPhase: number;
-  nmlLo: number;
-  nmlHi: number;
+  fields: Fields;
+  fieldCell: number;
   post: number;
+}
+
+/**
+ * The farmland behind the lines, as a patchwork: the nearest of one point a FIELD-square cell
+ * (jittered in its cell) owns each column, and each field is ploughed at its own bearing and
+ * spacing, or left fallow. Furrows stop short of no man's land, wherever the fire trenches bend.
+ */
+interface Fields {
+  cells: number;
+  px: Float64Array;
+  pz: Float64Array;
+  /** Per field: the furrow bearing's unit vector, the spacing (voxels), its phase; spacing 0 for fallow. */
+  ux: Float64Array;
+  uz: Float64Array;
+  period: Float64Array;
+  phase: Float64Array;
+  /** Per world x: where no man's land begins and ends, furrows kept this far clear of it. */
+  nmlLo: Float64Array;
+  nmlHi: Float64Array;
+}
+
+const FIELD_M = 45;
+
+const fieldsCache = new WeakMap<WorldPlan, Fields>();
+
+function fields(plan: WorldPlan): Fields {
+  const known = fieldsCache.get(plan);
+  if (known) return known;
+  const p = plan.params;
+  const cell = vx(FIELD_M, p.voxel);
+  const cells = Math.ceil(Math.max(p.dims.x, p.dims.z) / cell) + 2;
+  const n = cells * cells;
+  const f: Fields = {
+    cells, px: new Float64Array(n), pz: new Float64Array(n), ux: new Float64Array(n), uz: new Float64Array(n),
+    period: new Float64Array(n), phase: new Float64Array(n), nmlLo: new Float64Array(p.dims.x), nmlHi: new Float64Array(p.dims.x),
+  };
+  const salt = plan.terrain.salt;
+  for (let j = 0; j < cells; j++) {
+    for (let i = 0; i < cells; i++) {
+      const k = j * cells + i;
+      const h = (q: number) => (hash32x4(i, j, salt, q) >>> 0) / 4294967296;
+      f.px[k] = (i - 1 + 0.15 + 0.7 * h(1)) * cell;
+      f.pz[k] = (j - 1 + 0.15 + 0.7 * h(2)) * cell;
+      // Most fields run near the lines' way, as the roads and hedges ran; some across, some askew.
+      const bearing = h(3) < 0.6 ? (h(4) - 0.5) * 0.5 : h(3) < 0.8 ? HALF_PI + (h(4) - 0.5) * 0.4 : h(4) * PI;
+      f.ux[k] = cos(bearing);
+      f.uz[k] = sin(bearing);
+      f.period[k] = h(5) < 0.3 ? 0 : vx(0.6 + 0.8 * h(6), p.voxel);
+      f.phase[k] = h(7) * 64;
+    }
+  }
+  const front = plan.lines.find((l) => l.spec.firingSteps && l.spec.facing > 0);
+  const enemy = plan.lines.find((l) => l.spec.firingSteps && l.spec.facing < 0);
+  for (let x = 0; x < p.dims.x; x++) {
+    f.nmlLo[x] = p.layout.front + (front ? meanderAt(front.meander ?? [], x) : 0);
+    f.nmlHi[x] = p.layout.enemyFront + (enemy ? meanderAt(enemy.meander ?? [], x) : 0);
+  }
+  fieldsCache.set(plan, f);
+  return f;
+}
+
+/** Whether column (x, z) lies in a furrow. */
+function furrowed(f: Fields, cell: number, x: number, z: number): boolean {
+  const xi = Math.max(0, Math.min(f.nmlLo.length - 1, x));
+  if (z >= f.nmlLo[xi] && z <= f.nmlHi[xi]) return false;
+  const ci = Math.floor(x / cell) + 1;
+  const cj = Math.floor(z / cell) + 1;
+  let best = Infinity;
+  let k = -1;
+  for (let j = Math.max(0, cj - 1); j <= Math.min(f.cells - 1, cj + 1); j++) {
+    for (let i = Math.max(0, ci - 1); i <= Math.min(f.cells - 1, ci + 1); i++) {
+      const c = j * f.cells + i;
+      const dx = x - f.px[c];
+      const dz = z - f.pz[c];
+      const d = dx * dx + dz * dz;
+      if (d < best) {
+        best = d;
+        k = c;
+      }
+    }
+  }
+  if (k < 0 || f.period[k] === 0) return false;
+  const u = x * f.ux[k] + z * f.uz[k] + f.phase[k];
+  return Math.floor(u / f.period[k]) % 2 === 0;
 }
 
 function context(plan: WorldPlan): Context {
   const p = plan.params;
-  const period = vx(3.5, p.voxel);
   return {
     plan,
     bays: bayList(plan),
     sod: 1,
     mud: vx(1.5, p.voxel),
     clay: vx(4.0, p.voxel),
-    ploughPeriod: period,
-    ploughPhase: plan.terrain.salt % period,
-    nmlLo: p.layout.front,
-    nmlHi: p.layout.enemyFront,
+    fields: fields(plan),
+    fieldCell: vx(FIELD_M, p.voxel),
     post: vx(1.2, p.voxel),
   };
 }
@@ -81,8 +161,7 @@ function context(plan: WorldPlan): Context {
 function strata(ctx: Context, ground: number, x: number, y: number, z: number): number {
   const depth = ground - y;
   if (depth <= ctx.sod) {
-    const ploughed = (z < ctx.nmlLo || z > ctx.nmlHi) && Math.floor((z + ctx.ploughPhase) / ctx.ploughPeriod) % 2 === 0;
-    if (ploughed) return P.MUD_TURNED;
+    if (furrowed(ctx.fields, ctx.fieldCell, x, z)) return P.MUD_TURNED;
     const h = shade(x, y, z, 1);
     return h < 180 ? P.SOD : h < 230 ? P.SOD_DRY : P.SOD_TUFT;
   }

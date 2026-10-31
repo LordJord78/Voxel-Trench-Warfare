@@ -12,6 +12,7 @@
  * Everything is in voxels on two axes: `a` along the trench, `b` across it.
  */
 
+import { TAU, sin } from '../../core/dmath';
 import type { Rng } from '../../core/rng';
 import { vx, type GenParams, type LineSpec } from './params';
 
@@ -70,8 +71,25 @@ export interface DugoutPlan {
   seed: number;
 }
 
+/** One sine of a line's meander: `amp` voxels across, every `wave` voxels along, starting at `phase`. */
+export interface Wave {
+  amp: number;
+  wave: number;
+  phase: number;
+}
+
+/** How far across a line has meandered at `a` (voxels): the sum of its waves. */
+export function meanderAt(waves: readonly Wave[], a: number): number {
+  let b = 0;
+  for (const w of waves) b += w.amp * sin((TAU * a) / w.wave + w.phase);
+  return b;
+}
+
 export interface LinePlan {
+  /** The line as planned; a line that joins others ends where it meets them (see `PlanLineOptions.ends`). */
   spec: LineSpec;
+  /** The bends it follows across the map, if any. */
+  meander?: Wave[];
   bays: BayPlan[];
   legs: LegPlan[];
   dugouts: DugoutPlan[];
@@ -125,9 +143,19 @@ function patch(surface: Surface, longAxis: 0 | 2, dims: { x: number; z: number }
 
 const corridorDims = { x: Infinity, z: Infinity };
 
-/** How far a line wanders across from where it was planned (metres), and its largest step from bay to bay. */
-const WANDER_M = 1.5;
+/** How far a line wanders across from its bends (metres), and its largest step from bay to bay. */
+const WANDER_M = 1.0;
 const WANDER_STEP_M = 0.5;
+
+export interface PlanLineOptions {
+  /** The bends the line follows: each bay set across by the meander at its middle. */
+  meander?: readonly Wave[];
+  /**
+   * Where a line that joins others must end, for a bay across [b0, b1): the line runs on until it
+   * gets there, its last bay stretched to meet it rather than leave a stub.
+   */
+  ends?: (b0: number, b1: number) => number;
+}
 
 /**
  * How high the ground gets in the strip this bay has to see over: a high
@@ -169,7 +197,8 @@ interface Draft {
   walkB: number;
 }
 
-export function planLine(p: GenParams, spec: LineSpec, surface: Surface, rng: Rng, crossed: readonly LinePlan[] = []): LinePlan {
+export function planLine(p: GenParams, planned: LineSpec, surface: Surface, rng: Rng, crossed: readonly LinePlan[] = [], opts: PlanLineOptions = {}): LinePlan {
+  let spec = planned;
   const T = p.trench;
   const dims = { x: p.dims.x, z: p.dims.z };
   const structure = spec.firingSteps ? T.bench + T.treadsAcross * T.treadDepth : 0;
@@ -177,19 +206,26 @@ export function planLine(p: GenParams, spec: LineSpec, surface: Surface, rng: Rn
 
   const drafts: Draft[] = [];
   let prevFloor: number | null = null;
-  // Dug by hand, not ruled (the multiplayer spec's §5): each bay its own length, and the line
-  // wandering as it goes, a random walk of its cross position held within WANDER of the plan's.
+  // Dug by hand, not ruled (the multiplayer spec's §5): each bay its own length, the line
+  // following its bends across the map, and wandering off them as it goes, a random walk of its
+  // cross position held within WANDER.
   const shape = rng.derive('shape');
   const wander = vx(WANDER_M, p.voxel);
   const stride = vx(WANDER_STEP_M, p.voxel);
+  const bends = opts.meander ?? [];
   let drift = 0;
-  for (let a = spec.aStart, index = 0; a < spec.aEnd; index++) {
+  let end = spec.aEnd;
+  for (let a = spec.aStart, index = 0; a < end; index++) {
     const length = T.bayLen + shape.randint(-Math.floor(T.bayLen / 4), Math.floor(T.bayLen / 5) + 1);
-    // The end of the line does not leave a stub too short to be a bay.
-    const a1 = spec.aEnd - (a + length) < T.bayLen / 2 ? spec.aEnd : Math.min(a + length, spec.aEnd);
     if (index > 0) drift = Math.max(-wander, Math.min(wander, drift + shape.randint(-stride, stride + 1)));
-    const b0 = spec.crossBase + drift + (index % 2 ? T.offset : 0);
+    const b0 = spec.crossBase + Math.round(meanderAt(bends, a + length / 2)) + drift + (index % 2 ? T.offset : 0);
     const b1 = b0 + T.width;
+    // The end of the line does not leave a stub too short to be a bay; a line that joins others
+    // takes its last bay all the way to them once there is no room for another.
+    if (opts.ends) end = opts.ends(b0, b1);
+    const room = opts.ends ? T.bayLen + T.leg : T.bayLen / 2;
+    const a1 = end - (a + length) < room ? end : Math.min(a + length, end);
+    if (a1 <= a) break;
     const groundY = medianInt(patch(surface, spec.longAxis, dims, a, a1, b0, b1, 1));
     let floorY = groundY - T.depth;
     if (prevFloor !== null) floorY = Math.max(prevFloor - T.treadRise, Math.min(prevFloor + T.treadRise, floorY));
@@ -215,6 +251,8 @@ export function planLine(p: GenParams, spec: LineSpec, surface: Surface, rng: Rn
     prevFloor = floorY;
     a = a1 + T.leg;
   }
+
+  if (opts.ends && drafts.length > 0) spec = { ...spec, aEnd: drafts[drafts.length - 1].a1 };
 
   // Raising a bay only buys a taller parapet, so smoothing only ever lifts.
   if (spec.firingSteps && T.smooth > 0) {
@@ -274,7 +312,10 @@ export function planLine(p: GenParams, spec: LineSpec, surface: Surface, rng: Rn
       dugouts.push(d);
     }
   }
-  return profile ? { spec, bays, legs, dugouts, profile } : { spec, bays, legs, dugouts };
+  const line: LinePlan = { spec, bays, legs, dugouts };
+  if (bends.length > 0) line.meander = bends.map((w) => ({ ...w }));
+  if (profile) line.profile = profile;
+  return line;
 }
 
 type Rect = { x0: number; x1: number; z0: number; z1: number };

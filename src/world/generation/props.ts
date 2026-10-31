@@ -11,6 +11,7 @@
  * except rubble, which is only ever laid flat or in 45° heaps.
  */
 
+import { TAU, cos, sin } from '../../core/dmath';
 import { hash32x4 } from '../../core/hash';
 import { Rng } from '../../core/rng';
 import { carveWith } from '../destruction';
@@ -20,6 +21,7 @@ import { columnTopAt } from './columns';
 import type { DirectHit } from './craters';
 import { vx } from './params';
 import type { PropPlan, WorldPlan } from './plan';
+import { meanderAt } from './trenches';
 
 const WIDE = 1e9;
 
@@ -88,6 +90,18 @@ export function planProps(plan: WorldPlan, root: Rng): PropPlan[] {
   const m = (metres: number) => vx(metres, p.voxel);
   const L = p.layout;
   const props: PropPlan[] = [];
+  // How far a line has bent across at x: the landmarks between the lines move with them.
+  const bend = (name: string, x: number) => {
+    const line = plan.lines.find((l) => l.spec.name === name);
+    return line ? Math.round(meanderAt(line.meander ?? [], x)) : 0;
+  };
+  // No tree stands in a trench: those planted where a line has bent into their belt are not.
+  const dug = plan.lines.flatMap((l) => [
+    ...l.bays.map((b) => [b.x0, b.x1, b.z0, b.z1]),
+    ...l.legs.map((g) => (g.longAxis === 0 ? [g.a0, g.a1, g.b0, g.b1] : [g.b0, g.b1, g.a0, g.a1])),
+  ]);
+  const clear = m(1.5);
+  const open = (x: number, z: number) => !dug.some(([x0, x1, z0, z1]) => x > x0 - clear && x < x1 + clear && z > z0 - clear && z < z1 + clear);
 
   // Shelterbelts: the shattered windbreaks between fields, Python's spacing in metres.
   const belts = root.derive('props.tree');
@@ -100,7 +114,8 @@ export function planProps(plan: WorldPlan, root: Rng): PropPlan[] {
       const stump = belts.chance(0.62);
       const a = stump ? belts.randint(m(1.0), m(2.5) + 1) : belts.randint(m(3.5), m(7.5) + 1);
       const b = (belts.chance(0.55) ? 1 : 0) | (belts.chance(0.22) ? 2 : 0);
-      props.push({ kind: 'tree', x, z, seed: belts.nextU32(), a, b });
+      const seed = belts.nextU32();
+      if (open(x, z)) props.push({ kind: 'tree', x, z, seed, a, b });
     }
   }
 
@@ -113,16 +128,17 @@ export function planProps(plan: WorldPlan, root: Rng): PropPlan[] {
       const stump = wood.chance(0.45);
       const a = stump ? wood.randint(m(1.0), m(3.0) + 1) : wood.randint(m(4), m(9) + 1);
       const b = (wood.chance(0.4) ? 1 : 0) | (wood.chance(0.15) ? 2 : 0);
-      props.push({ kind: 'tree', x, z, seed: wood.nextU32(), a, b });
+      const seed = wood.nextU32();
+      if (open(x, z)) props.push({ kind: 'tree', x, z, seed, a, b });
     }
   }
 
   // Wire belts out in front of both fire trenches.
   const wire = root.derive('props.wire');
-  for (const line of plan.lines) {
-    if (!line.spec.firingSteps) continue;
-    props.push({ kind: 'wire', x: p.dims.x / 2, z: line.spec.crossBase + line.spec.facing * m(12), seed: wire.nextU32() });
-  }
+  plan.lines.forEach((line, index) => {
+    if (!line.spec.firingSteps) return;
+    props.push({ kind: 'wire', x: p.dims.x / 2, z: line.spec.crossBase + line.spec.facing * m(12), seed: wire.nextU32(), c: index });
+  });
 
   // Telegraph poles and fence lines in no man's land: things that break the horizon.
   const poles = root.derive('props.pole');
@@ -140,11 +156,12 @@ export function planProps(plan: WorldPlan, root: Rng): PropPlan[] {
 
   // Landmarks.
   const land = root.derive('props.landmarks');
-  props.push({ kind: 'hull', x: L.hull[0], z: L.hull[1], seed: land.nextU32() });
-  props.push({ kind: 'farm', x: L.farm[0], z: L.farm[1], seed: land.nextU32() });
+  const between = (x: number) => Math.round((bend('front', x) + bend('enemy_front', x)) / 2);
+  props.push({ kind: 'hull', x: L.hull[0], z: L.hull[1] + between(L.hull[0]), seed: land.nextU32() });
+  props.push({ kind: 'farm', x: L.farm[0], z: L.farm[1] + bend('front', L.farm[0]), seed: land.nextU32() });
   // The culvert's middle span drops in a planned collapse; `a` seeds it (see `propHits`).
   const culvertSeed = land.nextU32();
-  props.push({ kind: 'culvert', x: L.culvert[0], z: L.culvert[1], seed: culvertSeed, a: land.nextU32() });
+  props.push({ kind: 'culvert', x: L.culvert[0], z: L.culvert[1] + bend('front', L.culvert[0]), seed: culvertSeed, a: land.nextU32() });
 
   // The hamlet behind our lines: a road, six wrecked buildings, a church tower.
   const hamlet = root.derive('props.hamlet');
@@ -282,7 +299,7 @@ export function propReach(prop: PropPlan): number {
     case 'road':
       return WIDE;
     case 'tree':
-      return 60;
+      return 80;
     case 'pole':
     case 'church':
       return 30;
@@ -310,62 +327,208 @@ export function stampProp(sink: VoxelSink, clip: Clip, plan: WorldPlan, prop: Pr
   }
 }
 
-const COMPASS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]] as const;
+type Vec3 = [number, number, number];
 
-function trunk(sink: VoxelSink, clip: Clip, plan: WorldPlan, x: number, z: number, height: number, big: boolean, seed: number): void {
+/**
+ * A round trunk standing on the ground at (x, z), `height` voxels to its shattered top: `r0`
+ * voxels in radius at the foot, tapering to `r1`, its top leaning (lx, lz) voxels off its foot,
+ * bowed (the lean grows with the square of the height), with a root flare `flare` voxels wide at
+ * the ground that runs down to it wherever the ground falls away. Returns where its top stands.
+ */
+function trunk(sink: VoxelSink, clip: Clip, plan: WorldPlan, x: number, z: number, height: number, r0: number, r1: number, lx: number, lz: number, flare: number, seed: number): Vec3 {
   const base = columnTopAt(plan, x, z);
-  const offsets = big ? [-1, 0, 1] : [0, 1];
-  const jag = Math.max(2, Math.min(6, height >> 2));
-  for (const dx of offsets) {
-    for (const dz of offsets) {
-      const outer = big && (dx !== 0 || dz !== 0);
-      const top = base + height - (hash32x4(x + dx, z + dz, seed, 51) % jag);
-      for (let y = base; y < top; y++) {
-        const v = y === top - 1 ? P.TRUNK_SPLINTER : outer && h8(x + dx, y, z + dz, 52) < 150 ? P.TRUNK_BARK : P.TRUNK;
-        putAir(sink, clip, x + dx, y, z + dz, v);
+  const cx = x + 0.5;
+  const cz = z + 0.5;
+  const jag = Math.max(2, Math.min(7, height >> 2));
+  const radius = (k: number) => {
+    const t = Math.max(0, k) / height;
+    const root = Math.max(0, 1 - Math.max(0, k) / 5);
+    return r0 + (r1 - r0) * t + flare * root * root;
+  };
+  const reach = Math.ceil(r0 + flare + Math.abs(lx) + Math.abs(lz)) + 1;
+  for (let dx = -reach; dx <= reach; dx++) {
+    const wx = x + dx;
+    if (wx < clip.x0 || wx >= clip.x1) continue;
+    for (let dz = -reach; dz <= reach; dz++) {
+      const wz = z + dz;
+      const top = base + height - (hash32x4(wx, wz, seed, 51) % jag);
+      const from = Math.min(base, columnTopAt(plan, wx, wz));
+      for (let y = from; y < top; y++) {
+        const k = y - base;
+        const t = Math.max(0, k) / height;
+        const ox = wx + 0.5 - (cx + lx * t * t);
+        const oz = wz + 0.5 - (cz + lz * t * t);
+        const r = radius(k);
+        const d2 = ox * ox + oz * oz;
+        if (d2 > r * r) continue;
+        const shell = d2 > (r - 1) * (r - 1);
+        const v = y === top - 1 ? P.TRUNK_SPLINTER : shell && h8(wx, y, wz, 52) < 170 ? P.TRUNK_BARK : P.TRUNK;
+        putAir(sink, clip, wx, y, wz, v);
+      }
+    }
+  }
+  return [cx + lx, base + height, cz + lz];
+}
+
+/** A limb from `a` to `b`, `r0` voxels thick at `a` tapering to `r1`: single voxels where it is thinner than one. Written only into air. */
+function limb(sink: VoxelSink, clip: Clip, a: Vec3, b: Vec3, r0: number, r1: number, v: number): void {
+  const n = Math.max(1, Math.ceil(Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]), Math.abs(b[2] - a[2]))));
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const px = a[0] + (b[0] - a[0]) * t;
+    const py = a[1] + (b[1] - a[1]) * t;
+    const pz = a[2] + (b[2] - a[2]) * t;
+    const r = r0 + (r1 - r0) * t;
+    if (r < 0.75) {
+      putAir(sink, clip, Math.floor(px), Math.floor(py), Math.floor(pz), v);
+      continue;
+    }
+    const k = Math.ceil(r);
+    for (let dx = -k; dx <= k; dx++) {
+      for (let dy = -k; dy <= k; dy++) {
+        for (let dz = -k; dz <= k; dz++) {
+          const x = Math.floor(px) + dx;
+          const y = Math.floor(py) + dy;
+          const z = Math.floor(pz) + dz;
+          const ox = x + 0.5 - px;
+          const oy = y + 0.5 - py;
+          const oz = z + 0.5 - pz;
+          if (ox * ox + oy * oy + oz * oz <= r * r) putAir(sink, clip, x, y, z, v);
+        }
       }
     }
   }
 }
 
+/** A loose clump of leaves about `c`, `r` voxels across, `fill` of it (0 to 1) in leaf: a hash per voxel, so every band agrees. */
+function leaves(sink: VoxelSink, clip: Clip, c: Vec3, r: number, fill: number, dry: boolean, seed: number): void {
+  const k = Math.ceil(r);
+  const cut = Math.floor(fill * 256);
+  for (let dx = -k; dx <= k; dx++) {
+    for (let dy = -k; dy <= k; dy++) {
+      for (let dz = -k; dz <= k; dz++) {
+        const x = Math.floor(c[0]) + dx;
+        const y = Math.floor(c[1]) + dy;
+        const z = Math.floor(c[2]) + dz;
+        // Flatter than round, as foliage hangs.
+        const ox = x + 0.5 - c[0];
+        const oy = (y + 0.5 - c[1]) * 1.4;
+        const oz = z + 0.5 - c[2];
+        const d2 = ox * ox + oy * oy + oz * oz;
+        if (d2 > r * r) continue;
+        // Denser in the middle, ragged at the edge.
+        const h = h8(x, y, z, seed & 0xff);
+        if (h >= cut * (1.15 - (0.5 * d2) / (r * r))) continue;
+        const shade = h8(x, y, z, 54);
+        putAir(sink, clip, x, y, z, dry && shade < 90 ? P.LEAF_DRY : shade < 110 ? P.LEAF_DARK : P.LEAF);
+      }
+    }
+  }
+}
+
+/** A unit vector on the ground at a random bearing. */
+function bearing(r: Rng): [number, number] {
+  const a = r.uniform(0, TAU);
+  return [cos(a), sin(a)];
+}
+
+/** A log lying on the ground from (x, z) along (ux, uz) for `len` voxels, round in section, `r` voxels in radius. */
+function log(sink: VoxelSink, clip: Clip, plan: WorldPlan, x: number, z: number, ux: number, uz: number, len: number, r: number): void {
+  const k = Math.ceil(r);
+  for (let i = 0; i < len; i++) {
+    const px = x + 0.5 + ux * i;
+    const pz = z + 0.5 + uz * i;
+    const ground = columnTopAt(plan, Math.floor(px), Math.floor(pz));
+    for (let s = -k; s <= k; s++) {
+      for (let h = 0; h <= 2 * k; h++) {
+        if (s * s + (h + 0.5 - r) * (h + 0.5 - r) > r * r) continue;
+        const wx = Math.floor(px - uz * s);
+        const wz = Math.floor(pz + ux * s);
+        const y = ground + h;
+        putAir(sink, clip, wx, y, wz, h === 2 * k - 1 && h8(wx, y, wz, 53) < 120 ? P.TRUNK_BARK : P.TRUNK);
+      }
+    }
+  }
+}
+
+/**
+ * A tree the shelling left: a round, tapered trunk, leaning and flared at the roots, shattered at
+ * the top; big ones with limbs at any bearing and pitch, some forked, some snapped short; some in
+ * thin leaf (all of them, for `b & 4`); a sapling beside it (`b & 1`), a log fallen from it (`b & 2`)
+ * and brash about its foot.
+ */
 function stampTree(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan): void {
   const r = Rng.root(q.seed);
   const h = q.a ?? 30;
   const big = h >= vx(3.5, plan.params.voxel);
-  trunk(sink, clip, plan, q.x, q.z, h, big, q.seed);
-  const base = columnTopAt(plan, q.x, q.z);
+  const r0 = big ? r.uniform(1.7, 2.7) : r.uniform(1.0, 1.6);
+  const r1 = r0 * r.uniform(0.45, 0.7);
+  const [lx, lz] = bearing(r);
+  const lean = h * r.uniform(0, big ? 0.1 : 0.16);
+  const flare = r0 * r.uniform(0.4, 0.9);
+  const top = trunk(sink, clip, plan, q.x, q.z, h, r0, r1, lx * lean, lz * lean, flare, q.seed);
+  const base = top[1] - h;
+  const leafy = ((q.b ?? 0) & 4) !== 0 || (big && r.chance(0.45));
+  const dry = r.chance(0.5);
+  const crowns: Vec3[] = [];
   if (big) {
-    const branches = r.randint(1, 4);
+    const branches = r.randint(2, 6);
     for (let i = 0; i < branches; i++) {
-      const [dx, dz] = COMPASS[r.randint(0, 8)];
-      const y = base + Math.floor(h * r.uniform(0.5, 0.9));
-      const len = r.randint(8, 21);
-      const rise = r.randint(2, 9);
-      line(sink, clip, [q.x + dx, y, q.z + dz], [q.x + dx * len, y + rise, q.z + dz * len], P.BRANCH);
+      const t = r.uniform(0.4, 0.92);
+      const at: Vec3 = [q.x + 0.5 + lx * lean * t * t, base + h * t, q.z + 0.5 + lz * lean * t * t];
+      const [ux, uz] = bearing(r);
+      const pitch = r.uniform(-0.2, 0.75);
+      const len = r.randint(8, 23) * (1 - 0.4 * t);
+      const thick = Math.max(0.5, (r0 + (r1 - r0) * t) * 0.45);
+      const end: Vec3 = [at[0] + ux * len, at[1] + pitch * len, at[2] + uz * len];
+      const snapped = r.chance(0.35);
+      limb(sink, clip, at, end, thick, 0.4, P.BRANCH);
+      if (snapped) {
+        putAir(sink, clip, Math.floor(end[0]), Math.floor(end[1]), Math.floor(end[2]), P.TRUNK_SPLINTER);
+        continue;
+      }
+      // A fork two thirds of the way out, off to one side and up.
+      if (r.chance(0.55)) {
+        const f = 0.6 + 0.1 * r.float();
+        const from: Vec3 = [at[0] + ux * len * f, at[1] + pitch * len * f, at[2] + uz * len * f];
+        const side = r.chance(0.5) ? 1 : -1;
+        const [fx, fz] = [ux * 0.7 - uz * 0.7 * side, uz * 0.7 + ux * 0.7 * side];
+        const flen = len * r.uniform(0.35, 0.6);
+        const fend: Vec3 = [from[0] + fx * flen, from[1] + (pitch + 0.3) * flen, from[2] + fz * flen];
+        limb(sink, clip, from, fend, 0.4, 0.4, P.BRANCH);
+        crowns.push(fend);
+      }
+      crowns.push(end);
     }
+    crowns.push(top);
+  }
+  if (leafy) {
+    for (const c of crowns) leaves(sink, clip, c, r.uniform(2.5, 4.5), ((q.b ?? 0) & 4) !== 0 ? 0.6 : 0.4, dry, q.seed + crowns.indexOf(c));
   }
   if ((q.b ?? 0) & 1) {
-    const [dx, dz] = COMPASS[r.randint(0, 8)];
-    const gap = r.randint(3, 6);
-    trunk(sink, clip, plan, q.x + dx * gap, q.z + dz * gap, Math.max(4, Math.floor(h * r.uniform(0.4, 0.8))), false, q.seed ^ 0x5a5a);
+    const [dx, dz] = bearing(r);
+    const gap = r.uniform(3, 6);
+    const sh = Math.max(4, Math.floor(h * r.uniform(0.4, 0.8)));
+    const sr = r.uniform(0.8, 1.3);
+    const [sx, sz] = bearing(r);
+    trunk(sink, clip, plan, Math.floor(q.x + dx * gap), Math.floor(q.z + dz * gap), sh, sr, sr * 0.6, sx * sh * 0.1, sz * sh * 0.1, sr * 0.4, q.seed ^ 0x5a5a);
   }
   if ((q.b ?? 0) & 2) {
-    const [dx, dz] = COMPASS[r.randint(0, 4) * 2];
+    const [ux, uz] = bearing(r);
     const len = r.randint(20, 46);
-    for (let i = 3; i < len; i++) {
-      const x = q.x + dx * i;
-      const z = q.z + dz * i;
-      const y = columnTopAt(plan, x, z);
-      for (const [ox, oz] of [[0, 0], [dz, dx]] as const) for (let k = 0; k < 2; k++) putAir(sink, clip, x + ox, y + k, z + oz, k === 1 && h8(x, y, z, 53) < 120 ? P.TRUNK_BARK : P.TRUNK);
-    }
+    log(sink, clip, plan, Math.floor(q.x + ux * 3), Math.floor(q.z + uz * 3), ux, uz, len, r.uniform(1.0, 1.6));
   }
   const debris = r.randint(1, 5);
   for (let i = 0; i < debris; i++) {
     const x = q.x + r.randint(-12, 13);
     const z = q.z + r.randint(-8, 9);
     const len = r.randint(3, 9);
-    const [dx, dz] = COMPASS[r.randint(0, 8)];
-    for (let k = 0; k < len; k++) putAir(sink, clip, x + dx * k, columnTopAt(plan, x + dx * k, z + dz * k), z + dz * k, P.BRANCH);
+    const [ux, uz] = bearing(r);
+    for (let k = 0; k < len; k++) {
+      const bx = Math.floor(x + 0.5 + ux * k);
+      const bz = Math.floor(z + 0.5 + uz * k);
+      putAir(sink, clip, bx, columnTopAt(plan, bx, bz), bz, P.BRANCH);
+    }
   }
 }
 
@@ -374,9 +537,12 @@ function stampWire(sink: VoxelSink, clip: Clip, plan: WorldPlan, q: PropPlan): v
   const spacing = vx(3.0, p.voxel);
   const row = vx(0.5, p.voxel);
   const heights = [0.3, 0.7, 1.1].map((m) => vx(m, p.voxel));
+  // The belt follows its trench's bends, the same distance out all along.
+  const line = q.c === undefined ? undefined : plan.lines[q.c];
+  const zAt = (x: number) => (line ? q.z + Math.round(meanderAt(line.meander ?? [], x)) : q.z);
   const picket = (side: number, i: number) => {
     const x = i * spacing + (side ? spacing >> 1 : 0) + (hash32x4(q.seed, side, i, 61) % 5) - 2;
-    const z = q.z + (side ? row : -row) + (hash32x4(q.seed, side, i, 62) % 3) - 1;
+    const z = zAt(x) + (side ? row : -row) + (hash32x4(q.seed, side, i, 62) % 3) - 1;
     const present = (hash32x4(q.seed, side, i, 63) & 255) < 220 && x >= 0 && x < p.dims.x;
     const tall = vx(1.2, p.voxel) + (hash32x4(q.seed, side, i, 64) % vx(0.3, p.voxel));
     return { x, z, present, tall, base: present ? columnTopAt(plan, x, z) : 0 };

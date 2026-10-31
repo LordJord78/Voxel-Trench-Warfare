@@ -118,6 +118,8 @@ const DEFS: readonly Def[] = [
   ['SOLDIER_WEBBING', K.CLOTH, 150, 140, 104], ['SOLDIER_SKIN', K.CLOTH, 188, 142, 112, 0.8],
   ['SOLDIER_HELMET', K.PICKET, 82, 86, 70, 0.55], ['SOLDIER_BOOT', K.CLOTH, 54, 42, 32, 0.7],
   ['TAPE_RED', K.CLOTH, 214, 44, 30, 0.75, 0.6], ['TAPE_BLUE', K.CLOTH, 44, 104, 226, 0.75, 0.6],
+  // Leaves on what trees the shelling left standing: they hide you and stop nothing, as cloth.
+  ['LEAF', K.CLOTH, 78, 90, 48], ['LEAF_DARK', K.CLOTH, 56, 68, 38], ['LEAF_DRY', K.CLOTH, 118, 100, 56],
 ];
 
 /** Palette ids by name. Kept explicit so ids are stable and greppable; checked against DEFS below. */
@@ -133,6 +135,7 @@ export const P = {
   RIFLE_FURNITURE: 49, RIFLE_MAG: 50, RIFLE_GRIP: 51, CHAR_TIMBER: 52, CHAR_DUCKBOARD: 53,
   CHAR_CLOTH: 54, CHAR_HULL: 55, BENCH: 56, SOLDIER_KHAKI: 57, SOLDIER_KHAKI_DARK: 58,
   SOLDIER_WEBBING: 59, SOLDIER_SKIN: 60, SOLDIER_HELMET: 61, SOLDIER_BOOT: 62, TAPE_RED: 63, TAPE_BLUE: 64,
+  LEAF: 65, LEAF_DARK: 66, LEAF_DRY: 67,
 } as const;
 
 export const PALETTE: readonly PaletteEntry[] = DEFS.map(([name, kind, r, g, b, roughness, emission]) => ({

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadTunables } from '../../../src/core/tunables';
 import { FLAG, columnModel } from '../../../src/world/generation/columns';
+import { REACH as CRATER_REACH } from '../../../src/world/generation/craters';
 import { genParams } from '../../../src/world/generation/params';
 import { planWorld } from '../../../src/world/generation/plan';
 import { structureFootprints } from '../../../src/world/generation/props';
@@ -85,13 +86,36 @@ describe('the plan as a whole', () => {
     expect(clashes).toEqual([]);
   });
 
-  it('keeps comm trenches behind their own front line', () => {
-    const T = p.trench;
+  it('runs every comm trench from inside the line at its back into the fire trench, never through its parapet', () => {
+    type Box = { x0: number; x1: number; z0: number; z1: number };
+    const feet = (l: (typeof plan.lines)[number]): Box[] => [...l.bays.map((b) => ({ x0: b.x0, x1: b.x1, z0: b.z0, z1: b.z1 })), ...l.legs.map((g) => ({ x0: g.a0, x1: g.a1, z0: g.b0, z1: g.b1 }))];
+    const overlaps = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
     for (const line of plan.lines) {
       if (!line.spec.name.includes('comm')) continue;
-      const zs = line.bays.flatMap((b) => [b.z0, b.z1]);
-      if (line.spec.side === 0) expect(Math.max(...zs)).toBeLessThanOrEqual(p.layout.front + T.offset);
-      else expect(Math.min(...zs)).toBeGreaterThanOrEqual(p.layout.enemyFront + T.width);
+      const ours = line.spec.side === 0;
+      const along = plan.lines.filter((l) => l.spec.side === line.spec.side && l.spec.longAxis === 0);
+      const front = along.find((l) => l.spec.firingSteps)!;
+      const rear = along.reduce((r, l) => ((l.spec.crossBase - r.spec.crossBase) * (ours ? 1 : -1) < 0 ? l : r));
+      const toward = ours ? line.bays[line.bays.length - 1] : line.bays[0];
+      const back = ours ? line.bays[0] : line.bays[line.bays.length - 1];
+      const met = feet(front).filter((f) => f.x0 < toward.x1 && toward.x0 < f.x1);
+      expect(met.some((f) => overlaps(f, toward)), line.spec.name).toBe(true);
+      if (ours) expect(toward.z1).toBeLessThanOrEqual(Math.min(...met.map((f) => f.z1)));
+      else expect(toward.z0).toBeGreaterThanOrEqual(Math.max(...met.map((f) => f.z0)));
+      expect(feet(rear).some((f) => overlaps(f, back)), line.spec.name).toBe(true);
+    }
+  });
+
+  it('bends the lines across the map, each side together', () => {
+    const z = (name: string) => plan.lines.find((l) => l.spec.name === name)!.bays.map((b) => b.z0);
+    const span = (zs: number[]) => Math.max(...zs) - Math.min(...zs);
+    for (const name of ['front', 'support', 'enemy_front']) expect(span(z(name)), name).toBeGreaterThan(50);
+    // The front and support lines keep their distance within a few metres all along.
+    const front = plan.lines.find((l) => l.spec.name === 'front')!;
+    const support = plan.lines.find((l) => l.spec.name === 'support')!;
+    for (const b of front.bays) {
+      const behind = support.bays.find((s) => s.x0 <= (b.x0 + b.x1) / 2 && (b.x0 + b.x1) / 2 < s.x1 + p.trench.leg);
+      if (behind) expect(b.z0 - behind.z0).toBeGreaterThan(120);
     }
   });
 
@@ -101,7 +125,7 @@ describe('the plan as a whole', () => {
     expect(structures.some((s) => s.kind === 'dugout')).toBe(true);
     const clashes: string[] = [];
     for (const c of plan.craters) {
-      const reach = Math.ceil(1.4 * c.r) + 1;
+      const reach = Math.ceil(CRATER_REACH * c.r) + 1;
       const zone = { x0: c.x - reach, x1: c.x + reach, z0: c.z - reach, z1: c.z + reach };
       for (const s of structures) if (overlaps(zone, s)) clashes.push(`crater at ${c.x},${c.z} r ${c.r.toFixed(1)} reaches the ${s.kind}`);
       if (zone.x0 < 0 || zone.z0 < 0 || zone.x1 > p.dims.x || zone.z1 > p.dims.z) clashes.push(`crater at ${c.x},${c.z} reaches the map edge`);
