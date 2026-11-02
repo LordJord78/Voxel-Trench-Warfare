@@ -83,6 +83,43 @@ test('one hosts, a friend follows the link: one lobby, two teams, a match, and e
   await expect(host.page.locator('#roomline')).toContainText(`Game ${room}`);
   expect(host.errors).toEqual([]);
   expect(friend.errors).toEqual([]);
+  // Each window draws the world on the one GPU: let them go before the next test's.
+  await host.page.context().close();
+  await friend.page.context().close();
+});
+
+test('a friend who follows a link to a Corridor game is taken to the Corridor, and each side starts at its end of the wood', async ({ browser }) => {
+  test.setTimeout(400_000);
+  const host = await open(browser, `/?map=corridor&relay=${RELAY}`);
+  expect(await host.page.evaluate(() => (window as unknown as { __trenchline: { map: string } }).__trenchline.map)).toBe('corridor');
+  await host.page.locator('#host').click();
+  await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.you() === 0);
+  const room = (await h(host.page, (x) => x.together.room()))!;
+  await expect(host.page.locator('#invite')).toHaveValue(/map=corridor/);
+  await expect(host.page.locator('#match-settings select[name="map"]')).toHaveValue('corridor');
+
+  // The link without its map: the friend's page loads the Ravine, finds the room's map, and goes to it.
+  const friend = await open(browser, `/?room=${room}&relay=${RELAY}`);
+  await friend.page.waitForURL(/map=corridor/, { timeout: 60_000 });
+  await friend.page.waitForFunction(() => (window as unknown as { __trenchline?: H }).__trenchline?.ready === true, null, { timeout: 120_000 });
+  expect(await friend.page.evaluate(() => (window as unknown as { __trenchline: { map: string } }).__trenchline.map)).toBe('corridor');
+  await friend.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.seats().length === 2, null, { timeout: 30_000 });
+  await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.seats().length === 2);
+
+  await host.page.locator('#start').click();
+  for (const p of [host.page, friend.page]) {
+    await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.begun(), null, { timeout: 15_000 });
+    await p.locator('#go').click();
+  }
+  // Red at the wood's south end (it starts 50 m in), Blue at its north (it ends 50 m from the far side).
+  const red = await h(host.page, (x) => x.player().position);
+  const blue = await h(friend.page, (x) => x.player().position);
+  expect(red[2]).toBeLessThan(50);
+  expect(blue[2]).toBeGreaterThan(206);
+  expect(host.errors).toEqual([]);
+  expect(friend.errors).toEqual([]);
+  await host.page.context().close();
+  await friend.page.context().close();
 });
 
 test('a link to a game that does not exist says so', async ({ browser }) => {

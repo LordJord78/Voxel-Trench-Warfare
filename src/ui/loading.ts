@@ -49,11 +49,21 @@ export class LoadingScreen {
    * The world is drawing behind the sheet (the still over it until reveal): the way in is offered,
    * alone, or with friends where there is a relay to play through (`together`).
    */
-  ready(onPlay: () => void, together?: { host(): void; join(code: string): void }): void {
+  ready(onPlay: () => void, together?: { host(): void; join(code: string): void }, map?: { now: string; pick(map: string): void }): void {
     if (this.failed) return;
     this.progress('Ready', null, 1);
     this.root.classList.add('over-world');
     this.play.hidden = false;
+    // The map: another one is another world, generated afresh.
+    const pick = this.root.querySelector<HTMLLabelElement>('#map-pick');
+    const select = pick?.querySelector('select');
+    if (map && pick && select) {
+      pick.hidden = false;
+      select.value = map.now;
+      select.onchange = () => {
+        if (select.value !== map.now) map.pick(select.value);
+      };
+    }
     this.controls.hidden = false;
     this.play.onclick = onPlay;
     if (together && this.together) {

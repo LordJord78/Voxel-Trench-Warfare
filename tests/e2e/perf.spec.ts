@@ -32,29 +32,34 @@ async function standardViews(page: import('@playwright/test').Page, preset: 'hig
     for (const [time, t] of Object.entries(TIMES)) {
       await hooks(page, (h, n) => h.view(n as string), name);
       await hooks(page, (h, v) => h.setTimeOfDay(v as number), t);
-      await hooks(page, (h, n) => h.waitFrames(n as number), SETTLE);
-      const times = await hooks(
-        page,
-        async (h, n) => {
-          const out: number[] = [];
-          for (let i = 0; i < (n as number); i++) {
-            await h.waitFrames(1);
-            const s = h.stats();
-            if (s.gpuMs !== null) out.push(s.gpuMs);
-          }
-          return out;
-        },
-        SAMPLES,
-      );
-      const s = await hooks(page, (h) => h.stats());
-      expect(s.res[0] * s.res[1]).toBeGreaterThan(1.48e6);
-      expect(s.preset).toBe(preset);
-      expect(times.length).toBeGreaterThan(SAMPLES / 2);
-      times.sort((a, b) => a - b);
-      medians[name][time] = times[times.length >> 1];
+      medians[name][time] = await settledMedian(page, preset);
     }
   }
   return medians;
+}
+
+/** The median GPU time of SAMPLES frames where the camera is, after SETTLE frames, at `preset`'s full 1.5 MP. */
+async function settledMedian(page: import('@playwright/test').Page, preset: 'high' | 'low'): Promise<number> {
+  await hooks(page, (h, n) => h.waitFrames(n as number), SETTLE);
+  const times = await hooks(
+    page,
+    async (h, n) => {
+      const out: number[] = [];
+      for (let i = 0; i < (n as number); i++) {
+        await h.waitFrames(1);
+        const s = h.stats();
+        if (s.gpuMs !== null) out.push(s.gpuMs);
+      }
+      return out;
+    },
+    SAMPLES,
+  );
+  const s = await hooks(page, (h) => h.stats());
+  expect(s.res[0] * s.res[1]).toBeGreaterThan(1.48e6);
+  expect(s.preset).toBe(preset);
+  expect(times.length).toBeGreaterThan(SAMPLES / 2);
+  times.sort((a, b) => a - b);
+  return times[times.length >> 1];
 }
 
 test('every standard view renders within the GPU budget at 1.5 MP, at dusk, at night, at noon and at dawn', async ({ page }) => {
@@ -66,6 +71,32 @@ test('every standard view renders within the GPU budget at 1.5 MP, at dusk, at n
   console.log(`GPU ms per view, median of ${SAMPLES} frames (dusk/night/noon/dawn): ${VIEWS.map((v) => `${v} ${Object.keys(TIMES).map((t) => medians![v][t].toFixed(2)).join('/')}`).join(', ')}`);
   expect(errors).toEqual([]);
   for (const name of VIEWS) for (const time of Object.keys(TIMES)) expect(medians![name][time], `${name} at ${time}`).toBeLessThanOrEqual(BUDGET_MS);
+});
+
+test("the Corridor renders within the GPU budget at 1.5 MP: from its firing step, over it, in the wood and down it, at dusk and at night", async ({ page }) => {
+  test.setTimeout(400_000);
+  const errors = await openGame(page, '/?map=corridor');
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  test.skip((await hooks(page, async (h) => (await h.waitFrames(30), h.stats().gpuMs))) === null, 'no timestamp queries on this GPU');
+  // The wood is 10 m either side of x = 128 m, from z = 50 m to 206 m: in it, and down it from Red's end.
+  const poses: [string, string | { position: [number, number, number]; yaw: number; pitch: number }][] = [
+    ['step', 'step'],
+    ['overview', 'overview'],
+    ['in the wood', { position: [128, 18, 90], yaw: 0, pitch: -2 }],
+    ['down the wood', { position: [128, 19, 44], yaw: 0, pitch: -3 }],
+  ];
+  const medians: string[] = [];
+  for (const [name, pose] of poses) {
+    for (const time of ['dusk', 'night']) {
+      await hooks(page, (h, p) => (typeof p === 'string' ? h.view(p) : h.flyTo(p as { position: [number, number, number]; yaw: number; pitch: number })), pose);
+      await hooks(page, (h, v) => h.setTimeOfDay(v as number), TIMES[time]);
+      const ms = await settledMedian(page, 'high');
+      medians.push(`${name} at ${time} ${ms.toFixed(2)}`);
+      expect(ms, `${name} at ${time}`).toBeLessThanOrEqual(BUDGET_MS);
+    }
+  }
+  console.log(`Corridor GPU ms, median of ${SAMPLES} frames: ${medians.join(', ')}`);
+  expect(errors).toEqual([]);
 });
 
 test('every standard view renders within the GPU budget on the low preset, at the four keys', async ({ page }) => {

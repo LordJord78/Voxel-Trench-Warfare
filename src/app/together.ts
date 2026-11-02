@@ -17,6 +17,7 @@ import type { SoldierDraw } from '../render/soldiers';
 import type { CombatEvents, Session } from '../sim/session';
 import { Lobby } from '../ui/lobby';
 import { MatchHud, type BoardRow } from '../ui/match-hud';
+import { MAP_NAMES, isMapId, type MapId } from '../world/generation/params';
 import { makeRoom, NetClient } from './net-client';
 import type { RemotePlayer } from './net-players';
 
@@ -72,7 +73,22 @@ export class Gaits {
   }
 }
 
+/**
+ * What a page playing the map `loaded` does about a room set to `room`: nothing; claim the room
+ * for its own map (a room it has just made, which nobody has set yet); or go to the room's map,
+ * which means generating that world (a reload).
+ */
+export function mapAction(loaded: string, room: string, madeHere: boolean, owner: boolean): 'stay' | 'claim' | 'switch' {
+  if (room === loaded) return 'stay';
+  if (madeHere && owner) return 'claim';
+  return isMapId(room) ? 'switch' : 'stay';
+}
+
 export interface TogetherHooks {
+  /** The map this page has generated. */
+  readonly map: string;
+  /** Go to the room's map: the page generates that world and rejoins `room`. */
+  switchMap(map: string, room: string): void;
   /** The lobby is up: the loading screen goes. */
   showLobby(): void;
   /** The match is starting (or on, for a late joiner): the player is put at their team's start. */
@@ -123,6 +139,10 @@ export class Together {
   boardOpen = false;
   /** Hits this player has claimed, this visit (for the tests). */
   claimed = 0;
+  /** This page made the room it is joining: it sets the room's map to its own. */
+  private made = false;
+  /** Leaving for the room's map. */
+  private leaving = false;
 
   constructor(
     private readonly doc: Document,
@@ -172,11 +192,13 @@ export class Together {
     return this.net?.seat?.team ?? null;
   }
 
-  /** Make a room and join it. */
+  /** Make a room and join it, set to this page's map. */
   async host(): Promise<void> {
     if (!this.relay) return;
     try {
-      this.join(await makeRoom(this.relay));
+      const code = await makeRoom(this.relay);
+      this.made = true;
+      this.join(code);
     } catch (e) {
       this.hooks.note(`Could not make a game: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -194,7 +216,9 @@ export class Together {
     url.searchParams.set('room', room);
     history.replaceState(null, '', url);
     this.net = new NetClient(this.relay, room, this.savedName(), this.build, {
-      changed: () => this.show(),
+      changed: () => {
+        if (!this.followMap()) this.show();
+      },
       started: (match) => this.started(match),
       ended: () => this.ended(),
       lost: (why) => this.lost(why),
@@ -417,6 +441,23 @@ export class Together {
     this.hooks.note(why);
   }
 
+  /**
+   * The room's map against this page's: a room this page just made is set to its map; any other
+   * room's map, if not this page's, is gone to. True if the page is leaving for it.
+   */
+  private followMap(): boolean {
+    const net = this.net;
+    if (!net || !net.joined || this.leaving) return this.leaving;
+    const action = mapAction(this.hooks.map, net.config.map, this.made, net.you === net.owner);
+    this.made = false;
+    if (action === 'claim') net.configure({ map: this.hooks.map });
+    if (action !== 'switch') return false;
+    this.leaving = true;
+    this.lobby.status(`Going to ${MAP_NAMES[net.config.map as MapId]}: the world is being dug…`);
+    this.hooks.switchMap(net.config.map, net.room);
+    return true;
+  }
+
   private show(): void {
     const net = this.net;
     if (!net || !net.joined) return;
@@ -424,6 +465,7 @@ export class Together {
     const url = new URL(location.href);
     url.search = '';
     url.searchParams.set('room', net.room);
+    url.searchParams.set('map', net.config.map);
     this.lobby.show({ room: net.room, invite: url.toString(), you: net.you, owner: net.owner, seats: net.seats, config: net.config });
   }
 

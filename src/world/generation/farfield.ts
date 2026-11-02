@@ -11,6 +11,7 @@
 
 import { hash32x4 } from '../../core/hash';
 import { Rng } from '../../core/rng';
+import { corridorX } from './corridor';
 import { fbm } from './noise';
 import { vx } from './params';
 import type { WorldPlan } from './plan';
@@ -101,7 +102,10 @@ export function farFieldRows(plan: WorldPlan, row0: number, row1: number, out: F
       let h = fieldHeight(plan.terrain, p, x, z) + hills * fade;
       let material: number = (hash32x4(Math.floor(x / vx(80, p.voxel)), Math.floor(z / vx(60, p.voxel)), salt, 7) & 1) === 0 ? FAR.FIELD : FAR.PLOUGHED;
       if (dist >= edge) {
-        const belt = p.layout.shelterbelts.some((bz) => Math.abs(z - bz) < vx(4, p.voxel)) && dx > 0;
+        // The Corridor's wood runs on past both ends of the map, as the shelterbelts run on past its sides.
+        const corridor = plan.corridor;
+        const strip = corridor !== undefined && dz > 0 && Math.abs(x - corridorX(p, corridor, z)) < corridor.edge;
+        const belt = (p.layout.shelterbelts.some((bz) => Math.abs(z - bz) < vx(4, p.voxel)) && dx > 0) || strip;
         const wood = fbm(x, z, woodCell, 2, 0.5, salt ^ 0x3d00d) > 0.62;
         if (belt || wood) {
           material = FAR.WOOD;

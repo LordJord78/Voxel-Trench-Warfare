@@ -1,14 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { hooks, openGame } from './support/app';
 
-// Nobody is ever trapped in a trench (the multiplayer spec's M1), played with the keys: from the
-// spawn, W climbs onto the firing step and Space with it goes over the parapet; turned round, Space
-// and W go over the parados from the duckboards.
+// Nobody is ever trapped in a trench (the multiplayer spec's M1), played with the keys, on both
+// maps: from the spawn, W climbs onto the firing step and Space with it goes over the parapet;
+// turned round, Space and W go over the parados from the duckboards.
 
 type Bay = { longAxis: 0 | 2; facing: 1 | -1; crestY: number; floorY: number };
 
-async function playing(page: Page): Promise<string[]> {
-  const errors = await openGame(page);
+async function playing(page: Page, path: string): Promise<string[]> {
+  const errors = await openGame(page, path);
   await page.locator('#play').click();
   await expect(page.locator('#loading')).toBeHidden();
   // The front's fire and shells are off: this is the controller's test, not suppression's.
@@ -48,29 +48,31 @@ async function holdUntil(page: Page, keys: string[], seconds: number, out: (y: n
   return y;
 }
 
-test('from the spawn, W climbs onto the firing step and W with Space goes over the parapet', async ({ page }) => {
-  const errors = await playing(page);
-  const { crest, duck } = await atSpawn(page, 1);
-  const bench = await holdUntil(page, ['KeyW'], 4, (y) => y > duck + 1.0);
-  expect(bench).toBeGreaterThan(duck + 1.0);
-  // Standing on the bench makes the firing step on the next tick: a few frames on, it has.
-  const stance = await hooks(page, async (h) => {
-    await h.waitFrames(5);
-    return h.player().stance;
+for (const [map, path] of [['the Ravine', '/'], ['the Corridor', '/?map=corridor']] as const) {
+  test(`on ${map}, from the spawn, W climbs onto the firing step and W with Space goes over the parapet`, async ({ page }) => {
+    const errors = await playing(page, path);
+    const { crest, duck } = await atSpawn(page, 1);
+    const bench = await holdUntil(page, ['KeyW'], 4, (y) => y > duck + 1.0);
+    expect(bench).toBeGreaterThan(duck + 1.0);
+    // Standing on the bench makes the firing step on the next tick: a few frames on, it has.
+    const stance = await hooks(page, async (h) => {
+      await h.waitFrames(5);
+      return h.player().stance;
+    });
+    expect(stance).toBe(3);
+    // W alone never takes anyone over the top.
+    const leaning = await holdUntil(page, ['KeyW'], 1.5, () => false);
+    expect(leaning).toBeLessThan(crest - 0.5);
+    const over = await holdUntil(page, ['KeyW', 'Space'], 4, (y) => y > crest - 0.05);
+    expect(over).toBeGreaterThan(crest - 0.05);
+    expect(errors).toEqual([]);
   });
-  expect(stance).toBe(3);
-  // W alone never takes anyone over the top.
-  const leaning = await holdUntil(page, ['KeyW'], 1.5, () => false);
-  expect(leaning).toBeLessThan(crest - 0.5);
-  const over = await holdUntil(page, ['KeyW', 'Space'], 4, (y) => y > crest - 0.05);
-  expect(over).toBeGreaterThan(crest - 0.05);
-  expect(errors).toEqual([]);
-});
 
-test('from the duckboards, W with Space goes over the parados', async ({ page }) => {
-  const errors = await playing(page);
-  const { duck } = await atSpawn(page, -1);
-  const out = await holdUntil(page, ['KeyW', 'Space'], 4, (y) => y > duck + 2.2);
-  expect(out).toBeGreaterThan(duck + 2.2);
-  expect(errors).toEqual([]);
-});
+  test(`on ${map}, from the duckboards, W with Space goes over the parados`, async ({ page }) => {
+    const errors = await playing(page, path);
+    const { duck } = await atSpawn(page, -1);
+    const out = await holdUntil(page, ['KeyW', 'Space'], 4, (y) => y > duck + 2.2);
+    expect(out).toBeGreaterThan(duck + 2.2);
+    expect(errors).toEqual([]);
+  });
+}

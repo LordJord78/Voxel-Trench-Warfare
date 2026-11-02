@@ -198,13 +198,13 @@ export async function audioRenders(page: Page): Promise<boolean> {
   return before !== null && after !== null && after > before + 0.1;
 }
 
-export async function openGame(page: Page): Promise<string[]> {
+export async function openGame(page: Page, path = '/'): Promise<string[]> {
   const errors: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
   });
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto('/');
+  await page.goto(path);
   await page.waitForFunction(() => (window as unknown as { __trenchline?: Hooks }).__trenchline?.ready === true, null, { timeout: 90_000 });
   // The views were approved, and their looks are measured, with the lights still: from the next
   // frame. (A game that stopped before it had a world has no lights to hold.)

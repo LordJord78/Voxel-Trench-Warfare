@@ -84,7 +84,7 @@ type Mode = 'loading' | 'ready' | 'playing' | 'paused' | 'fly';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const loading = new LoadingScreen(document);
-const hooks: Record<string, unknown> = { ready: false, phases: loading.phases };
+const hooks: Record<string, unknown> = { ready: false, phases: loading.phases, map: MAP };
 (window as unknown as { __trenchline: unknown }).__trenchline = hooks;
 /** Set once the game has stopped for good: its message stays, and no more frames are drawn. */
 let stopped = false;
@@ -468,6 +468,13 @@ async function start(): Promise<void> {
   // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
   const searchParams = new URLSearchParams(location.search);
   const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
+    map: MAP,
+    switchMap: (map, room) => {
+      const url = new URL(location.href);
+      url.searchParams.set('map', map);
+      url.searchParams.set('room', room);
+      location.assign(url);
+    },
     showLobby: () => loading.hide(),
     deploy: (team, index, match) => {
       const at = startOf(team, index);
@@ -821,7 +828,15 @@ async function start(): Promise<void> {
       // A first visit at the high preset, not the visitor's own, is warmed up (tiers.ts), the still over it meanwhile.
       if (!checkRun && !settings.presetChosen && settings.preset === 'high' && gpu.timestamps && renderer.quality.dynres) warmup = { seen: renderer.stats.gpuSamples, judge: new Warmup() };
       revealAt = warmup ? -1 : frames + render.denoise.historyMax + 8;
-      loading.ready(() => play(true), together.relay ? { host: () => void together.host(), join: (code) => together.join(code) } : undefined);
+      loading.ready(() => play(true), together.relay ? { host: () => void together.host(), join: (code) => together.join(code) } : undefined, {
+        now: MAP,
+        pick: (map) => {
+          const url = new URL(location.href);
+          url.searchParams.set('map', map);
+          url.searchParams.delete('room');
+          location.assign(url);
+        },
+      });
       // A friend's link: straight to their game's lobby.
       const room = searchParams.get('room');
       if (room && together.relay) together.join(room);
