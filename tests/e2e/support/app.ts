@@ -198,7 +198,36 @@ export async function audioRenders(page: Page): Promise<boolean> {
   return before !== null && after !== null && after > before + 0.1;
 }
 
+/**
+ * `E2E_FPS=60`: the page's frames drawn no more often than that. The tests that wait a number of
+ * frames for a span of the game's time were written at 60 Hz; headless on a fast GPU draws several
+ * times as often, so those spans come out short. Off unless asked.
+ */
+async function capFrames(page: Page): Promise<void> {
+  const hz = Number(process.env.E2E_FPS ?? 0);
+  if (!(hz > 0)) return;
+  await page.addInitScript((rate: number) => {
+    const raf = window.requestAnimationFrame.bind(window);
+    // Every callback of a frame let through goes in that frame; the next frame let through is a period on.
+    let passed = -1;
+    let next = 0;
+    window.requestAnimationFrame = (cb: FrameRequestCallback) =>
+      raf(function wait(t: number) {
+        if (t !== passed && t < next) {
+          raf(wait);
+          return;
+        }
+        if (t !== passed) {
+          passed = t;
+          next = t + 1000 / rate - 2;
+        }
+        cb(t);
+      });
+  }, hz);
+}
+
 export async function openGame(page: Page, path = '/'): Promise<string[]> {
+  await capFrames(page);
   const errors: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
