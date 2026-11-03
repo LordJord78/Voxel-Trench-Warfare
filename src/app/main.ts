@@ -1228,7 +1228,7 @@ async function start(): Promise<void> {
       others: () => together.others().map(({ seat, state }) => ({ id: seat.id, team: seat.team, name: seat.name, position: state.position, stance: state.stance })),
     },
     /** Soldiers stood in the world without a room, for the tests and the perf gate (seat 100 on, so they never share a probe with a player's). */
-    puppets(list: (Pick<Figure, 'team' | 'position' | 'yaw' | 'pitch' | 'height'> & Partial<Pick<Figure, 'velocity' | 'deadFor'>>)[]) {
+    puppets(list: (Pick<Figure, 'team' | 'position' | 'yaw' | 'pitch' | 'height'> & Partial<Pick<Figure, 'velocity' | 'deadFor' | 'gear' | 'flags'>>)[]) {
       puppets = list.map((p, i) => ({ seat: 100 + i, velocity: [0, 0, 0], deadFor: null, ...p }));
     },
     soldiersDrawn: () => renderer.soldiersDrawn(),
@@ -1264,6 +1264,12 @@ async function start(): Promise<void> {
     trigger(held: boolean) {
       input.trigger(held);
     },
+    /** The sights, as the right button raises them with the pointer locked; for tests. */
+    aim(held: boolean) {
+      input.aim(held);
+    },
+    /** What is in the hands: the gun's or the shovel's, how far up, how far aimed, the light. */
+    hands: () => ({ held: session.held, ready: session.ready, aimed: session.aimed, gun: session.arm.spec.gun.key, light: session.lightOn, model: renderer.rifleModel().dims }),
     /** The front's shells alone, for a test. */
     setShelling(i: 'off' | 'light' | 'heavy') {
       session.artillery.intensity = i;

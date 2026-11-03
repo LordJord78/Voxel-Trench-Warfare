@@ -78,16 +78,17 @@ export const RIFLE_HOLDING: Holding = { kind: 'rifle', sight: { y: 0.0675, z: 0.
 
 /** A pistol's rest, nearer the middle and lower than a long gun's; the shovel's, low at the right, its blade down. */
 const PISTOL_REST = [0.13, -0.19, 0.4] as const;
-const SHOVEL_REST = { offset: [0.2, -0.33, 0.36], pitch: -28, yaw: -14, roll: 10 } as const;
+// In the lower right, its blade in toward the middle and down, in view at a 90° field of view.
+const SHOVEL_REST = { offset: [0.16, -0.16, 0.3], pitch: -22, yaw: -18, roll: 10 } as const;
 
 const smooth = (t: number) => t * t * (3 - 2 * t);
 
 /** The shovel's stroke, as offsets (metres) and turns (degrees) from its rest: push in, lever, throw to the right, back. */
 const STROKE: readonly { at: number; o: readonly [number, number, number]; pitch: number; yaw: number; roll: number }[] = [
   { at: 0, o: [0, 0, 0], pitch: 0, yaw: 0, roll: 0 },
-  { at: 0.3, o: [0, -0.08, 0.16], pitch: -30, yaw: 0, roll: 0 },
-  { at: 0.55, o: [0, 0.02, 0.1], pitch: 25, yaw: 0, roll: 0 },
-  { at: 0.78, o: [0.1, 0.06, 0.04], pitch: 10, yaw: 35, roll: 30 },
+  { at: 0.3, o: [0, -0.05, 0.14], pitch: -20, yaw: 0, roll: 0 },
+  { at: 0.55, o: [0, 0.03, 0.08], pitch: 22, yaw: 0, roll: 0 },
+  { at: 0.78, o: [0.08, 0.06, 0.03], pitch: 12, yaw: 32, roll: 28 },
   { at: 1, o: [0, 0, 0], pitch: 0, yaw: 0, roll: 0 },
 ];
 
