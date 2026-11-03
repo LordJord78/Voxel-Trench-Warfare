@@ -4,7 +4,7 @@ import { loadTunables } from '../../src/core/tunables';
 import { Stance, type MoveIntent } from '../../src/physics/character';
 import { boxHitsSolid } from '../../src/physics/collision';
 import type { DetonationRunner } from '../../src/sim/destruction';
-import { idleIntent, Session } from '../../src/sim/session';
+import { idleIntent, Session, SHOVEL_HELD } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
 import { runDetonation, type DetonationResult } from '../../src/world/detonation';
 import { isLoose, P } from '../../src/world/materials';
@@ -160,7 +160,7 @@ describe('digging in the session', () => {
     expect(air.digging).toBe(true);
   });
 
-  it('digging costs exposure and steadiness', () => {
+  it('digging costs exposure, and the shovel in the hands is not a gun', () => {
     const idle = stand(yard(), [6.4, 0.4, 2.0]);
     const busy = stand(yard(), [6.4, 0.4, 2.0]);
     const shown = idle.exposure();
@@ -169,19 +169,22 @@ describe('digging in the session', () => {
     busy.tick();
     expect(busy.digging).toBe(true);
     expect(busy.exposure()).toBeCloseTo(shown * t.exposureScale, 12);
-    // The same first shot from each: its cone, and the recoil, are 1.6 times as wide while digging.
+    // The trigger pulled while digging fires nothing; the rifle goes down and the shovel comes up.
     idle.intent = { ...idleIntent(), fire: true };
     busy.intent = { ...DIG, fire: true };
     idle.tick();
+    for (let k = 0; k < 40; k++) busy.tick();
+    expect(idle.shots).toHaveLength(1);
+    expect(busy.weapon.shotsFired).toBe(0);
+    expect(busy.held).toBe(SHOVEL_HELD);
+    expect(busy.ready).toBe(1);
+    // Let go of F: the shovel goes away and the rifle comes back up, and then it fires.
+    busy.intent = { ...idleIntent(), fire: true };
     busy.tick();
-    expect(busy.recoil.scale).toBeCloseTo(idle.recoil.scale * t.swayScale, 12);
-    const off = (s: Session) => {
-      const { dir, aim } = s.shots[0];
-      const yaw = (Math.atan2(dir[0], dir[2]) * 180) / Math.PI;
-      const pitch = (Math.asin(dir[1]) * 180) / Math.PI;
-      return Math.hypot(yaw - aim[0], pitch - aim[1]);
-    };
-    expect(off(busy) / off(idle)).toBeCloseTo(t.swayScale, 4);
+    expect(busy.weapon.shotsFired).toBe(0);
+    for (let k = 0; k < 40 && busy.weapon.shotsFired === 0; k++) busy.tick();
+    expect(busy.held).toBe(0);
+    expect(busy.weapon.shotsFired).toBe(1);
   });
 
   it('a dig inside a region that is out waits for it, then goes on', () => {

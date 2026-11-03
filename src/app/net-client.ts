@@ -143,8 +143,8 @@ export class NetClient {
   }
 
   /** This player's round struck seat `victim`'s `zone`. */
-  hit(victim: number, zone: Zone): void {
-    this.send({ t: 'hit', v: victim, z: zone });
+  hit(victim: number, zone: Zone, gun?: number): void {
+    this.send({ t: 'hit', v: victim, z: zone, ...(gun === undefined ? {} : { w: gun }) });
   }
 
   /** The battle hurt this player by `amount`. */

@@ -3,7 +3,8 @@
  * killed whom, the teams' scores, respawns, and the win. Pure and given its clock, so the room's
  * Durable Object and the tests run the same rules.
  *
- * - A round does its zone's damage: the head 100 (a kill), the torso 55, a limb 30.
+ * - A round does its zone's damage: the head 100 (a kill), the torso 55, a limb 30; times its gun's
+ *   scale (net/gear.ts), where the claim says which gun.
  * - Health comes back at REGEN_PER_S a second, REGEN_DELAY_MS after the last hurt.
  * - The dead respawn after the match's respawn time, protected for PROTECT_MS (and no longer once
  *   they fire, which the client stops sending as protection: the room only times it out).
@@ -12,6 +13,7 @@
  * - The first team to the kill target wins; the match is then over.
  */
 
+import { gunDamage } from './gear';
 import type { Cause, Team, Zone } from './protocol';
 
 export const DAMAGE: Record<Zone, number> = { head: 100, torso: 55, limb: 30 };
@@ -75,8 +77,8 @@ export class MatchRules {
     this.fighters.delete(id);
   }
 
-  /** A shooter's claim that their round struck `victim` in `zone`: what follows from it, if it stands. */
-  hit(shooter: number, victim: number, zone: Zone, now: number): MatchEvent[] {
+  /** A shooter's claim that their round (from `gun`, if it says) struck `victim` in `zone`: what follows from it, if it stands. */
+  hit(shooter: number, victim: number, zone: Zone, now: number, gun?: number): MatchEvent[] {
     const s = this.fighters.get(shooter);
     const v = this.fighters.get(victim);
     if (!s || !v || shooter === victim || this.winner) return [];
@@ -85,7 +87,7 @@ export class MatchRules {
     s.claimsAt = now;
     if (s.claims >= CLAIMS_PER_S) return [];
     s.claims++;
-    return this.harm(v, DAMAGE[zone], shooter, zone, 'round', now);
+    return this.harm(v, gunDamage(DAMAGE[zone], gun), shooter, zone, 'round', now);
   }
 
   /** The battle hurt `victim` (its rounds, a shell's blast): no one scores for it. */

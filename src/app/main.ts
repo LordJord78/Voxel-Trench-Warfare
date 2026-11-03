@@ -18,8 +18,10 @@ import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import { AudioEngine } from '../audio/engine';
 import { audioTunables, planVoices } from '../audio/plan';
-import { rifleModel, traceRifle } from '../combat/rifle-model';
-import { rayDir, type CameraPose } from '../render/camera';
+import { cleanLoadout, TRACER_NAMES, type Loadout } from '../combat/arsenal';
+import { gunModel, shovelModel } from '../combat/gun-models';
+import { traceRifle } from '../combat/rifle-model';
+import { projectToPixel, rayDir, type CameraPose } from '../render/camera';
 import type { SmokePuff, TransientLight } from '../render/effects';
 import { FLAGS, horizonTerms, type HorizonFlash } from '../render/frame-uniforms';
 import { throughPose, type RifleDrawn, type RiflePose } from '../render/rifle';
@@ -32,14 +34,17 @@ import { battleFireLights, battleFlareLights, sceneLights, type SceneLight } fro
 import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
-import { idleIntent, Session, type CombatEvents } from '../sim/session';
+import { idleIntent, Session, SHOVEL_HELD, type CombatEvents } from '../sim/session';
 import { MAP_SEEDS, isMapId, type MapId } from '../world/generation/params';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
 import { relayUrl, Together, type Figure } from './together';
 import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
-import { Hud } from '../ui/hud';
+import { Hud, type HudTag, type Reticle } from '../ui/hud';
+import { kitSummary, loadLoadout, LoadoutMenu, saveLoadout } from '../ui/loadout';
+import { MapView } from '../ui/map-view';
+import type { SoldierDraw } from '../render/soldiers';
 import { boxHitsSolid } from '../physics/collision';
 import { Vec3 } from '../physics/vec';
 import { battleDarkness, Director, noBattleEvents, type BattleEvents, type BattleInputs, type Strike } from '../battle/director';
@@ -232,6 +237,11 @@ async function start(): Promise<void> {
   const views = standardViews(world.plan, world.spawn);
   // Craters are cut in a worker, off the frame.
   const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn, runner: workerRunner() }, tun, SEED, views.bay.yaw);
+  // The visitor's loadout (ui/loadout.ts), kept between visits: in the hands from the first spawn.
+  let loadout: Loadout = loadLoadout(storage);
+  /** A loadout chosen mid-match with friends: taken at the next respawn. */
+  let pendingLoadout: Loadout | null = null;
+  session.equip(loadout);
   // Shells the tests drop: each one's waiter, told its crater's bricks when it settles, and when its cut was in.
   const craterWaiters = new Map<number, (bricks: number) => void>();
   const cutsIn = new Map<number, number>();
@@ -450,6 +460,7 @@ async function start(): Promise<void> {
   const overlay = new Overlay(document.body);
   const periscope = new PeriscopeFrame(document);
   const hud = new Hud(document);
+  const mapView = new MapView(document.querySelector<HTMLCanvasElement>('#hud canvas.map')!, world.plan);
   const pauseMenu = new PauseMenu(document, {
     resume: () => resume(),
     change: changeSettings,
@@ -458,6 +469,104 @@ async function start(): Promise<void> {
     leave: () => together.leave(),
     endMatch: () => together.endMatch(),
   });
+  // The loadout (ui/loadout.ts): chosen on the start screen, in the lobby, or from the pause menu.
+  const loadoutMenu = new LoadoutMenu(document, tun);
+  const showKit = () => {
+    const line = kitSummary(loadout);
+    for (const id of ['kit-line', 'deploy-kit']) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = line;
+    }
+  };
+  showKit();
+  /** Take `l`: kept for the next visit; in the hands now, or (with friends, mid-match) at the next respawn. */
+  const takeLoadout = (l: Loadout, now: boolean) => {
+    loadout = l;
+    saveLoadout(storage, l);
+    showKit();
+    if (now) {
+      session.equip(l);
+      pendingLoadout = null;
+    } else pendingLoadout = l;
+  };
+  const openLoadout = (from: 'start' | 'lobby' | 'pause') => {
+    if (from === 'start') {
+      loadoutMenu.open(loadout, {
+        action: 'Deploy',
+        done: (l) => {
+          takeLoadout(l, true);
+          play(true);
+        },
+      });
+    } else if (from === 'lobby') {
+      // Not yet gone in: the lobby, or the match's way in. The kit is in the hands at once.
+      loadoutMenu.open(loadout, { action: 'Done', done: (l) => takeLoadout(l, true) });
+    } else {
+      pauseMenu.close();
+      const live = together.inMatch;
+      loadoutMenu.open(loadout, {
+        action: live ? 'Done' : 'Deploy',
+        note: live ? 'Taken when you are next back in.' : undefined,
+        done: (l) => {
+          takeLoadout(l, !live);
+          resume();
+        },
+        cancel: () => {
+          pauseMenu.open(settings, timeOfDay, lapse);
+          pauseMenu.together(together.inMatch, together.isOwner);
+        },
+      });
+    }
+  };
+  document.getElementById('loadout-open')?.addEventListener('click', () => openLoadout('start'));
+  document.getElementById('pause-loadout')?.addEventListener('click', () => openLoadout('pause'));
+  for (const id of ['lobby-loadout', 'deploy-loadout']) document.getElementById(id)?.addEventListener('click', () => openLoadout('lobby'));
+  /** The gun in the hands and how it fires, for the HUD. */
+  const modeLabel = (): string => {
+    if (session.held === SHOVEL_HELD) return '';
+    const w = session.weapon;
+    if (w.spec.pellets > 1) return 'Pump';
+    return w.spec.automatic && !w.semi ? 'Auto' : 'Single';
+  };
+  const kitLine = (): string => {
+    const s = session.arm.spec;
+    const bits: string[] = [];
+    if (session.held !== SHOVEL_HELD && session.weapon.rounds === 0 && !session.weapon.reloading) bits.push('Empty: R to reload');
+    const tracer = (session.loadout ?? loadout).tracer;
+    if (tracer !== 'off') bits.push(TRACER_NAMES[tracer]);
+    if (s.fit.side !== 'none') bits.push(session.lightOn ? (s.fit.side === 'laser' ? 'Laser on' : 'Light on') : s.fit.side === 'laser' ? 'L for the laser' : 'L for the light');
+    bits.push(session.arms.map((a, i) => `${i + 1} ${a.spec.gun.name}`).join('  '));
+    return bits.join(' · ');
+  };
+  /** What is over the middle of the view, aimed: the fitted sight's reticle (iron sights: none). */
+  const reticleOf = (): Reticle => {
+    if (session.held === SHOVEL_HELD) return 'cross';
+    const o = session.arm.spec.fit.optic;
+    return o === 'reddot' ? 'dot' : o === 'holo' ? 'holo' : o === 'scope' ? 'scope' : 'none';
+  };
+  /** The ticks' distance from the middle (vh): the cone's half-angle on the screen, at least the reference's 0.7. */
+  const crosshairGap = (at: CameraPose): number => {
+    const w = Math.max(1, canvas.clientWidth);
+    const h = Math.max(1, canvas.clientHeight);
+    const halfV = Math.atan(Math.tan(((at.fov ?? 90) * Math.PI) / 360) * (h / w));
+    return Math.max(0.7, (Math.tan((session.coneDeg() * Math.PI) / 180) / Math.tan(halfV)) * 50);
+  };
+  /** Teammates' marks where they stand on the page. */
+  const tagsFor = (draws: readonly SoldierDraw[], at: CameraPose): HudTag[] => {
+    const res: [number, number] = [Math.max(1, canvas.clientWidth), Math.max(1, canvas.clientHeight)];
+    return together.tags(draws, at.position).flatMap((t) => {
+      const px = projectToPixel(at, res, t.at);
+      if (!px) return [];
+      const distanceM = Math.hypot(t.at[0] - at.position[0], t.at[1] - at.position[1], t.at[2] - at.position[2]);
+      return [{ x: px[0], y: px[1], name: t.name, team: t.team, distanceM }];
+    });
+  };
+  /** The mouse turns by the sight's magnification, aimed. */
+  const aimTurn = () => {
+    const z = session.zoomAt();
+    return z > 1.0001 ? session.hands.adsSensitivity / z : 1;
+  };
+  let wheelAt = Number.NEGATIVE_INFINITY;
   /** Soldiers a test stands in the world without a room (puppets). */
   let puppets: Figure[] = [];
   /** A team's starts: the line its players start and come back in at. */
@@ -478,6 +587,8 @@ async function start(): Promise<void> {
     showLobby: () => loading.hide(),
     deploy: (team, index, match) => {
       const at = startOf(team, index);
+      session.equip(pendingLoadout ?? loadout);
+      pendingLoadout = null;
       session.respawn(at.position, facingYaw(at.bay));
       timeOfDay = match.config.timeOfDay;
       lapse = match.config.lapse;
@@ -498,6 +609,11 @@ async function start(): Promise<void> {
     },
     respawn: (team, spawn) => {
       const at = startOf(team, spawn);
+      // A loadout chosen while dead (or mid-fight) is the one they come back with.
+      if (pendingLoadout) {
+        session.equip(pendingLoadout);
+        pendingLoadout = null;
+      }
       session.respawn(at.position, facingYaw(at.bay));
       renderer.resetHistory();
     },
@@ -593,6 +709,15 @@ async function start(): Promise<void> {
     }
     held.add(e.code);
     if (mode === 'playing') input.keyDown(e.code, e.repeat);
+    if (mode === 'playing' && !e.repeat) {
+      // The guns by their numbers (the developer's views have them behind F3), the keys' card, the map.
+      if (!developer && (e.code === 'Digit1' || e.code === 'Digit2')) {
+        input.swap(e.code === 'Digit1' ? 0 : 1);
+        return;
+      }
+      if (e.code === 'KeyH') hud.toggleHelp();
+      if (e.code === 'KeyM') mapView.show(true);
+    }
     const action = actionFor(e.code);
     // Held keys repeat only the time steps.
     if (!action || (e.repeat && action.kind !== 'time-step') || (action.kind !== 'overlay' && !developer)) return;
@@ -601,6 +726,7 @@ async function start(): Promise<void> {
   });
   window.addEventListener('keyup', (e) => {
     if (e.code === 'Tab') together.boardOpen = false;
+    if (e.code === 'KeyM') mapView.show(false);
     held.delete(e.code);
     input.keyUp(e.code);
   });
@@ -608,6 +734,7 @@ async function start(): Promise<void> {
   window.addEventListener('blur', () => {
     held.clear();
     input.blur();
+    mapView.show(false);
   });
   canvas.addEventListener('click', () => {
     if (mode === 'ready') play(true);
@@ -619,10 +746,29 @@ async function start(): Promise<void> {
   // The trigger: the left button, with the pointer locked to the game (a click that locks it does not fire).
   window.addEventListener('mousedown', (e) => {
     if (e.button === 0 && mode === 'playing' && document.pointerLockElement === canvas) input.trigger(true);
+    // The sights: the right button.
+    if (e.button === 2 && mode === 'playing' && document.pointerLockElement === canvas) input.aim(true);
   });
   window.addEventListener('mouseup', (e) => {
     if (e.button === 0) input.trigger(false);
+    if (e.button === 2) input.aim(false);
   });
+  // The right button is the sights', not the page's menu, over the game.
+  window.addEventListener('contextmenu', (e) => {
+    if (document.pointerLockElement === canvas || e.target === canvas) e.preventDefault();
+  });
+  // The wheel: the other gun, a turn of it at a time.
+  window.addEventListener(
+    'wheel',
+    (e) => {
+      if (mode !== 'playing' || document.pointerLockElement !== canvas || e.deltaY === 0) return;
+      const now = performance.now();
+      if (now - wheelAt < 180) return;
+      wheelAt = now;
+      input.cycle();
+    },
+    { passive: true },
+  );
   window.addEventListener('mousemove', (e) => {
     if (document.pointerLockElement !== canvas) return;
     if (mode === 'playing') input.mouse(e.movementX, e.movementY);
@@ -718,7 +864,7 @@ async function start(): Promise<void> {
       const live = mode === 'playing' || (mode === 'paused' && together.inMatch);
       if (live) {
         if (mode === 'playing') {
-          input.look(session.player, settings.sensitivity, pitchLimit);
+          input.look(session.player, settings.sensitivity * aimTurn(), pitchLimit);
           session.intent = input.intent();
         } else {
           session.intent = idleIntent();
@@ -741,9 +887,13 @@ async function start(): Promise<void> {
       }
       periscope.set((1 - rig.fovScale) / (1 - periscopeScale));
     }
-    // The rifle in hand while playing (paused too), not through the periscope or flying.
+    // What is in the hands, while playing (paused too), not through the periscope or flying: the
+    // gun with its fit, or the shovel; through a scope, nothing (its circle is the HUD's).
+    const inHands = session.arm.spec;
+    renderer.setRifleModel(session.held === SHOVEL_HELD ? shovelModel() : gunModel(inHands.gun.key, inHands.fit));
+    const scoped = session.held !== SHOVEL_HELD && inHands.fit.optic === 'scope' && session.aimed >= 0.85;
     let rifle: RiflePose | null = null;
-    if (rifleHeld && session.alive && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) rifle = rig.rifle(session, pose);
+    if (rifleHeld && session.alive && !scoped && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) rifle = rig.rifle(session, pose);
     else rig.hideRifle();
     renderer.setRifle(rifle);
     // Under fire the picture greys and closes in, while playing (and paused); not flying.
@@ -763,7 +913,7 @@ async function start(): Promise<void> {
     const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
     renderer.setSoldiers(draws);
     together.after(session, events, draws, performance.now());
-    const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares);
+    const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares, draws);
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
     audio.play(planVoices(hearing, events, pose.position, battleEvents));
@@ -853,6 +1003,17 @@ async function start(): Promise<void> {
     // The HUD only in play (not over the loading screen, the pause menu or flying), redrawn ten times a second.
     hud.visible = mode === 'playing';
     hud.room(hud.visible ? together.roomline() : null);
+    if (hud.visible) {
+      // Every frame: the compass, the sight, teammates' marks, and the map while M is held.
+      hud.compass(pose.yaw);
+      hud.sight(reticleOf(), session.held === SHOVEL_HELD ? 0 : session.aimed, crosshairGap(pose));
+      hud.tags(tagsFor(draws, pose));
+      if (mapView.open) {
+        const team = together.team;
+        const p = session.player;
+        mapView.draw({ x: p.position.x, z: p.position.z, yaw: p.yaw, team }, draws.filter((d) => team !== null && d.team === team).map((d) => ({ x: d.feet[0], z: d.feet[2], team: d.team })));
+      }
+    }
     if (hud.visible && now - hudShown >= 100) {
       hudShown = now;
       const p = session.player;
@@ -865,7 +1026,10 @@ async function start(): Promise<void> {
         digging: session.digging,
         digFraction: session.entrenching.fraction,
         digInReach: session.entrenching.inReach,
-        crosshair: p.stance !== Stance.PERISCOPE && session.alive,
+        crosshair: p.stance !== Stance.PERISCOPE && session.alive && session.aimed < 0.5,
+        weapon: session.held === SHOVEL_HELD ? 'Shovel' : session.arm.spec.gun.name,
+        mode: modeLabel(),
+        kit: kitLine(),
       });
     }
     if (now - shown > 250) {
@@ -936,8 +1100,7 @@ async function start(): Promise<void> {
   }
 
   const waitFrames = (n: number) => new Promise<void>((resolve) => waiting.push({ until: frames + n, resolve }));
-  // For tests: the rifle as the CPU traces it through the last frame's pixels.
-  const rifleShape = rifleModel();
+  // For tests: the rifle as the CPU traces it through the last frame's pixels (the model in the hands).
   /** Metres along pixel (x, y)'s ray to the rifle as the last frame drew it, or null. */
   const traceRiflePixel = (s: RifleDrawn, x: number, y: number): number | null => {
     const m = s.toWorld!;
@@ -945,7 +1108,7 @@ async function start(): Promise<void> {
     const d = rayDir(cam, s.res, x + 0.5, y + 0.5);
     const o = [cam.position[0] - m[9], cam.position[1] - m[10], cam.position[2] - m[11]];
     const along = (v: readonly number[], c: number) => v[0] * m[c * 3] + v[1] * m[c * 3 + 1] + v[2] * m[c * 3 + 2];
-    const hit = traceRifle(rifleShape, [along(o, 0), along(o, 1), along(o, 2)], [along(d, 0), along(d, 1), along(d, 2)]);
+    const hit = traceRifle(renderer.rifleModel(), [along(o, 0), along(o, 1), along(o, 2)], [along(d, 0), along(d, 1), along(d, 2)]);
     return hit ? hit.t : null;
   };
   /** n × n pixels across the last frame's rifle box: the G-buffer's depth there and the CPU's trace (metres). */
@@ -1184,8 +1347,11 @@ async function start(): Promise<void> {
     },
     rifleMuzzle: () => {
       const m = renderer.rifleState().toWorld;
-      return m ? throughPose(m, rifleModel().muzzle) : null;
+      return m ? throughPose(m, session.arm.spec.muzzle) : null;
     },
+    /** The loadout, and one taken (into the hands at once), for tests. */
+    loadout: () => loadout,
+    setLoadout: (l: unknown) => takeLoadout(cleanLoadout(l), true),
     rifleCheck: (n: number) => rifleCheck(n),
     // Over every other pixel of the box where the rifle was drawn: the CPU's trace meets it, and
     // the G-buffer's depth there is the rifle's.

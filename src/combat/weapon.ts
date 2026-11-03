@@ -34,12 +34,24 @@ export interface WeaponSpec {
   /** Every n-th round is a tracer; 0, none. */
   tracerEvery: number;
   projectile: ProjectileSpec;
+  /** Rounds a shot throws, each the cone's own: a shotgun's pellets; 1 for a bullet. */
+  pellets: number;
+  /** Aimed down the sights: the cone's share, and the seconds the sights take to come up. */
+  adsSpread: number;
+  adsTimeS: number;
+  /** Its carrier's speed, as a share of the stance's. */
+  moveScale: number;
 }
 
 export function weaponSpec(tun: Tunables, key: string): WeaponSpec {
   const k = `weapon.${key}`;
   const table = tun.section(k);
+  const or = (name: string, fallback: number) => (typeof table[name] === 'number' ? (table[name] as number) : fallback);
   return {
+    pellets: Math.max(1, Math.round(or('pellets', 1))),
+    adsSpread: or('ads_spread', 0.4),
+    adsTimeS: or('ads_time_s', 0.22),
+    moveScale: or('move_scale', 1),
     key,
     name: String(table.name),
     rpm: tun.f(`${k}.rounds_per_minute`),
@@ -58,6 +70,8 @@ const EPS = 1e-9;
 export class Weapon {
   rounds: number;
   shotsFired = 0;
+  /** An automatic weapon switched to single shots (B): one a press, as a semi-automatic's. */
+  semi = false;
   private readonly interval: number;
   private sinceShot: number;
   private reloadLeft = 0;
@@ -100,6 +114,19 @@ export class Weapon {
     return true;
   }
 
+  /** Put away mid-reload: the magazine stays as it was, and the next one starts afresh. */
+  cancelReload(): void {
+    this.reloadLeft = 0;
+    this.held = false;
+    this.sinceShot = Math.min(this.sinceShot, this.interval);
+  }
+
+  /** Automatic and single shots in turn, for a weapon that has both; whether it now fires singly. */
+  toggleMode(): boolean {
+    if (this.spec.automatic) this.semi = !this.semi;
+    return this.semi || !this.spec.automatic;
+  }
+
   /** Once a tick, with the trigger as it is: whether a shot leaves now. */
   wants(trigger: boolean): boolean {
     const pressed = trigger && !this.held;
@@ -108,7 +135,7 @@ export class Weapon {
       this.sinceShot = Math.min(this.sinceShot, this.interval);
       return false;
     }
-    if (!this.spec.automatic && !pressed) return false;
+    if ((!this.spec.automatic || this.semi) && !pressed) return false;
     return this.sinceShot + EPS >= this.interval;
   }
 

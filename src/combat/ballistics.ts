@@ -33,6 +33,8 @@ export interface ProjectileSpec {
   massKg: number;
   /** ½ · Cd · A / m, in m²/kg. */
   dragFactor: number;
+  /** The gun that fires it (net/gear.ts GUNS), for what its hits do; none, the battle's. */
+  gun?: number;
 }
 
 /** A weapon's round, from its `[weapon.<key>]` table. */
@@ -78,6 +80,8 @@ export interface BodyHit {
   dir: readonly [number, number, number];
   /** How far the round had flown (m). */
   distance: number;
+  /** The gun it left (its spec's), if it says. */
+  gun?: number;
 }
 
 /** A round stopped by the world. */
@@ -160,8 +164,12 @@ export class Rounds {
     this.size = [map.dims.x * voxel, map.dims.y * voxel, map.dims.z * voxel];
   }
 
-  /** A round leaving `origin` (m) at `velocity` (m/s), its tracer drawn from `from` (the origin unless given): its slot, or −1 if the pool is full or the velocity is zero. */
-  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean, from: readonly [number, number, number] = origin): number {
+  /**
+   * A round leaving `origin` (m) at `velocity` (m/s), its tracer drawn from `from` (the origin
+   * unless given): its slot, or −1 if the pool is full or the velocity is zero. `tracer` is true
+   * (the battle's amber), false, or a kind (net/gear.ts TRACER_KIND: 0 none, 2 red, 3 green).
+   */
+  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean | number, from: readonly [number, number, number] = origin): number {
     if (velocity[0] === 0 && velocity[1] === 0 && velocity[2] === 0) return -1;
     if (this.count >= this.t.capacity) {
       this.dropped++;
@@ -176,7 +184,7 @@ export class Rounds {
     if (s < 0) s = this.specs.push(spec) - 1;
     this.specIndex[i] = s;
     this.owner[i] = owner;
-    this.tracer[i] = tracer ? 1 : 0;
+    this.tracer[i] = tracer === true ? 1 : tracer === false ? 0 : Math.max(0, Math.min(3, Math.round(tracer)));
     this.origin.set(origin, i * 3);
     this.from.set(from, i * 3);
     this.nearMiss[i] = Infinity;
@@ -185,7 +193,7 @@ export class Rounds {
   }
 
   isTracer(slot: number): boolean {
-    return this.tracer[slot] === 1;
+    return this.tracer[slot] !== 0;
   }
 
   /** Who hears near misses: the player's eye (metres), within `radiusM`; null, no one. */
@@ -221,17 +229,18 @@ export class Rounds {
   /**
    * Each tracer round's head and its tail, up to `lengthM` back along its path (no further than it
    * has flown), as [x, y, z] triples in metres; where it left and where its tracer is drawn from,
-   * how far it has flown (m), and whose it is.
+   * how far it has flown (m), whose it is, and its kind (its colour).
    */
-  tracerSegments(lengthM: number): { head: Float32Array; tail: Float32Array; origin: Float32Array; from: Float32Array; flown: Float32Array; owner: Int8Array } {
+  tracerSegments(lengthM: number): { head: Float32Array; tail: Float32Array; origin: Float32Array; from: Float32Array; flown: Float32Array; owner: Int8Array; kind: Uint8Array } {
     let n = 0;
-    for (let i = 0; i < this.count; i++) n += this.tracer[i];
+    for (let i = 0; i < this.count; i++) if (this.tracer[i] !== 0) n++;
     const head = new Float32Array(n * 3);
     const tail = new Float32Array(n * 3);
     const origin = new Float32Array(n * 3);
     const from = new Float32Array(n * 3);
     const flown = new Float32Array(n);
     const owner = new Int8Array(n);
+    const kind = new Uint8Array(n);
     let o = 0;
     for (let i = 0; i < this.count; i++) {
       if (!this.tracer[i]) continue;
@@ -246,9 +255,10 @@ export class Rounds {
       }
       flown[o] = this.distance[i];
       owner[o] = this.owner[i];
+      kind[o] = this.tracer[i];
       o++;
     }
-    return { head, tail, origin, from, flown, owner };
+    return { head, tail, origin, from, flown, owner, kind };
   }
 
   /** One substep of round `i`: whether it is to be retired. */
@@ -310,6 +320,7 @@ export class Rounds {
           position: [this.pos[p] + dir[0] * body.t, this.pos[p + 1] + dir[1] * body.t, this.pos[p + 2] + dir[2] * body.t],
           dir,
           distance: this.distance[i] + body.t,
+          ...(spec.gun === undefined ? {} : { gun: spec.gun }),
         });
         this.hearPass(i);
         return true;

@@ -143,10 +143,17 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
       lowpassHz: t.openLowpassHz * Math.pow(t.farLowpassHz / t.openLowpassHz, share),
     };
   };
-  for (const s of events.shots) out.push({ kind: 'report', at: s.muzzle, delayS: 0, gain: 1, lowpassHz: t.openLowpassHz });
+  // A suppressed gun's report (its `report` share, under half a bare gun's) is quieter and duller: a crack, not a bang.
+  const muffled = (share: number | undefined, hz: number) => (share !== undefined && share < 0.5 ? hz * 0.3 : hz);
+  for (const s of events.shots) out.push({ kind: 'report', at: s.muzzle, delayS: 0, gain: s.report ?? 1, lowpassHz: muffled(s.report, t.openLowpassHz) });
   for (const s of events.frontShots) out.push(afar(s.origin, t.frontReportGain, 'report'));
-  // Another player's rifle: heard where it is, as the front's are.
-  for (const s of events.remoteShots) out.push(afar(s.muzzle, t.frontReportGain, 'report'));
+  // Another player's gun: heard where it is, as the front's are.
+  for (const s of events.remoteShots) {
+    const v = afar(s.muzzle, t.frontReportGain * (s.report ?? 1), 'report');
+    out.push({ ...v, lowpassHz: muffled(s.report, v.lowpassHz) });
+  }
+  // A round of the player's into another player: a dull knock at the ear, so a hit is heard as well as seen.
+  for (const h of events.hits) if (h.owner === 0 && h.body >= 0) out.push({ kind: 'impact-timber', at: [listener[0], listener[1], listener[2]], delayS: 0, gain: 0.4, lowpassHz: t.openLowpassHz });
   for (const c of events.cracks) {
     out.push({ kind: 'crack', at: c.at, delayS: 0, gain: t.crackGain * Math.max(0, 1 - c.missM / t.crackRadiusM), lowpassHz: t.openLowpassHz });
   }

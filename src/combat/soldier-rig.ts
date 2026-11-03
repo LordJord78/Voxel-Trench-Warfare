@@ -11,7 +11,7 @@
  * arithmetic (dmath), so every client poses a body alike.
  */
 
-import { cos, HALF_PI, hypot, radians, sin } from '../core/dmath';
+import { cos, HALF_PI, hypot, radians, sin, TAU } from '../core/dmath';
 
 export type V3 = [number, number, number];
 
@@ -48,7 +48,8 @@ export const PART_BOX: Record<PartName, { min: V3; max: V3 }> = {
   thighR: { min: [-0.08, -0.46, -0.085], max: [0.08, 0, 0.085] },
   shinL: { min: [-0.07, -0.47, -0.08], max: [0.07, 0, 0.16] },
   shinR: { min: [-0.07, -0.47, -0.08], max: [0.07, 0, 0.16] },
-  rifle: { min: [-0.04, -0.24, -0.27], max: [0.04, 0.07, 0.72] },
+  // Whatever is carried (combat/gun-models.ts): the longest gun with a can on it, the tallest optic.
+  rifle: { min: [-0.09, -0.24, -0.42], max: [0.09, 0.2, 1.02] },
 };
 
 const THIGH = 0.46;
@@ -70,6 +71,16 @@ const HANDGUARD: V3 = [0, -0.03, 0.42];
 /** How long a killed body takes to fall. */
 const FALL_S = 0.7;
 
+/** What the hands hold, for the pose: a gun's grips (model metres), whether a pistol, or the shovel and its stroke (turns) while digging. */
+export interface Hold {
+  kind: 'rifle' | 'pistol' | 'shovel';
+  grip: V3;
+  fore: V3;
+  stroke?: number;
+}
+
+const RIFLE_HOLD: Hold = { kind: 'rifle', grip: GRIP, fore: HANDGUARD };
+
 export interface PoseInput {
   /** Foot centre, metres. */
   position: V3;
@@ -83,6 +94,8 @@ export interface PoseInput {
   bob: number;
   /** Seconds since killed, or null alive. */
   deadFor: number | null;
+  /** What is in the hands: the AK, unless said. */
+  hold?: Hold;
 }
 
 const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -192,8 +205,25 @@ export function pose(p: PoseInput): Record<PartName, Frame> {
   // Square to the aim and level: the aim's pitch is held short of straight up or down.
   const rifleRight = norm(cross(up, aim));
   const rifleUp = norm(cross(aim, rifleRight));
-  const rifleOrigin = add(add(add(shoulderR, mul(aim, 0.22)), mul(rifleRight, -0.04)), mul(rifleUp, -0.02 - 0.1 * stride));
-  const rifle: Frame = dead ? { x: [0, 1, 0], y: mul(right, -1), z: forward, t: add(add(feet, mul(right, 0.55)), [0, 0.03, 0]) } : { x: rifleRight, y: rifleUp, z: aim, t: rifleOrigin };
+  const hold = p.hold ?? RIFLE_HOLD;
+  let rifle: Frame;
+  if (dead) {
+    rifle = { x: [0, 1, 0], y: mul(right, -1), z: forward, t: add(add(feet, mul(right, 0.55)), [0, 0.03, 0]) };
+  } else if (hold.kind === 'shovel') {
+    // Held low before the body, blade down; digging, it drives down and levers up with the stroke.
+    const s = hold.stroke === undefined ? 0 : 0.5 - 0.5 * cos(hold.stroke * TAU);
+    const angle = radians(32 + 26 * s);
+    const along = norm(add(mul(forward, cos(angle)), mul(up, -sin(angle))));
+    const origin = add(add(add(hips, mul(forward, 0.16 + 0.1 * s)), mul(right, 0.14)), mul(up, 0.18 - 0.08 * s));
+    rifle = { x: right, y: cross(along, right), z: along, t: origin };
+  } else if (hold.kind === 'pistol') {
+    // At arm's length before the chest, both hands on it.
+    const chest = add(add(neck, mul(spine, -0.1)), mul(right, 0.02));
+    rifle = { x: rifleRight, y: rifleUp, z: aim, t: add(add(chest, mul(aim, 0.42)), mul(rifleUp, -0.05 - 0.05 * stride)) };
+  } else {
+    const rifleOrigin = add(add(add(shoulderR, mul(aim, 0.22)), mul(rifleRight, -0.04)), mul(rifleUp, -0.02 - 0.1 * stride));
+    rifle = { x: rifleRight, y: rifleUp, z: aim, t: rifleOrigin };
+  }
   const onRifle = (q: V3): V3 => add(add(add(rifle.t, mul(rifle.x, q[0])), mul(rifle.y, q[1])), mul(rifle.z, q[2]));
 
   // The arms reach for the rifle's grips, elbows down and out; killed, they hang.
@@ -203,8 +233,8 @@ export function pose(p: PoseInput): Record<PartName, Frame> {
     return { upper: bone(shoulder, elbow, forward), fore: bone(elbow, end, dead ? forward : aim) };
   };
   const hang = (shoulder: V3, side: 1 | -1): V3 => add(add(shoulder, mul(spine, -(UPPER_ARM + FOREARM - 0.04))), mul(right, 0.06 * side));
-  const armR = arm(shoulderR, dead ? hang(shoulderR, 1) : onRifle(GRIP), 1);
-  const armL = arm(shoulderL, dead ? hang(shoulderL, -1) : onRifle(HANDGUARD), -1);
+  const armR = arm(shoulderR, dead ? hang(shoulderR, 1) : onRifle(hold.grip), 1);
+  const armL = arm(shoulderL, dead ? hang(shoulderL, -1) : onRifle(hold.fore), -1);
 
   const head = frameAlong(neck, norm(add(spine, mul(up, 0.6 + 0.8 * prone))), norm(add(aim, mul(forward, 0.5))));
   let frames: Record<PartName, Frame> = {

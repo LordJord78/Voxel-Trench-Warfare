@@ -7,7 +7,10 @@
  * stands them is not a jump, until Space is let go of and pressed again. The
  * trigger is held while the left button is (the app passes it on only with
  * the pointer locked) and a press stands until a tick takes it, as R's
- * request for a reload does. F, held, digs.
+ * request for a reload does. F, held, digs (the shovel comes out). The right
+ * button, held, raises the sights; B switches single shots and automatic and
+ * L the gun's light or laser, each a press a tick takes, as R's; the app asks
+ * for a gun by its number or the wheel (`swap`, `cycle`).
  * Losing focus lets go of every held key and the trigger, so nobody walks on
  * with W stuck down or empties a magazine into the wall.
  */
@@ -23,6 +26,11 @@ export class Input {
   private triggerHeld = false;
   private triggerPressed = false;
   private reloadAsked = false;
+  private aimHeld = false;
+  private swapAsked = -1;
+  private cycleAsked = false;
+  private lightAsked = false;
+  private modeAsked = false;
   private dx = 0;
   private dy = 0;
 
@@ -39,6 +47,23 @@ export class Input {
     // Asked for on the press and kept until a tick has run with it, so a tap between two frames,
     // or in a frame too short for a tick, still counts.
     else if (code === 'KeyR') this.reloadAsked = true;
+    else if (code === 'KeyB') this.modeAsked = true;
+    else if (code === 'KeyL') this.lightAsked = true;
+  }
+
+  /** The sights: the right button, held while the pointer is locked. */
+  aim(held: boolean): void {
+    this.aimHeld = held;
+  }
+
+  /** A gun asked for by its place (0 the long gun, 1 the pistol), until a tick takes it. */
+  swap(slot: number): void {
+    this.swapAsked = slot;
+  }
+
+  /** The next gun (the wheel), until a tick takes it. */
+  cycle(): void {
+    this.cycleAsked = true;
   }
 
   /**
@@ -62,6 +87,7 @@ export class Input {
     this.spaceStood = false;
     this.triggerHeld = false;
     this.triggerPressed = false;
+    this.aimHeld = false;
     this.dx = 0;
     this.dy = 0;
   }
@@ -91,6 +117,11 @@ export class Input {
       fire: this.triggerHeld || this.triggerPressed,
       reload: this.reloadAsked,
       dig: this.held.has('KeyF'),
+      aim: this.aimHeld,
+      swap: this.swapAsked >= 0 ? this.swapAsked : undefined,
+      cycle: this.cycleAsked,
+      light: this.lightAsked,
+      mode: this.modeAsked,
     };
   }
 
@@ -98,6 +129,10 @@ export class Input {
   ticked(): void {
     this.reloadAsked = false;
     this.triggerPressed = false;
+    this.swapAsked = -1;
+    this.cycleAsked = false;
+    this.lightAsked = false;
+    this.modeAsked = false;
   }
 
   /** Turn by the gathered mouse movement: `sensitivity` degrees a pixel, moving up looks up. */

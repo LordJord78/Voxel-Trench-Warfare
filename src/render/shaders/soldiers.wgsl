@@ -143,7 +143,7 @@ fn tracePart(p: SoldierPart, om: vec3f, d: vec3f, tMax: f32) -> PartHit {
   let stepv = select(vec3i(-1), vec3i(1), up);
   var next = (vec3f(cell) + select(vec3f(0.0), vec3f(1.0), up) - o) * inv;
   let delta = abs(inv);
-  for (var n = 0u; n < 128u; n++) {
+  for (var n = 0u; n < 160u; n++) {
     let v = partVoxel(p, cell);
     if (v != 0u) {
       var axis = face;
@@ -201,9 +201,14 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   var bestPart = 0u;
   for (var k = 0u; k < SOLDIER_PARTS; k++) {
     let pose = soldiers.poses[s * SOLDIER_PARTS + k];
+    // The last part is what they carry: their own weapon slot's model (soldiers.ts).
+    var part = soldiers.parts[k];
+    if (k == SOLDIER_PARTS - 1u) {
+      part = soldiers.weapons[soldiers.info[s].weapon];
+    }
     // Into the part's space: its axes are square and unit, so their transpose undoes them.
     let o = eye - pose.t;
-    let hit = tracePart(soldiers.parts[k], vec3f(dot(o, pose.x), dot(o, pose.y), dot(o, pose.z)), vec3f(dot(rd, pose.x), dot(rd, pose.y), dot(rd, pose.z)), best.t);
+    let hit = tracePart(part, vec3f(dot(o, pose.x), dot(o, pose.y), dot(o, pose.z)), vec3f(dot(rd, pose.x), dot(rd, pose.y), dot(rd, pose.z)), best.t);
     if (hit.palette != 0u && hit.t < best.t) {
       best = hit;
       bestPart = k;

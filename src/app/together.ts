@@ -9,8 +9,9 @@
  * never opens a socket or asks the relay anything.
  */
 
-import { RIFLE_MUZZLE } from '../combat/rifle-model';
+import { holdOf, muzzleOf } from '../combat/arsenal';
 import { hitParts, pose, toWorld } from '../combat/soldier-rig';
+import { decodeGear, encodeGear } from '../net/gear';
 import { MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type MatchInfo, type PlayerState, type RoomConfig, type ShotState, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
@@ -29,6 +30,10 @@ const STRIDE_HZ = 1.9;
 const WALK_MS = 4.1;
 /** A teammate aimed at within this many metres is named under the crosshair. */
 const NAME_REACH_M = 30;
+/** Teammates are marked over their heads within this many metres. */
+const TAG_REACH_M = 150;
+/** The shovel's stroke as others are drawn digging, seconds a turn ([hands] dig_stroke_s). */
+const STROKE_S = 0.85;
 /** Health comes back, as the room's rules have it (net/match-rules.ts), shown as it does. */
 const REGEN_DELAY_MS = 6000;
 const REGEN_PER_S = 10;
@@ -45,6 +50,16 @@ export interface Figure {
   height: number;
   /** Seconds since killed, or null alive. */
   deadFor: number | null;
+  /** What they show (net/gear.ts encodeGear), and their state's flags (net/protocol.ts STATE); none, the bare AK at rest. */
+  gear?: number;
+  flags?: number;
+}
+
+/** A teammate to mark: over their head (metres), their name and team. */
+export interface Tag {
+  at: [number, number, number];
+  name: string;
+  team: Team;
 }
 
 /**
@@ -53,6 +68,8 @@ export interface Figure {
  */
 export class Gaits {
   private readonly phase = new Map<number, number>();
+  /** Each digger's shovel stroke, in turns. */
+  private readonly strokes = new Map<number, number>();
 
   pose(figures: readonly Figure[], dt: number): SoldierDraw[] {
     const seen = new Set<number>();
@@ -61,11 +78,19 @@ export class Gaits {
       const speed = Math.hypot(f.velocity[0], f.velocity[2]);
       const phase = ((this.phase.get(f.seat) ?? 0) + dt * STRIDE_HZ * 2 * Math.PI * (speed / WALK_MS)) % (2 * Math.PI);
       this.phase.set(f.seat, phase);
+      const gear = decodeGear(f.gear ?? 0);
+      // With the shovel out and digging, its stroke goes round; otherwise it rests.
+      let stroke: number | undefined;
+      if (gear.gun === null && ((f.flags ?? 0) & STATE.DIGGING) !== 0) {
+        stroke = ((this.strokes.get(f.seat) ?? 0) + dt / STROKE_S) % 1;
+        this.strokes.set(f.seat, stroke);
+      } else this.strokes.delete(f.seat);
       return {
-        frames: pose({ position: f.position, yaw: f.yaw, pitch: f.pitch, height: f.height, speed, bob: phase, deadFor: f.deadFor }),
+        frames: pose({ position: f.position, yaw: f.yaw, pitch: f.pitch, height: f.height, speed, bob: phase, deadFor: f.deadFor, hold: holdOf(gear, stroke) }),
         team: f.team,
         seat: f.seat,
         feet: f.position,
+        gear: f.gear ?? 0,
       };
     });
     for (const seat of [...this.phase.keys()]) if (!seen.has(seat)) this.phase.delete(seat);
@@ -262,7 +287,10 @@ export class Together {
     if (this.net && this.inMatch) {
       for (const { seat, shot } of this.net.takeShots()) {
         const d = draws.find((x) => x.seat === seat);
-        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, d ? toWorld(d.frames.rifle, RIFLE_MUZZLE) : shot.origin);
+        // From the muzzle of the gun they are drawn with.
+        const g = decodeGear(d?.gear ?? 0);
+        const muzzle = d && g.gun !== null ? toWorld(d.frames.rifle, muzzleOf(g.gun, g.fit)) : shot.origin;
+        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark);
       }
     }
     return draws;
@@ -272,10 +300,10 @@ export class Together {
   after(session: Session, events: CombatEvents, draws: readonly SoldierDraw[], now: number): void {
     const net = this.net;
     if (!net || !this.inMatch) return;
-    for (const s of events.shots) if (this.shotsOut.length < 2 * SHOTS_MAX) this.shotsOut.push({ tick: s.tick, origin: s.origin, dir: s.dir, tracer: s.tracer });
+    for (const s of events.shots) if (this.shotsOut.length < 2 * SHOTS_MAX) this.shotsOut.push({ tick: s.tick, origin: s.origin, dir: s.dir, tracer: s.tracer, ...(s.mark === undefined ? {} : { mark: s.mark }) });
     for (const h of events.hits) {
       if (h.owner !== 0 || h.body < 0 || h.body >= MAX_PLAYERS) continue;
-      net.hit(h.body, h.zone);
+      net.hit(h.body, h.zone, h.gun);
       this.claimed++;
       this.hud.marker('hit', now);
     }
@@ -292,6 +320,22 @@ export class Together {
     this.hud.board(this.boardOpen, this.rows(), net.score, net.match?.config.killTarget ?? 0);
     this.hud.aimed(this.fallen ? null : this.teammateAimed(session, draws));
     this.hud.tick(now);
+  }
+
+  /** Teammates to mark over their heads (alive, within TAG_REACH_M of `eye`), so a friend is not shot for a foe. */
+  tags(draws: readonly SoldierDraw[], eye: readonly number[]): Tag[] {
+    const net = this.net;
+    const team = this.team;
+    if (!net || !this.inMatch || !team) return [];
+    const out: Tag[] = [];
+    for (const d of draws) {
+      if (d.team !== team || d.seat === net.you || this.deaths.has(d.seat)) continue;
+      const head = d.frames.head.t;
+      if (Math.hypot(head[0] - eye[0], head[1] - eye[1], head[2] - eye[2]) > TAG_REACH_M) continue;
+      const seat = net.seats.find((s) => s.id === d.seat);
+      if (seat) out.push({ at: [head[0], head[1] + 0.55, head[2]], name: seat.name, team });
+    }
+    return out;
   }
 
   /** The teammate the player's view rests on, within NAME_REACH_M: their name and team. */
@@ -373,7 +417,7 @@ export class Together {
     const now = performance.now();
     return this.others().map(({ seat, state }) => {
       const died = this.deaths.get(seat.id);
-      return { seat: seat.id, team: seat.team, position: state.position, velocity: state.velocity, yaw: state.yaw, pitch: state.pitch, height: state.height, deadFor: died === undefined ? null : (now - died) / 1000 };
+      return { seat: seat.id, team: seat.team, position: state.position, velocity: state.velocity, yaw: state.yaw, pitch: state.pitch, height: state.height, deadFor: died === undefined ? null : (now - died) / 1000, gear: state.gear ?? 0, flags: state.flags };
     });
   }
 
@@ -496,5 +540,5 @@ export function stateOf(session: Session): PlayerState {
   if (session.digging) flags |= STATE.DIGGING;
   if (p.climbTo !== null) flags |= STATE.CLIMBING;
   if (p.onFiringStep) flags |= STATE.ON_STEP;
-  return { tick: session.ticks, position: p.position.toArray(), velocity: p.velocity.toArray(), yaw: p.yaw, pitch: p.pitch, stance: p.stance, height: p.height, flags };
+  return { tick: session.ticks, position: p.position.toArray(), velocity: p.velocity.toArray(), yaw: p.yaw, pitch: p.pitch, stance: p.stance, height: p.height, flags, gear: encodeGear(session.gear()) };
 }

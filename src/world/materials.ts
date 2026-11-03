@@ -120,6 +120,16 @@ const DEFS: readonly Def[] = [
   ['TAPE_RED', K.CLOTH, 214, 44, 30, 0.75, 0.6], ['TAPE_BLUE', K.CLOTH, 44, 104, 226, 0.75, 0.6],
   // Leaves on what trees the shelling left standing: they hide you and stop nothing, as cloth.
   ['LEAF', K.CLOTH, 78, 90, 48], ['LEAF_DARK', K.CLOTH, 56, 68, 38], ['LEAF_DRY', K.CLOTH, 118, 100, 56],
+  // The loadout's guns and the shovel (combat/gun-models.ts): never placed in the world. Black
+  // anodising and polymer, tan and olive furniture, wood, a belt's brass; an optic's glass, its
+  // dot, and a light's lens, which glow a little; the shovel's handle, blade and worn edge.
+  ['GUN_BLACK', K.PICKET, 40, 40, 42, 0.5], ['GUN_POLYMER', K.TIMBER, 30, 30, 32, 0.75],
+  ['GUN_TAN', K.TIMBER, 148, 126, 94, 0.7], ['GUN_OD', K.CLOTH, 84, 88, 62, 0.75],
+  ['GUN_WOOD', K.TIMBER, 124, 76, 46, 0.55], ['GUN_BRASS', K.PICKET, 180, 142, 72, 0.3],
+  ['OPTIC_GLASS', K.PICKET, 34, 52, 66, 0.1], ['OPTIC_DOT', K.PICKET, 255, 40, 30, 0.5, 3],
+  ['LIGHT_LENS', K.PICKET, 236, 234, 214, 0.2, 1.2],
+  ['SHOVEL_HANDLE', K.TIMBER, 138, 104, 66, 0.65], ['SHOVEL_BLADE', K.PICKET, 78, 82, 64, 0.55],
+  ['SHOVEL_EDGE', K.PICKET, 132, 128, 118, 0.35],
 ];
 
 /** Palette ids by name. Kept explicit so ids are stable and greppable; checked against DEFS below. */
@@ -136,6 +146,8 @@ export const P = {
   CHAR_CLOTH: 54, CHAR_HULL: 55, BENCH: 56, SOLDIER_KHAKI: 57, SOLDIER_KHAKI_DARK: 58,
   SOLDIER_WEBBING: 59, SOLDIER_SKIN: 60, SOLDIER_HELMET: 61, SOLDIER_BOOT: 62, TAPE_RED: 63, TAPE_BLUE: 64,
   LEAF: 65, LEAF_DARK: 66, LEAF_DRY: 67,
+  GUN_BLACK: 68, GUN_POLYMER: 69, GUN_TAN: 70, GUN_OD: 71, GUN_WOOD: 72, GUN_BRASS: 73,
+  OPTIC_GLASS: 74, OPTIC_DOT: 75, LIGHT_LENS: 76, SHOVEL_HANDLE: 77, SHOVEL_BLADE: 78, SHOVEL_EDGE: 79,
 } as const;
 
 export const PALETTE: readonly PaletteEntry[] = DEFS.map(([name, kind, r, g, b, roughness, emission]) => ({

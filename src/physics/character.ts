@@ -117,6 +117,14 @@ export interface MoveIntent {
   reload: boolean;
   /** Dig out loose earth in front of the feet, held. */
   dig: boolean;
+  /** The sights raised, held (the right button). */
+  aim?: boolean;
+  /** A gun asked for by its place (0 the long gun, 1 the pistol), or the next (the wheel). */
+  swap?: number;
+  cycle?: boolean;
+  /** Pressed: the gun's light or laser switched, and single shots or automatic. */
+  light?: boolean;
+  mode?: boolean;
 }
 
 export interface CharacterState {

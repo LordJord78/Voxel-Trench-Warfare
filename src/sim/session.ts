@@ -11,20 +11,20 @@
  */
 
 import { Artillery, artilleryTunables, planShellSource, type ShellSource } from '../combat/artillery';
-import { ballisticsTunables, Rounds, type BodyHit, type Impact } from '../combat/ballistics';
+import { armSpec, GUN_DEFS, loadoutArms, type ArmSpec, type Loadout } from '../combat/arsenal';
+import { ballisticsTunables, projectileSpec, Rounds, type BodyHit, type Impact, type ProjectileSpec } from '../combat/ballistics';
 import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
 import { Entrenching, entrenchingTunables, type Scoop } from '../combat/entrenching';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
 import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
-import { Recoil, recoilProfile } from '../combat/recoil';
-import { RIFLE_MUZZLE, RIFLE_PORT } from '../combat/rifle-model';
+import { Recoil } from '../combat/recoil';
 import { bodySphere, hitParts, pose, type Frame, type PartName } from '../combat/soldier-rig';
 import { Suppression, suppressionTunables } from '../combat/suppression';
-import { ViewKick, viewKickProfile } from '../combat/viewkick';
-import { modelToView, viewBasis, viewmodelPose, viewmodelTunables, type ViewmodelKick, type ViewmodelPose, type ViewmodelTunables } from '../combat/viewmodel';
+import { ViewKick } from '../combat/viewkick';
+import { heldPose, modelToView, viewBasis, viewmodelTunables, type Holding, type ViewmodelKick, type ViewmodelPose, type ViewmodelTunables } from '../combat/viewmodel';
 import { Weapon, weaponSpec } from '../combat/weapon';
 import { FixedClock } from '../core/clock';
-import { cos, exp, hypot, sin, TAU } from '../core/dmath';
+import { cos, exp, hypot, radians, sin, TAU } from '../core/dmath';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import { CharacterController, controllerTunables, letGoOfLedge, newCharacter, Stance, type CharacterState, type MoveIntent } from '../physics/character';
@@ -35,6 +35,7 @@ import type { BrickMap } from '../world/bricks';
 import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, P, paletteData } from '../world/materials';
 import { groundTop } from '../world/raycast';
+import { BARE, decodeShotMark, encodeShotMark, GUNS, TRACER_KIND, type Gear, type GunKey, type Tracer } from '../net/gear';
 import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from './destruction';
 
 /** The uniform's colour, for the dust a round throws out of a body. */
@@ -50,6 +51,46 @@ export const PORT_ANCHOR = 2;
 /** The local player's body, among the bodies a round may strike. */
 export const LOCAL_BODY = -1;
 
+/** `Session.held` when the shovel is in the hands. */
+export const SHOVEL_HELD = -1;
+
+/** A gun carried: what it is with its fit (arsenal.ts), and its own weapon, recoil and kick. */
+export interface Arm {
+  spec: ArmSpec;
+  weapon: Weapon;
+  recoil: Recoil;
+  viewKick: ViewKick;
+}
+
+/** The hands' times and the aim's terms (`[hands]`). */
+export interface HandsTunables {
+  lowerS: number;
+  raiseS: number;
+  pistolRaiseS: number;
+  shovelRaiseS: number;
+  adsRecoil: number;
+  adsMove: number;
+  adsSensitivity: number;
+  strokeS: number;
+}
+
+export function handsTunables(tun: Tunables): HandsTunables {
+  const f = (k: string) => tun.f(`hands.${k}`);
+  return {
+    lowerS: f('lower_s'),
+    raiseS: f('raise_s'),
+    pistolRaiseS: f('pistol_raise_s'),
+    shovelRaiseS: f('shovel_raise_s'),
+    adsRecoil: f('ads_recoil'),
+    adsMove: f('ads_move'),
+    adsSensitivity: f('ads_sensitivity'),
+    strokeS: f('dig_stroke_s'),
+  };
+}
+
+const SHOVEL_HOLDING: Holding = { kind: 'shovel', sight: { y: 0, z: 0.4 } };
+const smooth = (t: number) => t * t * (3 - 2 * t);
+
 /** Another player's body as drawn this frame, for rounds to strike: their seat, their parts' frames, their feet. */
 export interface Body {
   id: number;
@@ -59,6 +100,11 @@ export interface Body {
 
 export function idleIntent(): MoveIntent {
   return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false, dig: false };
+}
+
+/** A tracer's colour as a loadout names it, from the pool's kind. */
+function tracerName(kind: number): Tracer {
+  return kind === TRACER_KIND.red ? 'red' : kind === TRACER_KIND.green ? 'green' : 'off';
 }
 
 /** How the rifle and suppression turn the view, in degrees: recoil and the flinch (yaw, pitch), the shake (pitch, roll), and the view kick's pulse of the field of view. */
@@ -77,6 +123,11 @@ export interface ShotEvent {
   tracer: boolean;
   /** The player's: the drawn rifle's (they leave from the eye); the front's: the origin. */
   muzzle: [number, number, number];
+  /** A player's shot's word (net/gear.ts ShotMark): its gun, its tracer's colour, whether suppressed. */
+  mark?: number;
+  /** The muzzle's flash and report, as shares of a bare gun's. */
+  flash?: number;
+  report?: number;
 }
 
 /** What combat did between drains, oldest first. */
@@ -144,12 +195,31 @@ export class Session {
   /** How far the rifle is raised for the firing step (0 to 1), now and before the last tick. */
   private raised = 0;
   private prevRaised = 0;
-  /** The player's rifle, and the rounds in the air. */
-  readonly weapon: Weapon;
+  /**
+   * The guns carried (the long gun first) and the rounds in the air. What is in the hands is
+   * `held`, an arm's index or SHOVEL_HELD; `weapon`, `recoil` and `viewKick` are the arm's in the
+   * hands (with the shovel out, the gun it goes back to).
+   */
+  arms: Arm[];
+  held = 0;
   readonly rounds: Rounds;
-  /** The rifle's feel: its aim's recoil, its view's kick, and the player's suppression. */
-  readonly recoil: Recoil;
-  readonly viewKick: ViewKick;
+  /** The gun asked for (1, 2, the wheel): in the hands once the shovel is put away. */
+  private wanted = 0;
+  /** How far up what is held is (0 put away, 1 ready to use), and before the last tick. */
+  ready = 1;
+  private prevReady = 1;
+  /** How far the sights are up (0 to 1, aimed), and before the last tick. */
+  aimed = 0;
+  private prevAimed = 0;
+  /** The shovel's stroke as drawn while it is clearing (in turns, 0 to 1), and before the last tick; null at rest. */
+  stroke: number | null = null;
+  private prevStroke: number | null = null;
+  /** The gun's light (or laser) switched on. */
+  lightOn = false;
+  /** The loadout taken in, if one was (the session's own default otherwise). */
+  loadout: Loadout | null = null;
+  readonly hands: HandsTunables;
+  /** The player's suppression. */
   readonly suppression: Suppression;
   /** The enemy line's incoming fire. */
   readonly front: Front;
@@ -188,6 +258,13 @@ export class Session {
   private readonly recoilRng: Rng;
   private readonly viewKickRng: Rng;
   private readonly suppressionRng: Rng;
+  /** Others' shotguns' pellets about their shot: drawn here, not by the shooter (cosmetic: hits are theirs to claim). */
+  private readonly remoteRng: Rng;
+  private readonly tun: Tunables;
+  /** The front's rounds: the AK's, whatever the player carries. */
+  private readonly frontProjectile: ProjectileSpec;
+  /** Each gun's round, pellets and cone, as another player's shots are fired. */
+  private readonly remoteGuns = new Map<GunKey, { spec: ProjectileSpec; pellets: number; coneDeg: number }>();
   private readonly chipEnergyJ: number;
   /** A shell's splash's energy, at a crater of 3 m: by the cube of its radius. */
   private readonly splashEnergyJ: number;
@@ -214,12 +291,17 @@ export class Session {
     this.player = newCharacter(new Vec3(...world.spawn.position), yaw, 0);
     this.prevPosition = this.player.position;
     this.streams = Rng.root(seed).derive('session');
-    this.weapon = new Weapon(weaponSpec(tun, 'assault_rifle'));
+    this.tun = tun;
+    this.hands = handsTunables(tun);
+    // Until a loadout is taken in: the AK and the pistol, bare, the battle's amber tracers.
+    this.arms = [armSpec(tun, 'ak74', BARE, 'amber'), armSpec(tun, 'm17', BARE, 'amber')].map((a) => this.makeArm(a, false));
+    this.frontProjectile = projectileSpec(tun, 'assault_rifle');
     this.rounds = new Rounds(ballisticsTunables(tun), world.map, voxel);
     this.dispersion = this.streams.derive('combat.dispersion');
     this.recoilRng = this.streams.derive('combat.recoil');
     this.viewKickRng = this.streams.derive('combat.viewkick');
     this.suppressionRng = this.streams.derive('combat.suppression');
+    this.remoteRng = this.streams.derive('combat.remote_pellets');
     this.chipEnergyJ = tun.f('destruction.chip_energy_j');
     this.splashEnergyJ = tun.f('artillery.splash_energy_j');
     this.debris = {
@@ -228,8 +310,6 @@ export class Session {
       energyJ: tun.f('artillery.debris_splash_j'),
       fallS: tun.pair('artillery.debris_fall_s'),
     };
-    this.recoil = new Recoil(recoilProfile(tun, 'assault_rifle'));
-    this.viewKick = new ViewKick(viewKickProfile(tun, 'assault_rifle'));
     this.suppression = new Suppression(suppressionTunables(tun));
     this.blastShake = new BlastShake(blastShakeTunables(tun));
     const front = frontTunables(tun);
@@ -288,21 +368,140 @@ export class Session {
     return frames;
   }
 
-  /** Another player's shot (owner 2 + their seat), from their eye along `dir`, its tracer and flash at their rifle's `muzzle`. */
-  fireRemote(owner: number, origin: readonly [number, number, number], dir: readonly [number, number, number], tracer: boolean, muzzle: readonly [number, number, number]): void {
-    const spec = this.weapon.spec.projectile;
+  /**
+   * Another player's shot (owner 2 + their seat), from their eye along `dir`, its tracer and flash
+   * at their rifle's `muzzle`; `mark`, its word (net/gear.ts): their gun's round, its tracer's
+   * colour, and a shotgun's pellets spread about it here. Without one, the AK's, amber.
+   */
+  fireRemote(owner: number, origin: readonly [number, number, number], dir: readonly [number, number, number], tracer: boolean, muzzle: readonly [number, number, number], mark?: number): void {
+    const m = mark === undefined ? null : decodeShotMark(mark);
+    const gun = m ? this.remoteGun(m.gun) : { spec: this.frontProjectile, pellets: 1, coneDeg: 0 };
+    const spec = gun.spec;
     const v = spec.muzzleVelocity;
-    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, tracer, [muzzle[0], muzzle[1], muzzle[2]]) < 0) return;
-    this.events.remoteShots.push({ tick: this.ticks, owner, origin: [origin[0], origin[1], origin[2]], dir: [dir[0], dir[1], dir[2]], tracer, muzzle: [muzzle[0], muzzle[1], muzzle[2]] });
+    const kind = !tracer ? TRACER_KIND.none : m ? m.kind : TRACER_KIND.amber;
+    const from: [number, number, number] = [muzzle[0], muzzle[1], muzzle[2]];
+    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, kind, from) < 0) return;
+    for (let k = 1; k < gun.pellets; k++) {
+      const d = this.spreadAbout(dir, gun.coneDeg, this.remoteRng);
+      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, TRACER_KIND.none, from);
+    }
+    const flashShare = m?.suppressed ? 0.12 : 1;
+    this.events.remoteShots.push({
+      tick: this.ticks, owner, origin: [origin[0], origin[1], origin[2]], dir: [dir[0], dir[1], dir[2]], tracer, muzzle: from,
+      ...(mark === undefined ? {} : { mark, flash: flashShare, report: m?.suppressed ? 0.3 : 1 }),
+    });
     const { flash } = this.kinds;
-    this.particles.emit(muzzle, [dir[0] * flash.speed, dir[1] * flash.speed + flash.lift, dir[2] * flash.speed], flash, flash.count, this.particleRng);
+    this.particles.emit(muzzle, [dir[0] * flash.speed, dir[1] * flash.speed + flash.lift, dir[2] * flash.speed], flash, Math.round(flash.count * flashShare), this.particleRng);
   }
 
-  /** Back in after being killed: at `position` (the foot, metres) facing `yaw`, armed and calm. */
+  /** Another's gun as their shots need it: its round, its pellets and their cone (degrees). */
+  private remoteGun(key: GunKey): { spec: ProjectileSpec; pellets: number; coneDeg: number } {
+    let g = this.remoteGuns.get(key);
+    if (!g) {
+      const w = weaponSpec(this.tun, GUN_DEFS[key].table);
+      g = { spec: w.projectile, pellets: w.pellets, coneDeg: w.dispersionMoa / 60 };
+      this.remoteGuns.set(key, g);
+    }
+    return g;
+  }
+
+  /** A direction within `coneDeg` of unit `dir`, uniform over its disc. */
+  private spreadAbout(dir: readonly number[], coneDeg: number, rng: Rng): [number, number, number] {
+    const a = rng.uniform(0, TAU);
+    const r = radians(coneDeg) * Math.sqrt(rng.float());
+    // Two directions square to it: across it (level), and up from it.
+    let ux = dir[2];
+    let uz = -dir[0];
+    const level = hypot(ux, uz);
+    if (level < 1e-9) {
+      ux = 1;
+      uz = 0;
+    } else {
+      ux /= level;
+      uz /= level;
+    }
+    const w = [dir[1] * uz, dir[2] * ux - dir[0] * uz, -dir[1] * ux];
+    const d = [dir[0] + (ux * cos(a) + w[0] * sin(a)) * r, dir[1] + w[1] * sin(a) * r, dir[2] + (uz * cos(a) + w[2] * sin(a)) * r];
+    const n = hypot(d[0], d[1], d[2]);
+    return [d[0] / n, d[1] / n, d[2] / n];
+  }
+
+  /** A gun carried: its own weapon, recoil and kick; `tagged`, its rounds say which gun (for what their hits do). */
+  private makeArm(spec: ArmSpec, tagged: boolean): Arm {
+    const weapon = new Weapon(tagged ? { ...spec.weapon, projectile: { ...spec.weapon.projectile, gun: GUNS.indexOf(spec.gun.key) } } : spec.weapon);
+    return { spec, weapon, recoil: new Recoil(spec.recoil), viewKick: new ViewKick(spec.viewKick) };
+  }
+
+  /** The arm in the hands, or (the shovel out) the one it goes back to. */
+  get arm(): Arm {
+    return this.arms[this.held === SHOVEL_HELD ? this.wanted : this.held];
+  }
+
+  get weapon(): Weapon {
+    return this.arm.weapon;
+  }
+
+  get recoil(): Recoil {
+    return this.arm.recoil;
+  }
+
+  get viewKick(): ViewKick {
+    return this.arm.viewKick;
+  }
+
+  /** Take in `loadout`: its long gun and its pistol, full, the long gun in the hands and up. */
+  equip(loadout: Loadout): void {
+    this.loadout = loadout;
+    this.arms = loadoutArms(this.tun, loadout).map((a) => this.makeArm(a, true));
+    this.held = 0;
+    this.wanted = 0;
+    this.ready = this.prevReady = 1;
+    this.aimed = this.prevAimed = 0;
+    this.stroke = this.prevStroke = null;
+    this.lightOn = false;
+    this.prevKick = this.kick();
+  }
+
+  /** What the player shows the others (net/gear.ts): what is in their hands and its fit, their tracers, their light. */
+  gear(): Gear {
+    const s = this.arm.spec;
+    return { gun: this.held === SHOVEL_HELD ? null : s.gun.key, fit: s.fit, tracer: tracerName(s.tracerKind), light: this.lightOn && s.fit.side !== 'none' };
+  }
+
+  /** What the hands hold, for their pose. */
+  holding(): Holding {
+    if (this.held === SHOVEL_HELD) return SHOVEL_HOLDING;
+    const s = this.arm.spec;
+    return { kind: s.gun.slot === 'secondary' ? 'pistol' : 'rifle', sight: s.sight };
+  }
+
+  /** The cone's half-angle now (degrees), as the next shot would be thrown: the stance's, the sights', the laser's and suppression's. */
+  coneDeg(): number {
+    const arm = this.arm;
+    const stance = this.controller.t.stances[this.player.stance].swayScale;
+    const hip = arm.spec.hipSpread * (this.lightOn && arm.spec.fit.side === 'laser' ? arm.spec.laserSpread : 1);
+    return (arm.weapon.spec.dispersionMoa / 60) * stance * (hip + (arm.spec.adsSpread - hip) * this.aimed) * this.suppression.swayScale;
+  }
+
+  /** The sight's magnification, `alpha` of the way between the last two ticks: 1 from the hip. */
+  zoomAt(alpha = this.clock.alpha): number {
+    const aimed = this.prevAimed + (this.aimed - this.prevAimed) * alpha;
+    return 1 + (this.arm.spec.zoom - 1) * smooth(Math.min(1, Math.max(0, aimed)));
+  }
+
+  /** Back in after being killed: at `position` (the foot, metres) facing `yaw`, armed and calm, the long gun in the hands. */
   respawn(position: readonly [number, number, number], yaw: number): void {
     this.teleport(position, yaw, 0);
     this.alive = true;
-    this.weapon.rearm();
+    for (const a of this.arms) {
+      a.weapon.rearm();
+      a.weapon.semi = false;
+    }
+    this.held = 0;
+    this.wanted = 0;
+    this.ready = this.prevReady = 1;
+    this.aimed = this.prevAimed = 0;
+    this.stroke = this.prevStroke = null;
     this.suppression.calm();
     this.digging = false;
   }
@@ -318,20 +517,28 @@ export class Session {
     this.ticks++;
     this.acting = this.alive ? this.intent : idleIntent();
     const p = this.player;
-    // Suppression as the last tick left it slows the feet and pins the player off the step.
-    p.speedScale = this.suppression.speedScale;
+    // Aimed down the sights the player does not sprint.
+    if (this.aimed > 0.5 && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
+    // Suppression as the last tick left it slows the feet and pins the player off the step; what
+    // is in the hands, and the sights up, slow them too.
+    const carried = this.held === SHOVEL_HELD ? 1 : this.arm.spec.move;
+    p.speedScale = this.suppression.speedScale * carried * (1 + (this.hands.adsMove - 1) * this.aimed);
     p.pinned = this.suppression.pinned;
     const wasOnStep = p.stance === Stance.FIRING_STEP;
     this.prevPosition = p.position;
     this.prevView = this.view();
     this.prevKick = this.kick();
     this.prevRaised = this.raised;
+    this.prevAimed = this.aimed;
+    this.prevReady = this.ready;
+    this.prevStroke = this.stroke;
     this.controller.tick(p, this.acting, this.clock.dt);
     if (wasOnStep && p.pinned && p.stance !== Stance.FIRING_STEP) this.ejected++;
     // To the shoulder on the firing step, over the parapet; down off it.
     const raise = p.stance === Stance.FIRING_STEP ? 1 : 0;
     this.raised += (raise - this.raised) * (1 - exp(-this.clock.dt / this.viewmodel.raiseS));
     this.dig(this.clock.dt);
+    this.handle(this.clock.dt);
     this.combat(this.clock.dt);
     for (const c of this.destruction.tick()) this.events.craters.push({ ...c, tick: this.ticks });
     for (const c of this.destruction.cuts) this.events.cuts.push({ ...c, tick: this.ticks });
@@ -355,6 +562,40 @@ export class Session {
     this.liftOut();
   }
 
+  /**
+   * The hands, after the dig: the gun asked for (1, 2, the wheel), or the shovel while digging;
+   * what is held comes down and the next comes up. Then the sights, up while the right button is
+   * held and the gun is ready (not on the shovel, the periscope or a climb); the light (or laser)
+   * switched; single shots or automatic; and the shovel's stroke while it clears.
+   */
+  private handle(dt: number): void {
+    const a = this.acting;
+    const p = this.player;
+    const h = this.hands;
+    if (a.swap !== undefined && a.swap >= 0 && a.swap < this.arms.length) this.wanted = a.swap;
+    if (a.cycle) this.wanted = (this.wanted + 1) % this.arms.length;
+    const target = this.digging ? SHOVEL_HELD : this.wanted;
+    if (this.held !== target) {
+      this.ready -= dt / h.lowerS;
+      if (this.ready <= 0) {
+        this.ready = 0;
+        // Put away mid-reload, the reload is lost.
+        if (this.held !== SHOVEL_HELD) this.arms[this.held].weapon.cancelReload();
+        this.held = target;
+      }
+    } else if (this.ready < 1) {
+      const raise = this.held === SHOVEL_HELD ? h.shovelRaiseS : this.arm.spec.gun.slot === 'secondary' ? h.pistolRaiseS : h.raiseS;
+      this.ready = Math.min(1, this.ready + dt / raise);
+    }
+    const spec = this.arm.spec;
+    const canAim = a.aim === true && this.alive && this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && p.climbTo === null;
+    if (canAim) this.aimed = Math.min(1, this.aimed + dt / spec.adsTimeS);
+    else if (this.aimed > 0) this.aimed = Math.max(0, this.aimed - dt / (spec.adsTimeS * 0.8));
+    if (a.light && spec.fit.side !== 'none') this.lightOn = !this.lightOn;
+    if (a.mode && this.held !== SHOVEL_HELD) this.arm.weapon.toggleMode();
+    this.stroke = this.digging && this.held === SHOVEL_HELD && this.ready >= 1 && this.entrenching.inReach ? ((this.stroke ?? 0) + dt / h.strokeS) % 1 : null;
+  }
+
   /** How exposed the player stands (the stance's), and more while digging. Nothing hits the player yet: it is shown only. */
   exposure(): number {
     return this.controller.t.stances[this.player.stance].exposure * (this.digging ? this.entrenching.t.exposureScale : 1);
@@ -371,34 +612,51 @@ export class Session {
    */
   private combat(dt: number): void {
     this.shots.length = 0;
-    const w = this.weapon;
+    const arm = this.arm;
+    const w = arm.weapon;
     const p = this.player;
-    // A shovel in the hands is not a rifle: the cone, and the recoil, are wider while digging.
-    const sway = this.controller.t.stances[p.stance].swayScale * (this.digging ? this.entrenching.t.swayScale : 1);
+    const stance = this.controller.t.stances[p.stance].swayScale * (this.digging ? this.entrenching.t.swayScale : 1);
+    // The cone: from the hip (a laser switched on tightens it) toward its share aimed.
+    const hip = arm.spec.hipSpread * (this.lightOn && arm.spec.fit.side === 'laser' ? arm.spec.laserSpread : 1);
+    const sway = stance * (hip + (arm.spec.adsSpread - hip) * this.aimed);
     w.tick(dt);
-    this.recoil.scale = sway;
-    this.recoil.tick(dt);
+    // Aimed, the recoil is steadier.
+    this.recoil.scale = stance * (1 + (this.hands.adsRecoil - 1) * this.aimed);
+    for (const a of this.arms) {
+      a.recoil.tick(dt);
+      a.viewKick.tick(dt);
+    }
     this.suppression.tick(dt);
     this.blastShake.tick(dt);
-    this.viewKick.tick(dt);
-    if (this.acting.reload) w.beginReload();
+    const inHand = this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging;
+    if (this.acting.reload && this.held !== SHOVEL_HELD) w.beginReload();
     const eye: [number, number, number] = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
-    if (w.wants(this.acting.fire && p.stance !== Stance.PERISCOPE)) {
+    // No shot with the shovel in the hands, a gun not yet up, or through the periscope.
+    if (w.wants(this.acting.fire && p.stance !== Stance.PERISCOPE && inHand)) {
       const aim: [number, number] = [p.yaw + this.recoil.yaw + this.suppression.flinchYaw, p.pitch + this.recoil.pitch + this.suppression.flinchPitch];
-      const dir = w.aim(aim[0], aim[1], sway * this.suppression.swayScale, this.dispersion);
-      const v = w.spec.projectile.muzzleVelocity;
-      const tracer = w.tracer();
+      const cone = sway * this.suppression.swayScale;
+      const dir = w.aim(aim[0], aim[1], cone, this.dispersion);
+      const projectile = w.spec.projectile;
+      const v = projectile.muzzleVelocity;
+      const kind = w.tracer() ? arm.spec.tracerKind : TRACER_KIND.none;
+      const tracer = kind !== TRACER_KIND.none;
       // The round leaves the eye, so the reticle tells the truth; its tracer, flash and brass the
       // drawn rifle, as it stands before this shot kicks it.
       const muzzle = this.muzzle();
-      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], w.spec.projectile, 0, tracer, muzzle) >= 0) {
+      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, muzzle) >= 0) {
+        // A shotgun's other pellets, each the cone's own.
+        for (let k = 1; k < w.spec.pellets; k++) {
+          const d = w.aim(aim[0], aim[1], cone, this.dispersion);
+          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, TRACER_KIND.none, muzzle);
+        }
         w.shot();
-        this.throwShot(muzzle);
+        this.throwShot(muzzle, arm.spec.flash);
         const kick = this.recoil.kickPitch;
         this.recoil.shot(this.recoilRng);
         this.viewKick.shot(this.recoil.kickPitch - kick, this.viewKickRng);
         this.shots.push({ origin: eye, dir, aim, tracer });
-        this.events.shots.push({ tick: this.ticks, origin: eye, dir, tracer, muzzle });
+        const mark = encodeShotMark({ tracer, kind, suppressed: arm.spec.suppressed, gun: arm.spec.gun.key });
+        this.events.shots.push({ tick: this.ticks, origin: eye, dir, tracer, muzzle, mark, flash: arm.spec.flash, report: arm.spec.report });
       }
     }
     this.rounds.listen(eye, this.suppression.t.crackRadiusM);
@@ -425,7 +683,7 @@ export class Session {
       this.throwImpact(hit);
     }
     // The front's rounds are the ones its tick adds to the pool, the last in it.
-    const fired = this.front.tick(dt, eye, this.rounds, w.spec.projectile);
+    const fired = this.front.tick(dt, eye, this.rounds, this.frontProjectile);
     for (let slot = this.rounds.count - fired; slot < this.rounds.count; slot++) {
       const v = this.rounds.velocity(slot);
       const speed = hypot(v[0], v[1], v[2]);
@@ -521,14 +779,14 @@ export class Session {
     this.particles.emit(at, up(debris), debris, debris.count, this.particleRng, this.tints[material]);
   }
 
-  /** A shot's flash out along the bore from the muzzle, and its brass out of the port, to the right and up (the reference's view kick). */
-  private throwShot(muzzle: readonly number[]): void {
+  /** A shot's flash out along the bore from the muzzle (`share` of it: a suppressor's wisp), and its brass out of the port, to the right and up (the reference's view kick). */
+  private throwShot(muzzle: readonly number[], share = 1): void {
     const p = this.player;
     const view = this.view();
     const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
     const along = (spec: ParticleSpec, d: readonly number[]) => [0, 1, 2].map((k) => d[k] * spec.speed + up[k] * spec.lift);
     const { flash, brass } = this.kinds;
-    this.particles.emit(muzzle, along(flash, forward), flash, flash.count, this.particleRng, undefined, MUZZLE_ANCHOR);
+    this.particles.emit(muzzle, along(flash, forward), flash, Math.round(flash.count * share), this.particleRng, undefined, MUZZLE_ANCHOR);
     this.particles.emit(this.port(), along(brass, right), brass, brass.count, this.particleRng, undefined, PORT_ANCHOR);
   }
 
@@ -573,17 +831,25 @@ export class Session {
     const b = this.kick();
     const at = (k: keyof ViewmodelKick) => a[k] + (b[k] - a[k]) * alpha;
     const raised = this.prevRaised + (this.raised - this.prevRaised) * alpha;
-    return viewmodelPose(this.viewmodel, { back: at('back'), up: at('up'), side: at('side'), pitch: at('pitch'), yaw: at('yaw'), roll: at('roll') }, sway, speedRatio, raised);
+    const aimed = this.prevAimed + (this.aimed - this.prevAimed) * alpha;
+    const ready = this.prevReady + (this.ready - this.prevReady) * alpha;
+    // The stroke round its turn: a wrap from the end of one to the next is a step forward.
+    let stroke = this.stroke;
+    if (stroke !== null && this.prevStroke !== null) {
+      const to = stroke < this.prevStroke ? stroke + 1 : stroke;
+      stroke = this.prevStroke + (to - this.prevStroke) * alpha;
+    }
+    return heldPose(this.viewmodel, this.holding(), { back: at('back'), up: at('up'), side: at('side'), pitch: at('pitch'), yaw: at('yaw'), roll: at('roll') }, sway, speedRatio, raised, aimed, ready, stroke);
   }
 
-  /** The rifle's muzzle in world metres, as the last tick left the view and the kick: where the flash and the tracers start. */
+  /** The gun's muzzle in world metres, as the last tick left the view, the kick and the hands: where the flash and the tracers start. */
   muzzle(): [number, number, number] {
-    return this.rifleToWorld(RIFLE_MUZZLE);
+    return this.rifleToWorld(this.arm.spec.muzzle);
   }
 
-  /** The rifle's ejection port in world metres: where the brass leaves. */
+  /** The gun's ejection port in world metres: where the brass leaves. */
   port(): [number, number, number] {
-    return this.rifleToWorld(RIFLE_PORT);
+    return this.rifleToWorld(this.arm.spec.port);
   }
 
   /** A rifle point (model metres) in the world, from the eye along the view with its offsets; the walk's sway and dip (a centimetre) are the camera's. */
@@ -591,7 +857,7 @@ export class Session {
     const p = this.player;
     const view = this.view();
     const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
-    const v = modelToView(viewmodelPose(this.viewmodel, this.kick(), 0, 0, this.raised), point);
+    const v = modelToView(heldPose(this.viewmodel, this.holding(), this.kick(), 0, 0, this.raised, this.aimed, this.ready, this.stroke), point);
     const eye = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
     return [0, 1, 2].map((k) => eye[k] + right[k] * v[0] + up[k] * v[1] + forward[k] * v[2]) as [number, number, number];
   }

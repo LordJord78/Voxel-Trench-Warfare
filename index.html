@@ -189,18 +189,88 @@
       #hud .bar { display: inline-flex; gap: 3px; vertical-align: -0.05em; }
       #hud .bar i { width: 3px; height: 0.75em; background: rgba(168, 152, 128, 0.32); box-shadow: 0 0 2px rgba(23, 20, 31, 0.7); }
       #hud .bar i.on { background: var(--haze); }
-      #hud .crosshair { position: absolute; left: 50%; top: 50%; }
+      /* The ticks stand --gap from the middle: the cone's own width, never under the reference's 0.7vh. */
+      #hud .crosshair { position: absolute; left: 50%; top: 50%; --gap: 0.7vh; }
       #hud .crosshair i { position: absolute; background: rgba(231, 211, 184, 0.95); box-shadow: 0 0 0 1px rgba(23, 20, 31, 0.45); }
-      #hud .crosshair i:nth-child(1) { left: calc(var(--tick) / -2); top: -1.7vh; width: var(--tick); height: 1vh; }
-      #hud .crosshair i:nth-child(2) { left: calc(var(--tick) / -2); top: 0.7vh; width: var(--tick); height: 1vh; }
-      #hud .crosshair i:nth-child(3) { left: 0.7vh; top: calc(var(--tick) / -2); width: 1vh; height: var(--tick); }
-      #hud .crosshair i:nth-child(4) { left: -1.7vh; top: calc(var(--tick) / -2); width: 1vh; height: var(--tick); }
+      #hud .crosshair i:nth-child(1) { left: calc(var(--tick) / -2); top: calc(-1vh - var(--gap)); width: var(--tick); height: 1vh; }
+      #hud .crosshair i:nth-child(2) { left: calc(var(--tick) / -2); top: var(--gap); width: var(--tick); height: 1vh; }
+      #hud .crosshair i:nth-child(3) { left: var(--gap); top: calc(var(--tick) / -2); width: 1vh; height: var(--tick); }
+      #hud .crosshair i:nth-child(4) { left: calc(-1vh - var(--gap)); top: calc(var(--tick) / -2); width: 1vh; height: var(--tick); }
 
       /* F3: what the frame costs. A developer's readout, so it is set as one. */
       #overlay {
         position: fixed; right: 16px; top: 12px; margin: 0; padding: 8px 12px; white-space: pre; pointer-events: none;
         font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--haze); background: rgba(23, 20, 31, 0.78);
       }
+
+      /* The loadout: the guns to carry down the left, the one being fitted on the right, drawn as its voxels are. */
+      #loadout { z-index: 5; align-items: center; overflow-y: auto; background: rgba(23, 20, 31, 0.93); }
+      #loadout .block { max-width: 64rem; }
+      #loadout .arms { display: grid; grid-template-columns: minmax(14rem, 18rem) 1fr; gap: 1.25rem 2.25rem; }
+      #loadout h3 { font-weight: 400; letter-spacing: 0.08em; margin: 0 0 0.45rem; color: var(--duckboard); font-size: 0.92rem; text-transform: uppercase; }
+      #loadout .guns { display: grid; gap: 0.35rem; margin: 0 0 1.1rem; }
+      .gun-pick { display: flex; justify-content: space-between; align-items: baseline; gap: 0.8rem; text-align: left; background: rgba(231, 211, 184, 0.05); color: var(--haze); border: 1px solid rgba(231, 211, 184, 0.22); padding: 0.42em 0.8em; }
+      .gun-pick:hover { background: rgba(231, 211, 184, 0.12); }
+      .gun-pick span { color: var(--duckboard); font-style: italic; font-size: 0.86rem; }
+      .gun-pick.on { border-color: var(--flare); background: rgba(242, 227, 179, 0.13); }
+      .gun-pick.editing { box-shadow: inset 3px 0 0 var(--flare); }
+      .choice-row, .fit-row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
+      .pick { font-size: 0.86rem; padding: 0.28em 0.75em; background: transparent; color: var(--duckboard); border: 1px solid rgba(231, 211, 184, 0.3); }
+      .pick:hover { background: rgba(231, 211, 184, 0.1); color: var(--haze); }
+      .pick.on { color: var(--night); background: var(--haze); border-color: var(--haze); }
+      .pick.tracer-red.on { background: #e0644a; border-color: #e0644a; }
+      .pick.tracer-green.on { background: #7fd16a; border-color: #7fd16a; }
+      #loadout canvas.preview { display: block; width: 100%; max-width: 560px; height: auto; aspect-ratio: 560 / 200; image-rendering: pixelated; background: radial-gradient(ellipse at 50% 60%, rgba(231, 211, 184, 0.1), rgba(231, 211, 184, 0) 70%); border-bottom: 1px solid rgba(231, 211, 184, 0.18); }
+      .gun-title { margin: 0.65rem 0 0.15rem; font-size: 1.3rem; letter-spacing: 0.04em; }
+      .facts { margin: 0 0 0.9rem; color: var(--duckboard); font-style: italic; font-size: 0.9rem; }
+      .fit { display: grid; gap: 0.45rem; margin: 0 0 1.1rem; }
+      .fit-row .slot-name { width: 4.4rem; color: var(--haze); }
+      .fit-row.fixed .pick { opacity: 0.55; }
+      #loadout .stats { display: grid; grid-template-columns: 8.5rem 1fr; gap: 0.32rem 0.9rem; margin: 0; font-size: 0.9rem; max-width: 30rem; }
+      #loadout .stats dt { color: var(--duckboard); }
+      #loadout .stats dd { margin: 0; align-self: center; height: 6px; background: rgba(168, 152, 128, 0.22); }
+      #loadout .stats dd i { display: block; height: 100%; background: var(--haze); transition: width 0.15s ease-out; }
+      #loadout .actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+      .loadout-note { color: var(--duckboard); font-style: italic; margin: 1rem 0 0; }
+      @media (max-width: 760px) { #loadout .arms { grid-template-columns: 1fr; } }
+      .kit-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: baseline; margin-top: 1.1rem; }
+      .kit-line { margin: 0; color: var(--duckboard); font-style: italic; max-width: 30rem; }
+      .kit-row + #play { margin-top: 0.9rem; }
+      #lobby .deploy .kit-row { margin: 0 0 1rem; }
+      #pause-loadout { margin: 0.5rem 0 0 0.6rem; }
+
+      /* The kit in the HUD: the gun and how it fires, the kit's line; aimed, a sight's reticle or the scope. */
+      #hud .weapon { font-size: 1.05rem; letter-spacing: 0.04em; }
+      #hud .kit { color: var(--duckboard); font-style: italic; font-size: 0.9rem; }
+      #hud .reticle { position: absolute; left: 50%; top: 50%; }
+      #hud .reticle .dot { position: absolute; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; background: #ff3b2a; box-shadow: 0 0 3px 1px rgba(255, 60, 40, 0.9), 0 0 10px rgba(255, 60, 40, 0.5); }
+      #hud .reticle .ring { display: none; position: absolute; width: 5.2vh; height: 5.2vh; margin: -2.6vh 0 0 -2.6vh; border-radius: 50%; border: 2px solid rgba(255, 70, 50, 0.85); box-sizing: border-box; box-shadow: 0 0 6px rgba(255, 60, 40, 0.5); }
+      #hud .reticle.holo .ring { display: block; }
+      #scope { position: absolute; inset: 0; }
+      #scope .glass { position: absolute; left: 50%; top: 50%; width: 84vh; height: 84vh; margin: -42vh 0 0 -42vh; border-radius: 50%; box-shadow: 0 0 0 200vmax #050506, inset 0 0 7vh 2vh rgba(0, 0, 0, 0.85); }
+      #scope .glass i { position: absolute; background: rgba(8, 8, 8, 0.92); }
+      #scope .glass .h { left: 6%; right: 6%; top: 50%; height: 2px; margin-top: -1px; }
+      #scope .glass .v { top: 50%; bottom: 6%; left: 50%; width: 2px; margin-left: -1px; }
+      #scope .glass .post { left: 50%; top: 50%; width: 0; height: 0; margin: -1px 0 0 -6px; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 10px solid rgba(8, 8, 8, 0.92); background: none; }
+      /* The compass under the score, the needle at its middle. */
+      #hud .compass { position: absolute; left: 50%; top: clamp(40px, 6.5vh, 60px); width: 360px; height: 30px; margin-left: -180px; overflow: hidden; -webkit-mask-image: linear-gradient(to right, transparent, #000 22%, #000 78%, transparent); mask-image: linear-gradient(to right, transparent, #000 22%, #000 78%, transparent); text-shadow: 0 1px 2px rgba(23, 20, 31, 0.9); }
+      #hud .compass .strip { position: absolute; left: 180px; top: 0; height: 100%; }
+      #hud .compass .strip span { position: absolute; transform: translateX(-50%); }
+      #hud .compass .point { top: 0; font-size: 0.82rem; letter-spacing: 0.05em; }
+      #hud .compass .tick { top: 6px; width: 1px; height: 7px; background: rgba(231, 211, 184, 0.55); }
+      #hud .compass .needle { position: absolute; left: 50%; bottom: 0; width: 0; height: 0; margin-left: -5px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 7px solid var(--flare); }
+      /* A teammate's mark over their head. */
+      #hud .tags { position: absolute; inset: 0; overflow: hidden; }
+      #hud .tag { position: absolute; left: 0; top: 0; width: 10rem; margin: -2.1rem 0 0 -5rem; display: flex; flex-direction: column; align-items: center; font-size: 0.8rem; letter-spacing: 0.03em; text-shadow: 0 1px 2px rgba(23, 20, 31, 0.95); white-space: nowrap; }
+      #hud .tag i { order: 2; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid currentColor; filter: drop-shadow(0 1px 1px rgba(23, 20, 31, 0.9)); }
+      #hud .tag.red { color: #e0644a; }
+      #hud .tag.blue { color: #6a9be0; }
+      /* H's card of the keys, and M's map. */
+      #hud .help { position: absolute; right: clamp(16px, 4vw, 48px); bottom: clamp(24px, 7vh, 72px); padding: 0.9rem 1.2rem 1rem; background: rgba(23, 20, 31, 0.84); border-radius: 2px; }
+      #hud .help h3 { font-weight: 400; margin: 0 0 0.5rem; letter-spacing: 0.08em; }
+      #hud .help .legend { margin: 0; grid-template-columns: max-content auto max-content auto; }
+      #hud canvas.map { position: absolute; left: 50%; top: 50%; width: min(86vh, 92vw); height: min(86vh, 92vw); transform: translate(-50%, -50%); border: 1px solid rgba(231, 211, 184, 0.3); box-shadow: 0 0 0 200vmax rgba(9, 8, 11, 0.5); }
+      #hud .fallen .kit-hint { color: var(--duckboard); font-style: italic; font-size: 0.9rem; margin: 0.6rem 0 0; }
       @media (prefers-reduced-motion: reduce) { .trace .dug, #still { transition: none; } }
     </style>
   </head>
@@ -211,20 +281,50 @@
     <div id="periscope" hidden><div class="mirror"></div></div>
     <div id="hud" hidden>
       <p class="roomline" id="roomline" hidden></p>
+      <div id="scope" aria-hidden="true" hidden><div class="glass"><i class="h"></i><i class="v"></i><i class="post"></i></div></div>
       <div class="crosshair" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <div class="reticle dot" aria-hidden="true" hidden><i class="ring"></i><i class="dot"></i></div>
+      <div class="compass" aria-hidden="true"><div class="strip"></div><i class="needle"></i></div>
+      <div class="tags" aria-hidden="true"></div>
+      <canvas class="map" aria-label="The trench map" hidden></canvas>
       <ol class="feed" aria-live="polite"></ol>
       <div class="marker" aria-hidden="true" hidden><i></i><i></i><i></i><i></i></div>
       <div class="harm" aria-hidden="true" hidden></div>
       <p class="aimed" hidden></p>
-      <div class="fallen" hidden><p class="by"></p><p class="back"></p></div>
+      <div class="fallen" hidden><p class="by"></p><p class="back"></p><p class="kit-hint">Esc, then Loadout, to change your kit before you are back in</p></div>
       <p class="won" hidden></p>
       <div class="board" hidden></div>
       <div class="readout">
         <p class="health" hidden></p>
         <p class="stance"></p>
         <p class="exposure"></p>
+        <p class="weapon" hidden></p>
         <p class="rifle"></p>
+        <p class="kit" hidden></p>
         <p class="dig" hidden></p>
+      </div>
+      <div class="help" hidden>
+        <h3>The keys</h3>
+        <dl class="legend">
+          <dt><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></dt><dd>Move</dd>
+          <dt><kbd>Shift</kbd></dt><dd>Sprint</dd>
+          <dt><kbd>Space</kbd></dt><dd>Jump</dd>
+          <dt><kbd>C</kbd></dt><dd>Crouch</dd>
+          <dt><kbd>Z</kbd></dt><dd>Go prone</dd>
+          <dt><kbd>Q</kbd></dt><dd>Periscope, on a firing step</dd>
+          <dt><kbd>Left mouse</kbd></dt><dd>Fire</dd>
+          <dt><kbd>Right mouse</kbd></dt><dd>Aim down the sights</dd>
+          <dt><kbd>R</kbd></dt><dd>Reload</dd>
+          <dt><kbd>1</kbd> <kbd>2</kbd>, wheel</dt><dd>Long gun, pistol</dd>
+          <dt><kbd>B</kbd></dt><dd>Single shots or automatic</dd>
+          <dt><kbd>L</kbd></dt><dd>Light or laser on and off</dd>
+          <dt><kbd>F</kbd>, held</dt><dd>Out with the shovel: dig</dd>
+          <dt><kbd>M</kbd>, held</dt><dd>The trench map</dd>
+          <dt><kbd>H</kbd></dt><dd>These keys</dd>
+          <dt><kbd>Tab</kbd></dt><dd>The score, with friends</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Pause, and the loadout</dd>
+          <dt><kbd>W</kbd> + <kbd>Space</kbd> at a wall</dt><dd>Climb out of the trench</dd>
+        </dl>
       </div>
     </div>
     <section id="loading" class="sheet" aria-label="Loading">
@@ -242,6 +342,10 @@
             <option value="corridor">The Corridor: a wood between two ends</option>
           </select>
         </label>
+        <div class="kit-row" id="kit-row" hidden>
+          <button id="loadout-open" type="button" class="quiet">Loadout</button>
+          <p class="kit-line" id="kit-line"></p>
+        </div>
         <button id="play" type="button" hidden>Play solo</button>
         <div id="together" hidden>
           <button id="host" type="button" class="quiet">Host a game with friends</button>
@@ -256,14 +360,20 @@
           <dt><kbd>Space</kbd></dt><dd>Jump</dd>
           <dt><kbd>C</kbd></dt><dd>Crouch</dd>
           <dt><kbd>Z</kbd></dt><dd>Go prone</dd>
-          <dt><kbd>W</kbd> into the bench</dt><dd>Climb onto the firing step</dd>
           <dt><kbd>Q</kbd></dt><dd>Periscope, on a firing step</dd>
           <dt><kbd>Left mouse</kbd></dt><dd>Fire</dd>
+          <dt><kbd>Right mouse</kbd></dt><dd>Aim down the sights</dd>
           <dt><kbd>R</kbd></dt><dd>Reload</dd>
-          <dt><kbd>F</kbd>, held</dt><dd>Dig out loose earth</dd>
-          <dt><kbd>Esc</kbd></dt><dd>Pause</dd>
-          <dt><kbd>F3</kbd></dt><dd>Frame timings</dd>
+          <dt><kbd>1</kbd> <kbd>2</kbd>, wheel</dt><dd>Long gun, pistol</dd>
+          <dt><kbd>B</kbd></dt><dd>Single shots or automatic</dd>
+          <dt><kbd>L</kbd></dt><dd>Light or laser on and off</dd>
+          <dt><kbd>F</kbd>, held</dt><dd>Out with the shovel: dig</dd>
+          <dt><kbd>M</kbd>, held</dt><dd>The trench map</dd>
+          <dt><kbd>H</kbd></dt><dd>These keys</dd>
+          <dt><kbd>Tab</kbd></dt><dd>The score, with friends</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Pause, and the loadout</dd>
           <dt><kbd>W</kbd> + <kbd>Space</kbd> at a wall</dt><dd>Climb out of the trench</dd>
+          <dt><kbd>F3</kbd></dt><dd>Frame timings</dd>
         </dl>
       </div>
     </section>
@@ -317,12 +427,17 @@
           <p id="lobby-status" aria-live="polite"></p>
           <div class="actions">
             <button id="ready" type="button">Ready</button>
+            <button id="lobby-loadout" type="button" class="quiet">Loadout</button>
             <button id="start" type="button" hidden>Start the match</button>
             <button id="leave" type="button" class="quiet">Leave</button>
           </div>
         </div>
         <div class="deploy">
           <p id="deploy-line" aria-live="polite"></p>
+          <div class="kit-row">
+            <button id="deploy-loadout" type="button" class="quiet">Loadout</button>
+            <p class="kit-line" id="deploy-kit"></p>
+          </div>
           <button id="go" type="button">Go</button>
         </div>
       </div>
@@ -370,11 +485,39 @@
           </div>
         </div>
         <button id="resume" type="button">Resume</button>
+        <button id="pause-loadout" type="button" class="quiet">Loadout</button>
         <div class="actions" id="pause-match" hidden>
           <button id="end-match" type="button" class="quiet" hidden>End the match</button>
           <button id="leave-match" type="button" class="quiet">Leave the game</button>
         </div>
       </form>
+    </section>
+    <section id="loadout" class="sheet" aria-label="Loadout" hidden>
+      <div class="block">
+        <h2>Loadout</h2>
+        <div class="arms">
+          <div class="picks">
+            <h3>Long gun</h3>
+            <div class="guns" data-slot="primary"></div>
+            <h3>Pistol</h3>
+            <div class="guns" data-slot="secondary"></div>
+            <h3>Tracers</h3>
+            <div class="choice-row" data-tracers></div>
+          </div>
+          <div class="gun">
+            <canvas class="preview" width="560" height="200" aria-hidden="true"></canvas>
+            <p class="gun-title"></p>
+            <p class="facts"></p>
+            <div class="fit"></div>
+            <dl class="stats"></dl>
+          </div>
+        </div>
+        <p class="loadout-note" hidden></p>
+        <div class="actions">
+          <button id="loadout-go" type="button">Deploy</button>
+          <button id="loadout-back" type="button" class="quiet">Back</button>
+        </div>
+      </div>
     </section>
     <script type="module" src="/src/app/main.ts"></script>
   </body>

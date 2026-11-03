@@ -9,6 +9,7 @@
  */
 
 import { hypot } from '../core/dmath';
+import { GUNS } from './gear';
 
 export const PROTOCOL = 1;
 export const MAX_PLAYERS = 8;
@@ -65,6 +66,8 @@ export interface PlayerState {
   stance: number;
   height: number;
   flags: number;
+  /** What they show (net/gear.ts encodeGear): the gun in their hands and its fit, their tracers, their light. */
+  gear?: number;
 }
 
 /** What `PlayerState.flags` carries. */
@@ -72,12 +75,13 @@ export const STATE = { ON_GROUND: 1, FIRING: 2, RELOADING: 4, DIGGING: 8, CLIMBI
 
 export type WireState = number[];
 
-/** A shot as others need it: the sender's tick, where it left (the eye) and which way, and whether it is a tracer. */
+/** A shot as others need it: the sender's tick, where it left (the eye) and which way, whether it is a tracer, and its word (net/gear.ts ShotMark: the gun, the tracer's colour, a suppressor). */
 export interface ShotState {
   tick: number;
   origin: [number, number, number];
   dir: [number, number, number];
   tracer: boolean;
+  mark?: number;
 }
 
 /** At most this many shots ride on one state message (a twentieth of a second of full auto is one). */
@@ -86,7 +90,9 @@ export const SHOTS_MAX = 4;
 export function encodeShot(s: ShotState): number[] {
   const mm = (m: number) => Math.round(m * 1000);
   const unit = (u: number) => Math.round(u * 10000);
-  return [s.tick, ...s.origin.map(mm), ...s.dir.map(unit), s.tracer ? 1 : 0];
+  // The last word's bit 0 is the tracer, as it always was; the mark's other bits ride above it.
+  const word = s.mark === undefined ? (s.tracer ? 1 : 0) : (s.mark & ~1) | (s.tracer ? 1 : 0);
+  return [s.tick, ...s.origin.map(mm), ...s.dir.map(unit), word];
 }
 
 const SHOT_LENGTH = 8;
@@ -96,7 +102,8 @@ export function decodeShot(w: unknown): ShotState | null {
   const d = [w[4], w[5], w[6]].map((n) => (n as number) / 10000);
   const l = hypot(d[0], d[1], d[2]);
   if (!(l > 0.5 && l < 1.5)) return null;
-  return { tick: w[0] as number, origin: [(w[1] as number) / 1000, (w[2] as number) / 1000, (w[3] as number) / 1000], dir: [d[0] / l, d[1] / l, d[2] / l], tracer: w[7] === 1 };
+  const word = w[7] as number;
+  return { tick: w[0] as number, origin: [(w[1] as number) / 1000, (w[2] as number) / 1000, (w[3] as number) / 1000], dir: [d[0] / l, d[1] / l, d[2] / l], tracer: (word & 1) === 1, ...(word > 1 ? { mark: word } : {}) };
 }
 
 /** Where a round struck a body. */
@@ -109,7 +116,7 @@ const CAUSES: readonly Cause[] = ['round', 'shell', 'fire'];
 export function encodeState(s: PlayerState): WireState {
   const mm = (m: number) => Math.round(m * 1000);
   const cdeg = (d: number) => Math.round(d * 100);
-  return [s.tick, ...s.position.map(mm), ...s.velocity.map(mm), cdeg(s.yaw), cdeg(s.pitch), s.stance, mm(s.height), s.flags];
+  return [s.tick, ...s.position.map(mm), ...s.velocity.map(mm), cdeg(s.yaw), cdeg(s.pitch), s.stance, mm(s.height), (s.flags & 0xff) | (((s.gear ?? 0) & 0x7fff) << 8)];
 }
 
 const STATE_LENGTH = 12;
@@ -120,7 +127,8 @@ export function decodeState(w: unknown): PlayerState | null {
   const d = (i: number) => (w[i] as number) / 100;
   const stance = w[9] as number;
   if (stance < 0 || stance > 4) return null;
-  return { tick: w[0] as number, position: [m(1), m(2), m(3)], velocity: [m(4), m(5), m(6)], yaw: d(7), pitch: d(8), stance, height: m(10), flags: (w[11] as number) & 0xff };
+  const word = w[11] as number;
+  return { tick: w[0] as number, position: [m(1), m(2), m(3)], velocity: [m(4), m(5), m(6)], yaw: d(7), pitch: d(8), stance, height: m(10), flags: word & 0xff, gear: word >= 0 ? (word >>> 8) & 0x7fff : 0 };
 }
 
 /** What a player sends their room. */
@@ -136,8 +144,8 @@ export type ClientMsg =
   | { t: 'end' }
   | { t: 'ping'; c: number }
   | { t: 's'; s: WireState; sh?: number[][] }
-  /** This player's round struck `v` in zone `z` (the shooter decides, as they saw it). */
-  | { t: 'hit'; v: number; z: Zone }
+  /** This player's round struck `v` in zone `z` (the shooter decides, as they saw it), from their gun `w` (net/gear.ts GUNS). */
+  | { t: 'hit'; v: number; z: Zone; w?: number }
   /** The battle hurt this player: `a` of health, by `c`. */
   | { t: 'hurt'; a: number; c: Cause }
   | { t: 'away'; away: boolean };
@@ -238,7 +246,8 @@ export function parseClient(raw: unknown): ClientMsg | null {
       return { t: 's', s: m.s as WireState, sh };
     }
     case 'hit':
-      return Number.isInteger(m.v) && ZONES.includes(m.z as Zone) ? { t: 'hit', v: m.v as number, z: m.z as Zone } : null;
+      if (!Number.isInteger(m.v) || !ZONES.includes(m.z as Zone)) return null;
+      return Number.isInteger(m.w) && (m.w as number) >= 0 && (m.w as number) < GUNS.length ? { t: 'hit', v: m.v as number, z: m.z as Zone, w: m.w as number } : { t: 'hit', v: m.v as number, z: m.z as Zone };
     case 'hurt':
       return typeof m.a === 'number' && Number.isFinite(m.a) && m.a > 0 && m.a <= 200 && CAUSES.includes(m.c as Cause) ? { t: 'hurt', a: m.a, c: m.c as Cause } : null;
     case 'away':

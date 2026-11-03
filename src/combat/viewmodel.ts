@@ -67,6 +67,83 @@ export function viewmodelPose(t: ViewmodelTunables, kick: ViewmodelKick, sway: n
   };
 }
 
+/** What the hands hold, as their pose needs it: a long gun or a pistol and its sight (arsenal.ts `sightOf`), or the shovel. */
+export interface Holding {
+  kind: 'rifle' | 'pistol' | 'shovel';
+  /** Aimed: the sight's line over the bore, and how far before the eye the model's origin comes. */
+  sight: { y: number; z: number };
+}
+
+export const RIFLE_HOLDING: Holding = { kind: 'rifle', sight: { y: 0.0675, z: 0.1 } };
+
+/** A pistol's rest, nearer the middle and lower than a long gun's; the shovel's, low at the right, its blade down. */
+const PISTOL_REST = [0.13, -0.19, 0.4] as const;
+const SHOVEL_REST = { offset: [0.2, -0.33, 0.36], pitch: -28, yaw: -14, roll: 10 } as const;
+
+const smooth = (t: number) => t * t * (3 - 2 * t);
+
+/** The shovel's stroke, as offsets (metres) and turns (degrees) from its rest: push in, lever, throw to the right, back. */
+const STROKE: readonly { at: number; o: readonly [number, number, number]; pitch: number; yaw: number; roll: number }[] = [
+  { at: 0, o: [0, 0, 0], pitch: 0, yaw: 0, roll: 0 },
+  { at: 0.3, o: [0, -0.08, 0.16], pitch: -30, yaw: 0, roll: 0 },
+  { at: 0.55, o: [0, 0.02, 0.1], pitch: 25, yaw: 0, roll: 0 },
+  { at: 0.78, o: [0.1, 0.06, 0.04], pitch: 10, yaw: 35, roll: 30 },
+  { at: 1, o: [0, 0, 0], pitch: 0, yaw: 0, roll: 0 },
+];
+
+function strokeAt(phase: number): { o: [number, number, number]; pitch: number; yaw: number; roll: number } {
+  const p = ((phase % 1) + 1) % 1;
+  let i = 0;
+  while (i < STROKE.length - 2 && p > STROKE[i + 1].at) i++;
+  const a = STROKE[i];
+  const b = STROKE[i + 1];
+  const t = smooth(Math.min(1, Math.max(0, (p - a.at) / (b.at - a.at))));
+  const mix = (x: number, y: number) => x + (y - x) * t;
+  return { o: [mix(a.o[0], b.o[0]), mix(a.o[1], b.o[1]), mix(a.o[2], b.o[2])], pitch: mix(a.pitch, b.pitch), yaw: mix(a.yaw, b.yaw), roll: mix(a.roll, b.roll) };
+}
+
+/**
+ * What is in the hands, posed: a gun at its rest (`viewmodelPose`, a pistol's lower and nearer the
+ * middle), brought to the eye as `aimed` goes to 1 (its sight's line on the eye's, the kick
+ * steadied); the shovel low at the right, through its `stroke` (0 to 1, null at rest); and either
+ * dipped out of view as `ready` goes to 0, while one thing is put away and the next comes up.
+ * At rest, raised and not aimed, a rifle's is `viewmodelPose`'s exactly.
+ */
+export function heldPose(t: ViewmodelTunables, holding: Holding, kick: ViewmodelKick, sway: number, speedRatio: number, raised: number, aimed = 0, ready = 1, stroke: number | null = null): ViewmodelPose {
+  let pose: ViewmodelPose;
+  if (holding.kind === 'shovel') {
+    const s = stroke === null ? { o: [0, 0, 0], pitch: 0, yaw: 0, roll: 0 } : strokeAt(stroke);
+    const r = SHOVEL_REST;
+    pose = {
+      offset: [r.offset[0] + s.o[0] + sway * t.swayFollow, r.offset[1] + s.o[1] - speedRatio * t.runDipM, r.offset[2] + s.o[2]],
+      pitch: r.pitch + s.pitch,
+      yaw: r.yaw + s.yaw,
+      roll: r.roll + s.roll,
+    };
+  } else {
+    pose = viewmodelPose(t, kick, sway, speedRatio, raised);
+    if (holding.kind === 'pistol') {
+      pose.offset = [pose.offset[0] + PISTOL_REST[0] - t.restRightM, pose.offset[1] + PISTOL_REST[1] - t.restUpM, pose.offset[2] + PISTOL_REST[2] - t.restForwardM];
+    }
+    if (aimed > 0) {
+      const a = smooth(Math.min(1, aimed));
+      const sight = holding.sight;
+      const to: ViewmodelPose = { offset: [kick.side * 0.5, -sight.y + kick.up * 0.6, sight.z - kick.back * 0.8], pitch: kick.pitch * 0.5, yaw: kick.yaw * 0.5, roll: kick.roll * 0.3 };
+      pose = {
+        offset: [0, 1, 2].map((k) => pose.offset[k] + (to.offset[k] - pose.offset[k]) * a) as [number, number, number],
+        pitch: pose.pitch + (to.pitch - pose.pitch) * a,
+        yaw: pose.yaw + (to.yaw - pose.yaw) * a,
+        roll: pose.roll + (to.roll - pose.roll) * a,
+      };
+    }
+  }
+  if (ready < 1) {
+    const d = smooth(1 - Math.max(0, ready));
+    pose = { offset: [pose.offset[0] + 0.03 * d, pose.offset[1] - 0.25 * d, pose.offset[2] - 0.05 * d], pitch: pose.pitch - 40 * d, yaw: pose.yaw, roll: pose.roll + 25 * d };
+  }
+  return pose;
+}
+
 /** A model point (metres) in view space. */
 export function modelToView(pose: ViewmodelPose, p: readonly number[]): [number, number, number] {
   const r = radians(pose.roll);

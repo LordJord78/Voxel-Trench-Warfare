@@ -65,6 +65,8 @@ export class LoadingScreen {
       };
     }
     this.controls.hidden = false;
+    const kit = this.root.querySelector<HTMLElement>('#kit-row');
+    if (kit) kit.hidden = false;
     this.play.onclick = onPlay;
     if (together && this.together) {
       this.together.hidden = false;
@@ -107,5 +109,7 @@ export class LoadingScreen {
     this.play.hidden = true;
     if (this.together) this.together.hidden = true;
     this.controls.hidden = true;
+    const kit = this.root.querySelector<HTMLElement>('#kit-row');
+    if (kit) kit.hidden = true;
   }
 }

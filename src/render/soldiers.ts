@@ -8,10 +8,17 @@
  * as last drawn, their team and seat. Each one's box on screen comes from its parts' boxes' corners;
  * a probe looks round each one; then, a dispatch a soldier over its box, farthest first: clear their
  * depth, trace and shade, merge.
+ *
+ * What each one carries (their gear: the gun in their hands with its fit, or the shovel) is a model
+ * of its own (combat/gun-models.ts) in one of MAX_SOLDIERS slots after the body's parts, made and
+ * written there the first frame it is seen and kept while it is; the shader takes a soldier's
+ * slot for their rifle part.
  */
 
+import { gunModel, MODEL_VOXELS_MAX, shovelModel } from '../combat/gun-models';
 import { PART_BOX, PARTS, type Frame, type PartName } from '../combat/soldier-rig';
 import type { PartGrid } from '../combat/soldier-model';
+import { decodeGear } from '../net/gear';
 import type { Team } from '../net/protocol';
 import { P } from '../world/materials';
 import { projectToPixel, type CameraPose } from './camera';
@@ -33,7 +40,7 @@ const POSE: StructDef = {
   name: 'SoldierPose',
   fields: [['x', 'vec3f'], ['y', 'vec3f'], ['z', 'vec3f'], ['t', 'vec3f'], ['px', 'vec3f'], ['py', 'vec3f'], ['pz', 'vec3f'], ['pt', 'vec3f']],
 };
-const INFO: StructDef = { name: 'SoldierInfo', fields: [['feet', 'vec3f'], ['tape', 'u32'], ['slot', 'u32']] };
+const INFO: StructDef = { name: 'SoldierInfo', fields: [['feet', 'vec3f'], ['tape', 'u32'], ['slot', 'u32'], ['weapon', 'u32']] };
 const SOLDIERS: StructDef = {
   name: 'Soldiers',
   fields: [
@@ -41,18 +48,21 @@ const SOLDIERS: StructDef = {
     ['parts', { element: PART, count: PART_COUNT }],
     ['info', { element: INFO, count: MAX_SOLDIERS }],
     ['poses', { element: POSE, count: MAX_SOLDIERS * PART_COUNT }],
+    // What each weapon slot holds, in the model buffer after the parts.
+    ['weapons', { element: PART, count: MAX_SOLDIERS }],
   ],
 };
 const DRAW: StructDef = { name: 'SoldierDraw', fields: [['soldier', 'u32'], ['box', 'vec4u']] };
 
 const TAPE: Record<Team, number> = { red: P.TAPE_RED, blue: P.TAPE_BLUE };
 
-/** One soldier to draw: their parts' frames, their team, their seat (which keeps their probe), and their feet (metres). */
+/** One soldier to draw: their parts' frames, their team, their seat (which keeps their probe), their feet (metres), and their gear (net/gear.ts; none, the bare AK). */
 export interface SoldierDraw {
   frames: Record<PartName, Frame>;
   team: Team;
   seat: number;
   feet: readonly [number, number, number];
+  gear?: number;
 }
 
 export interface SoldierPipelines {
@@ -87,6 +97,11 @@ export class Soldiers {
   private list: SoldierDraw[] = [];
   /** Each seat's frames as last drawn, for the motion. */
   private readonly before = new Map<number, Record<PartName, Frame>>();
+  /** Where the weapon slots start in the model buffer (bytes), what model each holds, and the frame each was last drawn. */
+  private weaponBase = 0;
+  private readonly slotKeys: (number | null)[] = new Array<number | null>(MAX_SOLDIERS).fill(null);
+  private readonly slotSeen = new Array<number>(MAX_SOLDIERS).fill(-1);
+  private frameCount = 0;
 
   static async compile(device: GPUDevice, scene: GPUBindGroupLayout, keyRead: GPUBindGroupLayout): Promise<SoldierPipelines> {
     const C = GPUShaderStage.COMPUTE;
@@ -155,7 +170,9 @@ export class Soldiers {
       bytes += shape[part].voxels.length;
       return at;
     });
-    const packed = new Uint32Array(Math.ceil(bytes / 4));
+    // The weapon slots after the parts, each the largest model's size; until one is filled, it is the parts' own rifle.
+    this.weaponBase = Math.ceil(bytes / 4) * 4;
+    const packed = new Uint32Array((this.weaponBase + MAX_SOLDIERS * MODEL_VOXELS_MAX) / 4);
     const view = new Uint8Array(packed.buffer);
     PARTS.forEach((part, k) => {
       view.set(shape[part].voxels, offsets[k]);
@@ -165,6 +182,14 @@ export class Soldiers {
       this.writer.set(`parts.${k}.origin`, g.origin);
       this.writer.set(`parts.${k}.voxelM`, g.voxelM);
     });
+    const rifle = PARTS.indexOf('rifle');
+    for (let k = 0; k < MAX_SOLDIERS; k++) {
+      const g = shape.rifle;
+      this.writer.set(`weapons.${k}.dims`, g.dims);
+      this.writer.set(`weapons.${k}.offset`, offsets[rifle]);
+      this.writer.set(`weapons.${k}.origin`, g.origin);
+      this.writer.set(`weapons.${k}.voxelM`, g.voxelM);
+    }
     this.model = device.createBuffer({ label: 'soldier model', size: packed.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.model, 0, packed);
     // Open sky and every light seen, until the probe has looked.
@@ -209,6 +234,34 @@ export class Soldiers {
         { binding: 2, resource: gDepth.createView() },
       ],
     });
+  }
+
+  /**
+   * The weapon slot holding what `gear` shows (the gun and its fit, or the shovel; its tracers and
+   * light change nothing drawn): one already holding it, or the one longest unseen, filled now.
+   * `taken`, the slots this frame has already given.
+   */
+  private slotFor(gear: number, taken: Set<number>): number {
+    const key = gear & 0x0fff;
+    let slot = this.slotKeys.indexOf(key);
+    if (slot < 0) {
+      slot = 0;
+      for (let k = 0; k < MAX_SOLDIERS; k++) if (!taken.has(k) && (taken.has(slot) || this.slotSeen[k] < this.slotSeen[slot])) slot = k;
+      const g = decodeGear(gear);
+      const m = g.gun === null ? shovelModel() : gunModel(g.gun, g.fit);
+      const bytes = new Uint8Array(Math.ceil(m.voxels.length / 4) * 4);
+      bytes.set(m.voxels);
+      const offset = this.weaponBase + slot * MODEL_VOXELS_MAX;
+      this.device.queue.writeBuffer(this.model, offset, bytes);
+      this.writer.set(`weapons.${slot}.dims`, m.dims);
+      this.writer.set(`weapons.${slot}.offset`, offset);
+      this.writer.set(`weapons.${slot}.origin`, m.origin);
+      this.writer.set(`weapons.${slot}.voxelM`, m.voxelM);
+      this.slotKeys[slot] = key;
+    }
+    taken.add(slot);
+    this.slotSeen[slot] = this.frameCount;
+    return slot;
   }
 
   /** The soldiers to draw this frame (at most MAX_SOLDIERS are). */
@@ -263,10 +316,13 @@ export class Soldiers {
     const w = this.writer;
     w.set('count', order.length);
     const records = new Uint32Array((DRAW_STRIDE / 4) * MAX_SOLDIERS);
+    this.frameCount++;
+    const taken = new Set<number>();
     order.forEach(({ s, box }, i) => {
       w.set(`info.${i}.feet`, s.feet);
       w.set(`info.${i}.tape`, TAPE[s.team]);
       w.set(`info.${i}.slot`, s.seat % MAX_SOLDIERS);
+      w.set(`info.${i}.weapon`, this.slotFor(s.gear ?? 0, taken));
       const was = this.before.get(s.seat) ?? s.frames;
       PARTS.forEach((part, k) => {
         const now = s.frames[part];

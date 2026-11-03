@@ -246,6 +246,197 @@ reload_time_s       = 2.4
 automatic           = true
 tracer              = true
 tracer_every        = 5        # every fifth round a tracer
+ads_spread          = 0.40     # the cone's share aimed down the sights
+ads_time_s          = 0.22     # raising the sights to the eye
+move_scale          = 1.0      # its carrier's speed
+
+# The loadout's other guns (src/combat/arsenal.ts holds their shapes and what fits them). Each is
+# its [weapon.<key>] as the AK's is (the AK-74 is assault_rifle), with the aim's terms: the cone's
+# share aimed (ads_spread), how long the sights take to come up (ads_time_s), how fast its carrier
+# moves (move_scale), and a shotgun's pellets, each of them the cone's own. What a round does to a
+# body is the room's (src/net/gear.ts), so no client can claim more.
+[weapon.m4]
+name                = "5.56 carbine"
+muzzle_velocity     = 905.0    # M855 from a 14.5 in barrel
+projectile_mass_kg  = 0.0040
+drag_coefficient    = 0.290
+cross_section_m2    = 0.0000243   # 5.56 mm bore
+rounds_per_minute   = 800.0
+magazine            = 30
+dispersion_moa      = 3.0
+reload_time_s       = 2.2
+automatic           = true
+tracer              = true
+tracer_every        = 5
+ads_spread          = 0.38
+ads_time_s          = 0.20
+move_scale          = 1.0
+
+[weapon.mp5]
+name                = "9 mm submachine gun"
+muzzle_velocity     = 400.0
+projectile_mass_kg  = 0.0080
+drag_coefficient    = 0.300
+cross_section_m2    = 0.0000636   # 9 mm bore
+rounds_per_minute   = 800.0
+magazine            = 30
+dispersion_moa      = 4.6
+reload_time_s       = 2.1
+automatic           = true
+tracer              = true
+tracer_every        = 5
+ads_spread          = 0.50
+ads_time_s          = 0.16
+move_scale          = 1.06
+
+[weapon.svd]
+name                = "7.62 marksman rifle"
+muzzle_velocity     = 830.0    # 7N1 sniper's cartridge
+projectile_mass_kg  = 0.0096
+drag_coefficient    = 0.270
+cross_section_m2    = 0.0000456   # 7.62 mm bore
+rounds_per_minute   = 240.0    # as fast as a steady finger
+magazine            = 10
+dispersion_moa      = 7.0      # wild from the hip; under a minute aimed
+reload_time_s       = 3.0
+automatic           = false
+tracer              = true
+tracer_every        = 3
+ads_spread          = 0.10
+ads_time_s          = 0.32
+move_scale          = 0.92
+
+[weapon.m249]
+name                = "5.56 light machine gun"
+muzzle_velocity     = 915.0
+projectile_mass_kg  = 0.0040
+drag_coefficient    = 0.290
+cross_section_m2    = 0.0000243
+rounds_per_minute   = 750.0
+magazine            = 100      # a belt in its box
+dispersion_moa      = 5.2
+reload_time_s       = 5.8
+automatic           = true
+tracer              = true
+tracer_every        = 4
+ads_spread          = 0.55
+ads_time_s          = 0.34
+move_scale          = 0.84
+
+[weapon.m870]
+name                = "12 gauge buckshot"
+muzzle_velocity     = 400.0
+projectile_mass_kg  = 0.0035   # one 00 pellet
+drag_coefficient    = 0.470    # a sphere
+cross_section_m2    = 0.0000554   # 8.4 mm
+rounds_per_minute   = 75.0     # pumped
+magazine            = 7        # the tube
+dispersion_moa      = 160.0    # each pellet's cone: a 0.9 m spread at 20 m
+reload_time_s       = 4.2
+automatic           = false
+tracer              = false
+pellets             = 9
+ads_spread          = 0.80
+ads_time_s          = 0.22
+move_scale          = 0.96
+
+[weapon.m17]
+name                = "9 mm pistol"
+muzzle_velocity     = 375.0
+projectile_mass_kg  = 0.0080
+drag_coefficient    = 0.300
+cross_section_m2    = 0.0000636
+rounds_per_minute   = 450.0
+magazine            = 17
+dispersion_moa      = 5.0
+reload_time_s       = 1.6
+automatic           = false
+tracer              = false
+ads_spread          = 0.45
+ads_time_s          = 0.14
+move_scale          = 1.08
+
+[weapon.pm]
+name                = "9x18 pistol"
+muzzle_velocity     = 315.0
+projectile_mass_kg  = 0.0061
+drag_coefficient    = 0.300
+cross_section_m2    = 0.0000675   # 9.27 mm
+rounds_per_minute   = 400.0
+magazine            = 8
+dispersion_moa      = 6.0
+reload_time_s       = 1.5
+automatic           = false
+tracer              = false
+ads_spread          = 0.50
+ads_time_s          = 0.13
+move_scale          = 1.08
+
+# What the attachments change (src/combat/arsenal.ts fits them; their shapes are its). Each term
+# multiplies the gun's own, and a term not given leaves it: the cone from the hip (hip_spread) and
+# aimed (ads_spread), the recoil's kick and climb, the time the sights take to come up (ads_time),
+# the sight's magnification (zoom, the field of view divided by it), the muzzle's flash and report,
+# the round's speed and the carrier's. A laser's hip_spread holds while it is switched on.
+[attachment.iron]
+zoom                = 1.15
+
+[attachment.reddot]
+zoom                = 1.25
+ads_spread          = 0.92
+ads_time            = 0.95
+
+[attachment.holo]
+zoom                = 1.30
+ads_spread          = 0.90
+
+[attachment.scope]
+zoom                = 3.6      # a 4x sight
+ads_spread          = 0.70
+ads_time            = 1.40
+move                = 0.97
+
+[attachment.suppressor]
+flash               = 0.12     # a wisp at the can's mouth
+report_gain         = 0.30     # still a crack, no longer a bang
+velocity            = 0.97
+kick                = 0.90
+ads_time            = 1.06
+
+[attachment.compensator]
+flash               = 1.40
+report_gain         = 1.15
+climb               = 0.72
+kick                = 0.95
+
+[attachment.vertical]
+hip_spread          = 0.85
+climb               = 0.85
+kick                = 0.90
+ads_time            = 1.04
+
+[attachment.angled]
+hip_spread          = 0.95
+kick                = 0.85
+ads_time            = 0.85
+
+[attachment.flashlight]
+move                = 1.0
+
+[attachment.laser]
+hip_spread          = 0.65
+
+# The hands (src/sim/session.ts): what is in them comes down and the next comes up (a gun from the
+# other, the shovel while F is held, the gun again after); aimed, the recoil is steadier and the feet
+# slower, and the mouse turns by the sight's magnification (times ads_sensitivity).
+[hands]
+lower_s             = 0.18
+raise_s             = 0.30     # a long gun
+pistol_raise_s      = 0.20
+shovel_raise_s      = 0.20
+ads_recoil          = 0.80
+ads_move            = 0.60
+ads_sensitivity     = 1.0
+dig_stroke_s        = 0.85     # the shovel's stroke as drawn: push, lift, throw
 
 # ---------------------------------------------------------------------------
 # RECOIL
@@ -292,6 +483,71 @@ drift_onset_shots   = 6.0
 drift_ramp_shots    = 5.0
 jitter_pitch_deg    = 0.035
 jitter_yaw_deg      = 0.055
+
+# The carbine: lighter in the hands than the AK, and a little faster.
+[recoil.m4]
+kick_pitch_deg      = 0.30
+climb_ceiling_deg   = 1.45
+climb_per_shot_deg  = 0.22
+climb_recovery_s    = 0.24
+drift_yaw_deg       = 0.05
+jitter_pitch_deg    = 0.03
+jitter_yaw_deg      = 0.05
+
+# A pistol cartridge in a heavy gun: almost nothing.
+[recoil.mp5]
+kick_pitch_deg      = 0.18
+settle_time_s       = 0.16
+climb_ceiling_deg   = 0.95
+climb_per_shot_deg  = 0.13
+climb_recovery_s    = 0.20
+drift_yaw_deg       = 0.03
+jitter_pitch_deg    = 0.025
+jitter_yaw_deg      = 0.04
+
+# A full-power round: each shot throws the muzzle up, and it comes back.
+[recoil.svd]
+kick_pitch_deg      = 1.60
+settle_time_s       = 0.32
+climb_ceiling_deg   = 2.50
+climb_per_shot_deg  = 0.90
+climb_recovery_s    = 0.40
+burst_reset_s       = 0.50
+
+# Heavy, so each round is small; long bursts walk right and up.
+[recoil.m249]
+kick_pitch_deg      = 0.32
+climb_ceiling_deg   = 2.20
+climb_per_shot_deg  = 0.17
+climb_recovery_s    = 0.35
+drift_yaw_deg       = 0.12
+drift_onset_shots   = 8.0
+jitter_pitch_deg    = 0.05
+jitter_yaw_deg      = 0.09
+
+[recoil.m870]
+kick_pitch_deg      = 3.00
+settle_time_s       = 0.38
+climb_ceiling_deg   = 3.00
+climb_per_shot_deg  = 1.50
+climb_recovery_s    = 0.45
+burst_reset_s       = 0.80
+
+[recoil.m17]
+kick_pitch_deg      = 0.90
+settle_time_s       = 0.22
+climb_ceiling_deg   = 2.00
+climb_per_shot_deg  = 0.55
+climb_recovery_s    = 0.25
+burst_reset_s       = 0.35
+
+[recoil.pm]
+kick_pitch_deg      = 1.05
+settle_time_s       = 0.22
+climb_ceiling_deg   = 2.00
+climb_per_shot_deg  = 0.60
+climb_recovery_s    = 0.25
+burst_reset_s       = 0.35
 
 # ---------------------------------------------------------------------------
 # THE FRONT
@@ -411,6 +667,51 @@ punch_pitch_deg     = 1.25
 punch_roll_deg      = 0.55
 damping_ratio       = 0.82
 fov_pulse_deg       = -0.60
+
+[viewkick.m4]
+punch_back_m        = 0.030
+punch_pitch_deg     = 1.10
+punch_roll_deg      = 0.45
+
+[viewkick.mp5]
+punch_back_m        = 0.020
+punch_pitch_deg     = 0.70
+punch_roll_deg      = 0.30
+fov_pulse_deg       = -0.30
+
+[viewkick.svd]
+punch_back_m        = 0.060
+punch_pitch_deg     = 3.20
+punch_roll_deg      = 1.20
+settle_time_s       = 0.32
+fov_pulse_deg       = -1.10
+
+[viewkick.m249]
+punch_back_m        = 0.032
+punch_pitch_deg     = 1.00
+punch_roll_deg      = 0.70
+
+[viewkick.m870]
+punch_back_m        = 0.080
+punch_up_m          = 0.020
+punch_pitch_deg     = 5.50
+punch_roll_deg      = 1.80
+settle_time_s       = 0.36
+fov_pulse_deg       = -1.40
+
+[viewkick.m17]
+punch_back_m        = 0.025
+punch_up_m          = 0.015
+punch_pitch_deg     = 4.00
+punch_roll_deg      = 1.00
+settle_time_s       = 0.20
+
+[viewkick.pm]
+punch_back_m        = 0.025
+punch_up_m          = 0.016
+punch_pitch_deg     = 4.40
+punch_roll_deg      = 1.10
+settle_time_s       = 0.20
 
 # ---------------------------------------------------------------------------
 # PARTICLES
@@ -600,8 +901,17 @@ max_voices          = 64       # sounding or waiting to (a distant one is schedu
 [effects]
 tracer_length_m     = 7.0      # the reference's render.tracer_length_m
 tracer_width_m      = 0.06     # receding from the shooter, a narrower one is a dash
-tracer_colour       = [1.0, 0.83, 0.45] # the reference's
+tracer_colour       = [1.0, 0.83, 0.45] # the reference's: the battle's, and the front's
+tracer_colour_red   = [1.0, 0.16, 0.10] # the loadout's own tracers
+tracer_colour_green = [0.30, 1.0, 0.25]
 tracer_intensity    = 60.0
+light_range_m       = 45.0     # a weapon light's beam: where it strikes within this,
+light_radius_m      = [2.4, 7.0]   # a light that reaches this far about it (near, far),
+light_intensity     = 2.4      # this bright up close and falling off with the beam's
+light_colour        = [1.0, 0.95, 0.84]  # spread; a little lights the gun itself
+laser_size_m        = 0.024    # a laser's dot where it strikes, emissive
+laser_glow          = 40.0
+laser_colour        = [1.0, 0.12, 0.06]
 tracer_tail_alpha   = 0.16     # the reference's 40 of 255 at the tail, 255 at the head
 tracer_converge_m   = 20.0     # the player's tracer leaves the muzzle and joins its
                                # round's path (from the eye) by this far

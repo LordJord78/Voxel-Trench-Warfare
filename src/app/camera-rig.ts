@@ -4,7 +4,8 @@
  * with the stride, dipping on a hard landing, and narrowing for the periscope,
  * eased so raising it does not read as a cut; turned by the rifle's recoil,
  * suppression's flinch and shake, and the view kick's pulse of the field of
- * view, interpolated between ticks as the foot is. Python's `_place_camera`
+ * view, interpolated between ticks as the foot is; and narrowed by the sight's magnification
+ * as the sights come up. Python's `_place_camera`
  * and `_place_viewmodel`, without the stride's roll (the shake's it carries).
  *
  * At 10 cm the ground is all steps: the body snaps up and down them, and
@@ -103,7 +104,7 @@ export class CameraRig {
       yaw: player.yaw + view.yaw,
       pitch: player.pitch + view.pitch,
       roll: view.roll,
-      fov: baseFov * this.fovScale + view.fov,
+      fov: (baseFov * this.fovScale) / session.zoomAt() + view.fov,
     };
   }
 

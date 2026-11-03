@@ -226,7 +226,7 @@ export class RoomCore {
         this.broadcastRoster();
         return;
       case 'hit':
-        if (this.rules && this.match && now >= this.match.startAt) this.apply(this.rules.hit(seat.id, msg.v, msg.z, now));
+        if (this.rules && this.match && now >= this.match.startAt) this.apply(this.rules.hit(seat.id, msg.v, msg.z, now, msg.w));
         return;
       case 'hurt':
         if (this.rules && this.match && now >= this.match.startAt) this.apply(this.rules.hurt(seat.id, msg.a, msg.c, now));

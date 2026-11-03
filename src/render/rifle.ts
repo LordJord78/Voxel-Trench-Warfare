@@ -10,8 +10,12 @@
  * it where it is nearer than the world, writing the shaded image and the
  * motion; a last one puts its depth into the G-buffer's. Hidden (null), none
  * of them runs.
+ *
+ * What is in the hands changes (another gun, its fit, the shovel): `setModel` writes the new model
+ * over the old, in a buffer sized for the largest (combat/gun-models.ts).
  */
 
+import { MODEL_VOXELS_MAX } from '../combat/gun-models';
 import type { RifleModel } from '../combat/rifle-model';
 import { projectToPixel, type CameraPose } from './camera';
 import { StructWriter, structWgsl, type StructDef } from './layout';
@@ -136,13 +140,13 @@ export class Rifle {
   private constructor(
     private readonly device: GPUDevice,
     private readonly pipelines: RiflePipelines,
-    private readonly shape: RifleModel,
+    private shape: RifleModel,
     cells: LightCells,
     private readonly keyGroup: GPUBindGroup,
     specular: number,
   ) {
     this.uniform = device.createBuffer({ label: 'rifle', size: this.writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const packed = new Uint32Array(Math.ceil(shape.voxels.length / 4));
+    const packed = new Uint32Array(Math.ceil(Math.max(MODEL_VOXELS_MAX, shape.voxels.length) / 4));
     new Uint8Array(packed.buffer).set(shape.voxels);
     this.model = device.createBuffer({ label: 'rifle model', size: packed.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.model, 0, packed);
@@ -194,6 +198,24 @@ export class Rifle {
   /** Where the rifle is this frame; null hides it. */
   set(pose: RiflePose | null): void {
     this.pose = pose;
+  }
+
+  /** What is drawn in the hands from now on (another gun, or the shovel); the same model again does nothing. */
+  setModel(model: RifleModel): void {
+    if (model === this.shape) return;
+    if (model.voxels.length > MODEL_VOXELS_MAX) throw new RangeError(`a model of ${model.voxels.length} voxels is over the ${MODEL_VOXELS_MAX} the rifle's buffer holds`);
+    const bytes = new Uint8Array(Math.ceil(model.voxels.length / 4) * 4);
+    bytes.set(model.voxels);
+    this.device.queue.writeBuffer(this.model, 0, bytes);
+    this.shape = model;
+    this.writer.set('dims', model.dims);
+    this.writer.set('voxelM', model.voxelM);
+    this.writer.set('origin', model.origin);
+  }
+
+  /** The model drawn in the hands. */
+  get current(): RifleModel {
+    return this.shape;
   }
 
   /** The pixels its grid covers seen from `camera` on a `res` image: corner and size, a pixel to spare; the whole image if a corner is behind the eye. */

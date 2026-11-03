@@ -55,7 +55,7 @@ import { Bloom, type BloomPipelines } from './bloom';
 import { copyPose, jitter, type CameraPose } from './camera';
 import type { Gpu } from './device';
 import { DynamicResolution } from './dynres';
-import { rifleModel } from '../combat/rifle-model';
+import { rifleModel, type RifleModel } from '../combat/rifle-model';
 import type { WaterTunables } from '../battle/water';
 import { STILL_WATER, writeWater, type FrameWater, type WaterFrameTunables } from './water-frame';
 import { Effects, effectsLook, type EffectsFrame, type EffectsPipelines, type SmokePuff, type TransientLight } from './effects';
@@ -527,6 +527,16 @@ export class Renderer {
   /** Where the player's rifle is this frame (camera-rig.ts); null hides it. */
   setRifle(pose: RiflePose | null): void {
     this.rifle.set(pose);
+  }
+
+  /** What is drawn in the hands (a gun with its fit, or the shovel: combat/gun-models.ts). */
+  setRifleModel(model: RifleModel): void {
+    this.rifle.setModel(model);
+  }
+
+  /** The model drawn in the hands. */
+  rifleModel(): RifleModel {
+    return this.rifle.current;
   }
 
   /** What the last frame drew of the rifle: whether, where on the image, and through what. */
