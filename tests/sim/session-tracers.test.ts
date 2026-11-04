@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { lineSource, type FrontSource } from '../../src/combat/front';
 import { loadTunables } from '../../src/core/tunables';
-import { TRACER_KIND } from '../../src/net/gear';
+import { encodeShotMark, TRACER_KIND } from '../../src/net/gear';
 import { idleIntent, Session } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
 import { P } from '../../src/world/materials';
@@ -64,15 +64,38 @@ describe("a session's tracers", () => {
     expect(Array.from(s.rounds.tracerSegments(7).kind)).toEqual([TRACER_KIND.blue, TRACER_KIND.amber]);
   });
 
-  it('the front fires tracers at light as at heavy', () => {
+  it("another player's shotgun: all 9 pellets in the kind given (their seat's), whatever the shot's word says, each lit in as a hip shot's", () => {
+    const s = stand();
+    const o: [number, number, number] = [10, 1.6, 10];
+    const d: [number, number, number] = [0, 0, 1];
+    // Their word says red; their seat is Blue's.
+    s.fireRemote(2, o, d, true, o, encodeShotMark({ tracer: true, kind: TRACER_KIND.red, suppressed: false, gun: 'm870' }), TRACER_KIND.blue);
+    expect(s.rounds.count).toBe(9);
+    const seg = s.rounds.tracerSegments(7);
+    expect(Array.from(seg.kind)).toEqual(Array(9).fill(TRACER_KIND.blue));
+    // A shot's word carries no share aimed: unset (−1), the draw's own, a hip shot's (tracer_ignite_hip_m).
+    expect(Array.from(seg.ignite)).toEqual(Array(9).fill(-1));
+    expect(Array.from(seg.owner)).toEqual(Array(9).fill(2));
+  });
+
+  it("the front fires tracers at light as at heavy, each lit in as a hip shot's", () => {
     const s = stand(lineSource(38, 0.4));
     s.front.intensity = 'light';
     const shots: boolean[] = [];
+    const ignites: number[] = [];
     for (let k = 0; k < 60 * 120 && shots.length < 3; k++) {
       s.tick();
-      for (const f of s.drainEvents().frontShots) shots.push(f.tracer);
+      const fired = s.drainEvents().frontShots;
+      for (const f of fired) shots.push(f.tracer);
+      // Just fired, in the pool: the front's (owner 1), its ignition unset (−1), a hip shot's.
+      if (fired.length > 0) {
+        const seg = s.rounds.tracerSegments(7);
+        for (let i = 0; i < seg.owner.length; i++) if (seg.owner[i] === 1) ignites.push(seg.ignite[i]);
+      }
     }
     expect(shots.length).toBeGreaterThanOrEqual(3);
     expect(shots.every(Boolean)).toBe(true);
+    expect(ignites.length).toBeGreaterThanOrEqual(3);
+    expect(ignites.every((m) => m === -1)).toBe(true);
   });
 });
