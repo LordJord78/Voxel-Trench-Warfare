@@ -57,20 +57,24 @@ The user's words:
   - **One ribbon per tracer, two terms across it:**
     - a core, `tracer_core_width_m` 0.035, mixed `tracer_core_white` 0.65 toward white;
     - a glow, `tracer_glow_width_m` 0.22, at `tracer_glow_share` 0.35 of the core's brightness.
-    - The glow's drawn width never passes `tracer_glow_max_px` 28, so a round past the eye is not a bar across the screen.
+    - The glow is drawn between `tracer_glow_min_px` 4 and `tracer_glow_max_px` 10 (internal pixels), so a round past the eye is not a bar across the screen. The core is at most 0.45 of the glow (at least 2 px), so the glow's colour always shows round it. *(As built: G1 Task 5 tuned these from the captures; the first numbers were a 28 px cap.)*
+    - **Whiteness by distance:** the core's white mix is `tracer_core_white × (1 − smoothstep(tracer_white_near_m 6, tracer_white_far_m 40, distance from the eye))`, lifted by day to at least `tracer_white_by_day` 1.0 × daylight. Near the eye a tracer is white-hot; far off it is its team's colour.
+    - **Its hue kept:** the tracer family's light (ribbons, heads, embers, ricochets, the battle's streams) keeps its hue through the present pass's per-channel tone curve. The effects pass maps each fragment through the exact inverse of the curve at the frame's exposure, blended back to the per-channel result by the fragment's own whiteness (`tone.wgsl`, `keepHue`). Without this, every far tracer clipped to white.
     - The flash star keeps today's one-term profile, chosen by a style word in the ribbon.
   - **The head:** an emissive billboard, `tracer_head_m` 0.09 across, at `tracer_head_glow`, where the round is.
-  - **The streak:** `clamp(speed × tracer_streak_s, tracer_min_m, tracer_max_m)`, with streak_s 0.014 s, min 2.5 m and max 14 m, and never more than the round has flown. An AK round's is 12.3 m, a pistol's 5.3 m.
+  - **The streak:** `clamp(speed × tracer_streak_s, tracer_min_m, tracer_max_m)`, with streak_s 0.024 s, min 2.5 m and max 24 m, and never more than the round has flown. An AK round's is 21.1 m, longer than a frame's flight (14.7 m), so a burst reads as an unbroken stream. *(As built; the first numbers were 0.014 s and 14 m, which left dotted chains.)*
     - The battle's tracers use the same law, with their own maximum (`[battle.tracers] trail_m`, 24 m).
-  - **Lit in:** the core and the glow rise from 0 to full over the first `tracer_ignite_m` 4 m of flight. The head is drawn from 1.5 m.
-    - The muzzle-to-eye convergence over 20 m stays.
+  - **Lit in:** the core and the glow rise from 0 to full over the first metres of flight: `tracer_ignite_hip_m` 1 m from the hip, `tracer_ignite_m` 4 m aimed, lerped by the shot's aimed share. Everyone else's rounds light in over 1 m. The head is drawn from 1.5 m. From the hip, the stretch from the muzzle to the crosshair on screen lies inside the first 3 m, so it has to be lit there to be seen. Aimed, the 4 m ramp keeps the sights clear.
+    - **Convergence at the aim's range:** the drawn tracer leaves the muzzle and joins its round's path (from the eye) where the shot was aimed. A ray cast once per trigger pull gives the distance to the first thing on the line, clamped to `tracer_converge_min_m` 8 and `tracer_converge_max_m` 150 (the sky gives 150). *(As built; it replaces a fixed 20 m.)*
   - **Brightness:** `tracer_intensity` 60 → 70, times `1 + tracer_day_boost (3.0) × daylight`.
     - Daylight is the sky's key at the clock: 0 at night, 1 at noon.
     - A tracer at noon reads against sunlit ground the way one at dusk reads against dusk.
-  - **The colours:**
-    - red: [1.0, 0.16, 0.10], as today;
-    - blue: [0.20, 0.50, 1.0];
-    - amber: [1.0, 0.83, 0.45], as today.
+  - **The colours** (linear; shown at their kept hue):
+    - red: [1.0, 0.04, 0.018], shown as (255, 59, 41);
+    - blue: [0.05, 0.32, 1.0], shown as (65, 152, 255);
+    - amber: [1.0, 0.45, 0.0], shown as (255, 177, 0).
+
+    *(As built: these were retuned once hue was kept. The first colours, [1.0, 0.16, 0.10], [0.20, 0.50, 1.0] and [1.0, 0.83, 0.45], showed as salmon, pale blue and cream.)*
 - **Embers:** a tracer round that strikes leaves an emissive ember of its colour, 0.06 m across, fading over 0.35 s.
 - **Ricochets** (cosmetic, in the effects layer; no new round, so nothing else is struck):
   - **When:** a tracer that strikes within `ricochet_max_deg` 18° of the face's plane flies again. Its chance is `ricochet_chance`: 0.25 off soil, 0.6 off timber, metal, concrete or masonry.
