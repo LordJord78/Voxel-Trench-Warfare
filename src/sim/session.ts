@@ -701,7 +701,7 @@ export class Session {
       for (const f of this.debrisFalling) if (f.tick <= this.ticks) this.events.splashes.push({ tick: this.ticks, at: f.at, energyJ: this.debris.energyJ, kind: 'debris' });
       this.debrisFalling = this.debrisFalling.filter((f) => f.tick > this.ticks);
     }
-    // Rounds into bodies: a puff of the uniform's dust where each struck, and blood.
+    // Rounds into bodies: a puff of the uniform's dust where each struck, and blood, but not out of the player's own.
     for (const hit of this.rounds.bodyHits) {
       this.events.hits.push({ ...hit, tick: this.ticks });
       const { dust } = this.kinds;
@@ -835,7 +835,7 @@ export class Session {
    * [particles.blood]'s droplets thrown out of the far side and a puff of [particles.blood_mist];
    * critical (a headshot, or the round that kills), [hits] critical_droplets and critical_mist of
    * them; and off a `helmet`, helmet_sparks sparks back along the round. combat() bleeds the rounds
-   * into bodies; the app bleeds a kill's.
+   * into others' bodies; the app bleeds a kill's.
    */
   bleed(at: readonly number[], dir: readonly number[], critical: boolean, helmet = false): void {
     const { blood, mist, spark } = this.kinds;
@@ -847,16 +847,19 @@ export class Session {
   }
 
   /**
-   * The tick's rounds into bodies bled: critical in the head, whose every hit sparks off the helmet
-   * too (the ledger's ruling). A body bleeds [hits] bursts_per_tick of them at most, its headshots
-   * first: a shotgun's nine pellets bleed it twice, and never leave a headshot's burst out.
+   * The tick's rounds into others' bodies bled: critical in the head, whose every hit sparks off the
+   * helmet too (the ledger's ruling). A body bleeds [hits] bursts_per_tick of them at most, its
+   * headshots first: a shotgun's nine pellets bleed it twice, and never leave a headshot's burst out.
+   * The player's own body (LOCAL_BODY) bleeds none: no body of theirs is drawn in first person, so
+   * its blood would be thrown into the eye, and being hit is the red flash, the aim's flinch and the
+   * hurt voice (the shots spec's §4).
    */
   private bleedHits(hits: readonly BodyHit[]): void {
     if (hits.length === 0) return;
     const bled = new Map<number, number>();
     for (const head of [true, false]) {
       for (const hit of hits) {
-        if ((hit.zone === 'head') !== head) continue;
+        if (hit.body === LOCAL_BODY || (hit.zone === 'head') !== head) continue;
         const n = bled.get(hit.body) ?? 0;
         if (n >= this.bleeding.burstsPerTick) continue;
         bled.set(hit.body, n + 1);

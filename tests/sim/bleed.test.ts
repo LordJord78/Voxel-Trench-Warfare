@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { projectileSpec } from '../../src/combat/ballistics';
 import { BILLBOARD_FLOATS, particleSpec } from '../../src/combat/particles';
-import { pose, toWorld, type V3 } from '../../src/combat/soldier-rig';
+import { pose, toWorld, type Frame, type PartName, type V3 } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
-import { idleIntent, Session, type Body, type CombatEvents } from '../../src/sim/session';
+import { idleIntent, LOCAL_BODY, Session, type Body, type CombatEvents } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
 import { P, paletteData } from '../../src/world/materials';
 
-// Blood (the shots spec's §4): every round into a body bleeds where it struck, beside the uniform's
-// khaki dust, and a headshot bleeds critical: more droplets thrown out of the far side, more mist,
-// and sparks off the helmet. The session throws it, so it is as deterministic as its other
-// particles; a shotgun's pellets bleed a body twice a tick at most.
+// Blood (the shots spec's §4): every round into another's body bleeds where it struck, beside the
+// uniform's khaki dust, and a headshot bleeds critical: more droplets thrown out of the far side,
+// more mist, and sparks off the helmet. The session throws it, so it is as deterministic as its
+// other particles; a shotgun's pellets bleed a body twice a tick at most. The player's own body
+// bleeds none.
 const tun = loadTunables();
 const AK = projectileSpec(tun, 'assault_rifle');
 const blood = particleSpec(tun, 'blood');
@@ -33,12 +34,18 @@ function target(id = 200, x = 12.8, z = 25): Body {
   return { id, feet, frames: pose({ position: feet, yaw: 180, pitch: 0, height: 1.8, speed: 0, bob: 0, deadFor: null }) };
 }
 
+/** The player's own body, posed as the session poses it for rounds to strike (and others draw it). */
+function own(s: Session): Record<PartName, Frame> {
+  const p = s.player;
+  return pose({ position: p.position.toArray(), yaw: p.yaw, pitch: p.pitch, height: p.height, speed: 0, bob: p.bobPhase, deadFor: null });
+}
+
 /**
- * The player's rounds (owner 0, the AK's), one from each of `from` along unit `dir`, ticked until
- * they strike: what they struck on that tick, the particles as it left them.
+ * Rounds of `owner` (the player's, 0, unless told; the AK's), one from each of `from` along unit
+ * `dir`, ticked until they strike: what they struck on that tick, the particles as it left them.
  */
-function volley(s: Session, from: readonly (readonly number[])[], dir: readonly number[]): CombatEvents['hits'] {
-  for (const o of from) s.rounds.fire([o[0], o[1], o[2]], [dir[0] * AK.muzzleVelocity, dir[1] * AK.muzzleVelocity, dir[2] * AK.muzzleVelocity], AK, 0, false);
+function volley(s: Session, from: readonly (readonly number[])[], dir: readonly number[], owner = 0): CombatEvents['hits'] {
+  for (const o of from) s.rounds.fire([o[0], o[1], o[2]], [dir[0] * AK.muzzleVelocity, dir[1] * AK.muzzleVelocity, dir[2] * AK.muzzleVelocity], AK, owner, false);
   for (let k = 0; k < 10; k++) {
     s.tick();
     const { hits } = s.drainEvents();
@@ -195,5 +202,33 @@ describe('blood', () => {
     const hits = volley(s, [...grid, [head[0], head[1], head[2] - 5]], dir);
     expect(hits.map((h) => h.zone)).toEqual([...Array(8).fill('torso'), 'head']);
     expect(counts(s)).toEqual({ droplets: 18 + 6, mists: 3 + 1, sparks: 4 });
+  });
+
+  it("another's rounds into the player's own body bleed nothing, which would be thrown into the eye; into another's body they bleed", () => {
+    const s = field();
+    s.together = true;
+    const me = own(s);
+    const p = s.player;
+    const eye = [p.position.x, p.position.y + s.controller.eyeHeight(p), p.position.z];
+    // Seat 2's rounds (owner 4) on one tick, from 5 m in front of the player and back along −z: one
+    // into the face, which an MP5's, a pistol's or a pellet's leaves the player standing through, and
+    // one into the chest.
+    const head = toWorld(me.head, [0, 0.155, 0]);
+    const chest = toWorld(me.torso, [0, 0.28, 0]);
+    const hits = volley(s, [[head[0], head[1], head[2] + 5], [chest[0], chest[1], chest[2] + 5]], [0, 0, -1], 4);
+    expect(hits.map((h) => [h.owner, h.body, h.zone])).toEqual([[4, LOCAL_BODY, 'head'], [4, LOCAL_BODY, 'torso']]);
+    // In first person no body of the player's is drawn, and the face is struck a hand's breadth in
+    // front of the eye: a headshot's critical burst would be thrown into the view.
+    expect(near(hits[0].position, eye)).toBeLessThan(0.3);
+    // Being hit is the red flash, the aim's flinch and the hurt voice (the spec's §4): no blood.
+    expect(counts(s)).toEqual({ droplets: 0, mists: 0, sparks: 0 });
+    // The same seat's round into another body bleeds, for whoever sees it.
+    const them = target(3);
+    s.bodies = [them];
+    const theirs = toWorld(them.frames.head, [0, 0.155, 0]);
+    const [hit, ...more] = volley(s, [[theirs[0], theirs[1], theirs[2] - 5]], dir, 4);
+    expect(more).toEqual([]);
+    expect(hit).toMatchObject({ owner: 4, body: 3, zone: 'head' });
+    expect(counts(s)).toEqual({ droplets: 18, mists: 3, sparks: 4 });
   });
 });
