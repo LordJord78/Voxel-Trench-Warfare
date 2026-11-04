@@ -516,7 +516,9 @@ export class EffectsFrameBuilder {
     // flight, drawn as the tracers are, long past their lighting in (they left a wall, not a muzzle),
     // fading as they burn out.
     let embers = 0;
-    for (const e of [...this.ricochets.embers(), ...this.debugEmbers.map((d) => ({ at: d.at, size: t.ricochet.emberM, kind: d.kind, alpha: 1 }))]) {
+    const glowing = this.ricochets.embers();
+    for (const d of this.debugEmbers) glowing.push({ at: d.at, size: t.ricochet.emberM, kind: d.kind, alpha: 1 });
+    for (const e of glowing) {
       if (billboards >= MAX_BILLBOARDS) break;
       const colour = glows[e.kind] ?? glows[TRACER_KIND.amber];
       const burn = (t.tracerHeadGain * e.alpha) / t.particleGlow;
