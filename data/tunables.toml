@@ -633,16 +633,17 @@ readout_s           = 1.5      # the HUD's readout of a hit
 
 [hits]
 # Hit feedback (the shots spec's §4). A critical hit (a headshot, or the round
-# that kills) bleeds more, and spatters what is behind the body; a helmet struck
-# sparks. A round leans the body it strikes: the torso along it from the waist,
-# and on a headshot the head on its neck as well, springing back (critically
-# damped) within flinch_s. A killed body falls toward the killing round's
-# bearing.
+# that kills) bleeds more, and spatters what is behind the body and the ground
+# behind its feet; a helmet struck sparks. A round leans the body it strikes:
+# the torso along it from the waist, and on a headshot the head on its neck as
+# well, springing back (critically damped) within flinch_s. A killed body falls
+# toward the killing round's bearing.
 critical_droplets   = 18       # [particles.blood]'s, out of the far side
 critical_mist       = 3        # [particles.blood_mist]'s
 helmet_sparks       = 4        # [particles.spark]'s: every head hit's
-bursts_per_tick     = 2        # a body bleeds this many rounds a tick at most:
-                               # a shotgun's nine pellets bleed twice, not nine times
+bursts_per_tick     = 2        # a body bleeds this many rounds a tick at most,
+                               # and spatters this many of its headshots: a
+                               # shotgun's nine pellets bleed twice, not nine times
 flinch_deg          = 12
 head_snap_deg       = 25       # on top of the torso's lean
 flinch_s            = 0.25     # back to 2% of either
@@ -653,6 +654,15 @@ spatter_rays        = 14       # a critical hit's spatter: rays from where it
                                # first thing it meets with blood (world/spatter.ts)
 spatter_cone_deg    = 25       # their cone's half-angle about the round
 spatter_reach_m     = 2.5      # nothing further from the hit is marked
+spatter_core        = 2        # both cones pack toward their axis: a ray's angle
+                               # off it is the half-angle × r^core, r uniform in
+                               # [0, 1). 1 spreads the rays evenly over the cone's
+                               # width; 2 packs a splat with a thin fringe
+spatter_fall_rays   = 10       # and rays falling from it, so a body standing in
+                               # the open marks the ground behind it
+spatter_fall_cone_deg = 30     # their cone's half-angle about an axis tilted
+spatter_fall_tilt_deg = 30     # this far from straight down toward the round
+spatter_fall_reach_m  = 2.5    # nothing further along them is marked
 
 # ---------------------------------------------------------------------------
 # DESTRUCTION

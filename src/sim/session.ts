@@ -284,9 +284,9 @@ export class Session {
   private events: CombatEvents = noEvents();
   private readonly particleRng: Rng;
   private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris' | 'blood' | 'mist', ParticleSpec>;
-  /** [hits]: a critical hit's droplets and mist, a helmet's sparks, and how many rounds a body bleeds a tick at most. */
+  /** [hits]: a critical hit's droplets and mist, a helmet's sparks, and how many rounds a body bleeds (and its head spatters) a tick at most. */
   private readonly bleeding: { criticalDroplets: number; criticalMist: number; helmetSparks: number; burstsPerTick: number };
-  /** [hits]: a critical hit's spatter, its rays, their cone and their reach (in voxels). */
+  /** [hits]: a critical hit's spatter, its rays on along the round and falling, their cones and reaches (in voxels), and how they pack. */
   private readonly spattering: SpatterTunables;
   /** Each palette entry's linear colour, for the dust it throws. */
   private readonly tints: [number, number, number][];
@@ -876,10 +876,11 @@ export class Session {
 
   /**
    * Spatter (the shots spec's §4) from `at` (metres) on along the round's `dir`: what is behind a
-   * critical hit marked with its blood (world/spatter.ts), drawn from `seed` (an integer). Nothing is
-   * marked inside a crater's region while it is out, whose bricks coming back would undo it. The
-   * voxels it marked, whose bricks upload as any edit's do. combat() spatters each headshot into
-   * another's body; the app spatters a kill's.
+   * critical hit, and the ground behind the body's feet, marked with its blood (world/spatter.ts),
+   * drawn from `seed` (any finite number; a fraction draws as its floor). Nothing is marked inside a
+   * crater's region while it is out, whose bricks coming back would undo it. The voxels it marked,
+   * whose bricks upload as any edit's do. combat() spatters the headshots into others' bodies; the
+   * app spatters a kill's.
    */
   spatterAt(at: readonly number[], dir: readonly number[], seed: number): number {
     const v = this.voxel;
@@ -887,13 +888,20 @@ export class Session {
   }
 
   /**
-   * The tick's headshots into others' bodies spattered, every pellet's, each drawn from the hash of
-   * the tick and where it struck (to a tenth of a millimetre). The player's own head spatters
-   * nothing, as it bleeds nothing (bleedHits): being hit is the flash, the flinch and the voice.
+   * The tick's headshots into others' bodies spattered, each drawn from the hash of the tick and
+   * where it struck (to a tenth of a millimetre). A body's head spatters [hits] bursts_per_tick of
+   * them at most, its first, counted as bleedHits counts: the same headshots bleed critical, and a
+   * shotgun's nine pellets into one head spatter twice. The player's own head spatters nothing, as
+   * it bleeds nothing (bleedHits): being hit is the flash, the flinch and the voice.
    */
   private spatterHits(hits: readonly BodyHit[]): void {
+    if (hits.length === 0) return;
+    const spattered = new Map<number, number>();
     for (const hit of hits) {
       if (hit.body === LOCAL_BODY || hit.zone !== 'head') continue;
+      const n = spattered.get(hit.body) ?? 0;
+      if (n >= this.bleeding.burstsPerTick) continue;
+      spattered.set(hit.body, n + 1);
       const [x, y, z] = hit.position;
       this.spatterAt(hit.position, hit.dir, hash32(this.ticks, Math.round(x * 1e4), Math.round(y * 1e4), Math.round(z * 1e4)));
     }

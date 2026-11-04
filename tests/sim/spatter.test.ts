@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { projectileSpec } from '../../src/combat/ballistics';
 import { pose, toWorld, type Frame, type PartName } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
@@ -7,15 +7,19 @@ import { idleIntent, LOCAL_BODY, Session, type Body, type CombatEvents } from '.
 import { BrickMap } from '../../src/world/bricks';
 import { P } from '../../src/world/materials';
 import { spatter, spatterTunables } from '../../src/world/spatter';
+import { fallAxis, inCone } from '../support/spatter';
 
 // The session's spatter (the shots spec's §4): every headshot into another's body marks what is
-// behind it with blood, drawn from the hit's tick and where it struck, as world/spatter.ts does in
-// voxels; and the app spatters a kill's (spatterAt). Neither marks inside a crater's region while it
-// is out, whose bricks coming back would undo it.
+// behind it with blood, and the ground behind its feet, drawn from the hit's tick and where it
+// struck, as world/spatter.ts does in voxels; a head spatters [hits] bursts_per_tick of a tick's
+// rounds at most, as a body bleeds; and the app spatters a kill's (spatterAt). Neither marks inside a
+// crater's region while it is out, whose bricks coming back would undo it.
 const tun = loadTunables();
 const AK = projectileSpec(tun, 'assault_rifle');
 const V = 0.1;
-const BLOOD = new Set<number>([P.BLOOD_SOIL, P.BLOOD_TIMBER, P.BLOOD_SANDBAG, P.BLOOD_DUCKBOARD, P.BLOOD_CLOTH]);
+const T = spatterTunables(tun, V);
+/** Every blood shade, by name, as the app's e2e counts them. */
+const BLOOD = new Set<number>(Object.entries(P).filter(([name]) => name.startsWith('BLOOD_')).map(([, id]) => id));
 
 /**
  * 25.6 × 6.4 × 51.2 m of sod 0.4 m deep, the player at (12.8, 0.4, 5) facing +z, settled; walls of
@@ -65,18 +69,10 @@ function blood(map: BrickMap, z0: number, z1: number): number[][] {
   return out;
 }
 
-/** Within `deg` of `dir` from `from` (voxels), for a voxel some ray went into, give or take the half-diagonal it subtends. */
-function inCone(cell: readonly number[], from: readonly number[], dir: readonly number[], deg: number): boolean {
-  const d = [cell[0] + 0.5 - from[0], cell[1] + 0.5 - from[1], cell[2] + 0.5 - from[2]];
-  const r = Math.hypot(d[0], d[1], d[2]);
-  const angle = Math.acos(Math.min(1, (d[0] * dir[0] + d[1] * dir[1] + d[2] * dir[2]) / r));
-  return angle <= (deg * Math.PI) / 180 + Math.asin(Math.min(1, Math.sqrt(3) / 2 / r)) + 1e-9;
-}
-
 describe('the session spatters', () => {
   const dir = [0, 0, 1];
 
-  it("a headshot spatters the wall behind the body; a body hit does not, nor another's round through the player's own head", () => {
+  it("a headshot spatters the wall behind the body, and the ground behind its feet; a body hit does not, nor another's round through the player's own head", () => {
     const s = field();
     const t = target();
     s.targets = [t];
@@ -84,21 +80,33 @@ describe('the session spatters', () => {
     const chest = toWorld(t.frames.torso, [0, 0.28, 0]);
     expect(volley(s, [[chest[0], chest[1], chest[2] - 5]], dir).map((h) => [h.body, h.zone])).toEqual([[200, 'torso']]);
     expect(blood(s.map, 0, 512)).toEqual([]);
-    // Into the head: the wall 1.5 m behind it.
+    // Into the head: the wall 1.5 m behind it, and the sod before the wall.
     const head = toWorld(t.frames.head, [0, 0.155, 0]);
     const [hit, ...more] = volley(s, [[head[0], head[1], head[2] - 5]], dir);
     expect(more).toEqual([]);
     expect(hit).toMatchObject({ owner: 0, body: 200, zone: 'head' });
     const behind = blood(s.map, 0, 512);
-    expect(behind.length).toBeGreaterThan(0);
-    expect(behind.length).toBeLessThanOrEqual(14);
+    expect(behind.length).toBeLessThanOrEqual(T.rays + T.fallRays);
     const from = hit.position.map((m) => m / V);
+    const fall = fallAxis(hit.dir, T.fallTiltDeg);
+    const wall = behind.filter(([, , z]) => z === 265);
+    const ground = behind.filter(([, y]) => y === 3);
+    expect(wall.length).toBeGreaterThan(0);
+    expect(ground.length).toBeGreaterThan(0);
+    expect(wall.length + ground.length).toBe(behind.length);
     for (const [x, y, z, p] of behind) {
-      expect([z, p]).toEqual([265, P.BLOOD_SOIL]);
-      expect(inCone([x, y, z], from, hit.dir, 25)).toBe(true);
+      expect(p).toBe(P.BLOOD_SOIL);
+      // In the cone on along the round, or the falling rays'.
+      expect(inCone([x, y, z], from, hit.dir, T.coneDeg) || inCone([x, y, z], from, fall, T.fallConeDeg)).toBe(true);
+    }
+    // The ground's from the falling rays, behind the body as the round went.
+    for (const [x, y, z] of ground) {
+      expect(inCone([x, y, z], from, fall, T.fallConeDeg)).toBe(true);
+      expect(z).toBeGreaterThanOrEqual(from[2] - 1);
     }
     // Another's round (seat 2's, owner 4) into the player's own face, from 5 m in front: nothing on
-    // the wall behind them. Being hit is the flash, the flinch and the voice (the spec's §4).
+    // the wall behind them, nor the ground. Being hit is the flash, the flinch and the voice (the
+    // spec's §4).
     s.together = true;
     const face = toWorld(own(s).head, [0, 0.155, 0]);
     expect(volley(s, [[face[0], face[1], face[2] + 5]], [0, 0, -1], 4).map((h) => [h.owner, h.body, h.zone])).toEqual([[4, LOCAL_BODY, 'head']]);
@@ -110,7 +118,7 @@ describe('the session spatters', () => {
     expect(volley(s, [[theirs[0], theirs[1], theirs[2] - 5]], dir, 4).map((h) => [h.owner, h.body, h.zone])).toEqual([[4, 3, 'head']]);
     const after = blood(s.map, 0, 512);
     expect(after.length).toBeGreaterThan(behind.length);
-    for (const [x, , z] of after.filter((b) => !behind.some((o) => o.join() === b.join()))) expect([x > 160, z]).toEqual([true, 265]);
+    for (const [x, y, z] of after.filter((b) => !behind.some((o) => o.join() === b.join()))) expect([x > 160, z === 265 || y === 3]).toEqual([true, true]);
   });
 
   it("spatterAt(at, dir, seed) spatters in metres as spatter does in voxels, and leaves a crater's region out alone", () => {
@@ -122,7 +130,7 @@ describe('the session spatters', () => {
     expect(n).toBeGreaterThan(0);
     // The world's own, in voxels, on the same world.
     const map = field().map;
-    expect(spatter(map, at.map((m) => m / V), dir, 11, spatterTunables(tun, V))).toBe(n);
+    expect(spatter(map, at.map((m) => m / V), dir, 11, T)).toBe(n);
     expect(blood(map, 0, 512)).toEqual(all);
     // A shell's crater 6.8 m to the left, its region (to x 12.8 m) out and its bricks not yet back.
     const held: DetonationRunner = { post: () => {}, take: () => [] };
@@ -160,5 +168,81 @@ describe('the session spatters', () => {
     const b = run();
     expect(b.once).toEqual(a.once);
     expect(b.twice).toEqual(a.twice);
+  });
+
+  it("a shotgun's nine pellets into one head on one tick spatter twice (bursts_per_tick), and two heads each spatter", () => {
+    const s = field();
+    const t = target();
+    const other = target(201, 18.8);
+    s.targets = [t, other];
+    const head = toWorld(t.frames.head, [0, 0.155, 0]);
+    const theirs = toWorld(other.frames.head, [0, 0.155, 0]);
+    // A shotgun's nine pellets over its face from 5 m, and three into another head 6 m beside it, all on one tick.
+    const grid = Array.from({ length: 9 }, (_, k) => [head[0] + ((k % 3) - 1) * 0.05, head[1] + (Math.floor(k / 3) - 1) * 0.05, head[2] - 5]);
+    const beside = [-1, 0, 1].map((k) => [theirs[0] + k * 0.05, theirs[1], theirs[2] - 5]);
+    const spatters = vi.spyOn(s, 'spatterAt');
+    const hits = volley(s, [...grid, ...beside], dir);
+    expect(hits.map((h) => [h.body, h.zone])).toEqual([...Array(9).fill([200, 'head']), ...Array(3).fill([201, 'head'])]);
+    expect(new Set(hits.map((h) => h.tick)).size).toBe(1);
+    // A head's first two, as a body's first two bleed (bleedHits): four in all, not twelve.
+    expect(tun.i('hits.bursts_per_tick')).toBe(2);
+    expect(spatters.mock.calls.map(([at]) => at)).toEqual([hits[0], hits[1], hits[9], hits[10]].map((h) => h.position));
+    // The blood is those four spatters' own, behind each head.
+    const marks = blood(s.map, 0, 512);
+    const replay = field();
+    for (const [at, d, seed] of spatters.mock.calls) replay.spatterAt(at, d, seed);
+    expect(marks).toEqual(blood(replay.map, 0, 512));
+    expect(marks.some(([x]) => x < 158)).toBe(true);
+    expect(marks.some(([x]) => x >= 158)).toBe(true);
+    // The next tick's head hits spatter again.
+    volley(s, [[head[0], head[1], head[2] - 5]], dir);
+    expect(spatters).toHaveBeenCalledTimes(5);
+  });
+
+  it('the seed depends on where the round struck: two head hits on one tick, apart, draw different marks', () => {
+    const s = field();
+    const a = target(200, 8.8);
+    const b = target(201, 16.8);
+    s.targets = [a, b];
+    const heads = [a, b].map((t) => toWorld(t.frames.head, [0, 0.155, 0]));
+    const hits = volley(s, heads.map((h) => [h[0], h[1], h[2] - 5]), dir);
+    expect(hits.map((h) => [h.body, h.zone])).toEqual([[200, 'head'], [201, 'head']]);
+    expect(hits[1].tick).toBe(hits[0].tick);
+    // Struck alike but 8 m apart across the field: at the same height and range, over the same sod
+    // and before the same wall.
+    expect((hits[1].position[0] - hits[0].position[0]) / V).toBeCloseTo(80, 9);
+    for (const k of [1, 2]) expect(hits[1].position[k]).toBeCloseTo(hits[0].position[k], 9);
+    /** The marks left of 12.8 m moved 8 m on, and those right of it, as `x,y,z` keys in x, y, z order. */
+    const halves = (marks: number[][]) => [
+      marks.filter(([x]) => x < 128).map(([x, y, z]) => `${x + 80},${y},${z}`),
+      marks.filter(([x]) => x >= 128).map(([x, y, z]) => `${x},${y},${z}`),
+    ];
+    // Drawn from one seed, the second is the first moved 8 m: the field is the same there.
+    const control = field();
+    for (const h of hits) control.spatterAt(h.position, h.dir, 99);
+    const [movedAlike, secondAlike] = halves(blood(control.map, 0, 512));
+    expect(movedAlike.length).toBeGreaterThan(0);
+    expect(secondAlike).toEqual(movedAlike);
+    // The session draws each from where it struck: the second is not the first moved.
+    const [moved, second] = halves(blood(s.map, 0, 512));
+    expect(moved.length).toBeGreaterThan(0);
+    expect(second.length).toBeGreaterThan(0);
+    expect(new Set(second)).not.toEqual(new Set(moved));
+  });
+
+  it('the cap counts headshots, as bleedHits bleeds them first: a head struck on a tick after two rounds into its torso still spatters', () => {
+    const s = field();
+    const t = target();
+    s.targets = [t];
+    const chest = toWorld(t.frames.torso, [0, 0.28, 0]);
+    const head = toWorld(t.frames.head, [0, 0.155, 0]);
+    const spatters = vi.spyOn(s, 'spatterAt');
+    // The torso's two, from 1 m, strike a substep before the head's, from 5 m.
+    const hits = volley(s, [[chest[0] - 0.05, chest[1], chest[2] - 1], [chest[0] + 0.05, chest[1], chest[2] - 1], [head[0], head[1], head[2] - 5]], dir);
+    expect(hits.map((h) => [h.body, h.zone])).toEqual([[200, 'torso'], [200, 'torso'], [200, 'head']]);
+    expect(new Set(hits.map((h) => h.tick)).size).toBe(1);
+    // Two rounds already into the body this tick, but no headshot: the head's spatters.
+    expect(spatters.mock.calls.map(([at]) => at)).toEqual([hits[2].position]);
+    expect(blood(s.map, 0, 512).length).toBeGreaterThan(0);
   });
 });
