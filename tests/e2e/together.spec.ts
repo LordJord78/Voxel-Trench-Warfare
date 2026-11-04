@@ -16,7 +16,17 @@ type Together = {
   begun(): boolean;
   others(): { id: number; team: string; position: [number, number, number] }[];
 };
-type H = { ready: boolean; together: Together; player(): { position: [number, number, number] }; waitFrames(n: number): Promise<void> };
+type H = {
+  ready: boolean;
+  together: Together;
+  player(): { position: [number, number, number] };
+  camera(): { yaw: number; pitch: number };
+  teleport(at: { position: [number, number, number]; yaw: number; pitch: number }): void;
+  trigger(held: boolean): void;
+  /** The session's tracers the last frame drew (net/gear.ts TRACER_KIND: amber 1, red 2, blue 3): this player's rounds and the others'. */
+  tracerPixels(): { tracers: { kind: number }[] };
+  waitFrames(n: number): Promise<void>;
+};
 
 const h = <T>(page: Page, fn: (h: H) => T | Promise<T>): Promise<T> =>
   page.evaluate((source) => new Function('h', `return (${source})(h)`)((window as unknown as { __trenchline: H }).__trenchline), fn.toString()) as Promise<T>;
@@ -81,6 +91,38 @@ test('one hosts, a friend follows the link: one lobby, two teams, a match, and e
     expect(Math.hypot(seen.position[0] - other[0], seen.position[2] - other[2])).toBeLessThan(0.3);
   }
   await expect(host.page.locator('#roomline')).toContainText(`Game ${room}`);
+
+  // Each sees the other's rounds in their team's colour (the shots spec §1, done row 2): a short burst
+  // from the friend (Blue) is drawn blue on both pages, the shooter's own rounds and the room's copy
+  // of them; then one from the host (Red), red on both. Fired well up into the sky, clear of everyone.
+  for (const [shooter, kind, who] of [[friend.page, 3, 'Blue'], [host.page, 2, 'Red']] as const) {
+    for (const p of [host.page, friend.page]) await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.tracerPixels().tracers.length === 0, null, { timeout: 15_000 });
+    // Every kind each page draws over the next 240 frames, and how many frames drew one.
+    const watch = (p: Page) =>
+      h(p, async (x) => {
+        const kinds: number[] = [];
+        let frames = 0;
+        for (let k = 0; k < 240; k++) {
+          await x.waitFrames(1);
+          const drawn = x.tracerPixels().tracers;
+          if (drawn.length > 0) frames++;
+          for (const t of drawn) if (!kinds.includes(t.kind)) kinds.push(t.kind);
+        }
+        return { kinds, frames };
+      });
+    const seen = Promise.all([watch(host.page), watch(friend.page)]);
+    await h(shooter, (x) => {
+      x.teleport({ position: x.player().position, yaw: x.camera().yaw, pitch: 35 });
+      x.trigger(true);
+    });
+    await shooter.waitForTimeout(300);
+    await h(shooter, (x) => x.trigger(false));
+    const [onHost, onFriend] = await seen;
+    expect(onHost.frames, `${who}'s rounds drawn on the host's page`).toBeGreaterThan(0);
+    expect(onFriend.frames, `${who}'s rounds drawn on the friend's page`).toBeGreaterThan(0);
+    expect(onHost.kinds, `${who}'s rounds on the host's page`).toEqual([kind]);
+    expect(onFriend.kinds, `${who}'s rounds on the friend's page`).toEqual([kind]);
+  }
   expect(host.errors).toEqual([]);
   expect(friend.errors).toEqual([]);
   // Each window draws the world on the one GPU: let them go before the next test's.
