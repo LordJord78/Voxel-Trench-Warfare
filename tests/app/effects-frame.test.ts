@@ -440,14 +440,14 @@ describe('a frame of effects', () => {
     const tt = tracerTunables(tun);
     const { s, events, rifle } = walkAndShoot();
     const eye: V3 = [0, 20, 0];
-    const tracers: TracerState[] = Array.from({ length: 500 }, (_, i) => ({ id: i, position: [10 + i, 30, 0], velocity: [0, 0, 500], flown: 50 }));
+    const tracers: TracerState[] = Array.from({ length: tt.maxDrawn + 100 }, (_, i) => ({ id: i, position: [10 + i, 30, 0], velocity: [0, 0, 500], flown: 50 }));
     const built = new EffectsFrameBuilder(t).build(s, events, rifle, eye, { ...NO_BATTLE, tracers });
     expect(built.counts.battleTracers).toBe(tt.maxDrawn);
     const own = built.counts.tracers + built.counts.stars;
     expect(own).toBeGreaterThan(0);
     const heads = Array.from({ length: built.counts.battleTracers }, (_, i) => ribbon(built.frame.ribbons, own + i).head[0]);
     expect(Math.max(...heads)).toBeLessThan(10 + tt.maxDrawn);
-    expect(tt.maxDrawn).toBe(400);
+    expect(tt.maxDrawn).toBe(900);
   });
 
   it("a flare's spark and disc are dimmed by the sky's flares key, as its light is", () => {

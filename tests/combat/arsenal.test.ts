@@ -64,7 +64,7 @@ describe('the arsenal', () => {
         if (optic === 'iron' || optic === 'scope') continue;
         const fit = { ...BARE, optic };
         const m = gunModel(gun, fit);
-        const spec = armSpec(tun, gun, fit, 'off');
+        const spec = armSpec(tun, gun, fit);
         // Along the sight's line through the optic's middle: nothing in the way.
         expect(at(m, [0, spec.sight.y, GUN_DEFS[gun].mounts.opticZ]), `${gun} ${optic}`).toBe(0);
       }
@@ -72,28 +72,33 @@ describe('the arsenal', () => {
   });
 
   it("is each gun's own numbers bare, and its fit's terms with attachments", () => {
-    const bare = armSpec(tun, 'm4', BARE, 'red');
+    const bare = armSpec(tun, 'm4', BARE);
     expect([bare.hipSpread, bare.flash, bare.report, bare.move]).toEqual([1, 1, 1, 1]);
     // Iron sights magnify a little, aimed ([attachment.iron]).
     expect(bare.zoom).toBeCloseTo(tun.f('attachment.iron.zoom'), 12);
     expect(bare.weapon.rpm).toBe(800);
     expect(bare.suppressed).toBe(false);
-    const kitted = armSpec(tun, 'm4', { optic: 'reddot', muzzle: 'suppressor', under: 'vertical', side: 'laser' }, 'green');
+    const kitted = armSpec(tun, 'm4', { optic: 'reddot', muzzle: 'suppressor', under: 'vertical', side: 'laser' });
     expect(kitted.suppressed).toBe(true);
     expect(kitted.flash).toBeLessThan(0.5);
     expect(kitted.zoom).toBeGreaterThan(1);
     expect(kitted.recoil.climbPerShotDeg).toBeLessThan(bare.recoil.climbPerShotDeg);
     expect(kitted.hipSpread * kitted.laserSpread).toBeLessThan(1);
     expect(kitted.muzzle[2]).toBeGreaterThan(bare.muzzle[2]);
-    expect(armSpec(tun, 'm4', BARE, 'off').weapon.tracerEvery).toBe(0);
-    expect(armSpec(tun, 'm870', BARE, 'red').weapon.pellets).toBe(9);
+    expect(bare.weapon.tracerEvery).toBe(1);
+    expect(armSpec(tun, 'm870', BARE).weapon.pellets).toBe(9);
   });
 
   it('cleans a loadout: anything not one is the default, a fit only what its gun takes', () => {
     expect(cleanLoadout(null)).toEqual(defaultLoadout());
-    expect(cleanLoadout({ primary: 'm17', secondary: 'svd', tracer: 'blue' })).toEqual(defaultLoadout());
-    const l = cleanLoadout({ primary: 'svd', secondary: 'pm', tracer: 'green', fits: { svd: { optic: 'holo', muzzle: 'suppressor', under: 'vertical' } } });
+    expect(defaultLoadout()).toEqual({ primary: 'ak74', secondary: 'm17', fits: {} });
+    expect(cleanLoadout({ primary: 'm17', secondary: 'svd' })).toEqual(defaultLoadout());
+    const l = cleanLoadout({ primary: 'svd', secondary: 'pm', fits: { svd: { optic: 'holo', muzzle: 'suppressor', under: 'vertical' } } });
     expect(l.primary).toBe('svd');
+    // A stored tracer choice from before is ignored.
+    const fits = { svd: { optic: 'holo', muzzle: 'suppressor', under: 'vertical' } };
+    expect(cleanLoadout({ primary: 'svd', secondary: 'pm', tracer: 'green', fits })).toEqual(cleanLoadout({ primary: 'svd', secondary: 'pm', fits }));
+    expect('tracer' in cleanLoadout({ tracer: 'red' })).toBe(false);
     expect(fitOf(l, 'svd')).toEqual({ optic: 'scope', muzzle: 'suppressor', under: 'none', side: 'none' });
   });
 });

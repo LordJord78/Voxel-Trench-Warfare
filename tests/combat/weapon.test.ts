@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { GUN_DEFS } from '../../src/combat/arsenal';
+import type { GunKey } from '../../src/net/gear';
 import { Weapon, weaponSpec, type WeaponSpec } from '../../src/combat/weapon';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
 
 const TICK = 1 / 60;
-const RIFLE = weaponSpec(loadTunables(), 'assault_rifle');
+const tun = loadTunables();
+const RIFLE = weaponSpec(tun, 'assault_rifle');
 
 /** Tick a weapon with the trigger as `held(tick)` says, firing whenever it wants: the ticks that fired. */
 function run(w: Weapon, ticks: number, held: (k: number) => boolean): number[] {
@@ -21,7 +24,7 @@ function run(w: Weapon, ticks: number, held: (k: number) => boolean): number[] {
 
 describe('the rifle', () => {
   it('reads the reference rifle from its tables', () => {
-    expect(RIFLE).toMatchObject({ key: 'assault_rifle', name: '5.45 assault rifle', rpm: 650, magazine: 30, dispersionMoa: 3.2, reloadS: 2.4, automatic: true, tracerEvery: 5 });
+    expect(RIFLE).toMatchObject({ key: 'assault_rifle', name: '5.45 assault rifle', rpm: 650, magazine: 30, dispersionMoa: 3.2, reloadS: 2.4, automatic: true, tracerEvery: 1 });
     expect(RIFLE.projectile.muzzleVelocity).toBe(880);
   });
 
@@ -119,16 +122,12 @@ describe('the rifle', () => {
     expect(burst(6)).not.toEqual(burst(5));
   });
 
-  it('every fifth shot is a tracer', () => {
-    const w = new Weapon({ ...RIFLE, magazine: 100 });
-    const flags: boolean[] = [];
-    for (let k = 0; k < 400 && flags.length < 20; k++) {
-      w.tick(TICK);
-      if (w.wants(true)) {
-        flags.push(w.tracer());
-        w.shot();
-      }
+  it('every shot of every gun is a tracer', () => {
+    for (const key of Object.keys(GUN_DEFS) as GunKey[]) {
+      const w = new Weapon(weaponSpec(tun, GUN_DEFS[key].table));
+      const flags: boolean[] = [];
+      for (let i = 0; i < 12; i++) { flags.push(w.tracer()); w.shot(); }
+      expect(flags.every(Boolean), key).toBe(true);
     }
-    expect(flags).toEqual(Array.from({ length: 20 }, (_, i) => i % 5 === 4));
   });
 });

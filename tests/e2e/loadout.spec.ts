@@ -10,7 +10,7 @@ import { hooks, openGame, type Hooks } from './support/app';
 
 type Kit = Hooks & {
   setLoadout(l: unknown): void;
-  loadout(): { primary: string; secondary: string; tracer: string; fits: Record<string, Record<string, string>> };
+  loadout(): { primary: string; secondary: string; fits: Record<string, Record<string, string>> };
   aim(held: boolean): void;
   hands(): { held: number; ready: number; aimed: number; gun: string; light: boolean; model: [number, number, number] };
   rifleCheck(n: number): Promise<{ visible: boolean; samples: { px: [number, number]; gpu: number; cpu: number | null }[] }>;
@@ -92,12 +92,13 @@ test('the loadout menu chooses the kit, and Deploy goes in with it', async ({ pa
   await page.locator('.gun-pick', { hasText: 'M4A1' }).click();
   await page.locator('#loadout .fit-row .pick', { hasText: 'Red dot' }).click();
   await page.locator('#loadout .fit-row .pick', { hasText: 'Suppressor' }).click();
-  await page.locator('#loadout [data-tracers] .pick', { hasText: 'Green' }).click();
+  // No tracer choice: every round is a tracer, in the team's colour.
+  await expect(page.locator('#loadout [data-tracers]')).toHaveCount(0);
   await page.locator('#loadout-go').click();
   await expect(page.locator('#loadout')).toBeHidden();
   expect(await kit(page, (h) => h.mode())).toBe('playing');
   const l = await kit(page, (h) => h.loadout());
-  expect([l.primary, l.fits.m4?.optic, l.fits.m4?.muzzle, l.tracer]).toEqual(['m4', 'reddot', 'suppressor', 'green']);
+  expect([l.primary, l.fits.m4?.optic, l.fits.m4?.muzzle]).toEqual(['m4', 'reddot', 'suppressor']);
   expect(await kit(page, (h) => h.hands().gun)).toBe('m4');
   expect(await page.locator('#kit-line').textContent()).toContain('M4A1');
   expect(errors).toEqual([]);
@@ -107,7 +108,7 @@ test('every gun with its fit, the pistol and the shovel are drawn as their model
   const errors = await openGame(page);
   await inTheBay(page);
   for (const [gun, fit] of Object.entries(FULL)) {
-    await kit(page, (h, l) => h.setLoadout(l), { primary: gun, secondary: 'm17', fits: { [gun]: fit, m17: { optic: 'reddot', muzzle: 'suppressor', side: 'laser' } }, tracer: 'red' });
+    await kit(page, (h, l) => h.setLoadout(l), { primary: gun, secondary: 'm17', fits: { [gun]: fit, m17: { optic: 'reddot', muzzle: 'suppressor', side: 'laser' } } });
     await kit(page, (h) => h.waitFrames(6));
     const r = await drawnAsTraced(page);
     expect(r.wrong, gun).toEqual([]);
@@ -138,7 +139,7 @@ test('aimed, the view closes in and the sight shows; the others carry their own 
   await inTheBay(page);
   const hip = (await kit(page, (h) => h.camera())).fov!;
   // A red dot: the reticle over the gun, which is still drawn.
-  await kit(page, (h) => h.setLoadout({ primary: 'm4', secondary: 'm17', fits: { m4: { optic: 'reddot' } }, tracer: 'red' }));
+  await kit(page, (h) => h.setLoadout({ primary: 'm4', secondary: 'm17', fits: { m4: { optic: 'reddot' } } }));
   await kit(page, (h) => h.aim(true));
   await handsBecome(page, { aimed: 1 });
   await kit(page, (h) => h.waitFrames(4));
@@ -147,7 +148,7 @@ test('aimed, the view closes in and the sight shows; the others carry their own 
   expect(await kit(page, (h) => h.rifleVisible())).toBe(true);
   // A scope: its circle, and the gun not drawn through it.
   await kit(page, (h) => h.aim(false));
-  await kit(page, (h) => h.setLoadout({ primary: 'svd', secondary: 'm17', fits: { svd: { optic: 'scope' } }, tracer: 'off' }));
+  await kit(page, (h) => h.setLoadout({ primary: 'svd', secondary: 'm17', fits: { svd: { optic: 'scope' } } }));
   await kit(page, (h) => h.aim(true));
   await handsBecome(page, { aimed: 1 });
   await kit(page, (h) => h.waitFrames(4));
@@ -163,9 +164,9 @@ test('aimed, the view closes in and the sight shows; the others carry their own 
   const gear = (g: Gear) => encodeGear(g);
   const bare = { optic: 'iron', muzzle: 'none', under: 'none', side: 'none' } as const;
   const soldiers = [
-    { gear: gear({ gun: 'm249', fit: { optic: 'scope', muzzle: 'compensator', under: 'vertical', side: 'flashlight' }, tracer: 'red', light: true }), flags: 0 },
-    { gear: gear({ gun: 'm17', fit: { ...bare, side: 'flashlight' }, tracer: 'off', light: true }), flags: 0 },
-    { gear: gear({ gun: null, fit: bare, tracer: 'off', light: false }), flags: STATE.DIGGING },
+    { gear: gear({ gun: 'm249', fit: { optic: 'scope', muzzle: 'compensator', under: 'vertical', side: 'flashlight' }, light: true }), flags: 0 },
+    { gear: gear({ gun: 'm17', fit: { ...bare, side: 'flashlight' }, light: true }), flags: 0 },
+    { gear: gear({ gun: null, fit: bare, light: false }), flags: STATE.DIGGING },
   ];
   await kit(
     page,

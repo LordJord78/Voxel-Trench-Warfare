@@ -35,7 +35,8 @@ import type { BrickMap } from '../world/bricks';
 import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, P, paletteData } from '../world/materials';
 import { groundTop } from '../world/raycast';
-import { BARE, decodeShotMark, encodeShotMark, GUNS, TRACER_KIND, type Gear, type GunKey, type Tracer } from '../net/gear';
+import { BARE, decodeShotMark, encodeShotMark, GUNS, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
+import type { Team } from '../net/protocol';
 import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from './destruction';
 
 /** The uniform's colour, for the dust a round throws out of a body. */
@@ -100,11 +101,6 @@ export interface Body {
 
 export function idleIntent(): MoveIntent {
   return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false, dig: false };
-}
-
-/** A tracer's colour as a loadout names it, from the pool's kind. */
-function tracerName(kind: number): Tracer {
-  return kind === TRACER_KIND.red ? 'red' : kind === TRACER_KIND.green ? 'green' : 'off';
 }
 
 /** How the rifle and suppression turn the view, in degrees: recoil and the flinch (yaw, pitch), the shake (pitch, roll), and the view kick's pulse of the field of view. */
@@ -252,6 +248,8 @@ export class Session {
   private ownFrames: { tick: number; frames: Record<PartName, Frame> } | null = null;
   /** Ticks run. */
   ticks = 0;
+  /** The side the player fires for: their rounds are its colour (solo plays Red's). */
+  team: Team = 'red';
   /** The last tick's shots: from the eye, their direction, the aim (yaw, pitch) before the cone, and whether each is a tracer. */
   readonly shots: { origin: [number, number, number]; dir: [number, number, number]; aim: [number, number]; tracer: boolean }[] = [];
   private readonly dispersion: Rng;
@@ -293,8 +291,8 @@ export class Session {
     this.streams = Rng.root(seed).derive('session');
     this.tun = tun;
     this.hands = handsTunables(tun);
-    // Until a loadout is taken in: the AK and the pistol, bare, the battle's amber tracers.
-    this.arms = [armSpec(tun, 'ak74', BARE, 'amber'), armSpec(tun, 'm17', BARE, 'amber')].map((a) => this.makeArm(a, false));
+    // Until a loadout is taken in: the AK and the pistol, bare.
+    this.arms = [armSpec(tun, 'ak74', BARE), armSpec(tun, 'm17', BARE)].map((a) => this.makeArm(a, false));
     this.frontProjectile = projectileSpec(tun, 'assault_rifle');
     this.rounds = new Rounds(ballisticsTunables(tun), world.map, voxel);
     this.dispersion = this.streams.derive('combat.dispersion');
@@ -371,19 +369,21 @@ export class Session {
   /**
    * Another player's shot (owner 2 + their seat), from their eye along `dir`, its tracer and flash
    * at their rifle's `muzzle`; `mark`, its word (net/gear.ts): their gun's round, its tracer's
-   * colour, and a shotgun's pellets spread about it here. Without one, the AK's, amber.
+   * colour, and a shotgun's pellets spread about it here. Without one, the AK's, amber. `kind`, where
+   * given, is the tracer's colour whatever the mark says (their seat's team); a shot that is not a
+   * tracer draws none. Every pellet takes the shot's kind.
    */
-  fireRemote(owner: number, origin: readonly [number, number, number], dir: readonly [number, number, number], tracer: boolean, muzzle: readonly [number, number, number], mark?: number): void {
+  fireRemote(owner: number, origin: readonly [number, number, number], dir: readonly [number, number, number], tracer: boolean, muzzle: readonly [number, number, number], mark?: number, kind?: number): void {
     const m = mark === undefined ? null : decodeShotMark(mark);
     const gun = m ? this.remoteGun(m.gun) : { spec: this.frontProjectile, pellets: 1, coneDeg: 0 };
     const spec = gun.spec;
     const v = spec.muzzleVelocity;
-    const kind = !tracer ? TRACER_KIND.none : m ? m.kind : TRACER_KIND.amber;
+    const round = !tracer ? TRACER_KIND.none : kind ?? (m ? m.kind : TRACER_KIND.amber);
     const from: [number, number, number] = [muzzle[0], muzzle[1], muzzle[2]];
-    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, kind, from) < 0) return;
+    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, from) < 0) return;
     for (let k = 1; k < gun.pellets; k++) {
       const d = this.spreadAbout(dir, gun.coneDeg, this.remoteRng);
-      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, TRACER_KIND.none, from);
+      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, round, from);
     }
     const flashShare = m?.suppressed ? 0.12 : 1;
     this.events.remoteShots.push({
@@ -462,10 +462,10 @@ export class Session {
     this.prevKick = this.kick();
   }
 
-  /** What the player shows the others (net/gear.ts): what is in their hands and its fit, their tracers, their light. */
+  /** What the player shows the others (net/gear.ts): what is in their hands and its fit, their light. */
   gear(): Gear {
     const s = this.arm.spec;
-    return { gun: this.held === SHOVEL_HELD ? null : s.gun.key, fit: s.fit, tracer: tracerName(s.tracerKind), light: this.lightOn && s.fit.side !== 'none' };
+    return { gun: this.held === SHOVEL_HELD ? null : s.gun.key, fit: s.fit, light: this.lightOn && s.fit.side !== 'none' };
   }
 
   /** What the hands hold, for their pose. */
@@ -638,7 +638,7 @@ export class Session {
       const dir = w.aim(aim[0], aim[1], cone, this.dispersion);
       const projectile = w.spec.projectile;
       const v = projectile.muzzleVelocity;
-      const kind = w.tracer() ? arm.spec.tracerKind : TRACER_KIND.none;
+      const kind = w.tracer() ? teamTracer(this.team) : TRACER_KIND.none;
       const tracer = kind !== TRACER_KIND.none;
       // The round leaves the eye, so the reticle tells the truth; its tracer, flash and brass the
       // drawn rifle, as it stands before this shot kicks it.
@@ -647,7 +647,7 @@ export class Session {
         // A shotgun's other pellets, each the cone's own.
         for (let k = 1; k < w.spec.pellets; k++) {
           const d = w.aim(aim[0], aim[1], cone, this.dispersion);
-          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, TRACER_KIND.none, muzzle);
+          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, muzzle);
         }
         w.shot();
         this.throwShot(muzzle, arm.spec.flash);

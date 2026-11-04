@@ -2,13 +2,14 @@
  * What a player carries, as the room and the others need to know it (the loadout): the guns in
  * the order every client and the room number them, what each one's round does to a body against
  * the zones' damage (match-rules.ts), and the gear a player shows, packed into an integer: the
- * gun in their hands (or the shovel), what is fitted to it, their tracers' colour and whether
- * their light is on. It rides above the eight bits of their state's flags, and a shot's own word
- * says which gun fired it, its tracer's colour and whether it was suppressed: the room relays both
+ * gun in their hands (or the shovel), what is fitted to it and whether their light is on. It rides above
+ * the eight bits of their state's flags, and a shot's own word says which gun fired it, its tracer's colour and whether it was suppressed: the room relays both
  * as they are, so none of this changes what it is sent.
  *
  * Pure and small, because the room imports it.
  */
+
+import type { Team } from './protocol';
 
 export const GUNS = ['ak74', 'm4', 'mp5', 'svd', 'm249', 'm870', 'm17', 'pm'] as const;
 export type GunKey = (typeof GUNS)[number];
@@ -20,12 +21,10 @@ export const OPTICS = ['iron', 'reddot', 'holo', 'scope'] as const;
 export const MUZZLES = ['none', 'suppressor', 'compensator'] as const;
 export const UNDERS = ['none', 'vertical', 'angled'] as const;
 export const SIDES = ['none', 'flashlight', 'laser'] as const;
-export const TRACERS = ['off', 'red', 'green'] as const;
 export type Optic = (typeof OPTICS)[number];
 export type Muzzle = (typeof MUZZLES)[number];
 export type Under = (typeof UNDERS)[number];
 export type Side = (typeof SIDES)[number];
-export type Tracer = (typeof TRACERS)[number];
 
 /** What is fitted to a gun, a slot each. */
 export interface Fit {
@@ -37,25 +36,25 @@ export interface Fit {
 
 export const BARE: Fit = { optic: 'iron', muzzle: 'none', under: 'none', side: 'none' };
 
-/** What a player shows: the gun in their hands (null: the shovel) and its fit, their tracers, their light (or laser) on. */
+/** What a player shows: the gun in their hands (null: the shovel) and its fit, their light (or laser) on. */
 export interface Gear {
   gun: GunKey | null;
   fit: Fit;
-  tracer: Tracer;
   light: boolean;
 }
 
-/** A round's tracer, as the pool keeps it: none, the battle's amber, or a loadout's red or green. */
-export const TRACER_KIND = { none: 0, amber: 1, red: 2, green: 3 } as const;
+/** A round's tracer, as the pool keeps it: none, the battle's amber, or a team's red or blue. */
+export const TRACER_KIND = { none: 0, amber: 1, red: 2, blue: 3 } as const;
 
-export function tracerKind(t: Tracer): number {
-  return t === 'red' ? TRACER_KIND.red : t === 'green' ? TRACER_KIND.green : TRACER_KIND.none;
+/** The tracer a team's players fire: every round, in the team's colour. */
+export function teamTracer(team: Team): number {
+  return team === 'blue' ? TRACER_KIND.blue : TRACER_KIND.red;
 }
 
 /** The four bits of the gun in hand for the shovel. */
 const SHOVEL = 15;
 
-/** Gear as 15 bits: the gun (4), the optic, muzzle, underbarrel and side (2 each), the tracers (2), the light (1). */
+/** Gear as 15 bits: the gun (4), the optic, muzzle, underbarrel and side (2 each), two spare (12-13: zero, and ignored), the light (1). */
 export function encodeGear(g: Gear): number {
   const gun = g.gun === null ? SHOVEL : GUNS.indexOf(g.gun);
   return (
@@ -64,7 +63,6 @@ export function encodeGear(g: Gear): number {
     (MUZZLES.indexOf(g.fit.muzzle) << 6) |
     (UNDERS.indexOf(g.fit.under) << 8) |
     (SIDES.indexOf(g.fit.side) << 10) |
-    (TRACERS.indexOf(g.tracer) << 12) |
     ((g.light ? 1 : 0) << 14)
   );
 }
@@ -82,7 +80,6 @@ export function decodeGear(n: number): Gear {
       under: pick(UNDERS, (bits >> 8) & 3, 'none'),
       side: pick(SIDES, (bits >> 10) & 3, 'none'),
     },
-    tracer: pick(TRACERS, (bits >> 12) & 3, 'off'),
     light: ((bits >> 14) & 1) === 1,
   };
 }

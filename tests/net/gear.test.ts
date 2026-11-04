@@ -1,25 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { decodeGear, decodeShotMark, encodeGear, encodeShotMark, GUNS, gunDamage, MUZZLES, OPTICS, SIDES, TRACER_KIND, TRACERS, UNDERS, type Gear } from '../../src/net/gear';
+import { decodeGear, decodeShotMark, encodeGear, encodeShotMark, GUNS, gunDamage, MUZZLES, OPTICS, SIDES, TRACER_KIND, teamTracer, UNDERS, type Gear } from '../../src/net/gear';
 import { decodeShot, decodeState, encodeShot, encodeState, parseClient } from '../../src/net/protocol';
 
 // What a player carries, as the others and the room know it (net/gear.ts): packed above the
 // state's eight flags and into a shot's last word, so the room relays it without knowing.
 describe('gear on the wire', () => {
-  it('packs every gun, fit, tracer and light, and the shovel, and unpacks them', () => {
+  it('packs every gun, fit and light, and the shovel, and unpacks them', () => {
     for (const gun of [...GUNS, null]) {
       for (const [k, optic] of OPTICS.entries()) {
-        const g: Gear = { gun, fit: { optic, muzzle: MUZZLES[k % 3], under: UNDERS[(k + 1) % 3], side: SIDES[(k + 2) % 3] }, tracer: TRACERS[k % 3], light: k % 2 === 1 };
+        const g: Gear = { gun, fit: { optic, muzzle: MUZZLES[k % 3], under: UNDERS[(k + 1) % 3], side: SIDES[(k + 2) % 3] }, light: k % 2 === 1 };
         expect(decodeGear(encodeGear(g))).toEqual(g);
         expect(encodeGear(g)).toBeLessThan(1 << 15);
       }
     }
     // Nothing (or junk) is the bare AK.
-    expect(decodeGear(0)).toEqual({ gun: 'ak74', fit: { optic: 'iron', muzzle: 'none', under: 'none', side: 'none' }, tracer: 'off', light: false });
+    expect(decodeGear(0)).toEqual({ gun: 'ak74', fit: { optic: 'iron', muzzle: 'none', under: 'none', side: 'none' }, light: false });
     expect(decodeGear(-5).gun).toBe('ak74');
+    // The old tracer bits (12-13) are ignored, and written as zero.
+    expect(decodeGear(0b11 << 12)).toEqual(decodeGear(0));
+    expect(encodeGear(decodeGear(0b11 << 12)) & (0b11 << 12)).toBe(0);
+  });
+
+  it("a team's tracer is its colour", () => {
+    expect(teamTracer('red')).toBe(2);
+    expect(teamTracer('blue')).toBe(3);
   });
 
   it("rides above a state's flags, which keep their own eight bits", () => {
-    const gear = encodeGear({ gun: 'm4', fit: { optic: 'scope', muzzle: 'suppressor', under: 'angled', side: 'laser' }, tracer: 'green', light: true });
+    const gear = encodeGear({ gun: 'm4', fit: { optic: 'scope', muzzle: 'suppressor', under: 'angled', side: 'laser' }, light: true });
     const s = { tick: 9, position: [1, 2, 3] as [number, number, number], velocity: [0, 0, 0] as [number, number, number], yaw: 10, pitch: -5, stance: 1, height: 1.8, flags: 0b101001, gear };
     const back = decodeState(encodeState(s))!;
     expect(back.flags).toBe(0b101001);
@@ -29,8 +37,8 @@ describe('gear on the wire', () => {
   });
 
   it("marks a shot with its gun, its tracer's colour and a suppressor; bit 0 is still the tracer", () => {
-    const mark = encodeShotMark({ tracer: true, kind: TRACER_KIND.green, suppressed: true, gun: 'svd' });
-    expect(decodeShotMark(mark)).toEqual({ tracer: true, kind: TRACER_KIND.green, suppressed: true, gun: 'svd' });
+    const mark = encodeShotMark({ tracer: true, kind: TRACER_KIND.blue, suppressed: true, gun: 'svd' });
+    expect(decodeShotMark(mark)).toEqual({ tracer: true, kind: TRACER_KIND.blue, suppressed: true, gun: 'svd' });
     const shot = { tick: 4, origin: [1, 1.6, 2] as [number, number, number], dir: [0, 0, 1] as [number, number, number], tracer: true, mark };
     const back = decodeShot(encodeShot(shot))!;
     expect(back.tracer).toBe(true);

@@ -39,11 +39,24 @@ describe('the front', () => {
       heavyRpm: 500,
       burstRounds: 8,
       burstRpm: 600,
-      tracerEvery: 5,
+      tracerEvery: 1,
       spreadM: 1.6,
       spreadVertical: 0.6,
       reachM: 30,
     });
+  });
+
+  it('light rounds are tracers as heavy ones are', () => {
+    for (const intensity of ['light', 'heavy'] as const) {
+      const front = new Front(T, lineSource(38, 0.4), Rng.root(3).derive('front'));
+      front.intensity = intensity;
+      const rounds = field();
+      let fired = 0;
+      for (let k = 0; k < 60 * 20 && fired < 3; k++) fired += front.tick(TICK, TARGET, rounds, SPEC);
+      expect(fired, intensity).toBeGreaterThanOrEqual(3);
+      // Nothing stepped: every round fired is still in the pool, each a tracer.
+      expect(Array.from({ length: fired }, (_, slot) => rounds.isTracer(slot)).every(Boolean), intensity).toBe(true);
+    }
   });
 
   it('is off unless asked for', () => {

@@ -10,7 +10,7 @@
  * The simulation's muzzle is the bare eye's at the tick; the drawn rifle's
  * follows the interpolated, bobbing eye, centimetres away while walking.
  *
- * The loadout's own: tracers in its red or green, a suppressed gun's flash a
+ * The team's own: tracers in its red or blue, a suppressed gun's flash a
  * wisp without its star, and the guns' lights and lasers — the player's from
  * the drawn gun, the others' from theirs — where their beams strike: a light's
  * pool of light, widening and dimming with its reach, and a laser's dot.
@@ -64,9 +64,9 @@ export interface EffectsTunables {
   tracerLengthM: number;
   tracerWidthM: number;
   tracerColour: V3;
-  /** The loadout's tracers' colours. */
+  /** A team's tracers' colours. */
   tracerColourRed: V3;
-  tracerColourGreen: V3;
+  tracerColourBlue: V3;
   tracerIntensity: number;
   /** A weapon light: how far its beam reaches, the light where it strikes (its radius near and far, its intensity, colour). */
   light: { rangeM: number; radiusM: [number, number]; intensity: number; colour: V3 };
@@ -116,7 +116,7 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     tracerWidthM: f('tracer_width_m'),
     tracerColour: rgb(tun, 'effects.tracer_colour'),
     tracerColourRed: rgb(tun, 'effects.tracer_colour_red'),
-    tracerColourGreen: rgb(tun, 'effects.tracer_colour_green'),
+    tracerColourBlue: rgb(tun, 'effects.tracer_colour_blue'),
     tracerIntensity: f('tracer_intensity'),
     light: { rangeM: f('light_range_m'), radiusM: tun.pair('effects.light_radius_m'), intensity: f('light_intensity'), colour: rgb(tun, 'effects.light_colour') },
     laser: { sizeM: f('laser_size_m'), glow: f('laser_glow'), colour: rgb(tun, 'effects.laser_colour') },
@@ -297,8 +297,8 @@ export class EffectsFrameBuilder {
     let tracers = 0;
     const seg = session.rounds.tracerSegments(t.tracerLengthM);
     const glow = t.tracerColour.map((c) => c * t.tracerIntensity);
-    // By the round's kind (net/gear.ts TRACER_KIND): the battle's amber, the loadout's red or green.
-    const glows = [t.tracerColour, t.tracerColour, t.tracerColourRed, t.tracerColourGreen].map((c) => c.map((v) => v * t.tracerIntensity));
+    // By the round's kind (net/gear.ts TRACER_KIND): the battle's amber, a team's red or blue.
+    const glows = [t.tracerColour, t.tracerColour, t.tracerColourRed, t.tracerColourBlue].map((c) => c.map((v) => v * t.tracerIntensity));
     for (let i = 0; i < seg.flown.length; i++) {
       const at = (a: Float32Array) => [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
       const head = at(seg.head);

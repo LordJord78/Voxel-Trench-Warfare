@@ -1,16 +1,16 @@
 /**
  * The loadout, chosen before going in (the start screen's, the lobby's, the pause menu's): a long
  * gun and a pistol, each with its own fit — an optic, a muzzle device, a grip, a light or a laser,
- * only what that gun takes — and the tracers' colour. The gun being fitted is drawn from its right
+ * only what that gun takes. The gun being fitted is drawn from its right
  * side as its voxels are (combat/gun-models.ts), with its numbers against the arsenal's as bars.
  * Kept in local storage between visits; anything stale or hand-edited falls back to the default.
  */
 
-import { armSpec, ATTACHMENT_NAMES, cleanLoadout, defaultLoadout, fitOf, GUN_DEFS, gunStats, PRIMARY_GUNS, SECONDARY_GUNS, TRACER_NAMES, type GunStats, type Loadout } from '../combat/arsenal';
+import { armSpec, ATTACHMENT_NAMES, cleanLoadout, defaultLoadout, fitOf, GUN_DEFS, gunStats, PRIMARY_GUNS, SECONDARY_GUNS, type GunStats, type Loadout } from '../combat/arsenal';
 import { gunModel } from '../combat/gun-models';
 import type { RifleModel } from '../combat/rifle-model';
 import type { Tunables } from '../core/tunables';
-import { DAMAGE_SCALE, TRACERS, type Fit, type GunKey, type Tracer } from '../net/gear';
+import { DAMAGE_SCALE, type Fit, type GunKey } from '../net/gear';
 import { PALETTE } from '../world/materials';
 
 const KEY = 'trenchline.loadout';
@@ -43,7 +43,7 @@ export function gunLine(gun: GunKey, fit: Fit): string {
 
 /** The loadout in a line, for the start screen and the lobby. */
 export function kitSummary(l: Loadout): string {
-  return `${gunLine(l.primary, fitOf(l, l.primary))} · ${GUN_DEFS[l.secondary].name} · ${TRACER_NAMES[l.tracer]}`;
+  return `${gunLine(l.primary, fitOf(l, l.primary))} · ${GUN_DEFS[l.secondary].name}`;
 }
 
 const SLOTS: readonly { key: keyof Fit; name: string }[] = [
@@ -158,8 +158,6 @@ export class LoadoutMenu {
         }),
       );
     }
-    const tracers = this.root.querySelector<HTMLElement>('[data-tracers]');
-    if (tracers) tracers.replaceChildren(...TRACERS.map((t) => this.choice(TRACER_NAMES[t].replace(' tracers', ''), l.tracer === t, () => this.setTracer(t), `tracer-${t}`)));
 
     const gun = this.editing;
     const fit = fitOf(l, gun);
@@ -182,7 +180,7 @@ export class LoadoutMenu {
         }),
       );
     }
-    const spec = armSpec(this.tun, gun, fit, l.tracer);
+    const spec = armSpec(this.tun, gun, fit);
     const stats = gunStats(spec, DAMAGE_SCALE[gun]);
     const statsEl = this.root.querySelector<HTMLElement>('.stats');
     if (statsEl) {
@@ -208,10 +206,10 @@ export class LoadoutMenu {
     if (preview) drawPreview(preview, gunModel(gun, fit));
   }
 
-  private choice(text: string, on: boolean, pick: () => void, cls = ''): HTMLButtonElement {
+  private choice(text: string, on: boolean, pick: () => void): HTMLButtonElement {
     const b = this.doc.createElement('button');
     b.type = 'button';
-    b.className = `pick${on ? ' on' : ''}${cls ? ` ${cls}` : ''}`;
+    b.className = `pick${on ? ' on' : ''}`;
     b.textContent = text;
     b.setAttribute('aria-pressed', String(on));
     b.onclick = pick;
@@ -223,10 +221,6 @@ export class LoadoutMenu {
     this.render();
   }
 
-  private setTracer(t: Tracer): void {
-    this.loadout.tracer = t;
-    this.render();
-  }
 }
 
 /** A model drawn from its right side, the muzzle to the right, a voxel a square: the nearest voxel of each column, darker the deeper it lies, lighter where nothing is over it. */

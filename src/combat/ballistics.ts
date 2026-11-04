@@ -167,7 +167,7 @@ export class Rounds {
   /**
    * A round leaving `origin` (m) at `velocity` (m/s), its tracer drawn from `from` (the origin
    * unless given): its slot, or −1 if the pool is full or the velocity is zero. `tracer` is true
-   * (the battle's amber), false, or a kind (net/gear.ts TRACER_KIND: 0 none, 2 red, 3 green).
+   * (the battle's amber), false, or a kind (net/gear.ts TRACER_KIND: 0 none, 2 red, 3 blue).
    */
   fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean | number, from: readonly [number, number, number] = origin): number {
     if (velocity[0] === 0 && velocity[1] === 0 && velocity[2] === 0) return -1;

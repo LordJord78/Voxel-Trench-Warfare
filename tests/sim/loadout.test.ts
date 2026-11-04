@@ -27,7 +27,6 @@ const KITTED: Loadout = {
   primary: 'm4',
   secondary: 'm17',
   fits: { m4: { optic: 'reddot', muzzle: 'suppressor', under: 'vertical', side: 'laser' } },
-  tracer: 'green',
 };
 
 describe('the loadout in the hands', () => {
@@ -81,7 +80,7 @@ describe('the loadout in the hands', () => {
   });
 
   it("throws a shotgun's pellets, each a round of its own", () => {
-    const s = stand({ primary: 'm870', secondary: 'pm', fits: {}, tracer: 'off' });
+    const s = stand({ primary: 'm870', secondary: 'pm', fits: {} });
     const before = s.rounds.count;
     s.intent = { ...idleIntent(), fire: true };
     s.tick();

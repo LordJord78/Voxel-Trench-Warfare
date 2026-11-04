@@ -11,7 +11,7 @@
 
 import { holdOf, muzzleOf } from '../combat/arsenal';
 import { hitParts, pose, toWorld } from '../combat/soldier-rig';
-import { decodeGear, encodeGear } from '../net/gear';
+import { decodeGear, encodeGear, teamTracer } from '../net/gear';
 import { MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type MatchInfo, type PlayerState, type RoomConfig, type ShotState, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
@@ -290,7 +290,7 @@ export class Together {
         // From the muzzle of the gun they are drawn with.
         const g = decodeGear(d?.gear ?? 0);
         const muzzle = d && g.gun !== null ? toWorld(d.frames.rifle, muzzleOf(g.gun, g.fit)) : shot.origin;
-        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark);
+        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark, d ? teamTracer(d.team) : undefined);
       }
     }
     return draws;

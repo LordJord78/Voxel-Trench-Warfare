@@ -10,7 +10,7 @@
  * ring about the head so it passes no nearer than `light_miss_m`: heard and
  * felt, never pinning (the spec's light). Heavy is a machine gun's bursts at
  * its cyclic rate, with drawn pauses that bring its mean to `heavy_rpm`, every
- * fifth round a tracer, scattered about the head as the reference's rig did:
+ * round a tracer (light's too, by `tracer_every`), scattered about the head as the reference's rig did:
  * `spread_m` sideways and `spread_vertical` of it up and down. Each round
  * leaves from where the source says (an enemy bay's crest in a generated
  * world; a line at a set distance in a test's), and its scatter is taken
@@ -99,7 +99,6 @@ export class Front {
   /** One tick: the rounds this intensity owes, fired at `target` into `rounds`; how many left. */
   tick(dt: number, target: readonly [number, number, number], rounds: Rounds, spec: ProjectileSpec): number {
     let shots = 0;
-    let tracers = false;
     if (this.intensity === 'light') {
       // Due now, then the tick passes: the next no sooner than light_gap_s, the rest drawn.
       while (this.wait <= 1e-9) {
@@ -108,7 +107,6 @@ export class Front {
       }
       this.wait -= dt;
     } else if (this.intensity === 'heavy') {
-      tracers = true;
       // Due now, then the tick passes: a burst's rounds fall 60/burst_rpm apart from its first.
       while (this.wait <= 1e-9) {
         if (this.burstLeft === 0) this.burstLeft = this.t.burstRounds;
@@ -133,7 +131,7 @@ export class Front {
       if (!(len > 0)) continue;
       const s = spec.muzzleVelocity / len;
       this.fired++;
-      const tracer = tracers && this.t.tracerEvery > 0 && this.fired % this.t.tracerEvery === 0;
+      const tracer = this.t.tracerEvery > 0 && this.fired % this.t.tracerEvery === 0;
       if (rounds.fire(origin, [d[0] * s, d[1] * s, d[2] * s], spec, 1, tracer) >= 0) fired++;
     }
     return fired;

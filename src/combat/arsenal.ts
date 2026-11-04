@@ -11,7 +11,7 @@
  */
 
 import type { Tunables } from '../core/tunables';
-import { BARE, GUNS, MUZZLES, OPTICS, SIDES, TRACER_KIND, TRACERS, UNDERS, tracerKind, type Fit, type Gear, type GunKey, type Muzzle, type Optic, type Side, type Tracer, type Under } from '../net/gear';
+import { BARE, GUNS, MUZZLES, OPTICS, SIDES, UNDERS, type Fit, type Gear, type GunKey, type Muzzle, type Optic, type Side, type Under } from '../net/gear';
 import { recoilProfile, type RecoilProfile } from './recoil';
 import type { Hold } from './soldier-rig';
 import { viewKickProfile, type ViewKickProfile } from './viewkick';
@@ -128,18 +128,16 @@ export const ATTACHMENT_NAMES: Record<Optic | Muzzle | Under | Side, string> = {
   vertical: 'Vertical grip', angled: 'Angled grip',
   flashlight: 'Flashlight', laser: 'Laser',
 };
-export const TRACER_NAMES: Record<Tracer, string> = { off: 'No tracers', red: 'Red tracers', green: 'Green tracers' };
 
-/** What a player takes in: a long gun and a pistol, each with its own fit, and their tracers' colour. */
+/** What a player takes in: a long gun and a pistol, each with its own fit. */
 export interface Loadout {
   primary: GunKey;
   secondary: GunKey;
   fits: Partial<Record<GunKey, Fit>>;
-  tracer: Tracer;
 }
 
 export function defaultLoadout(): Loadout {
-  return { primary: 'ak74', secondary: 'm17', fits: {}, tracer: 'red' };
+  return { primary: 'ak74', secondary: 'm17', fits: {} };
 }
 
 const isGun = (v: unknown): v is GunKey => typeof v === 'string' && (GUNS as readonly string[]).includes(v);
@@ -162,8 +160,7 @@ export function cleanLoadout(raw: unknown): Loadout {
   const fits: Partial<Record<GunKey, Fit>> = {};
   const given = (typeof r.fits === 'object' && r.fits !== null ? r.fits : {}) as Record<string, unknown>;
   for (const g of GUNS) if (g in given) fits[g] = cleanFit(g, given[g]);
-  const tracer = (TRACERS as readonly string[]).includes(r.tracer as string) ? (r.tracer as Tracer) : d.tracer;
-  return { primary, secondary, fits, tracer };
+  return { primary, secondary, fits };
 }
 
 export function fitOf(l: Loadout, gun: GunKey): Fit {
@@ -264,8 +261,6 @@ export interface ArmSpec {
   flash: number;
   report: number;
   suppressed: boolean;
-  /** Its rounds' tracer (TRACER_KIND), every `weapon.tracerEvery`-th. */
-  tracerKind: number;
   sight: { y: number; z: number };
   muzzle: V3;
   port: V3;
@@ -273,19 +268,17 @@ export interface ArmSpec {
 }
 
 /**
- * `gun` with `fit`, its tracers `tracer` (a loadout's colour, or the battle's amber where no
- * loadout says: the session's own default). Bare, every term is the gun's own, exactly.
+ * `gun` with `fit`. Bare, every term is the gun's own, exactly. Its rounds' tracers are every
+ * `weapon.tracerEvery`-th; their colour is the player's team's (the session's).
  */
-export function armSpec(tun: Tunables, gun: GunKey, fit: Fit, tracer: Tracer | 'amber'): ArmSpec {
+export function armSpec(tun: Tunables, gun: GunKey, fit: Fit): ArmSpec {
   const def = GUN_DEFS[gun];
   const terms = [fit.optic, fit.muzzle, fit.under, fit.side].filter((k) => k !== 'none').map((k) => attachmentTerms(tun, k));
   const product = (k: keyof AttachmentTerms) => terms.reduce((p, t) => p * t[k], 1);
   const base = weaponSpec(tun, def.table);
-  const kind = tracer === 'amber' ? TRACER_KIND.amber : tracerKind(tracer);
   const velocity = product('velocity');
   const weapon: WeaponSpec = {
     ...base,
-    tracerEvery: kind === TRACER_KIND.none ? 0 : base.tracerEvery,
     projectile: velocity === 1 ? base.projectile : { ...base.projectile, muzzleVelocity: base.projectile.muzzleVelocity * velocity },
   };
   const kick = product('kick');
@@ -309,7 +302,6 @@ export function armSpec(tun: Tunables, gun: GunKey, fit: Fit, tracer: Tracer | '
     flash: product('flash'),
     report: product('reportGain'),
     suppressed: fit.muzzle === 'suppressor',
-    tracerKind: kind,
     sight: sightOf(gun, fit),
     muzzle: muzzleOf(gun, fit),
     port: def.mounts.port,
@@ -319,7 +311,7 @@ export function armSpec(tun: Tunables, gun: GunKey, fit: Fit, tracer: Tracer | '
 
 /** The loadout's two guns in the hands, the long gun first. */
 export function loadoutArms(tun: Tunables, l: Loadout): ArmSpec[] {
-  return [l.primary, l.secondary].map((g) => armSpec(tun, g, fitOf(l, g), l.tracer));
+  return [l.primary, l.secondary].map((g) => armSpec(tun, g, fitOf(l, g)));
 }
 
 /** A gun's numbers as the loadout compares them, each 0 to 1 against the arsenal's best. */

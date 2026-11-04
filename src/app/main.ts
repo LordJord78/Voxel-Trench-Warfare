@@ -18,7 +18,7 @@ import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import { AudioEngine } from '../audio/engine';
 import { audioTunables, planVoices } from '../audio/plan';
-import { cleanLoadout, TRACER_NAMES, type Loadout } from '../combat/arsenal';
+import { cleanLoadout, type Loadout } from '../combat/arsenal';
 import { gunModel, shovelModel } from '../combat/gun-models';
 import { traceRifle } from '../combat/rifle-model';
 import { projectToPixel, rayDir, type CameraPose } from '../render/camera';
@@ -532,8 +532,6 @@ async function start(): Promise<void> {
     const s = session.arm.spec;
     const bits: string[] = [];
     if (session.held !== SHOVEL_HELD && session.weapon.rounds === 0 && !session.weapon.reloading) bits.push('Empty: R to reload');
-    const tracer = (session.loadout ?? loadout).tracer;
-    if (tracer !== 'off') bits.push(TRACER_NAMES[tracer]);
     if (s.fit.side !== 'none') bits.push(session.lightOn ? (s.fit.side === 'laser' ? 'Laser on' : 'Light on') : s.fit.side === 'laser' ? 'L for the laser' : 'L for the light');
     bits.push(session.arms.map((a, i) => `${i + 1} ${a.spec.gun.name}`).join('  '));
     return bits.join(' · ');
@@ -587,6 +585,7 @@ async function start(): Promise<void> {
     showLobby: () => loading.hide(),
     deploy: (team, index, match) => {
       const at = startOf(team, index);
+      session.team = team;
       session.equip(pendingLoadout ?? loadout);
       pendingLoadout = null;
       session.respawn(at.position, facingYaw(at.bay));
