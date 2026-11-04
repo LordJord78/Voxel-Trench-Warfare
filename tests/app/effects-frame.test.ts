@@ -183,7 +183,9 @@ describe('a frame of effects', () => {
     expect(built.counts.tracers).toBe(1);
     const path = s.rounds.tracerSegments(streak);
     const offset = [from[0] - origin[0], from[1] - origin[1], from[2] - origin[2]];
-    const drawn = ribbon(built.frame.ribbons, 0);
+    // Its ends, as its ribbons draw them: in its first frame lit in part way along, so two, one streak.
+    const ribbons = Array.from({ length: built.frame.ribbonCount }, (_, i) => ribbon(built.frame.ribbons, i));
+    const drawn = { tail: ribbons[0].tail, head: ribbons[ribbons.length - 1].head };
     const flown = path.flown[0];
     const length = Math.hypot(path.head[0] - path.tail[0], path.head[1] - path.tail[1], path.head[2] - path.tail[2]);
     for (const [end, at] of [['head', flown], ['tail', flown - length]] as const) {
@@ -361,7 +363,7 @@ describe('a frame of effects', () => {
     // joining the round's path).
     const head = Array.from(built.frame.billboards.slice(s.particles.count * BILLBOARD_FLOATS, (s.particles.count + 1) * BILLBOARD_FLOATS));
     expect(head[8]).toBe(3);
-    close(head, ribbon(built.frame.ribbons, 0).head, 5, 'head');
+    close(head, built.drawn[0].head, 5, 'head');
   });
   it('a flare climbing is a spark where it is, a burning flare a bright disc by its glow; one out is nothing', () => {
     const ft = flareTunables(tun);
@@ -460,8 +462,9 @@ describe('a frame of effects', () => {
     const tracers: TracerState[] = Array.from({ length: tt.maxDrawn + 100 }, (_, i) => ({ id: i, position: [10 + i, 30, 0], velocity: [0, 0, 500], flown: 50 }));
     const built = new EffectsFrameBuilder(t).build(s, events, rifle, eye, { ...NO_BATTLE, tracers });
     expect(built.counts.battleTracers).toBe(tt.maxDrawn);
-    const own = built.counts.tracers + built.counts.stars;
-    expect(own).toBeGreaterThan(0);
+    // The session's own ribbons first: its tracer's (two in its first frame) and the star's.
+    const own = built.frame.ribbonCount - built.counts.battleTracers;
+    expect(own).toBeGreaterThan(built.counts.tracers + built.counts.stars - 1);
     const heads = Array.from({ length: built.counts.battleTracers }, (_, i) => ribbon(built.frame.ribbons, own + i).head[0]);
     expect(Math.max(...heads)).toBeLessThan(10 + tt.maxDrawn);
     expect(tt.maxDrawn).toBe(900);

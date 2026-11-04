@@ -15,11 +15,14 @@
  *
  * A tracer (the shots spec §1), the session's and the battle's alike: a white-
  * hot core in a coloured glow (ribbon style 1), its streak more than a frame's
- * flight at its speed (`tracer_streak_s`) and no more than it has flown, lit in
- * over its first metre (`tracer_ignite_hip_m`; the shooter's own aimed shot over
- * `tracer_ignite_m`, clear of the sights), a burning head from `tracer_head_from_m`,
- * white-hot near the eye and its team's colour far off (`tracer_white_near_m`
- * to `tracer_white_far_m`), and brighter by day.
+ * flight at its speed (`tracer_streak_s`) and no more than it has flown, fading
+ * toward its tail; lit in from nothing at the muzzle to full a metre out
+ * (`tracer_ignite_hip_m`; the shooter's own aimed shot `tracer_ignite_m` out,
+ * clear of the sights) and full past it, along the streak: a round's first
+ * frame reaches back to the muzzle, so a streak that spans that point is drawn
+ * as two ribbons, the ramp and the rest. A burning head from
+ * `tracer_head_from_m`, white-hot near the eye and its team's colour far off
+ * (`tracer_white_near_m` to `tracer_white_far_m`), and brighter by day.
  *
  * The team's own: tracers in its red or blue, a suppressed gun's flash a
  * wisp without its star, and the guns' lights and lasers — the player's from
@@ -409,18 +412,29 @@ export class EffectsFrameBuilder {
     let heads = 0;
     /**
      * One tracer-like streak, `tail` to `head` (m), of `kind`, its tail and head `tailFlown` and
-     * `headFlown` metres into its flight: its ribbon, lit in over its first `igniteM` (its round's,
-     * by how aimed its shot was; unless given, a hip shot's, tracer_ignite_hip_m); and its
-     * head once it is tracer_head_from_m out, an emissive disc as bright as its core there and more
-     * (its colour mixed toward white as effects.wgsl mixes the core's, by its own distance from the
-     * eye), held to the pixels it is drawn over as the ribbon is (HEAD_BILLBOARD). False once the
-     * ribbons are full; a head is left off once the billboards are. `fade` (0 to 1) dims all of it:
-     * a ricochet's burning out.
+     * `headFlown` metres into its flight: its ribbon, fading toward its tail (tracer_tail_alpha), lit
+     * in from nothing at the muzzle to full `igniteM` out (its round's, by how aimed its shot was;
+     * unless given, a hip shot's, tracer_ignite_hip_m) and full past it. A streak that spans that
+     * point (a round's first frame or two, its streak reaching back to the muzzle) is drawn as two
+     * ribbons, the ramp up to it and the rest, so it is lit as the law says along its length, not only
+     * at its ends. Then its head once it is tracer_head_from_m out, an emissive disc as bright as its
+     * core there and more (its colour mixed toward white as effects.wgsl mixes the core's, by its own
+     * distance from the eye), held to the pixels it is drawn over as the ribbon is (HEAD_BILLBOARD).
+     * False once the ribbons are full; a head is left off once the billboards are. `fade` (0 to 1)
+     * dims all of it: a ricochet's burning out.
      */
     const tracer = (tail: readonly number[], head: readonly number[], kind: number, tailFlown: number, headFlown: number, fade = 1, igniteM = t.tracerIgniteHipM): boolean => {
       const colour = glows[kind] ?? glows[TRACER_KIND.amber];
       const lit = ignite(headFlown, igniteM) * fade;
-      if (!ribbon(tail, head, t.tracerGlowWidthM, colour, t.tracerTailAlpha * ignite(tailFlown, igniteM) * fade, lit, tracerLook)) return false;
+      const fromTail = t.tracerTailAlpha * ignite(tailFlown, igniteM) * fade;
+      if (tailFlown < igniteM && igniteM < headFlown) {
+        // Where it is fully lit, `u` of the way along, as bright there as the streak's own fade.
+        const u = (igniteM - tailFlown) / (headFlown - tailFlown);
+        const at = [0, 1, 2].map((k) => tail[k] + (head[k] - tail[k]) * u);
+        const there = (t.tracerTailAlpha + (1 - t.tracerTailAlpha) * u) * fade;
+        if (!ribbon(tail, at, t.tracerGlowWidthM, colour, fromTail, there, tracerLook)) return false;
+        if (!ribbon(at, head, t.tracerGlowWidthM, colour, there, lit, tracerLook)) return false;
+      } else if (!ribbon(tail, head, t.tracerGlowWidthM, colour, fromTail, lit, tracerLook)) return false;
       if (headFlown >= t.tracerHeadFromM && billboards < MAX_BILLBOARDS) {
         const hottest = Math.max(colour[0], colour[1], colour[2]);
         const burn = (t.tracerHeadGain * lit) / t.particleGlow;
