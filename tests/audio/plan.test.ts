@@ -23,6 +23,8 @@ const impact = (at: [number, number, number], material: number, owner = 0): Impa
   energyJ: 1100,
   owner,
   spec: '5.45',
+  dir: [0, -1, 0],
+  kind: 0,
 });
 
 describe('the sound of a frame', () => {

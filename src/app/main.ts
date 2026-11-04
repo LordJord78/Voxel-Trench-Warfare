@@ -275,7 +275,7 @@ async function start(): Promise<void> {
   const effects = new EffectsFrameBuilder(effectsTunables(tun));
   const hearing = audioTunables(tun);
   const audio = new AudioEngine(hearing, { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') });
-  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0 };
+  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0, ricochets: 0, embers: 0 };
   /** Whether the rifle is in hand (tests put it down to read the world behind it). */
   let rifleHeld = true;
   const input = new Input();

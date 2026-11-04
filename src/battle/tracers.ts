@@ -97,6 +97,8 @@ export interface TracerState {
   position: V3;
   velocity: V3;
   flown: number;
+  /** After a strike: how far it had flown before this leg (m), for what is lit by the distance from the muzzle; absent on the first leg. */
+  carried?: number;
 }
 
 /** Seconds a path is marched by, finding where it goes under the ground. */
@@ -169,10 +171,14 @@ export function planShot(id: number, origin: readonly number[], dir: readonly nu
 
 /** The tracer at `t`: on whichever of its legs it is flying; null before it is fired and after it ends. */
 export function tracerAt(shot: Shot, t: number, tt: TracerTunables): TracerState | null {
+  let carried = 0;
   for (const leg of shot.legs) {
-    if (t < leg.t0 || t > leg.t1) continue;
+    if (t < leg.t0 || t > leg.t1) {
+      carried += along(leg, leg.t1 - leg.t0, tt).flown;
+      continue;
+    }
     const at = along(leg, t - leg.t0, tt);
-    return { id: shot.id, ...at };
+    return { id: shot.id, ...at, ...(carried > 0 ? { carried } : {}) };
   }
   return null;
 }

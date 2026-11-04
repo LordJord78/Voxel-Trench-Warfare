@@ -964,6 +964,20 @@ dust_sky            = 1.0      # case of brass takes (a flake turned every way: 
                                # mean of n·l), and of the mean of the sky's on its
                                # faces, in the open (near a face it takes the face's)
 
+# Ricochets and embers (src/app/ricochets.ts): a tracer that strikes leaves an ember, and a graze
+# (within max_deg of the face's plane) sometimes glances off and flies on, burning.
+[effects.ricochet]
+max_deg             = 18.0     # a round within this of the face's plane may glance; steeper never
+chance_soil         = 0.25     # of those, off earth, sand, cloth and the rest
+chance_hard         = 0.6      # and off timber, trunk, duckboard, hull, picket, corrugate, wire, concrete, brick
+turn_deg            = 12.0     # it leaves along the reflection, within this much of it
+speed               = [0.35, 0.6]   # of its speed where it struck
+burn_s              = [0.4, 0.9]    # it burns this long, fading, falling under gravity
+max                 = 64       # the most in flight; the oldest goes first
+ember_m             = 0.06     # a strike's ember: this wide, of its tracer's colour,
+ember_s             = 0.35     # fading over this long
+
+
 [viewmodel]
 rest_right_m        = 0.175    # where the rifle sits when nothing is happening
 rest_up_m           = -0.205

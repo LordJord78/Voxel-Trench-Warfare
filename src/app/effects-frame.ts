@@ -27,6 +27,7 @@ import { farShellTunables, type ColumnPuff, type FarShellTunables } from '../bat
 import { fireTunables, type FireTunables, type FlameQuad, type PlumePuff } from '../battle/fires';
 import { flareTunables, type FlareState, type FlareTunables } from '../battle/flares';
 import { tracerTunables, type TracerState } from '../battle/tracers';
+import { Ricochets, ricochetTunables, type RicochetTunables } from './ricochets';
 import { beamOf } from '../combat/arsenal';
 import { BILLBOARD_FLOATS } from '../combat/particles';
 import { toWorld } from '../combat/soldier-rig';
@@ -97,6 +98,8 @@ export interface EffectsTunables {
   laser: { sizeM: number; glow: number; colour: V3 };
   tracerTailAlpha: number;
   tracerConvergeM: number;
+  /** Embers and ricochets ([effects.ricochet]). */
+  ricochet: RicochetTunables;
   flashS: number;
   particleAttachS: number;
   flashStarLengthM: number;
@@ -157,6 +160,7 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     laser: { sizeM: f('laser_size_m'), glow: f('laser_glow'), colour: rgb(tun, 'effects.laser_colour') },
     tracerTailAlpha: f('tracer_tail_alpha'),
     tracerConvergeM: f('tracer_converge_m'),
+    ricochet: ricochetTunables(tun),
     flashS: f('flash_s'),
     particleAttachS: f('particle_attach_s'),
     flashStarLengthM: f('flash_star_length_m'),
@@ -211,7 +215,7 @@ export interface BuiltEffects {
   /** Their smoke in the haze, and the fires' plumes: the nearest MAX_PUFFS puffs, nearest first (renderer.setSmoke). */
   smoke: SmokePuff[];
   /** The session's tracers and the battle's, and the heads drawn on every tracer (a test's too). */
-  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number };
+  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number };
 }
 
 /** The day's share of the light for the tracers' brightness: 0 with the sun low or down, 1 once it is up (a smoothstep over `tracer_daylight_deg`). */
@@ -256,7 +260,12 @@ export class EffectsFrameBuilder {
   /** The world's time the last frame showed. */
   private shown: number | null = null;
 
-  constructor(readonly t: EffectsTunables) {}
+  /** Tracer strikes' embers and the ricochets that glanced off, aged by the world's time. */
+  private readonly ricochets: Ricochets;
+
+  constructor(readonly t: EffectsTunables) {
+    this.ricochets = new Ricochets(t.ricochet);
+  }
 
   /**
    * `rifle`: the rifle as this frame draws it, or null when it is not drawn; `eye`: the camera
@@ -275,6 +284,8 @@ export class EffectsFrameBuilder {
     this.flashes = this.flashes.filter((f) => f.age < t.flashS);
     for (const shot of events.shots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0, share: shot.flash ?? 1 });
     for (const shot of events.remoteShots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0, remote: true, share: shot.flash ?? 1 });
+    this.ricochets.step(elapsed);
+    for (const hit of events.impacts) if (hit.kind !== TRACER_KIND.none) this.ricochets.strike(hit, hit.kind);
     for (const b of this.landed) b.age += elapsed;
     this.landed = this.landed.filter((b) => b.age < Math.max(t.blastLightS, t.smokeS));
     for (const b of events.blasts) this.landed.push({ at: b.at, radiusM: b.radiusM, age: 0 });
@@ -364,12 +375,12 @@ export class EffectsFrameBuilder {
      * head once it is tracer_head_from_m out, an emissive disc as bright as its core there and more
      * (its colour mixed toward white as effects.wgsl mixes the core's), held to the pixels it is
      * drawn over as the ribbon is (HEAD_BILLBOARD). False once the ribbons are full; a head is left
-     * off once the billboards are.
+     * off once the billboards are. `fade` (0 to 1) dims all of it: a ricochet's burning out.
      */
-    const tracer = (tail: readonly number[], head: readonly number[], kind: number, tailFlown: number, headFlown: number): boolean => {
+    const tracer = (tail: readonly number[], head: readonly number[], kind: number, tailFlown: number, headFlown: number, fade = 1): boolean => {
       const colour = glows[kind] ?? glows[TRACER_KIND.amber];
-      const lit = ignite(headFlown);
-      if (!ribbon(tail, head, t.tracerGlowWidthM, colour, t.tracerTailAlpha * ignite(tailFlown), lit, tracerLook)) return false;
+      const lit = ignite(headFlown) * fade;
+      if (!ribbon(tail, head, t.tracerGlowWidthM, colour, t.tracerTailAlpha * ignite(tailFlown) * fade, lit, tracerLook)) return false;
       if (headFlown >= t.tracerHeadFromM && billboards < MAX_BILLBOARDS) {
         const hottest = Math.max(colour[0], colour[1], colour[2]);
         const burn = (t.tracerHeadGain * lit) / t.particleGlow;
@@ -399,6 +410,25 @@ export class EffectsFrameBuilder {
       const s = share(seg.flown[i] - length);
       if (!tracer(tail.map((v, k) => v + offset[k] * s), head.map((v, k) => v + offset[k] * h), seg.kind[i], seg.flown[i] - length, seg.flown[i])) break;
       tracers++;
+    }
+
+    // Tracer strikes' embers, small emissive discs of their tracer's colour fading out; and the
+    // ricochets in flight, drawn as the tracers are, long past their lighting in (they left a wall,
+    // not a muzzle), fading as they burn out.
+    let embers = 0;
+    for (const e of this.ricochets.embers()) {
+      if (billboards >= MAX_BILLBOARDS) break;
+      const colour = glows[e.kind] ?? glows[TRACER_KIND.amber];
+      const burn = (t.tracerHeadGain * e.alpha) / t.particleGlow;
+      this.billboards.set([e.at[0], e.at[1], e.at[2], e.size / 2, colour[0] * burn, colour[1] * burn, colour[2] * burn, 1, 1], billboards * BILLBOARD_FLOATS);
+      billboards++;
+      embers++;
+    }
+    let ricochets = 0;
+    for (const f of this.ricochets.flights()) {
+      if (!(Math.hypot(f.head[0] - f.tail[0], f.head[1] - f.tail[1], f.head[2] - f.tail[2]) > 0)) continue;
+      if (!tracer(f.tail, f.head, f.kind, LONG_FLOWN, LONG_FLOWN, f.alpha)) break;
+      ricochets++;
     }
 
     // Each live flash: its star and its light, at the drawn muzzle (where the shot left it when
@@ -475,7 +505,9 @@ export class EffectsFrameBuilder {
       if (!(speed > 0)) continue;
       const trailM = Math.min(streak(speed, t.battleTrailM), tr.flown);
       const tail = [0, 1, 2].map((k) => tr.position[k] - (tr.velocity[k] * trailM) / speed);
-      if (!tracer(tail, tr.position, TRACER_KIND.amber, tr.flown - trailM, tr.flown)) break;
+      // A leg after a strike is lit as the whole flight was: its ignition is the muzzle's.
+      const lit = tr.carried ?? 0;
+      if (!tracer(tail, tr.position, TRACER_KIND.amber, lit + tr.flown - trailM, lit + tr.flown)) break;
       battleTracers++;
     }
 
@@ -518,7 +550,7 @@ export class EffectsFrameBuilder {
       lights,
       blasts,
       smoke,
-      counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames, heads },
+      counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames, heads, ricochets, embers },
     };
   }
 }

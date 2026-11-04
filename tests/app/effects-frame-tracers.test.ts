@@ -182,6 +182,36 @@ describe("a tracer's look", () => {
     expect(heads.map((q) => q[0]).sort()).toEqual([50, 60]);
   });
 
+  it('a battle tracer after a strike stays lit: its ignition is the muzzle\'s, not the ricochet\'s', () => {
+    const tracers: TracerState[] = [{ id: 1, position: [50, 30, 80], velocity: [0, 0, 300], flown: 1, carried: 120 }];
+    const built = new EffectsFrameBuilder(t).build(stand(), none(), null, [50, 20, 70], { ...NO_BATTLE, tracers });
+    expect(ribbon(built.frame.ribbons, 0).alphaHead).toBe(1);
+    expect(built.counts.heads).toBe(1);
+  });
+
+  it('a tracer that strikes leaves an ember and, grazing, a ricochet: drawn as a tracer, lit, then gone', () => {
+    const s = stand();
+    // Grazing the ground at 800 m/s; corrugate rings every one off.
+    const hit = (n: number) => ({ position: [10 + n, 4, 5] as V3, normal: [0, 1, 0] as V3, cell: [n, 3, 0] as V3, material: P.CORRUGATE, speed: 800, distance: 60, energyJ: 3000, owner: 0, spec: 'ak', dir: [0.9848, -0.1736, 0] as V3, kind: TRACER_KIND.red, tick: n });
+    const tun2 = { ...t, ricochet: { ...t.ricochet, chanceHard: 1 } };
+    const b = new EffectsFrameBuilder(tun2);
+    const events = { ...none(), impacts: [hit(0), hit(1)] };
+    const first = b.build(s, events);
+    expect(first.counts.embers).toBe(2);
+    expect(first.counts.ricochets).toBe(0); // at the strike they have not flown
+    // Embers are emissive, their tracer's colour; none is a head.
+    expect(billboards(first).filter((q) => q[8] === 3)).toHaveLength(0);
+    s.tick();
+    const later = b.build(s, none());
+    expect(later.counts.ricochets).toBe(2);
+    expect(later.counts.heads).toBe(2);
+    expect(ribbon(later.frame.ribbons, 0).alphaHead).toBeGreaterThan(0.9);
+    expect(ribbon(later.frame.ribbons, 0).alphaHead).toBeLessThanOrEqual(1);
+    for (let k = 0; k < 120; k++) s.tick();
+    const gone = b.build(s, none());
+    expect(gone.counts.ricochets + gone.counts.embers).toBe(0);
+  });
+
   it("by day a tracer is brighter: daylight 1 gives 4× the radiance of night's", () => {
     const s = stand();
     s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.blue);

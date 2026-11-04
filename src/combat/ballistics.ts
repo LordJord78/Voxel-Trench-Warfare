@@ -100,6 +100,10 @@ export interface Impact {
   energyJ: number;
   owner: number;
   spec: string;
+  /** The round's unit direction over the substep that struck. */
+  dir: [number, number, number];
+  /** Its tracer kind (net/gear.ts TRACER_KIND): 0 for a round that burns no tracer. */
+  kind: number;
 }
 
 export class Rounds {
@@ -345,6 +349,8 @@ export class Rounds {
           energyJ: 0.5 * spec.massKg * speed * speed,
           owner: this.owner[i],
           spec: spec.name,
+          dir,
+          kind: this.tracer[i],
         });
         // Stopped before it passed: heard as near as it came.
         this.hearPass(i);
