@@ -13,6 +13,7 @@
 
 import { cos, radians, sin } from '../core/dmath';
 import type { Tunables } from '../core/tunables';
+import { ZERO_HANDS, type HandsDelta } from './handling';
 
 export interface ViewmodelTunables {
   restRightM: number;
@@ -106,11 +107,13 @@ function strokeAt(phase: number): { o: [number, number, number]; pitch: number; 
 /**
  * What is in the hands, posed: a gun at its rest (`viewmodelPose`, a pistol's lower and nearer the
  * middle), brought to the eye as `aimed` goes to 1 (its sight's line on the eye's, the kick
- * steadied); the shovel low at the right, through its `stroke` (0 to 1, null at rest); and either
- * dipped out of view as `ready` goes to 0, while one thing is put away and the next comes up.
- * At rest, raised and not aimed, a rifle's is `viewmodelPose`'s exactly.
+ * steadied); the shovel low at the right, through its `stroke` (0 to 1, null at rest); moved by
+ * the hands (handling.ts: the bob, sway, breathing, sprint, landing, reload and pump), summed after
+ * the aim's blend so an aimed gun still breathes; and either dipped out of view as `ready` goes to
+ * 0, while one thing is put away and the next comes up. At rest, raised and not aimed, a rifle's
+ * is `viewmodelPose`'s exactly, and with `ZERO_HANDS` every pose is what it was before the hands.
  */
-export function heldPose(t: ViewmodelTunables, holding: Holding, kick: ViewmodelKick, sway: number, speedRatio: number, raised: number, aimed = 0, ready = 1, stroke: number | null = null): ViewmodelPose {
+export function heldPose(t: ViewmodelTunables, holding: Holding, kick: ViewmodelKick, sway: number, speedRatio: number, raised: number, aimed = 0, ready = 1, stroke: number | null = null, hands: HandsDelta = ZERO_HANDS): ViewmodelPose {
   let pose: ViewmodelPose;
   if (holding.kind === 'shovel') {
     const s = stroke === null ? { o: [0, 0, 0], pitch: 0, yaw: 0, roll: 0 } : strokeAt(stroke);
@@ -138,6 +141,12 @@ export function heldPose(t: ViewmodelTunables, holding: Holding, kick: Viewmodel
       };
     }
   }
+  pose = {
+    offset: [pose.offset[0] + hands.offset[0], pose.offset[1] + hands.offset[1], pose.offset[2] + hands.offset[2]],
+    pitch: pose.pitch + hands.pitch,
+    yaw: pose.yaw + hands.yaw,
+    roll: pose.roll + hands.roll,
+  };
   if (ready < 1) {
     const d = smooth(1 - Math.max(0, ready));
     pose = { offset: [pose.offset[0] + 0.03 * d, pose.offset[1] - 0.25 * d, pose.offset[2] - 0.05 * d], pitch: pose.pitch - 40 * d, yaw: pose.yaw, roll: pose.roll + 25 * d };
