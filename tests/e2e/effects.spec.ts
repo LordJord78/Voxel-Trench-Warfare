@@ -486,9 +486,10 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
 });
 
 test("a far tracer's white-hot core stays an unbroken line, as its glow does", async ({ page }) => {
-  // A tracer's core (3.5 cm) is under a tenth of a pixel 150 m out: drawn no narrower than two
-  // pixels, its light kept, as the glow is; drawn at its share of the glow's two, it broke into
-  // dashes (a third of the columns all but dark, and neighbours a third apart).
+  // A tracer's core (3.5 cm) is under a tenth of a pixel 150 m out: drawn at 0.45 of the glow there,
+  // 1.8 px at the glow's 4 px floor, its light kept, as the glow's is; drawn at its share of a glow
+  // two pixels across, it broke into dashes (a third of the columns all but dark, and neighbours a
+  // third apart).
   const errors = await openGame(page);
   const at = await hooks(page, async (h) => {
     h.view('step');
@@ -643,7 +644,7 @@ test("a far red tracer at night shows red on the screen, not white, under fire a
   expect(errors).toEqual([]);
 });
 
-test('a tracer seen end on is its head alone: lit every frame 150 m out, held small half a metre out', async ({ page }) => {
+test('a tracer seen end on is its head alone: lit every frame 150 m out, its cap under three pixels or not; held small half a metre out', async ({ page }) => {
   // The review's case: aimed down the sights, once its tracer has joined its path (where the shot
   // was aimed) the player's round is drawn on a ray from the eye, so its streak is seen end on and
   // its head is all the shooter sees of it. A
@@ -651,7 +652,8 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, held sm
   // head is drawn no smaller than three pixels, its light kept, so it lights the same light's worth
   // of pixels every frame however it falls among them (at its true 0.4 px, 150 m out, it lit one
   // frame in a few), and near the eye no wider than its share of a glow held to 10 px (0.09 of 0.22:
-  // 4.1 px), where at its true size it would be 115 px.
+  // 4.1 px), where at its true size it would be 115 px. Its cap is never under its three pixels: a
+  // glow_max_px under 7.33 would set it there, and capped first it drew every far head smaller.
   const errors = await openGame(page);
   const at = await hooks(page, async (h) => {
     h.view('step');
@@ -712,6 +714,33 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, held sm
   for (const p of peaks) expect(p, farSeen).toBeGreaterThan(0.05 * Math.max(...peaks));
   expect(Math.min(...totals) / Math.max(...totals), farSeen).toBeGreaterThan(0.9);
   expect(Math.min(...totals), farSeen).toBeGreaterThan(0);
+
+  // The same head with its cap at 2 px, as a glow_max_px of 4.9 would set it: the look the renderer's
+  // effects were made with (effectsLook, from the tunables), changed here as a tunable would change it.
+  // Held at three far off all the same, it lights every frame alike; held to two, the light it laid
+  // swung by some 40% from frame to frame as it moved among the pixels.
+  type Look = { renderer: { effects: { look: { tracerHeadMaxPx: number } } } };
+  const cap = await hooks(page, (h) => {
+    const look = (h as unknown as Look).renderer.effects.look;
+    const was = look.tracerHeadMaxPx;
+    look.tracerHeadMaxPx = 2;
+    return was;
+  });
+  const capped = await lightOver(far.map((f) => ({ tail: f.tail.at, head: f.head.at })), [x0, y0, 20, 20]);
+  await hooks(
+    page,
+    (h, was) => {
+      (h as unknown as Look).renderer.effects.look.tracerHeadMaxPx = was as number;
+    },
+    cap,
+  );
+  const cappedTotals = capped.map((f) => f.reduce((a, b) => a + b, 0));
+  const cappedPeaks = capped.map((f) => Math.max(...f));
+  const cappedSeen = JSON.stringify({ cap, totals: cappedTotals, peaks: cappedPeaks });
+  expect(cap, cappedSeen).toBeGreaterThan(3);
+  for (const p of cappedPeaks) expect(p, cappedSeen).toBeGreaterThan(0.05 * Math.max(...cappedPeaks));
+  expect(Math.min(...cappedTotals) / Math.max(...cappedTotals), cappedSeen).toBeGreaterThan(0.9);
+  expect(Math.min(...cappedTotals), cappedSeen).toBeGreaterThan(0);
 
   // Half a metre out on the view's middle, coming at the eye, its tail 12 m back and 0.4 px aside: a
   // row and a column through it lit (over a hundredth of its brightest) across 6 px at most: its

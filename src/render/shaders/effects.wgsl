@@ -9,12 +9,13 @@
 // a core mixed toward white in a glow of its colour. A tracer's glow is drawn no narrower than
 // glowMinPx, its light kept, so far off its colour shows round its core, nor wider than glowMaxPx,
 // narrowed and not brightened, so a round past the eye is not a bar or a wedge across the view; its
-// core is its share of the width drawn, no narrower than MIN_RIBBON_PX (its light kept) nor wider
-// than CORE_MAX_SHARE of the glow. The core is mixed toward white by all of the ribbon's whiteness
-// within whiteNearM of the eye, falling to none at whiteFarM: white-hot close by, the team's colour
-// far off. Seen end on, a tracer's ends within END_ON_PX of each other, it draws nothing: its head (a
-// held billboard, no smaller than MIN_HEAD_PX nor wider than headMaxPx) carries it. A strike's ember
-// is held no smaller than MIN_HEAD_PX too.
+// core is its share of the width drawn, no narrower than MIN_RIBBON_PX (its light kept), but never
+// wider than CORE_MAX_SHARE of the glow, which wins: 0.45 of the glow, 1.8 px at its 4 px floor. The
+// core is mixed toward white by all of the ribbon's whiteness within whiteNearM of the eye, falling to
+// none at whiteFarM: white-hot close by, the team's colour far off. Seen end on, a tracer's ends
+// within END_ON_PX of each other, it draws nothing: its head (a held billboard, no smaller than
+// MIN_HEAD_PX nor wider than headMaxPx, a cap never under that floor) carries it. A strike's ember is
+// held no smaller than MIN_HEAD_PX too.
 // The tracers' light (their ribbons, heads and embers, the battle's and the ricochets' too) is lit to
 // keep its hue through the present pass's per-channel tone curve (keepHue): far off and in its glow a
 // tracer shows its team's colour, where the curve alone would take a bright red to white; as white as
@@ -181,10 +182,11 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
       tone = vec2f(1.0, clamp(select(-1.0 - b.colour.a, -3.0 - b.colour.a, ember), 0.0, 1.0));
       // Each held no smaller than MIN_HEAD_PX, its light kept, so a far one does not twinkle; a head,
       // as its ribbon is, nor wider than headMaxPx, narrowed and not brightened (an ember, centimetres
-      // across, is never held narrower).
+      // across, is never held narrower). The cap never under the floor: a glow_max_px under 7.33 puts
+      // headMaxPx under three pixels, and capped there every far head twinkled again.
       let pixel = pixelAt(b.centre * toVoxels) * frame.voxel;
       let least = max(half, 0.5 * MIN_HEAD_PX * pixel);
-      let drawn = select(min(least, 0.5 * draw.headMaxPx * pixel), least, ember);
+      let drawn = select(min(least, 0.5 * max(draw.headMaxPx, MIN_HEAD_PX) * pixel), least, ember);
       colour = vec4f(b.colour.rgb * min((half / drawn) * (half / drawn), 1.0), 0.0);
       half = drawn;
     }

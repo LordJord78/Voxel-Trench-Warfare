@@ -33,7 +33,7 @@ export const RIBBON_STYLE = { star: 0, tracer: 1 } as const;
  * A tracer's head's kind of billboard, after particles.ts's 0 (a lit disc), 1 (emissive) and 2 (a lit
  * square): emissive, and held to the pixels it is drawn over as a tracer's ribbon is (effects.wgsl),
  * no smaller than MIN_HEAD_PX, its light kept, nor wider than its share of a tracer's glow at its
- * widest, narrowed and not brightened.
+ * widest, narrowed and not brightened; that cap is never under the floor.
  */
 export const HEAD_BILLBOARD = 3;
 /** A tracer strike's ember: emissive, kept at its hue as a tracer's head is (effects.wgsl keepHue), and held no smaller than MIN_HEAD_PX, its light kept, as a head is; never held narrower. */
@@ -82,8 +82,9 @@ export interface SmokePuff {
 /**
  * How the billboards are lit: the emissive's glow, and how much of the key's and the sky's light the
  * rest take; the narrowest and the widest a tracer's glow is drawn, in pixels, and the widest its head
- * is (its share of that, as its width is of the glow's); and the distances (m) over which a tracer's
- * core goes from its whiteness near the eye to none.
+ * is (its share of that, as its width is of the glow's; effects.wgsl never caps it under its
+ * MIN_HEAD_PX floor); and the distances (m) over which a tracer's core goes from its whiteness near
+ * the eye to none.
  */
 export interface EffectsLook {
   glow: number;

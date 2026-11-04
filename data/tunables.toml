@@ -936,8 +936,9 @@ tracer_intensity    = 70.0     # a tracer's core, linear, before the day's boost
 # A tracer as drawn (effects.wgsl's style 1): one ribbon, two terms across it. A core mixed toward
 # white in a glow of its colour, the glow drawn between tracer_glow_min_px and tracer_glow_max_px:
 # past the eye not a bar across the screen nor a fat wedge, far off wide enough for its colour to
-# show round the core (the core no narrower than two pixels nor wider than 0.45 of the glow; each
-# held its light kept, narrowed and not brightened).
+# show round the core (the core no narrower than two pixels, but never wider than 0.45 of the glow,
+# which wins: 0.45 of the glow, 1.8 px at its 4 px floor; each held its light kept, narrowed and not
+# brightened).
 tracer_core_width_m = 0.035    # the white-hot core,
 tracer_glow_width_m = 0.22     # and the glow round it, as wide as the ribbon is drawn
 tracer_glow_share   = 0.35     # the glow's brightness over the core's
