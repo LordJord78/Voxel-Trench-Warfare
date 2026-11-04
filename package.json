@@ -21,6 +21,7 @@
     "@playwright/test": "^1.64.1",
     "@types/node": "^22.19.0",
     "@webgpu/types": "^0.1.74",
+    "pngjs": "^7.0.0",
     "smol-toml": "^1.9.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",

@@ -275,6 +275,7 @@ async function start(): Promise<void> {
   const effects = new EffectsFrameBuilder(effectsTunables(tun));
   const hearing = audioTunables(tun);
   const audio = new AudioEngine(hearing, { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') });
+  let builtDrawn: BuiltEffects['drawn'] = [];
   let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0, ricochets: 0, embers: 0 };
   /** Whether the rifle is in hand (tests put it down to read the world behind it). */
   let rifleHeld = true;
@@ -922,6 +923,7 @@ async function start(): Promise<void> {
     renderer.setBlasts(frameEffects.blasts);
     renderer.setSmoke(frameEffects.smoke);
     built = frameEffects.counts;
+    builtDrawn = frameEffects.drawn;
     light(dt, pose.position, strikesFrom(events), events.splashes.map((w) => ({ at: w.at, energyJ: w.energyJ })));
     renderer.render(pose, timeOfDay, now);
     lastPose = pose;
@@ -1280,6 +1282,20 @@ async function start(): Promise<void> {
       session.artillery.intensity = i;
     },
     effects: () => built,
+    /** For the tracer captures: the session's tracers of the last frame on the canvas (CSS pixels, by the frame's camera), the rifle's drawn box scaled to it, and the weapon's state. */
+    tracerPixels: () => {
+      const res: [number, number] = [Math.max(1, canvas.clientWidth), Math.max(1, canvas.clientHeight)];
+      const g = renderer.rifleState();
+      const k = g.res[0] > 0 ? res[0] / g.res[0] : 1;
+      return {
+        res,
+        frame: frames,
+        pose: lastPose,
+        gun: g.visible ? [g.box[0] * k, g.box[1] * k, g.box[2] * k, g.box[3] * k] : null,
+        weapon: { automatic: session.weapon.spec.automatic, semi: session.weapon.semi, rounds: session.weapon.rounds, magazine: session.weapon.spec.magazine, id: session.arm.spec.gun.name },
+        tracers: builtDrawn.map((d) => ({ kind: d.kind, flown: d.flown, headDrawn: d.headDrawn, head: projectToPixel(lastPose, res, d.head), tail: projectToPixel(lastPose, res, d.tail) })),
+      };
+    },
     debugQuads(quads: DebugQuad[]) {
       effects.debug = quads;
     },

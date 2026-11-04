@@ -216,6 +216,8 @@ export interface BuiltEffects {
   smoke: SmokePuff[];
   /** The session's tracers and the battle's, and the heads drawn on every tracer (a test's too). */
   counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number };
+  /** The session's own tracers as drawn this frame (their offsets applied), metres: for a test to find them on the image. `headDrawn`: the burning head is drawn (past tracer_head_from_m). */
+  drawn: { tail: [number, number, number]; head: [number, number, number]; kind: number; flown: number; headDrawn: boolean }[];
 }
 
 /** The day's share of the light for the tracers' brightness: 0 with the sun low or down, 1 once it is up (a smoothstep over `tracer_daylight_deg`). */
@@ -395,6 +397,7 @@ export class EffectsFrameBuilder {
     // Tracers: the round's streak back along its path, its offset from where it left to where it
     // is drawn from shrinking to nothing by tracer_converge_m.
     let tracers = 0;
+    const drawn: BuiltEffects['drawn'] = [];
     const seg = session.rounds.tracerSegments((speed) => streak(speed, t.tracerMaxM));
     for (let i = 0; i < seg.flown.length; i++) {
       const at = (a: Float32Array) => [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
@@ -408,7 +411,10 @@ export class EffectsFrameBuilder {
       const share = (flown: number) => Math.max(0, 1 - flown / t.tracerConvergeM);
       const h = share(seg.flown[i]);
       const s = share(seg.flown[i] - length);
-      if (!tracer(tail.map((v, k) => v + offset[k] * s), head.map((v, k) => v + offset[k] * h), seg.kind[i], seg.flown[i] - length, seg.flown[i])) break;
+      const drawnTail = tail.map((v, k) => v + offset[k] * s);
+      const drawnHead = head.map((v, k) => v + offset[k] * h);
+      if (!tracer(drawnTail, drawnHead, seg.kind[i], seg.flown[i] - length, seg.flown[i])) break;
+      drawn.push({ tail: drawnTail as [number, number, number], head: drawnHead as [number, number, number], kind: seg.kind[i], flown: seg.flown[i], headDrawn: seg.flown[i] >= t.tracerHeadFromM });
       tracers++;
     }
 
@@ -551,6 +557,7 @@ export class EffectsFrameBuilder {
       blasts,
       smoke,
       counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames, heads, ricochets, embers },
+      drawn,
     };
   }
 }
