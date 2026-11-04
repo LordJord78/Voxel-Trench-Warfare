@@ -29,6 +29,13 @@ import effectsSrc from './shaders/effects.wgsl';
 export const RIBBON_FLOATS = 16;
 /** A ribbon's look across it (effects.wgsl): a shot's flash star's one soft term, or a tracer's white-hot core in its coloured glow. */
 export const RIBBON_STYLE = { star: 0, tracer: 1 } as const;
+/**
+ * A tracer's head's kind of billboard, after particles.ts's 0 (a lit disc), 1 (emissive) and 2 (a lit
+ * square): emissive, and held to the pixels it is drawn over as a tracer's ribbon is (effects.wgsl),
+ * no smaller than MIN_HEAD_PX, its light kept, nor wider than its share of a tracer's glow at its
+ * widest, narrowed and not brightened.
+ */
+export const HEAD_BILLBOARD = 3;
 /** A billboard's floats, as particles.ts writes them. */
 const BILLBOARD_FLOATS = 9;
 /** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4). */
@@ -60,16 +67,28 @@ export interface SmokePuff {
   density: number;
 }
 
-/** How the billboards are lit: the emissive's glow, and how much of the key's and the sky's light the rest take; and the widest a tracer's glow is drawn, in pixels. */
+/**
+ * How the billboards are lit: the emissive's glow, and how much of the key's and the sky's light the
+ * rest take; and the widest a tracer's glow is drawn, in pixels, and its head (its share of that, as
+ * its width is of the glow's).
+ */
 export interface EffectsLook {
   glow: number;
   dustKey: number;
   dustSky: number;
   tracerGlowMaxPx: number;
+  tracerHeadMaxPx: number;
 }
 
 export function effectsLook(tun: Tunables): EffectsLook {
-  return { glow: tun.f('effects.particle_glow'), dustKey: tun.f('effects.dust_key'), dustSky: tun.f('effects.dust_sky'), tracerGlowMaxPx: tun.f('effects.tracer_glow_max_px') };
+  const glowMaxPx = tun.f('effects.tracer_glow_max_px');
+  return {
+    glow: tun.f('effects.particle_glow'),
+    dustKey: tun.f('effects.dust_key'),
+    dustSky: tun.f('effects.dust_sky'),
+    tracerGlowMaxPx: glowMaxPx,
+    tracerHeadMaxPx: (glowMaxPx * tun.f('effects.tracer_head_m')) / tun.f('effects.tracer_glow_width_m'),
+  };
 }
 
 export interface EffectsPipelines {
@@ -219,10 +238,10 @@ export class Effects {
     new Uint32Array(light, 0, 1)[0] = this.billboardCount;
     new Float32Array(light, 4, 3).set([this.look.glow, this.look.dustKey, this.look.dustSky]);
     queue.writeBuffer(this.lightParams, 0, light);
-    // effects.wgsl's EffectsDraw: the counts, and the widest a tracer's glow is drawn.
+    // effects.wgsl's EffectsDraw: the counts, and the widest a tracer's glow and its head are drawn.
     const draw = new ArrayBuffer(16);
     new Uint32Array(draw, 0, 2).set([this.billboardCount, this.ribbonCount]);
-    new Float32Array(draw, 8, 1)[0] = this.look.tracerGlowMaxPx;
+    new Float32Array(draw, 8, 2).set([this.look.tracerGlowMaxPx, this.look.tracerHeadMaxPx]);
     queue.writeBuffer(this.drawParams, 0, draw);
   }
 

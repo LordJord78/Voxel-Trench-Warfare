@@ -34,7 +34,7 @@ import type { Tunables } from '../core/tunables';
 import { decodeGear, TRACER_KIND } from '../net/gear';
 import type { SoldierDraw } from '../render/soldiers';
 import { raycast } from '../world/raycast';
-import { MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, RIBBON_STYLE, type EffectsFrame, type SmokePuff, type TransientLight } from '../render/effects';
+import { HEAD_BILLBOARD, MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, RIBBON_STYLE, type EffectsFrame, type SmokePuff, type TransientLight } from '../render/effects';
 import { MAX_PUFFS } from '../render/frame-uniforms';
 import { throughPose, type RiflePose } from '../render/rifle';
 import { MUZZLE_ANCHOR, PORT_ANCHOR, SHOVEL_HELD, type CombatEvents, type Session } from '../sim/session';
@@ -362,8 +362,9 @@ export class EffectsFrameBuilder {
      * One tracer-like streak, `tail` to `head` (m), of `kind`, its tail and head `tailFlown` and
      * `headFlown` metres into its flight: its ribbon, lit in over its first tracer_ignite_m; and its
      * head once it is tracer_head_from_m out, an emissive disc as bright as its core there and more
-     * (its colour mixed toward white as effects.wgsl mixes the core's). False once the ribbons are
-     * full; a head is left off once the billboards are.
+     * (its colour mixed toward white as effects.wgsl mixes the core's), held to the pixels it is
+     * drawn over as the ribbon is (HEAD_BILLBOARD). False once the ribbons are full; a head is left
+     * off once the billboards are.
      */
     const tracer = (tail: readonly number[], head: readonly number[], kind: number, tailFlown: number, headFlown: number): boolean => {
       const colour = glows[kind] ?? glows[TRACER_KIND.amber];
@@ -373,7 +374,7 @@ export class EffectsFrameBuilder {
         const hottest = Math.max(colour[0], colour[1], colour[2]);
         const burn = (t.tracerHeadGain * lit) / t.particleGlow;
         const core = colour.map((c) => (c + (hottest - c) * t.tracerCoreWhite) * burn);
-        this.billboards.set([head[0], head[1], head[2], t.tracerHeadM / 2, core[0], core[1], core[2], 1, 1], billboards * BILLBOARD_FLOATS);
+        this.billboards.set([head[0], head[1], head[2], t.tracerHeadM / 2, core[0], core[1], core[2], 1, HEAD_BILLBOARD], billboards * BILLBOARD_FLOATS);
         billboards++;
         heads++;
       }

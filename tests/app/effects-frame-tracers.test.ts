@@ -152,8 +152,9 @@ describe("a tracer's look", () => {
     expect(head[3]).toBeCloseTo(0.045, 6);
     close(head.slice(4, 7), burning, 4, 'burning');
     expect(head[7]).toBe(1);
-    // Emissive.
-    expect(head[8]).toBe(1);
+    // Emissive, and held as a ribbon is to the pixels it is drawn over (kind 3, effects.wgsl): no
+    // smaller than three, nor wider than its share of a tracer's glow at its widest.
+    expect(head[8]).toBe(3);
   });
 
   it("a battle tracer is drawn as the session's are, its streak at most the battle's trail_m, its head from 1.5 m", () => {
@@ -177,7 +178,7 @@ describe("a tracer's look", () => {
     // Lit in as the session's: a metre out, a quarter lit, and no head yet.
     expect(at(tracers[2].position).alphaHead).toBeCloseTo(0.25, 6);
     expect(built.counts.heads).toBe(2);
-    const heads = billboards(built).filter((q) => q[8] === 1);
+    const heads = billboards(built).filter((q) => q[8] === 3);
     expect(heads.map((q) => q[0]).sort()).toEqual([50, 60]);
   });
 

@@ -6,7 +6,8 @@
 // the haze (a flare through its map) — and the emissive (the flash, sparks) by their own glow. Then
 // each is seen through the haze between it and the eye, as shade sees the world: the wall behind a
 // mote has it, and a mote without it reads as soot. One thread a billboard. A square (a shell's
-// debris, kind 2) is lit as a mote is, and handed on with its half size negative.
+// debris, kind 2) is lit as a mote is, and handed on with its half size negative; a tracer's head
+// (kind 3) is emissive, and handed on with its alpha -1 for the draw to hold it to its pixels.
 #include "scene.wgsl"
 #include "sky.wgsl"
 #include "camera.wgsl"
@@ -24,7 +25,7 @@ struct EffectsLight {
 struct Lit {
   centre: vec3f,
   half: f32,
-  // Premultiplied; alpha 0 adds light, as the emissive do.
+  // Premultiplied; alpha 0 adds light, as the emissive do (-1: a tracer's head, which adds light).
   colour: vec4f,
 }
 
@@ -137,7 +138,8 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let colour = vec4f(billboards[o + 4u], billboards[o + 5u], billboards[o + 6u], billboards[o + 7u]);
   var out = vec4f(colour.rgb * look.glow, 0.0);
   let kind = billboards[o + 8u];
-  if (kind != 1.0) {
+  let head = kind == 3.0;
+  if (kind != 1.0 && !head) {
     let p = centre / frame.voxel;
     let near = nearLight(p);
     let around = skyAround() * look.dustSky + cellLightsAt(p);
@@ -147,5 +149,5 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   // Premultiplied: what covers adds the haze before it as much as it covers.
   let haze = hazeBefore(centre / frame.voxel);
   let half = billboards[o + 3u];
-  lit[i] = Lit(centre, select(half, -half, kind == 2.0), vec4f(out.rgb * haze.a + haze.rgb * out.a, out.a));
+  lit[i] = Lit(centre, select(half, -half, kind == 2.0), vec4f(out.rgb * haze.a + haze.rgb * out.a, select(out.a, -1.0, head)));
 }

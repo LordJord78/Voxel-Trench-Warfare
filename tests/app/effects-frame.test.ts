@@ -355,9 +355,10 @@ describe('a frame of effects', () => {
     expect(built.counts.heads).toBe(1);
     expect(built.counts.billboards).toBe(s.particles.count + 1);
     expect(built.frame.billboardCount).toBe(s.particles.count + 1);
-    // The head last, emissive, at its tracer's head as drawn (still joining the round's path).
+    // The head last, emissive and held to its pixels (kind 3), at its tracer's head as drawn (still
+    // joining the round's path).
     const head = Array.from(built.frame.billboards.slice(s.particles.count * BILLBOARD_FLOATS, (s.particles.count + 1) * BILLBOARD_FLOATS));
-    expect(head[8]).toBe(1);
+    expect(head[8]).toBe(3);
     close(head, ribbon(built.frame.ribbons, 0).head, 5, 'head');
   });
   it('a flare climbing is a spark where it is, a burning flare a bright disc by its glow; one out is nothing', () => {

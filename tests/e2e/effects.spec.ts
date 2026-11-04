@@ -524,6 +524,94 @@ test("a far tracer's white-hot core stays an unbroken line, as its glow does", a
   expect(errors).toEqual([]);
 });
 
+test('a tracer seen end on is its head alone: lit every frame 150 m out, held small half a metre out', async ({ page }) => {
+  // The review's case: aimed down the sights, past tracer_converge_m the player's round is drawn on
+  // a ray from the eye, so its streak is seen end on and its head is all the shooter sees of it. A
+  // streak whose ends fall within a pixel of each other draws nothing (not a sliver of noise); its
+  // head is drawn no smaller than three pixels, its light kept, so it lights the same light's worth
+  // of pixels every frame however it falls among them (at its true 0.4 px, 150 m out, it lit one
+  // frame in a few), and near the eye no wider than its share of a glow held to 28 px (0.09 of 0.22:
+  // 11.5 px), where at its true size it would be 115 px.
+  const errors = await openGame(page);
+  const at = await hooks(page, async (h) => {
+    h.view('step');
+    h.setTimeOfDay(21);
+    h.jitter(false);
+    h.setQuality({ dynres: false, scale: 1 });
+    h.freeze();
+    await h.stepFrames(40);
+    const c = h.camera();
+    return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res };
+  });
+  const RAD = Math.PI / 180;
+  const y = at.yaw * RAD;
+  const right = [Math.cos(y), 0, -Math.sin(y)];
+  const tanHalf = Math.tan((at.fov * RAD) / 2);
+  /** The point `m` metres out along the ray `up` degrees over the view's middle and `side` pixels right of it, and the pixel it falls on. */
+  const out = (up: number, side: number, m: number) => {
+    const p = (at.pitch + up) * RAD;
+    const s = (side * Math.cos(up * RAD) * 2 * tanHalf) / at.res[0];
+    const d = [Math.sin(y) * Math.cos(p) + right[0] * s, Math.sin(p), Math.cos(y) * Math.cos(p) + right[2] * s];
+    const n = Math.hypot(d[0], d[1], d[2]);
+    return { at: d.map((v, k) => at.position[k] + (v / n) * m) as [number, number, number], px: [at.res[0] / 2 + side, at.res[1] / 2 - (Math.tan(up * RAD) / tanHalf) * (at.res[0] / 2)] };
+  };
+  /** The light each tracer adds over `box` of the internal image (each, less the image without it): luminance, a row at a time. */
+  const lightOver = (tracers: { tail: [number, number, number]; head: [number, number, number] }[], box: [number, number, number, number]) =>
+    hooks(
+      page,
+      async (h, arg) => {
+        const { tracers, box } = arg as { tracers: { tail: [number, number, number]; head: [number, number, number] }[]; box: [number, number, number, number] };
+        const lum = (a: number[], i: number) => 0.2126 * a[i * 3] + 0.7152 * a[i * 3 + 1] + 0.0722 * a[i * 3 + 2];
+        h.debugTracer(null);
+        await h.stepFrames(2);
+        const without = await h.sharpAt(box);
+        const seen: number[][] = [];
+        for (const t of tracers) {
+          h.debugTracer({ ...t, kind: 2 });
+          await h.stepFrames(2);
+          const withIt = await h.sharpAt(box);
+          seen.push(Array.from({ length: box[2] * box[3] }, (_, i) => lum(withIt, i) - lum(without, i)));
+        }
+        h.debugTracer(null);
+        return seen;
+      },
+      { tracers, box },
+    );
+
+  // 150 m out, 20° over the view against the night sky, moving a third of a pixel right and a
+  // quarter up each frame; its tail 12 m back, 0.6 px aside (the eye a few centimetres off the
+  // shot's line, as when walking).
+  const steps = Array.from({ length: 8 }, (_, k) => ({ up: 20 + 0.023 * k, side: 0.37 * k }));
+  const far = steps.map((s) => ({ head: out(s.up, s.side, 150), tail: out(s.up, s.side + 0.6, 138) }));
+  const x0 = Math.round(far[0].head.px[0]) - 8;
+  const y0 = Math.round(far[far.length - 1].head.px[1]) - 8;
+  const frames = await lightOver(far.map((f) => ({ tail: f.tail.at, head: f.head.at })), [x0, y0, 20, 20]);
+  const totals = frames.map((f) => f.reduce((a, b) => a + b, 0));
+  const peaks = frames.map((f) => Math.max(...f));
+  const farSeen = JSON.stringify({ totals, peaks });
+  for (const p of peaks) expect(p, farSeen).toBeGreaterThan(0.05 * Math.max(...peaks));
+  expect(Math.min(...totals) / Math.max(...totals), farSeen).toBeGreaterThan(0.9);
+  expect(Math.min(...totals), farSeen).toBeGreaterThan(0);
+
+  // Half a metre out on the view's middle, coming at the eye, its tail 12 m back and 0.4 px aside: a
+  // row and a column through it lit (over a hundredth of its brightest) across 12 px at most.
+  const near = { head: out(0, 0, 0.5), tail: out(0, 0.4, 12.5) };
+  const [cx, cy] = near.head.px.map(Math.round);
+  const [row] = await lightOver([{ tail: near.tail.at, head: near.head.at }], [0, cy, at.res[0], 1]);
+  const [column] = await lightOver([{ tail: near.tail.at, head: near.head.at }], [cx, 0, 1, at.res[1]]);
+  const across = (line: number[]) => {
+    const peak = Math.max(...line);
+    const lit = line.map((v, i) => (v > 0.01 * peak ? i : -1)).filter((i) => i >= 0);
+    return { peak, width: lit.length > 0 ? lit[lit.length - 1] - lit[0] + 1 : 0 };
+  };
+  const nearSeen = JSON.stringify({ row: across(row), column: across(column) });
+  for (const line of [row, column]) {
+    expect(across(line).peak, nearSeen).toBeGreaterThan(1);
+    expect(across(line).width, nearSeen).toBeLessThanOrEqual(12);
+  }
+  expect(errors).toEqual([]);
+});
+
 test('a lit square shows as a square, where a lit disc leaves its corners', async ({ page }) => {
   // Debris is drawn as lit squares (milestone 4's plan, ruling 7).
   const errors = await openGame(page);

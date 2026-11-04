@@ -9,6 +9,8 @@
 // a core mixed toward white in a glow of its colour. A tracer's glow is drawn no wider than
 // glowMaxPx, narrowed and not brightened, so a round past the eye is not a bar across the view; its
 // core is its share of the width drawn, but no narrower than MIN_RIBBON_PX either, its light kept.
+// Seen end on, a tracer's ends within END_ON_PX of each other, it draws nothing: its head (a held
+// billboard, no smaller than MIN_HEAD_PX nor wider than headMaxPx) carries it.
 
 struct Lit {
   centre: vec3f,
@@ -35,9 +37,9 @@ struct Ribbon {
 struct EffectsDraw {
   billboards: u32,
   ribbons: u32,
-  // The widest a tracer's glow is drawn, in pixels.
+  // The widest a tracer's glow is drawn, and its head, in pixels.
   glowMaxPx: f32,
-  pad1: u32,
+  headMaxPx: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -51,6 +53,13 @@ const NEAR: f32 = 0.5;
 // The narrowest a ribbon is drawn, in pixels: wide enough that every column it crosses has a pixel
 // centre within half a pixel of its middle (its soft edge falls to a twentieth).
 const MIN_RIBBON_PX: f32 = 2.0;
+// The smallest a tracer's head (a disc) is drawn, in pixels across: from three, the light it lays on
+// the pixels it covers is within 2% of the same wherever it falls among them (at two, between half
+// and 1.4 times it), so a far head moving across the view does not twinkle.
+const MIN_HEAD_PX: f32 = 3.0;
+// A tracer whose ends fall within this many pixels of each other is seen end on (the shooter's own
+// round, from the eye it left): it draws nothing, fading in over the next as many.
+const END_ON_PX: f32 = 1.0;
 
 const CORNERS = array(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
 
@@ -76,6 +85,23 @@ fn toClip(p: vec3f) -> vec4f {
   return vec4f(dot(d, c.right) / c.tanHalf, dot(d, c.up) / c.tanHalf * aspect, w - NEAR, w);
 }
 
+// A pixel's width at p (voxels), in voxels.
+fn pixelAt(p: vec3f) -> f32 {
+  return 2.0 * max(dot(p - frame.cam.origin, frame.cam.forward), NEAR) * frame.cam.tanHalf / f32(frame.res.x);
+}
+
+// How much of a tracer from tail to head (voxels) is shown: none seen end on, its ends within
+// END_ON_PX of each other on the screen, all from twice that, and all while an end is within NEAR.
+fn sideOn(tail: vec3f, head: vec3f) -> f32 {
+  let a = toClip(tail);
+  let b = toClip(head);
+  if (a.w <= NEAR || b.w <= NEAR) {
+    return 1.0;
+  }
+  let apart = length((a.xy / a.w - b.xy / b.w) * vec2f(frame.res) * 0.5);
+  return clamp(apart / END_ON_PX - 1.0, 0.0, 1.0);
+}
+
 @vertex
 fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragment {
   let corner = CORNERS[v];
@@ -83,11 +109,21 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
   var f: Fragment;
   if (i < draw.billboards) {
     let b = lit[i];
-    let p = (b.centre + (frame.cam.right * corner.x + frame.cam.up * corner.y) * abs(b.half)) * toVoxels;
+    var half = abs(b.half);
+    var colour = b.colour;
+    if (b.colour.a < 0.0) {
+      // A tracer's head, held as its ribbon is: no smaller than MIN_HEAD_PX, its light kept, nor wider
+      // than headMaxPx, narrowed and not brightened.
+      let pixel = pixelAt(b.centre * toVoxels) * frame.voxel;
+      let drawn = min(max(half, 0.5 * MIN_HEAD_PX * pixel), 0.5 * draw.headMaxPx * pixel);
+      colour = vec4f(b.colour.rgb * min((half / drawn) * (half / drawn), 1.0), 0.0);
+      half = drawn;
+    }
+    let p = (b.centre + (frame.cam.right * corner.x + frame.cam.up * corner.y) * half) * toVoxels;
     f.clip = toClip(p);
     f.world = p;
     f.uv = corner;
-    f.colour = b.colour;
+    f.colour = colour;
     // A disc (-1), or a square (-2: its half size came negative).
     f.alphas = vec2f(select(-1.0, -2.0, b.half < 0.0));
     return f;
@@ -95,16 +131,22 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
   let r = ribbons[i - draw.billboards];
   let tail = r.tail * toVoxels;
   let head = r.head * toVoxels;
+  let isTracer = r.style > 0.5;
+  // A tracer seen end on draws nothing (its head carries it): not a sliver of noise across the view.
+  let shown = select(1.0, sideOn(tail, head), isTracer);
+  if (shown <= 0.0) {
+    f.clip = vec4f(0.0, 0.0, -1.0, 1.0);
+    return f;
+  }
   // Across the ribbon: square to its length and to the line of sight, so it faces the camera.
   let across = cross(head - tail, (tail + head) * 0.5 - frame.cam.origin);
   let span = length(across);
   let along = corner.y * 0.5 + 0.5;
   let mid = mix(tail, head, along);
   // A pixel's width where this end is (voxels), and the width drawn there: its light kept.
-  let pixel = 2.0 * max(dot(mid - frame.cam.origin, frame.cam.forward), NEAR) * frame.cam.tanHalf / f32(frame.res.x);
+  let pixel = pixelAt(mid);
   let width = r.width * toVoxels;
   let narrowest = MIN_RIBBON_PX * pixel;
-  let isTracer = r.style > 0.5;
   let drawn = select(max(width, narrowest), min(max(width, narrowest), draw.glowMaxPx * pixel), isTracer);
   let side = select(frame.cam.right, across / max(span, 1e-6), span > 1e-6) * (drawn * 0.5);
   let p = mid + side * corner.x;
@@ -119,8 +161,8 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
     let core = r.coreShare * width;
     let coreDrawn = min(max(r.coreShare * drawn, narrowest), drawn);
     let hot = mix(r.rgb, vec3f(max(r.rgb.r, max(r.rgb.g, r.rgb.b))), r.white);
-    f.colour = vec4f(hot * min(core / coreDrawn, 1.0), 0.0);
-    f.glow = vec4f(r.rgb * r.glowShare * min(width / drawn, 1.0), coreDrawn / drawn);
+    f.colour = vec4f(hot * (min(core / coreDrawn, 1.0) * shown), 0.0);
+    f.glow = vec4f(r.rgb * (r.glowShare * min(width / drawn, 1.0) * shown), coreDrawn / drawn);
   }
   return f;
 }
