@@ -100,6 +100,22 @@ export interface TracerDraw {
 /** Where a round stops in a body: how far along its segment (m), whose body, and where it struck. */
 export type BodyTest = (owner: number, from: readonly [number, number, number], dir: readonly [number, number, number], length: number) => { t: number; body: number; zone: Zone } | null;
 
+/**
+ * A tracer round's draw, carried by the strike that retired it (the pool's own; never sent to the
+ * room): where it left and where its tracer is drawn from, how far out it joins its path (m; 0: drawn
+ * on it), over how far it is lit in (m; −1 unset: the draw's own), its speed as it struck (m/s), and
+ * its kind (net/gear.ts TRACER_KIND). The frame that drains the strike draws the last of its flight by
+ * it (effects-frame.ts), so a round whose flight ends within the frame's ticks is seen.
+ */
+export interface StrikeDraw {
+  origin: [number, number, number];
+  from: [number, number, number];
+  convergeM: number;
+  igniteM: number;
+  speed: number;
+  kind: number;
+}
+
 export interface BodyHit {
   owner: number;
   body: number;
@@ -110,6 +126,8 @@ export interface BodyHit {
   distance: number;
   /** The gun it left (its spec's), if it says. */
   gun?: number;
+  /** A tracer round's draw (StrikeDraw); none for a round that burns no tracer. */
+  draw?: StrikeDraw;
 }
 
 /** A round stopped by the world. */
@@ -132,6 +150,8 @@ export interface Impact {
   dir: [number, number, number];
   /** Its tracer kind (net/gear.ts TRACER_KIND): 0 for a round that burns no tracer. */
   kind: number;
+  /** A tracer round's draw (StrikeDraw); none for a round that burns no tracer. */
+  draw?: StrikeDraw;
 }
 
 export class Rounds {
@@ -368,6 +388,7 @@ export class Rounds {
           dir,
           distance: this.distance[i] + body.t,
           ...(spec.gun === undefined ? {} : { gun: spec.gun }),
+          ...(this.tracer[i] ? { draw: this.strikeDraw(i, speed) } : {}),
         });
         this.hearPass(i);
         return true;
@@ -392,6 +413,7 @@ export class Rounds {
           spec: spec.name,
           dir,
           kind: this.tracer[i],
+          ...(this.tracer[i] ? { draw: this.strikeDraw(i, speed) } : {}),
         });
         // Stopped before it passed: heard as near as it came.
         this.hearPass(i);
@@ -409,6 +431,19 @@ export class Rounds {
     const retired = this.distance[i] >= this.t.maxRangeM || this.age[i] >= this.t.maxFlightS || x < 0 || y < 0 || z < 0 || x >= sx || y >= sy || z >= sz;
     if (retired) this.hearPass(i);
     return retired;
+  }
+
+  /** Round `i`'s tracer as it strikes at `speed` (m/s): what its last streak is drawn by. */
+  private strikeDraw(i: number, speed: number): StrikeDraw {
+    const p = i * 3;
+    return {
+      origin: [this.origin[p], this.origin[p + 1], this.origin[p + 2]],
+      from: [this.from[p], this.from[p + 1], this.from[p + 2]],
+      convergeM: this.converge[i],
+      igniteM: this.ignite[i],
+      speed,
+      kind: this.tracer[i],
+    };
   }
 
   /** Round `i` is heard passing the listener, once, if it has come within reach. */

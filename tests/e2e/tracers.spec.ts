@@ -40,7 +40,10 @@ test('at rest none is drawn', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test('grazing tracers ricochet off the parapet', async ({ page }) => {
+test('grazing tracers ricochet off the parapet, and every round that strikes it is drawn to it', async ({ page }) => {
+  // The parapet's crest is within a tick's flight of the step, so a round that strikes it does so in
+  // the tick it was fired in: it is drawn once, its streak ending where it struck, in the frame whose
+  // ticks it flew in, the frame that leaves its ember. Without that the first strikes drew nothing.
   const errors = await openGame(page);
   await hooks(page, (h) => h.play());
   await hooks(page, (h) => {
@@ -52,15 +55,30 @@ test('grazing tracers ricochet off the parapet', async ({ page }) => {
   const most = await hooks(page, async (h) => {
     let ricochets = 0;
     let embers = 0;
+    let tracers = 0;
+    // Frames that left a new ember (a tracer struck in their ticks), and those of them that drew no tracer.
+    let struck = 0;
+    const unseen: number[] = [];
+    let before = 0;
     for (let k = 0; k < 120; k++) {
       await h.waitFrames(1);
       const e = h.effects();
       ricochets = Math.max(ricochets, e.ricochets);
       embers = Math.max(embers, e.embers);
+      tracers = Math.max(tracers, e.tracers);
+      if (e.embers > before) {
+        struck++;
+        if (e.tracers === 0) unseen.push(k);
+      }
+      before = e.embers;
     }
     h.trigger(false);
-    return { ricochets, embers, errors: h.gpuErrors() };
+    return { ricochets, embers, tracers, struck, unseen, errors: h.gpuErrors() };
   });
+  const seen = JSON.stringify(most);
+  expect(most.struck, seen).toBeGreaterThan(0);
+  expect(most.unseen, seen).toEqual([]);
+  expect(most.tracers, seen).toBeGreaterThan(0);
   expect(most.embers).toBeGreaterThan(0);
   expect(most.ricochets).toBeGreaterThan(0);
   expect(most.errors).toEqual([]);

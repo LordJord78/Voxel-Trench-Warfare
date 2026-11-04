@@ -40,6 +40,36 @@ function shoot(s: Session): CombatEvents {
   return s.drainEvents();
 }
 
+/** The player 2 m along open ground looking along it (+z), a wall across it `wallM` in front of the eye (none: open to the map's end, 49 m on). */
+function facing(wallM: number | null): Session {
+  const map = new BrickMap({ x: 256, y: 64, z: 512 });
+  map.fillBox(0, 0, 0, 256, 4, 512, P.SOD);
+  if (wallM !== null) map.fillBox(0, 0, Math.round((2 + wallM) * 10), 256, 64, Math.round((2 + wallM) * 10) + 4, P.TIMBER);
+  const s = Session.create({ map, plan: null, spawn: { position: [12.8, 0.4, 2] } }, tun, 7, 0);
+  for (let k = 0; k < 40; k++) s.tick();
+  s.drainEvents();
+  return s;
+}
+
+/** The player's long gun made the M870, and up. */
+function shotgun(s: Session): Session {
+  s.equip({ primary: 'm870', secondary: 'm17', fits: {} });
+  for (let k = 0; k < 120; k++) s.tick();
+  s.drainEvents();
+  return s;
+}
+
+/** A frame of `ticks` whole 60 Hz ticks, the trigger pulled in the first if `fire`: the events it drained, and the frame built from them. */
+function frameOf(s: Session, b: EffectsFrameBuilder, ticks = 1, fire = false): { events: CombatEvents; built: ReturnType<EffectsFrameBuilder['build']> } {
+  for (let k = 0; k < ticks; k++) {
+    s.intent = { ...s.intent, fire: fire && k === 0 };
+    s.tick();
+  }
+  s.intent = { ...s.intent, fire: false };
+  const events = s.drainEvents();
+  return { events, built: b.build(s, events) };
+}
+
 /** Ribbon `i`, 16 floats apart as effects.wgsl's Ribbon is laid out. */
 function ribbon(r: Float32Array, i: number) {
   const o = i * 16;
@@ -289,16 +319,6 @@ describe("a tracer's look", () => {
   });
 
   it('a shot is aimed at the first thing on its line: a wall 30 m out, past the map (the sky) the farthest, nearer than 8 m held at 8', () => {
-    /** The player 2 m along open ground looking along it (+z), a wall across it `wallM` in front of the eye. */
-    const facing = (wallM: number | null) => {
-      const map = new BrickMap({ x: 256, y: 64, z: 512 });
-      map.fillBox(0, 0, 0, 256, 4, 512, P.SOD);
-      if (wallM !== null) map.fillBox(0, 0, Math.round((2 + wallM) * 10), 256, 64, Math.round((2 + wallM) * 10) + 4, P.TIMBER);
-      const s = Session.create({ map, plan: null, spawn: { position: [12.8, 0.4, 2] } }, tun, 7, 0);
-      for (let k = 0; k < 40; k++) s.tick();
-      s.drainEvents();
-      return s;
-    };
     const eye = (s: Session): V3 => [s.player.position.x, s.player.position.y + s.controller.eyeHeight(s.player), s.player.position.z];
     const [near, far] = [tun.f('effects.tracer_converge_min_m'), tun.f('effects.tracer_converge_max_m')];
     // A shot into the wall: its round (and its tracer) joins its path there, cast once as it leaves.
@@ -446,5 +466,143 @@ describe("a tracer's look", () => {
     expect(built.counts.battleTracers).toBe(10);
     expect(built.frame.billboardCount).toBe(MAX_BILLBOARDS);
     expect(built.counts.heads).toBe(10);
+  });
+});
+
+describe("a round that strikes within the frame's ticks", () => {
+  // A round is retired at its strike, inside the tick: one whose whole flight fits in the frame's
+  // ticks (an AK round's under 14.7 m at 60 Hz, a pellet's under 6.7 m, twice that when a frame runs
+  // two ticks) would never be drawn, and a longer stream would stop a tick short of what it struck. The
+  // strike carries the round's draw, and the frame that drains it draws the last of its flight once,
+  // by the law the live rounds are drawn by, ending where it struck.
+  const length = (d: { tail: readonly number[]; head: readonly number[] }) => Math.hypot(d.head[0] - d.tail[0], d.head[1] - d.tail[1], d.head[2] - d.tail[2]);
+  /** The streak the law asks for at `speed` (m/s): tracer_streak_s of its flight, within tracer_min_m and tracer_max_m. */
+  const streakAt = (speed: number) => Math.min(t.tracerMaxM, Math.max(t.tracerMinM, speed * t.tracerStreakS));
+
+  it('a wall 10 m out: one AK shot draws one tracer, its head at the wall and its tail at the drawn muzzle', () => {
+    const s = facing(10);
+    const { events, built } = frameOf(s, new EffectsFrameBuilder(t), 1, true);
+    expect(events.shots).toHaveLength(1);
+    expect(events.impacts).toHaveLength(1);
+    expect(s.rounds.count).toBe(0);
+    expect(built.counts.tracers).toBe(1);
+    expect(built.drawn).toHaveLength(1);
+    const [d] = built.drawn;
+    const hit = events.impacts[0];
+    expect(d.struck).toBe(true);
+    expect(d.kind).toBe(TRACER_KIND.red);
+    expect(d.flown).toBeCloseTo(hit.distance, 4);
+    // Its head where it struck, held off the face (toward the eye, its normal) by its own radius, so the
+    // wall does not hide half of it.
+    expect(hit.normal).toEqual([0, 0, -1]);
+    close(d.head, [hit.position[0], hit.position[1], hit.position[2] - t.tracerHeadM / 2], 4, 'head');
+    // Its whole 10 m flight its streak (21.1 m asked for): back to where it left, drawn from the muzzle.
+    close(d.tail, events.shots[0].muzzle, 2, 'tail');
+    // Its ribbons written, as a tracer's, and its head.
+    expect(built.frame.ribbonCount).toBeGreaterThan(built.counts.stars);
+    expect(ribbon(built.frame.ribbons, 0).style).toBe(1);
+    expect(built.counts.heads).toBe(1);
+  });
+
+  it('a wall 25 m out: the round is drawn twice, in flight and then ending at the wall', () => {
+    const s = facing(25);
+    const b = new EffectsFrameBuilder(t);
+    const first = frameOf(s, b, 1, true);
+    expect(first.events.impacts).toHaveLength(0);
+    expect(first.built.drawn.map((d) => d.struck)).toEqual([false]);
+    const second = frameOf(s, b);
+    expect(second.events.impacts).toHaveLength(1);
+    expect(s.rounds.count).toBe(0);
+    expect(second.built.drawn.map((d) => d.struck)).toEqual([true]);
+    const [d] = second.built.drawn;
+    const hit = second.events.impacts[0];
+    close(d.head, [hit.position[0], hit.position[1], hit.position[2] - t.tracerHeadM / 2], 4, 'at the wall');
+    // Its streak the law's at the speed it struck at (some 20.5 m of its 25) back along its way from
+    // the wall, its tail drawn off its path by its share of the muzzle's offset, shrinking to none where
+    // it joins its path: where it was aimed (the wall, cast from the eye), or where it struck if nearer.
+    const shot = first.events.shots[0];
+    const reach = Math.min(first.built.drawn[0].joinsM, hit.distance);
+    expect(d.joinsM).toBeCloseTo(reach, 6);
+    const back = Math.min(streakAt(hit.speed), hit.distance);
+    expect(back).toBeGreaterThan(20);
+    const share = 1 - (hit.distance - back) / reach;
+    close(d.tail, [0, 1, 2].map((k) => hit.position[k] - hit.dir[k] * back + (shot.muzzle[k] - shot.origin[k]) * share), 4, 'tail');
+    expect(length(d)).toBeLessThan(back);
+    // Drawn once: the next frame has nothing.
+    expect(frameOf(s, b).built.drawn).toHaveLength(0);
+  });
+
+  it("an M870 shot at 5 m: all 9 pellets drawn", () => {
+    const s = shotgun(facing(5));
+    const { events, built } = frameOf(s, new EffectsFrameBuilder(t), 1, true);
+    expect(events.shots).toHaveLength(1);
+    expect(events.impacts).toHaveLength(9);
+    expect(built.counts.tracers).toBe(9);
+    expect(built.drawn.every((d) => d.struck && d.kind === TRACER_KIND.red)).toBe(true);
+    for (const [i, d] of built.drawn.entries()) {
+      const hit = events.impacts[i];
+      close(d.head, [hit.position[0], hit.position[1], hit.position[2] - t.tracerHeadM / 2], 4, `pellet ${i}`);
+    }
+  });
+
+  it('a round that strikes a body is drawn to it, its head held off the body back along its way', () => {
+    const s = facing(null);
+    // A body across the line 6 m out from the eye (z 8 m): a stub, as a soldier's or a target's parts.
+    s.rounds.bodies = (_owner, from, dir, length) => {
+      const m = (8 - from[2]) / dir[2];
+      return dir[2] > 0 && m >= 0 && m <= length ? { t: m, body: 200, zone: 'torso' } : null;
+    };
+    const { events, built } = frameOf(s, new EffectsFrameBuilder(t), 1, true);
+    expect(events.hits).toHaveLength(1);
+    expect(events.impacts).toHaveLength(0);
+    expect(built.drawn).toHaveLength(1);
+    const [d] = built.drawn;
+    const hit = events.hits[0];
+    expect(d.struck).toBe(true);
+    close(d.head, [0, 1, 2].map((k) => hit.position[k] - hit.dir[k] * (t.tracerHeadM / 2)), 4, 'head');
+    close(d.tail, events.shots[0].muzzle, 2, 'tail');
+  });
+
+  it('a strike the frame drained without a draw (a round that burns no tracer) draws nothing', () => {
+    const s = facing(10);
+    s.rounds.fire([12.8, 2, 2], [0, 0, 880], projectileSpec(tun, 'assault_rifle'), 0, false);
+    const { events, built } = frameOf(s, new EffectsFrameBuilder(t));
+    expect(events.impacts).toHaveLength(1);
+    expect(events.impacts[0].draw).toBeUndefined();
+    expect(built.counts.tracers).toBe(0);
+  });
+});
+
+describe("every round fired is drawn (the shots spec's done row 1)", () => {
+  it("an AK shot's round and all 9 of an M870's pellets, into walls 10 m and 25 m out and into the open, a tick a frame or two: each drawn in the frame it was fired in, every live round and every strike drawn in every frame", () => {
+    for (const gun of ['ak74', 'm870'] as const) {
+      for (const wallM of [10, 25, null]) {
+        for (const ticks of [1, 2]) {
+          const what = `${gun}, ${wallM === null ? 'the open' : `a wall ${wallM} m out`}, ${ticks} a frame`;
+          const s = gun === 'm870' ? shotgun(facing(wallM)) : facing(wallM);
+          const b = new EffectsFrameBuilder(t);
+          const rounds = gun === 'm870' ? 9 : 1;
+          let frame = frameOf(s, b, ticks, true);
+          expect(frame.events.shots, what).toHaveLength(1);
+          // Each round still flying after the frame's ticks, or struck within them: drawn either way.
+          expect(frame.built.drawn, what).toHaveLength(rounds);
+          let strikes = 0;
+          let struck = 0;
+          for (let f = 0; f < 60; f++) {
+            const ended = frame.events.impacts.filter((i) => i.draw).length + frame.events.hits.filter((h) => h.draw).length;
+            strikes += ended;
+            struck += frame.built.drawn.filter((d) => d.struck).length;
+            // Every round in the air drawn, and every one struck in the frame's ticks.
+            expect(frame.built.counts.tracers, `${what}, frame ${f}`).toBe(s.rounds.count + ended);
+            if (s.rounds.count === 0) break;
+            frame = frameOf(s, b, ticks);
+          }
+          expect(s.rounds.count, what).toBe(0);
+          // Each strike drawn once; into a wall, every round's flight ends at it.
+          expect(struck, what).toBe(strikes);
+          if (wallM !== null) expect(strikes, what).toBe(rounds);
+        }
+      }
+    }
   });
 });

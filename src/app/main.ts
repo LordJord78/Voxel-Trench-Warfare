@@ -1315,7 +1315,7 @@ async function start(): Promise<void> {
       session.artillery.intensity = i;
     },
     effects: () => built,
-    /** For the tracer captures: the session's tracers of the last frame on the canvas (CSS pixels, by the frame's camera) and where they are drawn (`headM`, `tailM`: metres), the rifle's drawn box scaled to it, and the weapon's state. */
+    /** For the tracer captures: the session's tracers of the last frame on the canvas (CSS pixels, by the frame's camera) and where they are drawn (`headM`, `tailM`: metres; `struck`, a round's last streak, ending where it struck), the rifle's drawn box scaled to it, and the weapon's state. */
     tracerPixels: () => {
       const res: [number, number] = [Math.max(1, canvas.clientWidth), Math.max(1, canvas.clientHeight)];
       const g = renderer.rifleState();
@@ -1326,7 +1326,7 @@ async function start(): Promise<void> {
         pose: lastPose,
         gun: g.visible ? [g.box[0] * k, g.box[1] * k, g.box[2] * k, g.box[3] * k] : null,
         weapon: { automatic: session.weapon.spec.automatic, semi: session.weapon.semi, rounds: session.weapon.rounds, magazine: session.weapon.spec.magazine, id: session.arm.spec.gun.name },
-        tracers: builtDrawn.map((d) => ({ kind: d.kind, flown: d.flown, headDrawn: d.headDrawn, head: projectToPixel(lastPose, res, d.head), tail: projectToPixel(lastPose, res, d.tail), headM: d.head, tailM: d.tail, joinsM: d.joinsM })),
+        tracers: builtDrawn.map((d) => ({ kind: d.kind, flown: d.flown, headDrawn: d.headDrawn, head: projectToPixel(lastPose, res, d.head), tail: projectToPixel(lastPose, res, d.tail), headM: d.head, tailM: d.tail, joinsM: d.joinsM, struck: d.struck })),
       };
     },
     debugQuads(quads: DebugQuad[]) {

@@ -4,7 +4,9 @@
  * leaving the drawn rifle; each tracer round's ribbon, the player's drawn from
  * the rifle's muzzle and joining the round's path where the shot was aimed
  * (Session.aimRange: the round leaves the eye, so the reticle tells the truth,
- * and its tracer reaches across to it); and each shot's flash
+ * and its tracer reaches across to it), and each round that struck in the
+ * frame's ticks once more, by the same law, ending where it struck (so one
+ * whose whole flight fitted in the ticks is seen); and each shot's flash
  * — a star of three ribbons from the drawn muzzle along its bore and a
  * transient light there — for `flash_s` of the world's time, so as long at any
  * frame rate and held while paused (spec §4). The simulation's muzzle is the
@@ -32,6 +34,7 @@ import { flareTunables, type FlareState, type FlareTunables } from '../battle/fl
 import { tracerTunables, type TracerState } from '../battle/tracers';
 import { Ricochets, ricochetTunables, type RicochetTunables } from './ricochets';
 import { beamOf } from '../combat/arsenal';
+import type { StrikeDraw } from '../combat/ballistics';
 import { BILLBOARD_FLOATS } from '../combat/particles';
 import { toWorld } from '../combat/soldier-rig';
 import type { Tunables } from '../core/tunables';
@@ -224,8 +227,13 @@ export interface BuiltEffects {
   smoke: SmokePuff[];
   /** The session's tracers and the battle's, and the heads drawn on every tracer (a test's too). */
   counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number };
-  /** The session's own tracers as drawn this frame (their offsets applied), metres: for a test to find them on the image. `headDrawn`: the burning head is drawn (past tracer_head_from_m); `joinsM`: how far out the tracer joins its round's path (0: drawn on it). */
-  drawn: { tail: [number, number, number]; head: [number, number, number]; kind: number; flown: number; headDrawn: boolean; joinsM: number }[];
+  /**
+   * The session's own tracers as drawn this frame (their offsets applied), metres: for a test to find
+   * them on the image. `headDrawn`: the burning head is drawn (past tracer_head_from_m); `joinsM`: how
+   * far out the tracer joins its round's path (0: drawn on it); `struck`: a round that struck in the
+   * frame's ticks, drawn once more, ending where it struck.
+   */
+  drawn: { tail: [number, number, number]; head: [number, number, number]; kind: number; flown: number; headDrawn: boolean; joinsM: number; struck: boolean }[];
 }
 
 /** WGSL's smoothstep: 0 at `low`, 1 at `high`, Hermite between. */
@@ -433,25 +441,53 @@ export class EffectsFrameBuilder {
     // is drawn from shrinking to nothing where the shot was aimed (its own convergence, Session.aimRange).
     let tracers = 0;
     const drawn: BuiltEffects['drawn'] = [];
-    const seg = session.rounds.tracerSegments((speed) => streak(speed, t.tracerMaxM));
-    for (let i = 0; i < seg.flown.length; i++) {
-      const at = (a: Float32Array) => [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
-      const head = at(seg.head);
-      const tail = at(seg.tail);
+    /**
+     * A round's streak, `tail` to `head` on its path (m), its head `flown` metres into its flight, of
+     * `kind`: drawn from where its tracer leaves, `offset` off its path at the muzzle, the offset
+     * shrinking to none `reach` metres out; lit in over `igniteM` (−1 unset: a hip shot's). `lift`,
+     * for a round that struck: its head held off what it struck by so much (m). False once the ribbons
+     * are full.
+     */
+    const round = (tail: readonly number[], head: readonly number[], flown: number, offset: readonly number[], reach: number, igniteM: number, kind: number, lift: readonly number[] | null): boolean => {
       const length = Math.hypot(head[0] - tail[0], head[1] - tail[1], head[2] - tail[2]);
-      if (!(length > 0)) continue;
-      const from = at(seg.from);
-      const origin = at(seg.origin);
-      const offset = [from[0] - origin[0], from[1] - origin[1], from[2] - origin[2]];
-      const reach = seg.converge[i];
-      const share = (flown: number) => (reach > 0 ? Math.max(0, 1 - flown / reach) : 0);
-      const h = share(seg.flown[i]);
-      const s = share(seg.flown[i] - length);
-      const drawnTail = tail.map((v, k) => v + offset[k] * s);
-      const drawnHead = head.map((v, k) => v + offset[k] * h);
-      if (!tracer(drawnTail, drawnHead, seg.kind[i], seg.flown[i] - length, seg.flown[i], 1, seg.ignite[i] >= 0 ? seg.ignite[i] : t.tracerIgniteHipM)) break;
-      drawn.push({ tail: drawnTail as [number, number, number], head: drawnHead as [number, number, number], kind: seg.kind[i], flown: seg.flown[i], headDrawn: seg.flown[i] >= t.tracerHeadFromM, joinsM: reach });
+      if (!(length > 0)) return true;
+      const share = (f: number) => (reach > 0 ? Math.max(0, 1 - f / reach) : 0);
+      const h = share(flown);
+      const s = share(flown - length);
+      const drawnTail = tail.map((v, k) => v + offset[k] * s) as V3;
+      const drawnHead = head.map((v, k) => v + offset[k] * h + (lift ? lift[k] : 0)) as V3;
+      if (!tracer(drawnTail, drawnHead, kind, flown - length, flown, 1, igniteM >= 0 ? igniteM : t.tracerIgniteHipM)) return false;
+      drawn.push({ tail: drawnTail, head: drawnHead, kind, flown, headDrawn: flown >= t.tracerHeadFromM, joinsM: reach, struck: lift !== null });
       tracers++;
+      return true;
+    };
+    let full = false;
+    const seg = session.rounds.tracerSegments((speed) => streak(speed, t.tracerMaxM));
+    for (let i = 0; i < seg.flown.length && !full; i++) {
+      const at = (a: Float32Array) => [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
+      full = !round(at(seg.tail), at(seg.head), seg.flown[i], sub(at(seg.from), at(seg.origin)), seg.converge[i], seg.ignite[i], seg.kind[i], null);
+    }
+    // The rounds that struck in the frame's ticks, drawn once more, by the same law, at the end of
+    // their flight: one whose whole flight fitted in the ticks is seen at all (its tail at the muzzle),
+    // and a stream reaches what it struck rather than stopping a tick short. Each joins its path where
+    // it struck if that is nearer than where it was aimed, and its head is held off what it struck by
+    // its own radius, so the face does not hide half of it: off a face along its normal; off a body,
+    // or the voxel a round started in, back along its way.
+    const r = t.tracerHeadM / 2;
+    const ended: { at: readonly number[]; dir: readonly number[]; flown: number; lift: V3; draw: StrikeDraw }[] = [];
+    for (const hit of events.impacts) {
+      if (!hit.draw) continue;
+      const n = hit.normal;
+      const lift: V3 = n[0] === 0 && n[1] === 0 && n[2] === 0 ? [-hit.dir[0] * r, -hit.dir[1] * r, -hit.dir[2] * r] : [n[0] * r, n[1] * r, n[2] * r];
+      ended.push({ at: hit.position, dir: hit.dir, flown: hit.distance, lift, draw: hit.draw });
+    }
+    for (const hit of events.hits) if (hit.draw) ended.push({ at: hit.position, dir: hit.dir, flown: hit.distance, lift: [-hit.dir[0] * r, -hit.dir[1] * r, -hit.dir[2] * r], draw: hit.draw });
+    for (const e of ended) {
+      if (full) break;
+      const d = e.draw;
+      const back = Math.min(streak(d.speed, t.tracerMaxM), e.flown);
+      const tail = [0, 1, 2].map((k) => e.at[k] - e.dir[k] * back);
+      full = !round(tail, e.at, e.flown, sub(d.from, d.origin), Math.min(d.convergeM, e.flown), d.igniteM, d.kind, e.lift);
     }
 
     // Tracer strikes' embers, small emissive discs of their tracer's colour fading out, kept at its
