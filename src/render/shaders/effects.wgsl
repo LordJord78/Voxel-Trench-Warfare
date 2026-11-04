@@ -102,6 +102,11 @@ struct Fragment {
   @location(4) glow: vec4f,
   // The tracers' light (1), kept at its hue; and how white it is near the eye (1 within whiteNearM).
   @location(5) tone: vec2f,
+  // A ribbon's across (-1 to 1), interpolated over the screen, not in perspective: its profile is held
+  // in pixels, and one reaching from beside the eye far out (a shot from the hip) would draw its core
+  // off its middle, along one edge of its glow, each of its quad's two triangles weighting its near
+  // corners.
+  @location(6) @interpolate(linear) across: f32,
 }
 
 // As camera.wgsl's project, in clip space: perspective-correct, and clipped at NEAR.
@@ -218,6 +223,7 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
   f.clip = toClip(p);
   f.world = p;
   f.uv = vec2f(corner.x, along);
+  f.across = corner.x;
   f.colour = vec4f(r.rgb * (width / drawn), 0.0);
   f.alphas = vec2f(r.alphaTail, r.alphaHead);
   if (isTracer) {
@@ -248,7 +254,7 @@ fn fs(f: Fragment) -> @location(0) vec4f {
       // A tracer: its core, its share of the width drawn, in its glow; both fading to the tail. As
       // white as its core's share of its light where the core is white (near the eye, or by day); its
       // glow keeps its hue.
-      let u2 = f.uv.x * f.uv.x;
+      let u2 = f.across * f.across;
       let fade = mix(f.alphas.x, f.alphas.y, f.uv.y);
       let core = f.colour.rgb * (exp(-3.0 * u2 / (f.glow.a * f.glow.a)) * fade);
       let glow = f.glow.rgb * (exp(-3.0 * u2) * fade);
@@ -256,7 +262,7 @@ fn fs(f: Fragment) -> @location(0) vec4f {
       return vec4f(keepHue(core + glow, f.tone.y * share), 0.0);
     }
     // Soft across, fading from the head back to the tail.
-    let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.uv.x * f.uv.x);
+    let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.across * f.across);
     return vec4f(f.colour.rgb * a, 0.0);
   }
   if (f.alphas.x < -1.5) {

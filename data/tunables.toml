@@ -932,9 +932,11 @@ tracer_streak_s     = 0.024    # the streak behind it: this much of its flight (
 tracer_min_m        = 2.5      # pistol's 9), more than a 60 Hz frame's (14.7 m), so a stream has no
 tracer_max_m        = 24.0     # gaps; within these, and never more than it has flown; the battle's
                                # tracers' longest is their own trail_m
-tracer_ignite_m     = 4.0      # lit in, core and glow, over its first metres of flight: a stream
-tracer_head_from_m  = 1.5      # under the sight line does not bury the sight picture; its head
-                               # drawn from here
+tracer_ignite_m     = 4.0      # lit in, core and glow, over its first metres of flight: aimed over
+tracer_ignite_hip_m = 1.0      # this, so a stream under the sight line does not bury the sight
+                               # picture; from the hip over this, so the stream reads from the gun;
+                               # between, by the shot's share aimed as it was fired (kept per round)
+tracer_head_from_m  = 1.5      # its head drawn from here
 tracer_day_boost    = 3.0      # by day it burns 1 + this × daylight as bright, to read against
 tracer_daylight_deg = [-4.0, 20.0]  # sunlit ground as at dusk against dusk; daylight rises 0 to 1
                                # (a smoothstep) as the sun climbs between these elevations

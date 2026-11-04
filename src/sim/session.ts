@@ -263,6 +263,8 @@ export class Session {
   private readonly frontProjectile: ProjectileSpec;
   /** A shooter's tracer joins its round's path where the shot was aimed, within these (m; [effects] tracer_converge_min_m, _max_m). */
   private readonly tracerConverge: [number, number];
+  /** The player's tracer is lit in over this from the hip and this aimed, between by the share aimed (m; [effects] tracer_ignite_hip_m, tracer_ignite_m). */
+  private readonly tracerIgnite: [number, number];
   /** Each gun's round, pellets and cone, as another player's shots are fired. */
   private readonly remoteGuns = new Map<GunKey, { spec: ProjectileSpec; pellets: number; coneDeg: number }>();
   private readonly chipEnergyJ: number;
@@ -297,6 +299,7 @@ export class Session {
     this.arms = [armSpec(tun, 'ak74', BARE), armSpec(tun, 'm17', BARE)].map((a) => this.makeArm(a, false));
     this.frontProjectile = projectileSpec(tun, 'assault_rifle');
     this.tracerConverge = [tun.f('effects.tracer_converge_min_m'), tun.f('effects.tracer_converge_max_m')];
+    this.tracerIgnite = [tun.f('effects.tracer_ignite_hip_m'), tun.f('effects.tracer_ignite_m')];
     this.rounds = new Rounds(ballisticsTunables(tun), world.map, voxel);
     this.dispersion = this.streams.derive('combat.dispersion');
     this.recoilRng = this.streams.derive('combat.recoil');
@@ -646,14 +649,17 @@ export class Session {
       const tracer = kind !== TRACER_KIND.none;
       // The round leaves the eye, so the reticle tells the truth; its tracer, flash and brass the
       // drawn rifle, as it stands before this shot kicks it; the tracer joining the round's path where
-      // the shot is aimed (one cast a pull of the trigger: a shotgun's pellets share it).
+      // the shot is aimed (one cast a pull of the trigger: a shotgun's pellets share it), and lit in
+      // by a metre from the hip, so a stream reads from the gun, further aimed, clear of the sights.
       const muzzle = this.muzzle();
       const reach = this.aimRange(eye, dir);
-      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, muzzle, reach) >= 0) {
+      const [hipM, aimedM] = this.tracerIgnite;
+      const lit = hipM + (aimedM - hipM) * this.aimed;
+      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, muzzle, reach, lit) >= 0) {
         // A shotgun's other pellets, each the cone's own.
         for (let k = 1; k < w.spec.pellets; k++) {
           const d = w.aim(aim[0], aim[1], cone, this.dispersion);
-          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, muzzle, reach);
+          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, muzzle, reach, lit);
         }
         w.shot();
         this.throwShot(muzzle, arm.spec.flash);

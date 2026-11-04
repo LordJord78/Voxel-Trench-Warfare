@@ -28,9 +28,10 @@
 // measures read the displayed pixels (sRGB-encoded 0-255, luminance by Rec. 709 weights):
 //   - head over ring (the shot): the player's brightest drawn head within HEAD_PX of where it projects,
 //     over the mean of a RING_PX annulus round it, the gun's box and anything brighter than the sky's
-//     99th percentile left out: dusk's and night's at least MIN_RATIO. Noon's head at the display's top
-//     in its brightest channel (no head reaches 2.2 in luminance over a sunlit ring); noon's contrast
-//     is (d)'s.
+//     99th percentile left out: dusk's and night's at least MIN_RATIO in the brightest channel (the
+//     head's V over the ring's mean V, as noon's is read; the luminance ratio reported beside it: a
+//     red head is bright in its red, not in luminance). Noon's head at the display's top in its
+//     brightest channel (no head reaches 2.2 in luminance over a sunlit ring); noon's contrast is (d)'s.
 //   - (a) near width: the widest run across the player's tracer within NEAR_M of the muzzle (from
 //     NEAR_FROM_M, clear of the flash's star), at half its height over each side's surroundings: the
 //     line's own band, not the bloom's halo nor the parapet its shot's flash lights (the looser width,
@@ -85,7 +86,7 @@ const SKY_ROWS = 0.3;
 const SKY_PERCENTILE = 0.99;
 /** The least ring pixels left; fewer fails. */
 const RING_MIN_PIXELS = 200;
-/** Head over ring (displayed luminance): dusk's and night's at least. Noon's head is at the display's top in its brightest channel (against a sunlit ring no head reaches 2.2 in luminance); noon's contrast is (d)'s. */
+/** Head over ring in the brightest channel (the head's V over the ring's mean V): dusk's and night's at least. Noon's head is at the display's top in its brightest channel (against a sunlit ring no head reaches 2.2 in luminance); noon's contrast is (d)'s. */
 const MIN_RATIO = 3;
 const NOON_HEAD_MIN = 250;
 /** The least GPU samples inside the burst, else the p95 is not trusted. */
@@ -115,8 +116,8 @@ const FAR_LIT_MIN = 10;
 /** The battle's streams: pixels within this of each tracer's drawn streak, of them the lit. */
 const BATTLE_RADIUS_PX = 1.5;
 /** (e): the stream from the hip, from this far past the muzzle to within STREAM_AIM_PX of the point of aim (the view's middle). */
-const STREAM_FROM_M = 3;
-const STREAM_AIM_PX = 40;
+const STREAM_FROM_M = 0.5;
+const STREAM_AIM_PX = 12;
 /** (c): a round's path, metres of its flight; its pixels read PATH_ACROSS_PX either side; under DEGENERATE_PX on the image it is seen end on. */
 const PATH_M = [20, 80];
 const PATH_ACROSS_PX = 1.5;
@@ -411,21 +412,24 @@ function ringContext(img, info) {
   return { skyP99, gun, inGun: (x, y) => gun !== null && x >= gun[0] && x < gun[2] && y >= gun[1] && y < gun[3] };
 }
 
-/** The mean of an annulus `radii` round (cx, cy), but where `drop(x, y, lum)` says. */
+/** The mean luminance of an annulus `radii` round (cx, cy), and its mean brightest channel (V), but where `drop(x, y, lum)` says. */
 function ringMean(img, cx, cy, radii, drop) {
   let sum = 0;
+  let sumV = 0;
   let n = 0;
   let dropped = 0;
   for (let y = Math.max(0, cy - radii[1]); y <= Math.min(img.h - 1, cy + radii[1]); y++) {
     for (let x = Math.max(0, cx - radii[1]); x <= Math.min(img.w - 1, cx + radii[1]); x++) {
       const d = Math.hypot(x - cx, y - cy);
       if (d < radii[0] || d > radii[1]) continue;
-      if (drop(x, y, img.lum[y * img.w + x])) { dropped++; continue; }
-      sum += img.lum[y * img.w + x];
+      const k = y * img.w + x;
+      if (drop(x, y, img.lum[k])) { dropped++; continue; }
+      sum += img.lum[k];
+      sumV += Math.max(img.data[k * 4], img.data[k * 4 + 1], img.data[k * 4 + 2]);
       n++;
     }
   }
-  return { mean: n > 0 ? sum / n : null, n, dropped };
+  return { mean: n > 0 ? sum / n : null, meanV: n > 0 ? sumV / n : null, n, dropped };
 }
 
 /** The brightest pixel within `r` (Chebyshev) of (cx, cy). */
@@ -456,7 +460,11 @@ function headRing(img, info, anyKind = false) {
     let channel = 0;
     for (let y = Math.max(0, cy - HEAD_PX); y <= Math.min(img.h - 1, cy + HEAD_PX); y++) for (let x = Math.max(0, cx - HEAD_PX); x <= Math.min(img.w - 1, cx + HEAD_PX); x++) for (let k = 0; k < 3; k++) channel = Math.max(channel, img.data[(y * img.w + x) * 4 + k]);
     const ring = ringMean(img, cx, cy, RING_PX, (x, y, v) => inGun(x, y) || v > skyP99);
-    heads.push({ at: [Math.round(px * 10) / 10, Math.round(py * 10) / 10], kind: t.kind, flownM: Math.round(t.flown * 10) / 10, headLum: head, headChannel: channel, ringMean: ring.mean, ringPixels: ring.n, ringDropped: ring.dropped, ratio: ring.mean === null ? null : head / Math.max(ring.mean, RING_FLOOR) });
+    heads.push({
+      at: [Math.round(px * 10) / 10, Math.round(py * 10) / 10], kind: t.kind, flownM: Math.round(t.flown * 10) / 10, headLum: head, headChannel: channel, ringMean: ring.mean, ringMeanV: ring.meanV, ringPixels: ring.n, ringDropped: ring.dropped,
+      ratio: ring.mean === null ? null : head / Math.max(ring.mean, RING_FLOOR),
+      ratioV: ring.meanV === null ? null : channel / Math.max(ring.meanV, RING_FLOOR),
+    });
   }
   const valid = heads.filter((x) => x.ringPixels >= RING_MIN_PIXELS).sort((a, b) => b.headLum - a.headLum);
   return { skyP99, tracersProjected: mine.length, headsDrawn: mine.filter((t) => t.headDrawn).length, headsMeasured: heads.length, headsValid: valid.length, gunMasked: gun !== null, skipped, headline: valid[0] ?? null, heads };
@@ -614,7 +622,7 @@ function streamCover(comp, frames, track) {
       samples.push({ at: q, off, covered: lit(comp.lum[k], comp.least[k]) });
     }
   }
-  // Where the stream is on the image a metre and three metres past the muzzle (from the first frame it is drawn in): how far from the point of aim.
+  // Where the stream is on the image STREAM_FROM_M, a metre and three metres past the muzzle (from the first frame it is drawn in): how far from the point of aim.
   const where = (m) => {
     for (const { frame, t } of track.seen) {
       const f = frames[frame];
@@ -628,11 +636,13 @@ function streamCover(comp, frames, track) {
     }
     return null;
   };
-  const geometry = { at1mPx: where(1), at3mPx: where(STREAM_FROM_M) };
+  const geometry = { atFromPx: where(STREAM_FROM_M), at1mPx: where(1), at3mPx: where(3) };
   if (samples.length === 0) return { share: null, muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), ...geometry, why: `nothing of the stream ${STREAM_FROM_M} m past the muzzle lies ${STREAM_AIM_PX} px or more from the point of aim` };
   const litOnes = samples.filter((x) => x.covered);
   const reach = litOnes.length ? Math.max(...litOnes.map((x) => x.off)) : 0;
-  return { share: litOnes.length / samples.length, samples: samples.length, reachPx: Math.round(reach), muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), span: muzzlePx ? reach / muzzlePx : null, ...geometry, marks: samples };
+  // Beside the span, the lit stream's own extent: its outermost lit pixel to its innermost, over the muzzle's distance.
+  const inner = litOnes.length ? Math.min(...litOnes.map((x) => x.off)) : 0;
+  return { share: litOnes.length / samples.length, samples: samples.length, reachPx: Math.round(reach), innerPx: Math.round(inner), muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), span: muzzlePx ? reach / muzzlePx : null, extent: muzzlePx && litOnes.length ? (reach - inner) / muzzlePx : null, ...geometry, marks: samples };
 }
 
 /** The round that left in the window's first frame, frame to frame by its flight (some 14.7 m a frame): its path, a line from where it left, fitted to its heads past convergence. */
@@ -829,7 +839,7 @@ function measureCapture(c, cap) {
     else if (!hl) failures.push(`no head measured with a ring of ${RING_MIN_PIXELS}+ pixels (${m.headsMeasured} measured)`);
     else {
       if (c.hours === 12 && !(hl.headChannel >= NOON_HEAD_MIN)) failures.push(`noon: the head's brightest channel ${hl.headChannel} < ${NOON_HEAD_MIN}`);
-      if (c.hours !== 12 && !(hl.ratio >= MIN_RATIO)) failures.push(`head over ring ${hl.ratio.toFixed(2)} < ${MIN_RATIO}`);
+      if (c.hours !== 12 && !(hl.ratioV >= MIN_RATIO)) failures.push(`head over ring in the brightest channel ${hl.headChannel}/${hl.ringMeanV?.toFixed(1)} = ${hl.ratioV?.toFixed(2)} < ${MIN_RATIO} (luminance ${hl.ratio?.toFixed(2)})`);
     }
   }
   if (m.nearWidth && !(m.nearWidth.px <= TARGET.nearWidthPx)) failures.push(`(a) near width ${m.nearWidth.px} px > ${TARGET.nearWidthPx}`);
@@ -892,7 +902,7 @@ try {
       report[c.name] = {
         hours: c.hours, burst: c.burst, aimed: !!c.aimed, side: !!c.side, weapon: cap.frames[shot].info.weapon, burstFrames: cap.burst, gpuSamples: cap.gpu.length, gpuP95, effectsGpu: { p95: effectsP95, mean: effectsMean },
         most: cap.most, failures: found,
-        thresholds: { minRatio: MIN_RATIO, noonHeadChannelMin: NOON_HEAD_MIN, minGpuSamples: MIN_GPU_SAMPLES, ringMinPixels: RING_MIN_PIXELS, lit: { ratio: LIT_RATIO, min: LIT_MIN }, targets: TARGET, team: TEAM },
+        thresholds: { minRatio: MIN_RATIO, minRatioIn: 'brightest channel (V)', noonHeadChannelMin: NOON_HEAD_MIN, stream: { fromM: STREAM_FROM_M, aimPx: STREAM_AIM_PX }, minGpuSamples: MIN_GPU_SAMPLES, ringMinPixels: RING_MIN_PIXELS, lit: { ratio: LIT_RATIO, min: LIT_MIN }, targets: TARGET, team: TEAM },
         ...m,
         pathCover: m.pathCover ? cover : null,
         stream: m.stream ? stream : null,
@@ -900,11 +910,11 @@ try {
       };
       const hl = m.headline;
       const bits = [
-        hl ? `head ${hl.headLum.toFixed(1)} (channel ${hl.headChannel}) / ring ${hl.ringMean.toFixed(1)} = ${hl.ratio.toFixed(2)}` : `no head (${m.headsDrawn} drawn)`,
+        hl ? `head V ${hl.headChannel} / ring V ${hl.ringMeanV.toFixed(1)} = ${hl.ratioV.toFixed(2)} (luminance ${hl.headLum.toFixed(1)} / ${hl.ringMean.toFixed(1)} = ${hl.ratio.toFixed(2)})` : `no head (${m.headsDrawn} drawn)`,
         m.nearWidth ? `(a) ${m.nearWidth.px} px (lit ${m.nearWidth.litPx})` : null,
         m.farColour ? `(b) sat ${round3(m.farColour.saturation)} hue ${m.farColour.hueDeg?.toFixed(1)} (n ${m.farColour.n})` : null,
         m.battleColour ? `battle sat ${round3(m.battleColour.saturation)} hue ${m.battleColour.hueDeg?.toFixed(1)} (n ${m.battleColour.n})` : null,
-        m.stream ? `(e) ${round3(m.stream.share)} reach ${m.stream.reachPx}/${m.stream.muzzlePx} = ${round3(m.stream.span)}` : null,
+        m.stream ? `(e) ${round3(m.stream.share)} of ${m.stream.samples ?? 0}, reach ${m.stream.reachPx}/${m.stream.muzzlePx} = ${round3(m.stream.span)} (lit ${m.stream.innerPx}-${m.stream.reachPx} px: ${round3(m.stream.extent)}; ${STREAM_FROM_M} m at ${m.stream.atFromPx} px, 1 m ${m.stream.at1mPx}, 3 m ${m.stream.at3mPx})` : null,
         m.pathCover ? `(c) ${round3(m.pathCover.share)} over ${m.pathCover.lengthPx} px${m.pathCover.endOn ? ' (end on)' : ''}${m.pathCover.behindGun ? `, ${m.pathCover.behindGun} behind the gun` : ''}${m.pathCover.hiddenByWorld ? `, ${m.pathCover.hiddenByWorld} hidden` : ''}` : null,
         m.noonContrast ? `(d) ${round3(m.noonContrast.ratio)}` : null,
         `ricochets ${cap.most.ricochets} embers ${cap.most.embers}`,

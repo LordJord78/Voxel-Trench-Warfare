@@ -14,7 +14,8 @@
  * A tracer (the shots spec §1), the session's and the battle's alike: a white-
  * hot core in a coloured glow (ribbon style 1), its streak more than a frame's
  * flight at its speed (`tracer_streak_s`) and no more than it has flown, lit in
- * over its first `tracer_ignite_m`, a burning head from `tracer_head_from_m`,
+ * over its first metres (the player's by a metre from the hip, `tracer_ignite_hip_m`,
+ * and `tracer_ignite_m` aimed; others' as aimed), a burning head from `tracer_head_from_m`,
  * white-hot near the eye and its team's colour far off (`tracer_white_near_m`
  * to `tracer_white_far_m`), and brighter by day.
  *
@@ -92,7 +93,7 @@ export interface EffectsTunables {
   tracerStreakS: number;
   tracerMinM: number;
   tracerMaxM: number;
-  /** Lit in over its first metres of flight, its head drawn from here (m). */
+  /** Lit in over its first metres of flight, unless its round says otherwise (an aimed shot's; the player's from the hip is lit in by tracer_ignite_hip_m, Session), its head drawn from here (m). */
   tracerIgniteM: number;
   tracerHeadFromM: number;
   /** By day, 1 + this × daylight as bright; daylight rising 0 to 1 as the sun climbs between these elevations (degrees). */
@@ -393,23 +394,24 @@ export class EffectsFrameBuilder {
     const day = 1 + t.tracerDayBoost * daylight;
     const glows = [t.tracerColour, t.tracerColour, t.tracerColourRed, t.tracerColourBlue].map((c) => c.map((v) => v * t.tracerIntensity * day));
     const tracerLook = [RIBBON_STYLE.tracer, t.tracerCoreWidthM / t.tracerGlowWidthM, t.tracerGlowShare, t.tracerCoreWhite];
-    const ignite = (flown: number) => Math.min(1, Math.max(0, flown / t.tracerIgniteM));
+    const ignite = (flown: number, overM: number) => Math.min(1, Math.max(0, flown / overM));
     /** A streak `speed` (m/s) asks for: a frame's flight, between tracer_min_m and `maxM`. */
     const streak = (speed: number, maxM: number) => Math.min(maxM, Math.max(t.tracerMinM, speed * t.tracerStreakS));
     let heads = 0;
     /**
      * One tracer-like streak, `tail` to `head` (m), of `kind`, its tail and head `tailFlown` and
-     * `headFlown` metres into its flight: its ribbon, lit in over its first tracer_ignite_m; and its
+     * `headFlown` metres into its flight: its ribbon, lit in over its first `igniteM` (its round's,
+     * by how aimed its shot was; tracer_ignite_m, an aimed shot's, unless given); and its
      * head once it is tracer_head_from_m out, an emissive disc as bright as its core there and more
      * (its colour mixed toward white as effects.wgsl mixes the core's, by its own distance from the
      * eye), held to the pixels it is drawn over as the ribbon is (HEAD_BILLBOARD). False once the
      * ribbons are full; a head is left off once the billboards are. `fade` (0 to 1) dims all of it:
      * a ricochet's burning out.
      */
-    const tracer = (tail: readonly number[], head: readonly number[], kind: number, tailFlown: number, headFlown: number, fade = 1): boolean => {
+    const tracer = (tail: readonly number[], head: readonly number[], kind: number, tailFlown: number, headFlown: number, fade = 1, igniteM = t.tracerIgniteM): boolean => {
       const colour = glows[kind] ?? glows[TRACER_KIND.amber];
-      const lit = ignite(headFlown) * fade;
-      if (!ribbon(tail, head, t.tracerGlowWidthM, colour, t.tracerTailAlpha * ignite(tailFlown) * fade, lit, tracerLook)) return false;
+      const lit = ignite(headFlown, igniteM) * fade;
+      if (!ribbon(tail, head, t.tracerGlowWidthM, colour, t.tracerTailAlpha * ignite(tailFlown, igniteM) * fade, lit, tracerLook)) return false;
       if (headFlown >= t.tracerHeadFromM && billboards < MAX_BILLBOARDS) {
         const hottest = Math.max(colour[0], colour[1], colour[2]);
         const burn = (t.tracerHeadGain * lit) / t.particleGlow;
@@ -443,7 +445,7 @@ export class EffectsFrameBuilder {
       const s = share(seg.flown[i] - length);
       const drawnTail = tail.map((v, k) => v + offset[k] * s);
       const drawnHead = head.map((v, k) => v + offset[k] * h);
-      if (!tracer(drawnTail, drawnHead, seg.kind[i], seg.flown[i] - length, seg.flown[i])) break;
+      if (!tracer(drawnTail, drawnHead, seg.kind[i], seg.flown[i] - length, seg.flown[i], 1, seg.ignite[i] > 0 ? seg.ignite[i] : t.tracerIgniteM)) break;
       drawn.push({ tail: drawnTail as [number, number, number], head: drawnHead as [number, number, number], kind: seg.kind[i], flown: seg.flown[i], headDrawn: seg.flown[i] >= t.tracerHeadFromM });
       tracers++;
     }

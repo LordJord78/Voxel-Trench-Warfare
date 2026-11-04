@@ -234,6 +234,48 @@ describe("a tracer's look", () => {
     close(past.drawn.tail, past.tail.map((v, k) => v + offset[k] * Math.max(0, 1 - (47 - 21.12) / 40)), 4, 'its tail, 25.9 m out');
   });
 
+  it("a hip shot's tracer is lit in by 1 m, an aimed one's by 4 m, a half-aimed one's between: by its share aimed as it was fired", () => {
+    const [hipM, aimedM] = [tun.f('effects.tracer_ignite_hip_m'), tun.f('effects.tracer_ignite_m')];
+    expect([hipM, aimedM]).toEqual([1, 4]);
+    // The session keeps each round's as it fires it: from the hip, the sights coming up, and aimed.
+    const fired = (aimedAtLeast: number) => {
+      const s = stand();
+      s.intent = { ...s.intent, aim: aimedAtLeast > 0 };
+      while (s.aimed < aimedAtLeast) s.tick();
+      s.drainEvents();
+      shoot(s);
+      const seg = s.rounds.tracerSegments(t.tracerMaxM);
+      expect(seg.ignite.length).toBe(1);
+      return { share: s.aimed, igniteM: seg.ignite[0] };
+    };
+    const hip = fired(0);
+    expect(hip.share).toBe(0);
+    expect(hip.igniteM).toBeCloseTo(hipM, 6);
+    const aimed = fired(1);
+    expect(aimed.share).toBe(1);
+    expect(aimed.igniteM).toBeCloseTo(aimedM, 6);
+    const half = fired(0.4);
+    expect(half.share).toBeGreaterThan(0.4);
+    expect(half.share).toBeLessThan(0.6);
+    expect(half.igniteM).toBeCloseTo(hipM + (aimedM - hipM) * half.share, 5);
+    // Drawn, each lit in over its own: its head's alpha the share of that it has flown.
+    const litAt = (igniteM: number, m: number) => {
+      const s = stand();
+      s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red, undefined, 0, igniteM);
+      s.rounds.step(m / 880);
+      return ribbon(new EffectsFrameBuilder(t).build(s, none()).frame.ribbons, 0).alphaHead;
+    };
+    expect(litAt(hip.igniteM, 1)).toBeCloseTo(1, 4);
+    expect(litAt(aimed.igniteM, 1)).toBeCloseTo(0.25, 4);
+    expect(litAt(aimed.igniteM, 2.5)).toBeCloseTo(0.625, 4);
+    expect(litAt(aimed.igniteM, 4)).toBeCloseTo(1, 4);
+    expect(litAt(half.igniteM, 1)).toBeCloseTo(1 / half.igniteM, 4);
+    expect(litAt(half.igniteM, 2.5)).toBeCloseTo(Math.min(1, 2.5 / half.igniteM), 4);
+    expect(litAt(half.igniteM, half.igniteM)).toBeCloseTo(1, 4);
+    // A round fired without one (the front's, the battle's, another player's) is lit in as an aimed shot's.
+    expect(litAt(0, 1)).toBeCloseTo(0.25, 4);
+  });
+
   it('a shot is aimed at the first thing on its line: a wall 30 m out, past the map (the sky) the farthest, nearer than 8 m held at 8', () => {
     /** The player 2 m along open ground looking along it (+z), a wall across it `wallM` in front of the eye. */
     const facing = (wallM: number | null) => {
