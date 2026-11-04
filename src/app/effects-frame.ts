@@ -234,8 +234,8 @@ export interface BuiltEffects {
   blasts: TransientLight[];
   /** Their smoke in the haze, and the fires' plumes: the nearest MAX_PUFFS puffs, nearest first (renderer.setSmoke). */
   smoke: SmokePuff[];
-  /** The session's tracers and the battle's, the heads drawn on every tracer and the embers (a test's too). */
-  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number };
+  /** The session's tracers and the battle's, the heads drawn on every tracer and the embers (a test's too); the ricochets and embers by their tracer's kind too (indexed by TRACER_KIND). */
+  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number; ricochetsByKind: number[]; embersByKind: number[] };
   /**
    * The session's own tracers as drawn this frame (their offsets applied), metres: for a test to find
    * them on the image. `headDrawn`: the burning head is drawn (past tracer_head_from_m); `joinsM`: how
@@ -516,6 +516,7 @@ export class EffectsFrameBuilder {
     // flight, drawn as the tracers are, long past their lighting in (they left a wall, not a muzzle),
     // fading as they burn out.
     let embers = 0;
+    const embersByKind = [0, 0, 0, 0];
     const glowing = this.ricochets.embers();
     for (const d of this.debugEmbers) glowing.push({ at: d.at, size: t.ricochet.emberM, kind: d.kind, alpha: 1 });
     for (const e of glowing) {
@@ -525,12 +526,15 @@ export class EffectsFrameBuilder {
       this.billboards.set([e.at[0], e.at[1], e.at[2], e.size / 2, colour[0] * burn, colour[1] * burn, colour[2] * burn, whiteFloor, EMBER_BILLBOARD], billboards * BILLBOARD_FLOATS);
       billboards++;
       embers++;
+      if (e.kind >= 0 && e.kind < embersByKind.length) embersByKind[e.kind]++;
     }
     let ricochets = 0;
+    const ricochetsByKind = [0, 0, 0, 0];
     for (const f of this.ricochets.flights()) {
       if (!(Math.hypot(f.head[0] - f.tail[0], f.head[1] - f.tail[1], f.head[2] - f.tail[2]) > 0)) continue;
       if (!tracer(f.tail, f.head, f.kind, LONG_FLOWN, LONG_FLOWN, f.alpha)) break;
       ricochets++;
+      if (f.kind >= 0 && f.kind < ricochetsByKind.length) ricochetsByKind[f.kind]++;
     }
 
     // Each live flash: its star and its light, at the drawn muzzle (where the shot left it when
@@ -651,7 +655,7 @@ export class EffectsFrameBuilder {
       lights,
       blasts,
       smoke,
-      counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames, heads, ricochets, embers },
+      counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames, heads, ricochets, embers, ricochetsByKind, embersByKind },
       drawn,
     };
   }

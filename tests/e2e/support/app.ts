@@ -132,8 +132,8 @@ export interface Hooks {
   setShelling(i: 'off' | 'light' | 'heavy'): void;
   /** The front's fire, for this visit (the pause menu's choice is what is kept). */
   setIntensity(i: 'off' | 'light' | 'heavy'): void;
-  /** What the last frame's effects held: particles' billboards, tracers, flash stars, transient lights; the battle's tracers, fires' flames, and every tracer's head. */
-  effects(): { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number };
+  /** What the last frame's effects held: particles' billboards, tracers, flash stars, transient lights; the battle's tracers, fires' flames, and every tracer's head; the ricochets and embers, and them by their tracer's kind (TRACER_KIND: none, amber, red, blue). */
+  effects(): { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number; ricochetsByKind: number[]; embersByKind: number[] };
   /** Test quads (metres, metres across, linear colour) drawn with the effects from the next frame, emissive or `lit` as dust is; [] for none. */
   debugQuads(quads: { position: [number, number, number]; size: number; colour: [number, number, number]; lit?: boolean; square?: boolean }[]): void;
   /** Emissive test ribbons (metres; metres across; linear colour), as a flash star's rays are drawn, from the next frame; [] for none. */

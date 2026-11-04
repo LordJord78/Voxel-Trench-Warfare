@@ -506,6 +506,20 @@ describe("a tracer's look", () => {
     expect(gone.counts.ricochets + gone.counts.embers).toBe(0);
   });
 
+  it("embers and ricochets are counted by their tracer's kind, so a capture can tell the player's from the front's", () => {
+    const s = stand();
+    const hit = (n: number, kind: number) => ({ position: [10 + n, 4, 5] as V3, normal: [0, 1, 0] as V3, cell: [n, 3, 0] as V3, material: P.CORRUGATE, speed: 800, distance: 60, energyJ: 3000, owner: kind === TRACER_KIND.amber ? 1 : 0, spec: 'ak', dir: [0.9848, -0.1736, 0] as V3, kind, tick: n });
+    const b = new EffectsFrameBuilder({ ...t, ricochet: { ...t.ricochet, chanceHard: 1 } });
+    const first = b.build(s, { ...none(), impacts: [hit(0, TRACER_KIND.amber), hit(1, TRACER_KIND.red), hit(2, TRACER_KIND.red)] });
+    // Indexed by TRACER_KIND: none, amber, red, blue.
+    expect(first.counts.embersByKind).toEqual([0, 1, 2, 0]);
+    expect(first.counts.ricochetsByKind).toEqual([0, 0, 0, 0]);
+    s.tick();
+    const later = b.build(s, none());
+    expect(later.counts.ricochetsByKind).toEqual([0, 1, 2, 0]);
+    expect(later.counts.ricochets).toBe(3);
+  });
+
   it("by day a tracer is brighter: daylight 1 gives 4× the radiance of night's", () => {
     const s = stand();
     s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.blue);
