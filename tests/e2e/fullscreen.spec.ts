@@ -95,7 +95,7 @@ test('Alt+Enter takes the page fullscreen, and back, from the start screen witho
   expect(errors).toEqual([]);
 });
 
-test('fullscreen where the keyboard can be locked, Esc pauses and the page stays fullscreen; held down, Esc leaves', async ({ page }) => {
+test('fullscreen where the keyboard can be locked, Esc pauses and the page stays fullscreen', async ({ page }) => {
   const errors = await openGame(page);
   await needFullscreen(page);
   const lockable = await page.evaluate(() => typeof navigator.keyboard?.lock === 'function');
@@ -111,10 +111,10 @@ test('fullscreen where the keyboard can be locked, Esc pauses and the page stays
   await page.waitForTimeout(1_000);
   expect(await pageFullscreen(page)).toBe(true);
   await expect(page.locator('#pause-fullscreen')).toHaveText(/^Leave fullscreen · /);
-  // Held down (the browser's rule: a second and a half), Esc leaves fullscreen, the menu still open.
-  await page.keyboard.down('Escape');
-  await page.waitForTimeout(2_500);
-  await page.keyboard.up('Escape');
+  // Holding Esc down to leave (the browser's own rule) is done by the browser's exclusive-access
+  // handling, which synthetic key events from automation never reach, so it is checked by hand,
+  // not here. The menu's own button leaves instead, and the label follows.
+  await page.locator('#pause-fullscreen').click();
   await expect.poll(() => nothingFullscreen(page), { timeout: 2_000 }).toBe(true);
   await expect(page.locator('#pause-fullscreen')).toHaveText(/^Fullscreen · /);
   await expect(page.locator('#pause')).toBeVisible();
