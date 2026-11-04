@@ -5,6 +5,10 @@
 // through the frame's camera without jitter (this is after TAA), each fragment is dropped where
 // the G-buffer's depth along its pixel's ray is nearer, so walls hide what is behind them, and
 // blended premultiplied: the emissive add their light (alpha 0), dust covers what is behind it.
+// A ribbon's style is how it is lit across: a flash star's one soft term (0), or a tracer's two (1),
+// a core mixed toward white in a glow of its colour. A tracer's glow is drawn no wider than
+// glowMaxPx, narrowed and not brightened, so a round past the eye is not a bar across the view; its
+// core is its share of the width drawn, but no narrower than MIN_RIBBON_PX either, its light kept.
 
 struct Lit {
   centre: vec3f,
@@ -12,7 +16,9 @@ struct Lit {
   colour: vec4f,
 }
 
-// Metres; the colour linear and emissive; alpha from the tail to the head.
+// Metres; the colour linear and emissive; alpha from the tail to the head. Its style (0 a star, 1 a
+// tracer), and a tracer's core width and glow brightness as shares of its glow's (the width), and
+// how far its core is mixed toward white.
 struct Ribbon {
   tail: vec3f,
   width: f32,
@@ -20,12 +26,17 @@ struct Ribbon {
   alphaTail: f32,
   rgb: vec3f,
   alphaHead: f32,
+  style: f32,
+  coreShare: f32,
+  glowShare: f32,
+  white: f32,
 }
 
 struct EffectsDraw {
   billboards: u32,
   ribbons: u32,
-  pad0: u32,
+  // The widest a tracer's glow is drawn, in pixels.
+  glowMaxPx: f32,
   pad1: u32,
 }
 
@@ -52,6 +63,8 @@ struct Fragment {
   @location(2) colour: vec4f,
   // A ribbon's alpha at its tail and head; (-1, -1) for a billboard.
   @location(3) alphas: vec2f,
+  // A tracer's glow, and its core's width over the width drawn; zero for the rest.
+  @location(4) glow: vec4f,
 }
 
 // As camera.wgsl's project, in clip space: perspective-correct, and clipped at NEAR.
@@ -90,7 +103,9 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
   // A pixel's width where this end is (voxels), and the width drawn there: its light kept.
   let pixel = 2.0 * max(dot(mid - frame.cam.origin, frame.cam.forward), NEAR) * frame.cam.tanHalf / f32(frame.res.x);
   let width = r.width * toVoxels;
-  let drawn = max(width, MIN_RIBBON_PX * pixel);
+  let narrowest = MIN_RIBBON_PX * pixel;
+  let isTracer = r.style > 0.5;
+  let drawn = select(max(width, narrowest), min(max(width, narrowest), draw.glowMaxPx * pixel), isTracer);
   let side = select(frame.cam.right, across / max(span, 1e-6), span > 1e-6) * (drawn * 0.5);
   let p = mid + side * corner.x;
   f.clip = toClip(p);
@@ -98,6 +113,15 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
   f.uv = vec2f(corner.x, along);
   f.colour = vec4f(r.rgb * (width / drawn), 0.0);
   f.alphas = vec2f(r.alphaTail, r.alphaHead);
+  if (isTracer) {
+    // Its core, mixed toward white at its brightest channel; each term's light kept where it is
+    // drawn wider than it is, and none added where the glow is held narrower.
+    let core = r.coreShare * width;
+    let coreDrawn = min(max(r.coreShare * drawn, narrowest), drawn);
+    let hot = mix(r.rgb, vec3f(max(r.rgb.r, max(r.rgb.g, r.rgb.b))), r.white);
+    f.colour = vec4f(hot * min(core / coreDrawn, 1.0), 0.0);
+    f.glow = vec4f(r.rgb * r.glowShare * min(width / drawn, 1.0), coreDrawn / drawn);
+  }
   return f;
 }
 
@@ -108,6 +132,12 @@ fn fs(f: Fragment) -> @location(0) vec4f {
     discard;
   }
   if (f.alphas.x >= 0.0) {
+    if (f.glow.a > 0.0) {
+      // A tracer: its core, its share of the width drawn, in its glow; both fading to the tail.
+      let u2 = f.uv.x * f.uv.x;
+      let core = f.colour.rgb * exp(-3.0 * u2 / (f.glow.a * f.glow.a));
+      return vec4f((core + f.glow.rgb * exp(-3.0 * u2)) * mix(f.alphas.x, f.alphas.y, f.uv.y), 0.0);
+    }
     // Soft across, fading from the head back to the tail.
     let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.uv.x * f.uv.x);
     return vec4f(f.colour.rgb * a, 0.0);

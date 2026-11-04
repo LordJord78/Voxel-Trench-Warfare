@@ -33,6 +33,8 @@ const unit = (a: readonly number[]): V3 => {
   return [a[0] / n, a[1] / n, a[2] / n];
 };
 const close = (got: readonly number[], want: readonly number[], digits: number, what = '') => [0, 1, 2].forEach((k) => expect(got[k], `${what}[${k}]`).toBeCloseTo(want[k], digits));
+/** A tracer's streak at `speed` (m/s): tracer_streak_s of its flight, between tracer_min_m and tracer_max_m. */
+const streak = (speed: number) => Math.min(t.tracerMaxM, Math.max(t.tracerMinM, speed * t.tracerStreakS));
 
 /** 25.6 × 6.4 × 51.2 m of open ground. */
 function stand(): Session {
@@ -142,8 +144,11 @@ describe('a frame of effects', () => {
     const { s, events, rifle } = walkAndShoot();
     const loose = new EffectsFrameBuilder(t).build(s, events).frame;
     const free = Array.from(loose.billboards.slice(0, loose.billboardCount * BILLBOARD_FLOATS));
-    const held = new EffectsFrameBuilder(t).build(s, events, rifle).frame;
-    expect(held.billboardCount).toBe(2);
+    const built = new EffectsFrameBuilder(t).build(s, events, rifle);
+    const held = built.frame;
+    // The shot's flash and brass, and after them its tracer's head.
+    expect(built.counts.heads).toBe(1);
+    expect(held.billboardCount).toBe(3);
     // Thrown in the shot's tick and stepped once with it.
     const share = 1 - 1 / 60 / t.particleAttachS;
     const drift = { 1: sub(throughPose(rifle.toWorld, RIFLE_MUZZLE), s.muzzle()), 0: sub(throughPose(rifle.toWorld, RIFLE_PORT), s.port()) };
@@ -174,7 +179,7 @@ describe('a frame of effects', () => {
     const b = new EffectsFrameBuilder(t);
     let built = b.build(s, none());
     expect(built.counts.tracers).toBe(1);
-    const path = s.rounds.tracerSegments(t.tracerLengthM);
+    const path = s.rounds.tracerSegments(streak);
     const offset = [from[0] - origin[0], from[1] - origin[1], from[2] - origin[2]];
     const drawn = ribbon(built.frame.ribbons, 0);
     const flown = path.flown[0];
@@ -184,16 +189,17 @@ describe('a frame of effects', () => {
       const round = end === 'head' ? path.head : path.tail;
       for (let k = 0; k < 3; k++) expect(drawn[end][k]).toBeCloseTo(round[k] + offset[k] * share, 3);
     }
-    // Past the convergence, on the round's path, at most tracer_length_m long.
+    // Past the convergence, on the round's path, its streak a frame's flight at its speed.
     for (let k = 0; k < 2; k++) s.rounds.step(1 / 60);
     built = b.build(s, none());
-    const late = s.rounds.tracerSegments(t.tracerLengthM);
+    const late = s.rounds.tracerSegments(streak);
     const on = ribbon(built.frame.ribbons, 0);
     for (let k = 0; k < 3; k++) {
       expect(on.head[k]).toBeCloseTo(late.head[k], 4);
       expect(on.tail[k]).toBeCloseTo(late.tail[k], 4);
     }
-    expect(Math.hypot(on.head[0] - on.tail[0], on.head[1] - on.tail[1], on.head[2] - on.tail[2])).toBeLessThanOrEqual(t.tracerLengthM + 1e-4);
+    const speed = Math.hypot(...s.rounds.velocity(0));
+    expect(Math.hypot(on.head[0] - on.tail[0], on.head[1] - on.tail[1], on.head[2] - on.tail[2])).toBeCloseTo(speed * t.tracerStreakS, 3);
   });
 
   it("a blast's light flares and dies over blast_light_s of the world's time, a metre over where it landed", () => {
@@ -337,16 +343,22 @@ describe('a frame of effects', () => {
     const flares: FlareState[] = Array.from({ length: 16 }, (_, k) => ({ id: k, position: [k * 3, 35, 120], glow: 1, stage: 'burning', colour: [1, 0.88, 0.7] }));
     const smoke = Array.from({ length: 96 }, (_, k) => ({ centre: [500 + k, 10 + 10 * (k % 8), 700] as V3, radiusM: 8, alpha: 0.85 }));
     const built = b.build(s, none(), null, undefined, { ...NO_BATTLE, seconds: 60, flares, smoke, flames, plumes });
-    expect(MAX_BILLBOARDS).toBe(4096 + 64 + 1024);
+    // The pool, the test quads, the battle's allowance, and a head for each tracer drawn.
+    expect(MAX_BILLBOARDS).toBe(4096 + 64 + 1024 + 2048);
     expect(built.counts.billboards).toBe(s.particles.capacity + 64 + flares.length + smoke.length + flames.length + plumes.length);
     expect(b.debugAt).toBe(s.particles.capacity);
   });
 
-  it("the session's particles are the frame's billboards", () => {
+  it("the session's particles are the frame's billboards, and its tracers' heads after them", () => {
     const s = stand();
     const built = new EffectsFrameBuilder(t).build(s, shoot(s));
-    expect(built.counts.billboards).toBe(s.particles.count);
-    expect(built.frame.billboardCount).toBe(s.particles.count);
+    expect(built.counts.heads).toBe(1);
+    expect(built.counts.billboards).toBe(s.particles.count + 1);
+    expect(built.frame.billboardCount).toBe(s.particles.count + 1);
+    // The head last, emissive, at its tracer's head as drawn (still joining the round's path).
+    const head = Array.from(built.frame.billboards.slice(s.particles.count * BILLBOARD_FLOATS, (s.particles.count + 1) * BILLBOARD_FLOATS));
+    expect(head[8]).toBe(1);
+    close(head, ribbon(built.frame.ribbons, 0).head, 5, 'head');
   });
   it('a flare climbing is a spark where it is, a burning flare a bright disc by its glow; one out is nothing', () => {
     const ft = flareTunables(tun);
@@ -421,14 +433,16 @@ describe('a frame of effects', () => {
     const r = built.frame.ribbons;
     expect(built.counts.battleTracers).toBe(2);
     const at = (i: number) => Array.from(r.slice(i * RIBBON_FLOATS, (i + 1) * RIBBON_FLOATS));
-    // The nearer the eye first: the first, 10.4 m off; its trail the battle's trail_m back along its
-    // way (two frames' flight at 60 Hz: a far tracer seen as the streak it makes).
+    // The nearer the eye first: the first, 10.4 m off; its streak a frame's flight at its 500 m/s
+    // (as the session's, but at most the battle's trail_m) back along its way.
     const tt = tracerTunables(tun);
     expect(tt.trailM).toBe(24);
     const first = at(0);
     close(first.slice(4, 7), [50, 30, 80], 6, 'head');
-    close(first.slice(0, 3), [50 - 0.8 * tt.trailM, 30, 80 - 0.6 * tt.trailM], 5, 'tail');
-    expect(first[3]).toBeCloseTo(t.tracerWidthM, 6);
+    const back = streak(500);
+    close(first.slice(0, 3), [50 - 0.8 * back, 30, 80 - 0.6 * back], 5, 'tail');
+    // As wide as a tracer's glow.
+    expect(first[3]).toBeCloseTo(t.tracerGlowWidthM, 6);
     expect(first[7]).toBeCloseTo(t.tracerTailAlpha, 6);
     expect(first[11]).toBe(1);
     for (let c = 0; c < 3; c++) expect(first[8 + c]).toBeCloseTo(t.tracerColour[c] * t.tracerIntensity, 4);

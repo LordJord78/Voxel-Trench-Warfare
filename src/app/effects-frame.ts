@@ -1,14 +1,20 @@
 /**
  * A frame's effects, from the session, the events the frame drained and the
  * rifle as it is drawn: the particles' billboards, the shot's flash and brass
- * leaving the drawn rifle; each tracer round's ribbon, 7 m back from its head,
- * the player's drawn from the rifle's muzzle and joining the round's path by
- * `tracer_converge_m` (the round leaves the eye, so the reticle tells the
- * truth); and each shot's flash — a star of three ribbons from the drawn
- * muzzle along its bore and a transient light there — for `flash_s` of the
- * world's time, so as long at any frame rate and held while paused (spec §4).
- * The simulation's muzzle is the bare eye's at the tick; the drawn rifle's
- * follows the interpolated, bobbing eye, centimetres away while walking.
+ * leaving the drawn rifle; each tracer round's ribbon, the player's drawn from
+ * the rifle's muzzle and joining the round's path by `tracer_converge_m` (the
+ * round leaves the eye, so the reticle tells the truth); and each shot's flash
+ * — a star of three ribbons from the drawn muzzle along its bore and a
+ * transient light there — for `flash_s` of the world's time, so as long at any
+ * frame rate and held while paused (spec §4). The simulation's muzzle is the
+ * bare eye's at the tick; the drawn rifle's follows the interpolated, bobbing
+ * eye, centimetres away while walking.
+ *
+ * A tracer (the shots spec §1), the session's and the battle's alike: a white-
+ * hot core in a coloured glow (ribbon style 1), its streak a frame's flight at
+ * its speed (`tracer_streak_s`) and no more than it has flown, lit in over its
+ * first `tracer_ignite_m`, a burning head from `tracer_head_from_m`, and
+ * brighter by day.
  *
  * The team's own: tracers in its red or blue, a suppressed gun's flash a
  * wisp without its star, and the guns' lights and lasers — the player's from
@@ -25,10 +31,10 @@ import { beamOf } from '../combat/arsenal';
 import { BILLBOARD_FLOATS } from '../combat/particles';
 import { toWorld } from '../combat/soldier-rig';
 import type { Tunables } from '../core/tunables';
-import { decodeGear } from '../net/gear';
+import { decodeGear, TRACER_KIND } from '../net/gear';
 import type { SoldierDraw } from '../render/soldiers';
 import { raycast } from '../world/raycast';
-import { MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, type EffectsFrame, type SmokePuff, type TransientLight } from '../render/effects';
+import { MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, RIBBON_STYLE, type EffectsFrame, type SmokePuff, type TransientLight } from '../render/effects';
 import { MAX_PUFFS } from '../render/frame-uniforms';
 import { throughPose, type RiflePose } from '../render/rifle';
 import { MUZZLE_ANCHOR, PORT_ANCHOR, SHOVEL_HELD, type CombatEvents, type Session } from '../sim/session';
@@ -58,16 +64,33 @@ export interface EffectsTunables {
   fires: FireTunables;
   /** A distant shell's flash's colour ([battle.flashes]). */
   distantColour: V3;
-  /** The most of the battle's tracers drawn, the nearest the eye, and the trail each is drawn with. */
+  /** The most of the battle's tracers drawn, the nearest the eye, and the longest streak each is drawn with. */
   maxBattleTracers: number;
   battleTrailM: number;
-  tracerLengthM: number;
-  tracerWidthM: number;
   tracerColour: V3;
   /** A team's tracers' colours. */
   tracerColourRed: V3;
   tracerColourBlue: V3;
   tracerIntensity: number;
+  /** A tracer as drawn: its core's and glow's widths (m), the glow's brightness over the core's, and how far the core is mixed toward white. */
+  tracerCoreWidthM: number;
+  tracerGlowWidthM: number;
+  tracerGlowShare: number;
+  tracerCoreWhite: number;
+  /** Its head: an emissive disc this wide (m), this many times as bright as the core, over the light pass's glow for emissive billboards (`particle_glow`). */
+  tracerHeadM: number;
+  tracerHeadGain: number;
+  particleGlow: number;
+  /** Its streak: this much of its flight (s), within these (m). */
+  tracerStreakS: number;
+  tracerMinM: number;
+  tracerMaxM: number;
+  /** Lit in over its first metres of flight, its head drawn from here (m). */
+  tracerIgniteM: number;
+  tracerHeadFromM: number;
+  /** By day, 1 + this × daylight as bright; daylight rising 0 to 1 as the sun climbs between these elevations (degrees). */
+  tracerDayBoost: number;
+  tracerDaylightDeg: [number, number];
   /** A weapon light: how far its beam reaches, the light where it strikes (its radius near and far, its intensity, colour). */
   light: { rangeM: number; radiusM: [number, number]; intensity: number; colour: V3 };
   /** A laser's dot: its size, glow and colour. */
@@ -112,12 +135,24 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     distantColour: tun.triple('battle.flashes.colour'),
     maxBattleTracers: tracerTunables(tun).maxDrawn,
     battleTrailM: tracerTunables(tun).trailM,
-    tracerLengthM: f('tracer_length_m'),
-    tracerWidthM: f('tracer_width_m'),
     tracerColour: rgb(tun, 'effects.tracer_colour'),
     tracerColourRed: rgb(tun, 'effects.tracer_colour_red'),
     tracerColourBlue: rgb(tun, 'effects.tracer_colour_blue'),
     tracerIntensity: f('tracer_intensity'),
+    tracerCoreWidthM: f('tracer_core_width_m'),
+    tracerGlowWidthM: f('tracer_glow_width_m'),
+    tracerGlowShare: f('tracer_glow_share'),
+    tracerCoreWhite: f('tracer_core_white'),
+    tracerHeadM: f('tracer_head_m'),
+    tracerHeadGain: f('tracer_head_gain'),
+    particleGlow: f('particle_glow'),
+    tracerStreakS: f('tracer_streak_s'),
+    tracerMinM: f('tracer_min_m'),
+    tracerMaxM: f('tracer_max_m'),
+    tracerIgniteM: f('tracer_ignite_m'),
+    tracerHeadFromM: f('tracer_head_from_m'),
+    tracerDayBoost: f('tracer_day_boost'),
+    tracerDaylightDeg: tun.pair('effects.tracer_daylight_deg'),
     light: { rangeM: f('light_range_m'), radiusM: tun.pair('effects.light_radius_m'), intensity: f('light_intensity'), colour: rgb(tun, 'effects.light_colour') },
     laser: { sizeM: f('laser_size_m'), glow: f('laser_glow'), colour: rgb(tun, 'effects.laser_colour') },
     tracerTailAlpha: f('tracer_tail_alpha'),
@@ -153,12 +188,19 @@ export interface DebugQuad {
   square?: boolean;
 }
 
-/** A test's ribbon: emissive, as a tracer is, as bright at its tail as its head. */
+/** A test's ribbon: emissive, as a flash star's ray is drawn (one soft term across it), as bright at its tail as its head. */
 export interface DebugRibbon {
   tail: V3;
   head: V3;
   width: number;
   colour: V3;
+}
+
+/** A test's tracer, drawn as a round's is (its core, glow and head) of `kind` (net/gear.ts TRACER_KIND), long since lit. */
+export interface DebugTracer {
+  tail: V3;
+  head: V3;
+  kind: number;
 }
 
 export interface BuiltEffects {
@@ -168,7 +210,15 @@ export interface BuiltEffects {
   blasts: TransientLight[];
   /** Their smoke in the haze, and the fires' plumes: the nearest MAX_PUFFS puffs, nearest first (renderer.setSmoke). */
   smoke: SmokePuff[];
-  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number };
+  /** The session's tracers and the battle's, and the heads drawn on every tracer (a test's too). */
+  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number };
+}
+
+/** The day's share of the light for the tracers' brightness: 0 with the sun low or down, 1 once it is up (a smoothstep over `tracer_daylight_deg`). */
+export function daylightAt(sunElevationDeg: number, t: EffectsTunables): number {
+  const [low, high] = t.tracerDaylightDeg;
+  const x = Math.min(1, Math.max(0, (sunElevationDeg - low) / (high - low)));
+  return x * x * (3 - 2 * x);
 }
 
 const RAD = Math.PI / 180;
@@ -182,11 +232,16 @@ const unit = (a: readonly number[]): V3 => {
 const STAR_SIDE = 60 * RAD;
 const STAR_SIDE_LENGTH = 0.6;
 const STAR_LIFT = 0.3;
+/** A star's ray's look across it: its style, and nothing of a tracer's core and glow. */
+const STAR_LOOK = [RIBBON_STYLE.star, 0, 0, 0] as const;
+/** How far a test's tracer has flown: far past its lighting in. */
+const LONG_FLOWN = Infinity;
 
 export class EffectsFrameBuilder {
   /** Quads and transient lights a test asks for, every frame until it asks for none. */
   debug: DebugQuad[] = [];
   debugRibbons: DebugRibbon[] = [];
+  debugTracers: DebugTracer[] = [];
   debugLights: TransientLight[] = [];
   debugBlasts: TransientLight[] = [];
   debugSmoke: SmokePuff[] = [];
@@ -207,9 +262,10 @@ export class EffectsFrameBuilder {
    * `rifle`: the rifle as this frame draws it, or null when it is not drawn; `eye`: the camera
    * (metres), the player's eye if not given; `battle`, the battle seen, its flares dimmed by the
    * sky's flares key `flareKey` as their light is; `others`, the other players as drawn, for their
-   * lights and lasers.
+   * lights and lasers; `daylight`, the day's share of the light (daylightAt), the tracers burning
+   * brighter by it.
    */
-  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battle: ShownBattle = NO_BATTLE, flareKey = 1, others: readonly SoldierDraw[] = []): BuiltEffects {
+  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battle: ShownBattle = NO_BATTLE, flareKey = 1, others: readonly SoldierDraw[] = [], daylight = 0): BuiltEffects {
     const t = this.t;
     // Flashes age with the world's time as the frame shows it: none while paused.
     const shown = (session.ticks + session.clock.alpha) * session.clock.dt;
@@ -285,20 +341,49 @@ export class EffectsFrameBuilder {
     }
 
     let ribbons = 0;
-    const ribbon = (tail: readonly number[], head: readonly number[], width: number, colour: readonly number[], alphaTail: number, alphaHead: number) => {
+    /** A ribbon, `look` its style and a tracer's shares (effects.ts RIBBON_FLOATS): false once they are full. */
+    const ribbon = (tail: readonly number[], head: readonly number[], width: number, colour: readonly number[], alphaTail: number, alphaHead: number, look: readonly number[] = STAR_LOOK) => {
       if (ribbons >= MAX_RIBBONS) return false;
-      this.ribbons.set([tail[0], tail[1], tail[2], width, head[0], head[1], head[2], alphaTail, colour[0], colour[1], colour[2], alphaHead], ribbons * RIBBON_FLOATS);
+      this.ribbons.set([tail[0], tail[1], tail[2], width, head[0], head[1], head[2], alphaTail, colour[0], colour[1], colour[2], alphaHead, look[0], look[1], look[2], look[3]], ribbons * RIBBON_FLOATS);
       ribbons++;
       return true;
     };
 
-    // Tracers: the round's last tracer_length_m, its offset from where it left to where it is
-    // drawn from shrinking to nothing by tracer_converge_m.
+    // A tracer by its kind (net/gear.ts TRACER_KIND): the battle's amber, a team's red or blue, at
+    // its intensity, and brighter by day; a white-hot core in its glow (effects.wgsl's style 1).
+    const day = 1 + t.tracerDayBoost * daylight;
+    const glows = [t.tracerColour, t.tracerColour, t.tracerColourRed, t.tracerColourBlue].map((c) => c.map((v) => v * t.tracerIntensity * day));
+    const tracerLook = [RIBBON_STYLE.tracer, t.tracerCoreWidthM / t.tracerGlowWidthM, t.tracerGlowShare, t.tracerCoreWhite];
+    const ignite = (flown: number) => Math.min(1, Math.max(0, flown / t.tracerIgniteM));
+    /** A streak `speed` (m/s) asks for: a frame's flight, between tracer_min_m and `maxM`. */
+    const streak = (speed: number, maxM: number) => Math.min(maxM, Math.max(t.tracerMinM, speed * t.tracerStreakS));
+    let heads = 0;
+    /**
+     * One tracer-like streak, `tail` to `head` (m), of `kind`, its tail and head `tailFlown` and
+     * `headFlown` metres into its flight: its ribbon, lit in over its first tracer_ignite_m; and its
+     * head once it is tracer_head_from_m out, an emissive disc as bright as its core there and more
+     * (its colour mixed toward white as effects.wgsl mixes the core's). False once the ribbons are
+     * full; a head is left off once the billboards are.
+     */
+    const tracer = (tail: readonly number[], head: readonly number[], kind: number, tailFlown: number, headFlown: number): boolean => {
+      const colour = glows[kind] ?? glows[TRACER_KIND.amber];
+      const lit = ignite(headFlown);
+      if (!ribbon(tail, head, t.tracerGlowWidthM, colour, t.tracerTailAlpha * ignite(tailFlown), lit, tracerLook)) return false;
+      if (headFlown >= t.tracerHeadFromM && billboards < MAX_BILLBOARDS) {
+        const hottest = Math.max(colour[0], colour[1], colour[2]);
+        const burn = (t.tracerHeadGain * lit) / t.particleGlow;
+        const core = colour.map((c) => (c + (hottest - c) * t.tracerCoreWhite) * burn);
+        this.billboards.set([head[0], head[1], head[2], t.tracerHeadM / 2, core[0], core[1], core[2], 1, 1], billboards * BILLBOARD_FLOATS);
+        billboards++;
+        heads++;
+      }
+      return true;
+    };
+
+    // Tracers: the round's streak back along its path, its offset from where it left to where it
+    // is drawn from shrinking to nothing by tracer_converge_m.
     let tracers = 0;
-    const seg = session.rounds.tracerSegments(t.tracerLengthM);
-    const glow = t.tracerColour.map((c) => c * t.tracerIntensity);
-    // By the round's kind (net/gear.ts TRACER_KIND): the battle's amber, a team's red or blue.
-    const glows = [t.tracerColour, t.tracerColour, t.tracerColourRed, t.tracerColourBlue].map((c) => c.map((v) => v * t.tracerIntensity));
+    const seg = session.rounds.tracerSegments((speed) => streak(speed, t.tracerMaxM));
     for (let i = 0; i < seg.flown.length; i++) {
       const at = (a: Float32Array) => [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
       const head = at(seg.head);
@@ -311,7 +396,7 @@ export class EffectsFrameBuilder {
       const share = (flown: number) => Math.max(0, 1 - flown / t.tracerConvergeM);
       const h = share(seg.flown[i]);
       const s = share(seg.flown[i] - length);
-      if (!ribbon(tail.map((v, k) => v + offset[k] * s), head.map((v, k) => v + offset[k] * h), t.tracerWidthM, glows[seg.kind[i]] ?? glow, t.tracerTailAlpha, 1)) break;
+      if (!tracer(tail.map((v, k) => v + offset[k] * s), head.map((v, k) => v + offset[k] * h), seg.kind[i], seg.flown[i] - length, seg.flown[i])) break;
       tracers++;
     }
 
@@ -374,11 +459,12 @@ export class EffectsFrameBuilder {
       }
     }
     for (const r of this.debugRibbons) ribbon(r.tail, r.head, r.width, r.colour, 1, 1);
+    for (const r of this.debugTracers) tracer(r.tail, r.head, r.kind, LONG_FLOWN, LONG_FLOWN);
     lights.push(...this.debugLights);
 
     // The battle's tracers, after the session's own: drawn as theirs are, the head at the round and
-    // its trail battleTrailM back along its way (or its flight since it was fired or struck, if
-    // shorter); the nearest the eye, at most maxBattleTracers.
+    // its streak back along its way, at most battleTrailM (or its flight since it was fired or
+    // struck, if shorter); the nearest the eye, at most maxBattleTracers.
     const eyeAt = eye ?? [session.player.position.x, session.player.position.y + session.controller.eyeHeight(session.player), session.player.position.z];
     const offEye = (p: readonly number[]) => (p[0] - eyeAt[0]) ** 2 + (p[1] - eyeAt[1]) ** 2 + (p[2] - eyeAt[2]) ** 2;
     const nearest = [...battle.tracers].sort((a, b) => offEye(a.position) - offEye(b.position)).slice(0, t.maxBattleTracers);
@@ -386,9 +472,9 @@ export class EffectsFrameBuilder {
     for (const tr of nearest) {
       const speed = Math.hypot(tr.velocity[0], tr.velocity[1], tr.velocity[2]);
       if (!(speed > 0)) continue;
-      const trail = Math.min(t.battleTrailM, tr.flown) / speed;
-      const tail = [0, 1, 2].map((k) => tr.position[k] - tr.velocity[k] * trail);
-      if (!ribbon(tail, tr.position, t.tracerWidthM, glow, t.tracerTailAlpha, 1)) break;
+      const trailM = Math.min(streak(speed, t.battleTrailM), tr.flown);
+      const tail = [0, 1, 2].map((k) => tr.position[k] - (tr.velocity[k] * trailM) / speed);
+      if (!tracer(tail, tr.position, TRACER_KIND.amber, tr.flown - trailM, tr.flown)) break;
       battleTracers++;
     }
 
@@ -431,7 +517,7 @@ export class EffectsFrameBuilder {
       lights,
       blasts,
       smoke,
-      counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames },
+      counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames, heads },
     };
   }
 }

@@ -227,11 +227,12 @@ export class Rounds {
   }
 
   /**
-   * Each tracer round's head and its tail, up to `lengthM` back along its path (no further than it
-   * has flown), as [x, y, z] triples in metres; where it left and where its tracer is drawn from,
-   * how far it has flown (m), whose it is, and its kind (its colour).
+   * Each tracer round's head and its tail, `lengthOf` its speed (m/s) back along its path, or a
+   * length given outright (m), no further than it has flown, as [x, y, z] triples in metres; where
+   * it left and where its tracer is drawn from, how far it has flown (m), whose it is, and its kind
+   * (its colour).
    */
-  tracerSegments(lengthM: number): { head: Float32Array; tail: Float32Array; origin: Float32Array; from: Float32Array; flown: Float32Array; owner: Int8Array; kind: Uint8Array } {
+  tracerSegments(lengthOf: number | ((speed: number) => number)): { head: Float32Array; tail: Float32Array; origin: Float32Array; from: Float32Array; flown: Float32Array; owner: Int8Array; kind: Uint8Array } {
     let n = 0;
     for (let i = 0; i < this.count; i++) if (this.tracer[i] !== 0) n++;
     const head = new Float32Array(n * 3);
@@ -246,6 +247,7 @@ export class Rounds {
       if (!this.tracer[i]) continue;
       const v = this.velocity(i);
       const speed = hypot(v[0], v[1], v[2]);
+      const lengthM = typeof lengthOf === 'number' ? lengthOf : lengthOf(speed);
       const back = speed > 0 ? Math.min(lengthM, this.distance[i]) / speed : 0;
       for (let k = 0; k < 3; k++) {
         head[o * 3 + k] = this.pos[i * 3 + k];

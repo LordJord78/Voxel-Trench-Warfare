@@ -902,12 +902,29 @@ max_voices          = 64       # sounding or waiting to (a distant one is schedu
 # shot's flash star and light, and how the particles take the world's light. The
 # intensities are against the world's own light; bloom takes what is too bright.
 [effects]
-tracer_length_m     = 7.0      # the reference's render.tracer_length_m
-tracer_width_m      = 0.06     # receding from the shooter, a narrower one is a dash
 tracer_colour       = [1.0, 0.83, 0.45] # the reference's: the battle's, and the front's
 tracer_colour_red   = [1.0, 0.16, 0.10] # a player's tracers, in their team's colour
 tracer_colour_blue  = [0.20, 0.50, 1.0]
-tracer_intensity    = 60.0
+tracer_intensity    = 70.0
+# A tracer as drawn (effects.wgsl's style 1): one ribbon, two terms across it. A core mixed toward
+# white in a glow of its colour, the glow drawn no wider than tracer_glow_max_px, so a round past
+# the eye is not a bar across the screen (each is drawn no narrower than two pixels, its light kept).
+tracer_core_width_m = 0.035    # the white-hot core,
+tracer_glow_width_m = 0.22     # and the glow round it, as wide as the ribbon is drawn
+tracer_glow_share   = 0.35     # the glow's brightness over the core's
+tracer_core_white   = 0.65     # how far the core's colour is mixed toward white
+tracer_glow_max_px  = 28.0     # the widest the glow is drawn, in pixels of the internal image
+tracer_head_m       = 0.09     # the burning head where the round is: an emissive disc this wide,
+tracer_head_gain    = 1.6      # this many times as bright as the core
+tracer_streak_s     = 0.014    # the streak behind it: this much of its flight (an AK's 12.3 m, a
+tracer_min_m        = 2.5      # pistol's 5.25), within these, and never more than it has flown;
+tracer_max_m        = 14.0     # the battle's tracers' longest is their own trail_m
+tracer_ignite_m     = 4.0      # lit in, core and glow, over its first metres of flight: a stream
+tracer_head_from_m  = 1.5      # under the sight line does not bury the sight picture; its head
+                               # drawn from here
+tracer_day_boost    = 3.0      # by day it burns 1 + this × daylight as bright, to read against
+tracer_daylight_deg = [-4.0, 20.0]  # sunlit ground as at dusk against dusk; daylight rises 0 to 1
+                               # (a smoothstep) as the sun climbs between these elevations
 light_range_m       = 45.0     # a weapon light's beam: where it strikes within this,
 light_radius_m      = [2.4, 7.0]   # a light that reaches this far about it (near, far),
 light_intensity     = 2.4      # this bright up close and falling off with the beam's
@@ -1264,7 +1281,7 @@ graze_share         = 0.5      # bursts laid on the field graze_m out: they stri
 graze_m             = [40.0, 200.0]
 miss_m              = 30.0     # a burst whose fire would pass nearer the player is not fired
 max_drawn           = 900      # the nearest the eye drawn; the farther not
-trail_m             = 24.0     # each drawn with this much trail: two frames' flight at 60 Hz, the streak a far one makes (the player's own keep [effects] tracer_length_m)
+trail_m             = 24.0     # the longest streak each is drawn with: as the player's ([effects] tracer_streak_s of its flight), but to this rather than tracer_max_m
 
 # Fires (src/battle/fires.ts, director.ts): a shell striking timber, cloth or duckboards starts one a
 # third of the time, a hull a fifth; at night the hamlet's ruins burn. A fire grows, burns its while

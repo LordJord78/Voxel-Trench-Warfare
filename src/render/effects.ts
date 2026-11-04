@@ -21,16 +21,22 @@ import { moduleSource } from './shaders';
 import effectsLightSrc from './shaders/effects-light.wgsl';
 import effectsSrc from './shaders/effects.wgsl';
 
-/** A ribbon's floats: tail (3), width (1), head (3), alpha at the tail (1), linear emissive colour (3), alpha at the head (1); metres. */
-export const RIBBON_FLOATS = 12;
+/**
+ * A ribbon's floats: tail (3), width (1), head (3), alpha at the tail (1), linear emissive colour (3),
+ * alpha at the head (1), metres; then its style (RIBBON_STYLE), and a tracer's core width and glow
+ * brightness as shares of its glow's, and how far its core is mixed toward white (0 for a star).
+ */
+export const RIBBON_FLOATS = 16;
+/** A ribbon's look across it (effects.wgsl): a shot's flash star's one soft term, or a tracer's white-hot core in its coloured glow. */
+export const RIBBON_STYLE = { star: 0, tracer: 1 } as const;
 /** A billboard's floats, as particles.ts writes them. */
 const BILLBOARD_FLOATS = 9;
 /** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4). */
 const LIT_BYTES = 32;
-/** The particle pool, room for test quads, and the battle's allowance: its flares, far shells' flashes and smoke, and fires' flames, embers and smoke. */
-export const MAX_BILLBOARDS = 4096 + 64 + 1024;
-/** Every round in flight a tracer, and a few shots' stars. */
-export const MAX_RIBBONS = 1024;
+/** The particle pool, room for test quads, the battle's allowance (its flares, far shells' flashes and smoke, and fires' flames, embers and smoke), and a head for each tracer drawn. */
+export const MAX_BILLBOARDS = 4096 + 64 + 1024 + 2048;
+/** Every round in flight a tracer, the battle's nearest, and a few shots' stars. */
+export const MAX_RIBBONS = 2048;
 
 export interface EffectsFrame {
   billboards: Float32Array;
@@ -54,15 +60,16 @@ export interface SmokePuff {
   density: number;
 }
 
-/** How the billboards are lit: the emissive's glow, and how much of the key's and the sky's light the rest take. */
+/** How the billboards are lit: the emissive's glow, and how much of the key's and the sky's light the rest take; and the widest a tracer's glow is drawn, in pixels. */
 export interface EffectsLook {
   glow: number;
   dustKey: number;
   dustSky: number;
+  tracerGlowMaxPx: number;
 }
 
 export function effectsLook(tun: Tunables): EffectsLook {
-  return { glow: tun.f('effects.particle_glow'), dustKey: tun.f('effects.dust_key'), dustSky: tun.f('effects.dust_sky') };
+  return { glow: tun.f('effects.particle_glow'), dustKey: tun.f('effects.dust_key'), dustSky: tun.f('effects.dust_sky'), tracerGlowMaxPx: tun.f('effects.tracer_glow_max_px') };
 }
 
 export interface EffectsPipelines {
@@ -212,7 +219,11 @@ export class Effects {
     new Uint32Array(light, 0, 1)[0] = this.billboardCount;
     new Float32Array(light, 4, 3).set([this.look.glow, this.look.dustKey, this.look.dustSky]);
     queue.writeBuffer(this.lightParams, 0, light);
-    queue.writeBuffer(this.drawParams, 0, new Uint32Array([this.billboardCount, this.ribbonCount, 0, 0]));
+    // effects.wgsl's EffectsDraw: the counts, and the widest a tracer's glow is drawn.
+    const draw = new ArrayBuffer(16);
+    new Uint32Array(draw, 0, 2).set([this.billboardCount, this.ribbonCount]);
+    new Float32Array(draw, 8, 1)[0] = this.look.tracerGlowMaxPx;
+    queue.writeBuffer(this.drawParams, 0, draw);
   }
 
   /** Light and draw this frame's effects into the image's `res` corner, seen through `haze` (froxels.ts `group`), timing each pass it runs. */

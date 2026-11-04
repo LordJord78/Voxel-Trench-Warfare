@@ -227,6 +227,28 @@ describe('rounds in flight', () => {
     expect(r.isTracer(1)).toBe(false);
   });
 
+  it("a tracer's segment is as long as its speed asks: tracerSegments((s) => s * 0.01) gives a tail 0.01·speed back", () => {
+    const r = new Rounds(T, world(), VOXEL);
+    r.fire([6.4, 3, 0.5], [0, 0, 880], RIFLE, 0, true);
+    r.fire([3.2, 3, 0.5], [0, 0, 400], RIFLE, 0, true);
+    for (let k = 0; k < 3; k++) r.step(TICK);
+    const { head, tail } = r.tracerSegments((s) => s * 0.01);
+    for (let i = 0; i < 2; i++) {
+      // Slowed by drag from 880 and 400 m/s: some 8 m and 4 m back, along its way.
+      const v = r.velocity(i);
+      for (let k = 0; k < 3; k++) expect(head[i * 3 + k] - tail[i * 3 + k], `round ${i}[${k}]`).toBeCloseTo(v[k] * 0.01, 4);
+    }
+    expect(head[2] - tail[2]).toBeGreaterThan(8);
+    expect(head[5] - tail[5]).toBeLessThan(4);
+    // No further back than it has flown: a round out of the muzzle by 2.2 m draws 2.2 m, not 8.8.
+    const fresh = new Rounds(T, world(), VOXEL);
+    fresh.fire([6.4, 3, 0.5], [0, 0, 880], RIFLE, 0, true);
+    fresh.step(0.0025);
+    const young = fresh.tracerSegments((s) => s * 0.01);
+    expect(young.head[2] - young.tail[2]).toBeCloseTo(young.flown[0], 4);
+    expect(young.flown[0]).toBeLessThan(2.3);
+  });
+
   it("a tracer's segment carries where it is drawn from, how far it has flown and whose it is", () => {
     const r = new Rounds(T, world(), VOXEL);
     r.fire([6.4, 3, 0.5], [0, 0, 880], RIFLE, 1, true);

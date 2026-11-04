@@ -67,7 +67,7 @@ import { copyRegion, type RegionCopy } from '../world/region-copy';
 import { CameraRig, rigTunables } from './camera-rig';
 import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
-import { EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type DebugQuad, type DebugRibbon } from './effects-frame';
+import { daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
@@ -275,7 +275,7 @@ async function start(): Promise<void> {
   const effects = new EffectsFrameBuilder(effectsTunables(tun));
   const hearing = audioTunables(tun);
   const audio = new AudioEngine(hearing, { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') });
-  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0, flames: 0 };
+  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0 };
   /** Whether the rifle is in hand (tests put it down to read the world behind it). */
   let rifleHeld = true;
   const input = new Input();
@@ -912,7 +912,8 @@ async function start(): Promise<void> {
     const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
     renderer.setSoldiers(draws);
     together.after(session, events, draws, performance.now());
-    const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares, draws);
+    // The tracers burn brighter by day, by the sun the frame is lit with.
+    const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares, draws, daylightAt(skyNow().sunElevationDeg, effects.t));
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
     audio.play(planVoices(hearing, events, pose.position, battleEvents));
@@ -1294,6 +1295,9 @@ async function start(): Promise<void> {
     keyTexels: () => ({ traced: renderer.keyTraced(), all: KEY_MAP_SIZE * KEY_MAP_SIZE, slots: KEY_SLOTS }),
     debugRibbons(ribbons: DebugRibbon[]) {
       effects.debugRibbons = ribbons;
+    },
+    debugTracer(tracer: DebugTracer | null) {
+      effects.debugTracers = tracer ? [tracer] : [];
     },
     sharpAt: async (box: [number, number, number, number]) => Array.from(await renderer.readColour(box, 'sharp')),
     debugLit: async () => {

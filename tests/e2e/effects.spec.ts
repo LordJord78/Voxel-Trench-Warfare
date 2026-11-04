@@ -375,6 +375,155 @@ test('a far tracer stays an unbroken line, at least two pixels across, its light
   expect(errors).toEqual([]);
 });
 
+test('a tracer is a white-hot core in a coloured glow, its glow held near the eye', async ({ page }) => {
+  // The shots spec's look (§1): a team's tracer is a core mixed toward white in a glow of its
+  // colour; and a round passing the eye is drawn no wider than tracer_glow_max_px (28), not the
+  // bar across the screen its 0.22 m of glow would be there (some 280 px half a metre out).
+  const errors = await openGame(page);
+  const at = await hooks(
+    page,
+    async (h, hours) => {
+      h.view('step');
+      h.setTimeOfDay(hours as number);
+      h.jitter(false);
+      h.setQuality({ dynres: false, scale: 1 });
+      h.freeze();
+      await h.stepFrames(40);
+      const c = h.camera();
+      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res };
+    },
+    DUSK,
+  );
+  const RAD = Math.PI / 180;
+  const y = at.yaw * RAD;
+  const along = (up: number, m: number) => [Math.sin(y) * Math.cos(up * RAD), Math.sin(up * RAD), Math.cos(y) * Math.cos(up * RAD)].map((v, k) => at.position[k] + v * m);
+  const right = [Math.cos(y), 0, -Math.sin(y)];
+  const across = (centre: number[], half: number) => ({ tail: centre.map((v, k) => v - right[k] * half), head: centre.map((v, k) => v + right[k] * half) });
+  /** The tracer's light (with it, less without) down a box of the internal image `w` columns wide at column `x`: linear rgb, a row at a time. */
+  const lightOf = (tracer: { tail: number[]; head: number[] }, x: number, w: number) =>
+    hooks(
+      page,
+      async (h, arg) => {
+        const { tracer, box } = arg as { tracer: { tail: [number, number, number]; head: [number, number, number] }; box: [number, number, number, number] };
+        const read = async (on: boolean) => {
+          h.debugTracer(on ? { ...tracer, kind: 2 } : null);
+          await h.stepFrames(2);
+          return h.sharpAt(box);
+        };
+        const without = await read(false);
+        const withIt = await read(true);
+        h.debugTracer(null);
+        return withIt.map((v, i) => v - without[i]);
+      },
+      { tracer, box: [x, 0, w, at.res[1]] },
+    );
+  const lum = (c: readonly number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  const saturation = (c: readonly number[]) => (Math.max(...c) - Math.min(...c)) / Math.max(...c);
+  const cx = Math.floor(at.res[0] / 2);
+
+  // Red, 20 m out across the view, 20° over it (against the sky), 10 m long. A pixel there is 2.9 cm:
+  // the glow drawn 7.5 px across, the core (3.5 cm) at its least, 2 px. The line's middle falls
+  // within half a pixel of its brightest row, so a block of rows 2 to 4 off that is in the glow,
+  // clear of the core.
+  const far = await lightOf(across(along(at.pitch + 20, 20), 5), cx - 1, 3);
+  const pixelM = (2 * 20 * Math.cos(20 * RAD) * Math.tan((at.fov * RAD) / 2)) / at.res[0];
+  const rgbAt = (row: number, col: number) => far.slice((row * 3 + col) * 3, (row * 3 + col) * 3 + 3);
+  const rows = far.length / 9;
+  const line = Array.from({ length: rows }, (_, r) => lum(rgbAt(r, 1))).reduce((best, v, r, all) => (v > all[best] ? r : best), 0);
+  const block = (row: number) => {
+    const sum = [0, 0, 0];
+    for (let r = row - 1; r <= row + 1; r++) for (let c = 0; c < 3; c++) rgbAt(r, c).forEach((v, k) => (sum[k] += v / 9));
+    return sum;
+  };
+  const centre = block(line);
+  const edge = block(line - 3);
+  const farSeen = JSON.stringify({ line, centre, edge, glowPx: 0.22 / pixelM, res: at.res });
+  expect(0.22 / pixelM, farSeen).toBeGreaterThan(6);
+  expect(lum(centre), farSeen).toBeGreaterThan(1);
+  // Whiter at its core (one term of the glow's colour all across would be as saturated: 0.9); red
+  // in its glow.
+  expect(saturation(centre), farSeen).toBeLessThan(saturation(edge) - 0.1);
+  expect(edge[0], farSeen).toBeGreaterThan(edge[1]);
+  expect(edge[0], farSeen).toBeGreaterThan(edge[2]);
+
+  // Half a metre out along the view, 4 m long, wider than the view: a column through it is lit
+  // (over a hundredth of its brightest) across no more than the glow's 28 px.
+  const near = await lightOf(across(along(at.pitch, 0.5), 2), cx, 1);
+  const column = Array.from({ length: near.length / 3 }, (_, r) => lum(near.slice(r * 3, r * 3 + 3)));
+  const peak = Math.max(...column);
+  const lit = column.map((v, r) => (v > 0.01 * peak ? r : -1)).filter((r) => r >= 0);
+  const width = lit.length > 0 ? lit[lit.length - 1] - lit[0] + 1 : 0;
+  const nearSeen = JSON.stringify({ peak, width, first: lit[0], res: at.res });
+  expect(peak, nearSeen).toBeGreaterThan(1);
+  expect(width, nearSeen).toBeGreaterThan(20);
+  expect(width, nearSeen).toBeLessThanOrEqual(30);
+  expect(errors).toEqual([]);
+});
+
+test("a far tracer's white-hot core stays an unbroken line, as its glow does", async ({ page }) => {
+  // A tracer's core (3.5 cm) is under a tenth of a pixel 150 m out: drawn no narrower than two
+  // pixels, its light kept, as the glow is; drawn at its share of the glow's two, it broke into
+  // dashes (a third of the columns all but dark, and neighbours a third apart).
+  const errors = await openGame(page);
+  const at = await hooks(page, async (h) => {
+    h.view('step');
+    h.setTimeOfDay(21);
+    h.jitter(false);
+    h.freeze();
+    await h.stepFrames(40);
+    const c = h.camera();
+    return { position: c.position, yaw: c.yaw, pitch: c.pitch };
+  });
+  // As the far ribbon above: 150 m out, 20° over the view, 20 m across it and rising half a metre.
+  const RAD = Math.PI / 180;
+  const y = at.yaw * RAD;
+  const p = (at.pitch + 20) * RAD;
+  const centre = [0, 1, 2].map((k) => at.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 150);
+  const right = [Math.cos(y), 0, -Math.sin(y)];
+  const tail = [0, 1, 2].map((k) => centre[k] - right[k] * 10 - (k === 1 ? 0.25 : 0));
+  const head = [0, 1, 2].map((k) => centre[k] + right[k] * 10 + (k === 1 ? 0.25 : 0));
+  const sums = await hooks(
+    page,
+    async (h, arg) => {
+      const { tail, head } = arg as { tail: [number, number, number]; head: [number, number, number] };
+      const read = async (on: boolean) => {
+        h.debugTracer(on ? { tail, head, kind: 2 } : null);
+        await h.stepFrames(2);
+        const s = h.stats();
+        const box: [number, number, number, number] = [0, 0, s.res[0], Math.floor(s.res[1] / 2)];
+        return { box, rgb: await h.sharpAt(box) };
+      };
+      const without = await read(false);
+      const withIt = await read(true);
+      h.debugTracer(null);
+      const [w, hgt] = [without.box[2], without.box[3]];
+      const lum = (a: number[], i: number) => 0.2126 * a[i * 3] + 0.7152 * a[i * 3 + 1] + 0.0722 * a[i * 3 + 2];
+      // Each column's light from the tracer, summed down it.
+      return Array.from({ length: w }, (_, x) => {
+        let sum = 0;
+        for (let yy = 0; yy < hgt; yy++) sum += lum(withIt.rgb, yy * w + x) - lum(without.rgb, yy * w + x);
+        return sum;
+      });
+    },
+    { tail, head },
+  );
+  // The middle 80% of the columns it crosses.
+  const touched = sums.map((v, x) => (v > 0.05 ? x : -1)).filter((x) => x >= 0);
+  expect(touched.length).toBeGreaterThan(5);
+  const [first, last] = [touched[0], touched[touched.length - 1]];
+  const span = last - first;
+  const middle = Array.from({ length: Math.floor(span * 0.8) }, (_, i) => first + Math.floor(span * 0.1) + i);
+  const most = Math.max(...middle.map((x) => sums[x]));
+  const lit = middle.filter((x) => sums[x] > 0.1 * most).length / middle.length;
+  // Column to column it changes by its fade toward the tail, a few percent.
+  const jumps = middle.slice(1).map((x) => Math.abs(sums[x] - sums[x - 1]) / Math.max(sums[x], sums[x - 1]));
+  const p95 = [...jumps].sort((a, b) => a - b)[Math.floor(jumps.length * 0.95)];
+  const seen = JSON.stringify({ span, lit, p95 });
+  expect(lit, seen).toBeGreaterThan(0.97);
+  expect(p95, seen).toBeLessThan(0.15);
+  expect(errors).toEqual([]);
+});
+
 test('a lit square shows as a square, where a lit disc leaves its corners', async ({ page }) => {
   // Debris is drawn as lit squares (milestone 4's plan, ruling 7).
   const errors = await openGame(page);
