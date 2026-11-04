@@ -25,6 +25,7 @@ import { heldPose, modelToView, viewBasis, viewmodelTunables, type Holding, type
 import { Weapon, weaponSpec } from '../combat/weapon';
 import { FixedClock } from '../core/clock';
 import { cos, exp, hypot, radians, sin, TAU } from '../core/dmath';
+import { hash32 } from '../core/hash';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import { CharacterController, controllerTunables, letGoOfLedge, newCharacter, Stance, type CharacterState, type MoveIntent } from '../physics/character';
@@ -35,6 +36,7 @@ import type { BrickMap } from '../world/bricks';
 import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, P, paletteData } from '../world/materials';
 import { groundTop } from '../world/raycast';
+import { spatter, spatterTunables, type SpatterTunables } from '../world/spatter';
 import { BARE, decodeShotMark, encodeShotMark, GUNS, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
 import type { Team } from '../net/protocol';
 import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from './destruction';
@@ -284,6 +286,8 @@ export class Session {
   private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris' | 'blood' | 'mist', ParticleSpec>;
   /** [hits]: a critical hit's droplets and mist, a helmet's sparks, and how many rounds a body bleeds a tick at most. */
   private readonly bleeding: { criticalDroplets: number; criticalMist: number; helmetSparks: number; burstsPerTick: number };
+  /** [hits]: a critical hit's spatter, its rays, their cone and their reach (in voxels). */
+  private readonly spattering: SpatterTunables;
   /** Each palette entry's linear colour, for the dust it throws. */
   private readonly tints: [number, number, number][];
 
@@ -348,6 +352,7 @@ export class Session {
       helmetSparks: tun.i('hits.helmet_sparks'),
       burstsPerTick: tun.i('hits.bursts_per_tick'),
     };
+    this.spattering = spatterTunables(tun, voxel);
     const palette = paletteData();
     this.tints = Array.from({ length: 256 }, (_, id) => [palette[id * 8], palette[id * 8 + 1], palette[id * 8 + 2]]);
     const waterTable = world.waterTable ?? world.plan?.params.waterTable ?? -1;
@@ -708,6 +713,7 @@ export class Session {
       this.particles.emit(hit.position, [-hit.dir[0] * dust.speed, dust.lift, -hit.dir[2] * dust.speed], dust, dust.count, this.particleRng, this.tints[P_KHAKI]);
     }
     this.bleedHits(this.rounds.bodyHits);
+    this.spatterHits(this.rounds.bodyHits);
     for (const hit of this.rounds.impacts) {
       this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
       if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
@@ -865,6 +871,31 @@ export class Session {
         bled.set(hit.body, n + 1);
         this.bleed(hit.position, hit.dir, head, head);
       }
+    }
+  }
+
+  /**
+   * Spatter (the shots spec's §4) from `at` (metres) on along the round's `dir`: what is behind a
+   * critical hit marked with its blood (world/spatter.ts), drawn from `seed` (an integer). Nothing is
+   * marked inside a crater's region while it is out, whose bricks coming back would undo it. The
+   * voxels it marked, whose bricks upload as any edit's do. combat() spatters each headshot into
+   * another's body; the app spatters a kill's.
+   */
+  spatterAt(at: readonly number[], dir: readonly number[], seed: number): number {
+    const v = this.voxel;
+    return spatter(this.map, [at[0] / v, at[1] / v, at[2] / v], dir, seed, this.spattering, (box) => this.destruction.overlapsOut(box));
+  }
+
+  /**
+   * The tick's headshots into others' bodies spattered, every pellet's, each drawn from the hash of
+   * the tick and where it struck (to a tenth of a millimetre). The player's own head spatters
+   * nothing, as it bleeds nothing (bleedHits): being hit is the flash, the flinch and the voice.
+   */
+  private spatterHits(hits: readonly BodyHit[]): void {
+    for (const hit of hits) {
+      if (hit.body === LOCAL_BODY || hit.zone !== 'head') continue;
+      const [x, y, z] = hit.position;
+      this.spatterAt(hit.position, hit.dir, hash32(this.ticks, Math.round(x * 1e4), Math.round(y * 1e4), Math.round(z * 1e4)));
     }
   }
 

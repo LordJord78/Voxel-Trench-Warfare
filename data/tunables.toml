@@ -633,10 +633,11 @@ readout_s           = 1.5      # the HUD's readout of a hit
 
 [hits]
 # Hit feedback (the shots spec's §4). A critical hit (a headshot, or the round
-# that kills) bleeds more, and a helmet struck sparks. A round leans the body it
-# strikes: the torso along it from the waist, and on a headshot the head on its
-# neck as well, springing back (critically damped) within flinch_s. A killed
-# body falls toward the killing round's bearing.
+# that kills) bleeds more, and spatters what is behind the body; a helmet struck
+# sparks. A round leans the body it strikes: the torso along it from the waist,
+# and on a headshot the head on its neck as well, springing back (critically
+# damped) within flinch_s. A killed body falls toward the killing round's
+# bearing.
 critical_droplets   = 18       # [particles.blood]'s, out of the far side
 critical_mist       = 3        # [particles.blood_mist]'s
 helmet_sparks       = 4        # [particles.spark]'s: every head hit's
@@ -647,6 +648,11 @@ head_snap_deg       = 25       # on top of the torso's lean
 flinch_s            = 0.25     # back to 2% of either
 fall_s              = 0.7      # a killed body's fall, unless told otherwise
 head_fall_s         = 0.45     # killed by a headshot
+spatter_rays        = 14       # a critical hit's spatter: rays from where it
+                               # struck, on along the round, each marking the
+                               # first thing it meets with blood (world/spatter.ts)
+spatter_cone_deg    = 25       # their cone's half-angle about the round
+spatter_reach_m     = 2.5      # nothing further from the hit is marked
 
 # ---------------------------------------------------------------------------
 # DESTRUCTION

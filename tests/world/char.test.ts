@@ -59,6 +59,16 @@ describe('char', () => {
     expect(map.takeDirty()).toEqual([]);
   });
 
+  it('a fire chars a bloodied timber, duckboard and cloth as it would a clean one; blood on soil and sandbags does not burn', () => {
+    // Blood (world/spatter.ts) changes only colour: each shade is of the kind it marks, and char goes by kind.
+    const map = new BrickMap({ x: 32, y: 32, z: 32 });
+    const shades = [P.BLOOD_TIMBER, P.BLOOD_DUCKBOARD, P.BLOOD_CLOTH, P.BLOOD_SOIL, P.BLOOD_SANDBAG];
+    shades.forEach((p, i) => map.fillBox(i * 6, 0, 0, i * 6 + 6, 32, 32, p));
+    expect(charAround(map, CENTRE, 1.5, V)).toBeGreaterThan(1000);
+    // A voxel of each, all within 1.25 m of the fire.
+    expect([3, 9, 15, 21, 27].map((x) => map.get(x, 16, 16))).toEqual([P.CHAR_TIMBER, P.CHAR_DUCKBOARD, P.CHAR_CLOTH, P.BLOOD_SOIL, P.BLOOD_SANDBAG]);
+  });
+
   it('a char waits while a crater about it is out, and is made once it is back', () => {
     const map = yard();
     const queue = new CharQueue(1.5, V);

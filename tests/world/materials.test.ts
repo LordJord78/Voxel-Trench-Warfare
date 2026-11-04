@@ -51,6 +51,26 @@ describe('materials', () => {
     expect(m.kindOf(m.P.TAPE_RANGE)).toBe(m.K.CLOTH);
     expect(m.PALETTE[m.P.TAPE_RANGE].emission).toBe(m.PALETTE[m.P.TAPE_RED].emission);
   });
+  it("blood adds five shades after the range's, each of the kind it marks; the soils all take BLOOD_SOIL", () => {
+    const blood = [m.P.BLOOD_SOIL, m.P.BLOOD_TIMBER, m.P.BLOOD_SANDBAG, m.P.BLOOD_DUCKBOARD, m.P.BLOOD_CLOTH];
+    // Appended in order, so no id before them moves.
+    expect(blood[0]).toBeGreaterThan(m.P.TAPE_RANGE);
+    expect(blood).toEqual(blood.map((_, i) => blood[0] + i));
+    expect(blood.map((p) => m.PALETTE[p].srgb)).toEqual([[70, 22, 18], [72, 20, 16], [84, 26, 20], [70, 22, 16], [80, 16, 16]]);
+    // Soil's is mud's: a carve or a round leaves it spoil, as it does the soil it marked.
+    expect(blood.map((p) => m.kindOf(p))).toEqual([m.K.MUD, m.K.TIMBER, m.K.SANDBAG, m.K.DUCKBOARD, m.K.CLOTH]);
+    // Lit as what they mark: their kind's roughness, and no glow.
+    for (const p of blood) {
+      expect(m.PALETTE[p].roughness, m.PALETTE[p].name).toBe(m.PALETTE[m.baseOf(m.kindOf(p))].roughness);
+      expect(m.PALETTE[p].emission).toBe(0);
+    }
+    const takes: Partial<Record<number, number>> = {
+      [m.K.SOD]: m.P.BLOOD_SOIL, [m.K.MUD]: m.P.BLOOD_SOIL, [m.K.CLAY]: m.P.BLOOD_SOIL, [m.K.SUBSOIL]: m.P.BLOOD_SOIL, [m.K.SPOIL]: m.P.BLOOD_SOIL,
+      [m.K.TIMBER]: m.P.BLOOD_TIMBER, [m.K.SANDBAG]: m.P.BLOOD_SANDBAG, [m.K.DUCKBOARD]: m.P.BLOOD_DUCKBOARD, [m.K.CLOTH]: m.P.BLOOD_CLOTH,
+    };
+    for (let k = 0; k < m.KIND_COUNT; k++) expect(m.BLOOD_OF(k), `kind ${k}`).toBe(takes[k] ?? null);
+    expect(m.spoilOf(m.P.BLOOD_SOIL)).toBe(m.P.SPOIL);
+  });
   it('a round does not chip target steel', () => {
     for (const p of [m.P.TARGET_STEEL, m.P.TARGET_STEEL_HIT]) {
       const map = new BrickMap({ x: 32, y: 32, z: 32 });

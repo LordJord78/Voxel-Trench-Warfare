@@ -5,12 +5,14 @@
  * world, `t` runs along the unit direction, `face` is the face of the hit cell
  * the ray came in through, and ties between axes go to the lowest.
  *
- * Water, wire, cloth and air let a ray through (`isSolid`). The walk reads the
- * brick table once for each brick it enters: an empty brick is stepped across
- * without reading its voxels, a uniform one is a hit at once if its material
- * is solid and stepped across if not, and only a dense brick's voxels are
- * read. A round's segment is a few metres a substep, so stepping is cheap; it
- * also keeps every cell and tie the reference's walk would give.
+ * Water, wire, cloth and air let a ray through (`isSolid`), unless it is told
+ * what stops it (a spatter's drop of blood stops at cloth and water too). The
+ * walk reads the brick table once for each brick it enters: an empty brick is
+ * stepped across without reading its voxels, a uniform one is a hit at once if
+ * its material stops the ray and stepped across if not, and only a dense
+ * brick's voxels are read. A round's segment is a few metres a substep, so
+ * stepping is cheap; it also keeps every cell and tie the reference's walk
+ * would give.
  */
 
 import { UNIFORM, type BrickMap } from './bricks';
@@ -38,9 +40,10 @@ export interface WaterEntry {
 /**
  * The first solid voxel along a ray from `origin` (voxels) along unit `dir`, within `maxT` voxels;
  * null if none. With `water`, also where it first entered water from outside it, short of that
- * solid: noted in `water` (a ray that starts in water notes none).
+ * solid: noted in `water` (a ray that starts in water notes none). With `stops` (1 for each palette
+ * id that stops the ray; air must not), the first voxel it names instead of the first solid one.
  */
-export function raycast(map: BrickMap, origin: readonly [number, number, number], dir: readonly [number, number, number], maxT: number, water?: WaterEntry): RayHit | null {
+export function raycast(map: BrickMap, origin: readonly [number, number, number], dir: readonly [number, number, number], maxT: number, water?: WaterEntry, stops: Uint8Array = SOLID): RayHit | null {
   const dims = [map.dims.x, map.dims.y, map.dims.z];
   let tEnd = maxT;
   let entry = -1;
@@ -83,7 +86,7 @@ export function raycast(map: BrickMap, origin: readonly [number, number, number]
     let p = 0;
     if (entryWord !== 0) {
       p = entryWord & UNIFORM ? entryWord & 0xff : map.get(cell[0], cell[1], cell[2]);
-      if (SOLID[p]) return { t, cell: [cell[0], cell[1], cell[2]], face, material: p };
+      if (stops[p]) return { t, cell: [cell[0], cell[1], cell[2]], face, material: p };
     }
     if (water) {
       const wet = WET[p] === 1;
