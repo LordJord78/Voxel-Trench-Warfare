@@ -10,7 +10,7 @@
  */
 
 import { holdOf, muzzleOf } from '../combat/arsenal';
-import { hitParts, pose, toWorld } from '../combat/soldier-rig';
+import { hitParts, pose, toWorld, type Flinch } from '../combat/soldier-rig';
 import { decodeGear, encodeGear, teamTracer } from '../net/gear';
 import { MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type MatchInfo, type PlayerState, type RoomConfig, type ShotState, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
@@ -55,6 +55,11 @@ export interface Figure {
   flags?: number;
   /** Their tape's palette id, whatever their team's (the range's dummies wear TAPE_RANGE); none, their team's. */
   tape?: number;
+  /** The round that last struck them, which leans them (soldier-rig.ts); none, unflinching. */
+  flinch?: Flinch;
+  /** Killed: the bearing they fall toward (degrees, world), and in how long (s); none, back from their feet in [hits] fall_s. */
+  fallYaw?: number;
+  fallS?: number;
 }
 
 /** A teammate to mark: over their head (metres), their name and team. */
@@ -66,7 +71,8 @@ export interface Tag {
 
 /**
  * Figures posed as soldiers for the renderer, each one's stride kept going from frame to frame by
- * how fast they move (the room does not send it).
+ * how fast they move (the room does not send it). A figure's flinch and fall are its caller's,
+ * set on it each frame: they are posed as given, and nothing of them is kept here.
  */
 export class Gaits {
   private readonly phase = new Map<number, number>();
@@ -88,7 +94,7 @@ export class Gaits {
         this.strokes.set(f.seat, stroke);
       } else this.strokes.delete(f.seat);
       return {
-        frames: pose({ position: f.position, yaw: f.yaw, pitch: f.pitch, height: f.height, speed, bob: phase, deadFor: f.deadFor, hold: holdOf(gear, stroke) }),
+        frames: pose({ position: f.position, yaw: f.yaw, pitch: f.pitch, height: f.height, speed, bob: phase, deadFor: f.deadFor, hold: holdOf(gear, stroke), flinch: f.flinch, fallYaw: f.fallYaw, fallS: f.fallS }),
         team: f.team,
         seat: f.seat,
         feet: f.position,

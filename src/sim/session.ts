@@ -281,7 +281,9 @@ export class Session {
   private debrisFalling: { tick: number; at: [number, number, number] }[] = [];
   private events: CombatEvents = noEvents();
   private readonly particleRng: Rng;
-  private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris', ParticleSpec>;
+  private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris' | 'blood' | 'mist', ParticleSpec>;
+  /** [hits]: a critical hit's droplets and mist, a helmet's sparks, and how many rounds a body bleeds a tick at most. */
+  private readonly bleeding: { criticalDroplets: number; criticalMist: number; helmetSparks: number; burstsPerTick: number };
   /** Each palette entry's linear colour, for the dust it throws. */
   private readonly tints: [number, number, number][];
 
@@ -337,6 +339,14 @@ export class Session {
       blastFlash: particleSpec(tun, 'blast_flash'),
       soil: particleSpec(tun, 'shell_soil'),
       debris: particleSpec(tun, 'debris'),
+      blood: particleSpec(tun, 'blood'),
+      mist: particleSpec(tun, 'blood_mist'),
+    };
+    this.bleeding = {
+      criticalDroplets: tun.i('hits.critical_droplets'),
+      criticalMist: tun.i('hits.critical_mist'),
+      helmetSparks: tun.i('hits.helmet_sparks'),
+      burstsPerTick: tun.i('hits.bursts_per_tick'),
     };
     const palette = paletteData();
     this.tints = Array.from({ length: 256 }, (_, id) => [palette[id * 8], palette[id * 8 + 1], palette[id * 8 + 2]]);
@@ -691,12 +701,13 @@ export class Session {
       for (const f of this.debrisFalling) if (f.tick <= this.ticks) this.events.splashes.push({ tick: this.ticks, at: f.at, energyJ: this.debris.energyJ, kind: 'debris' });
       this.debrisFalling = this.debrisFalling.filter((f) => f.tick > this.ticks);
     }
-    // Rounds into bodies: a puff of the uniform's dust where each struck.
+    // Rounds into bodies: a puff of the uniform's dust where each struck, and blood.
     for (const hit of this.rounds.bodyHits) {
       this.events.hits.push({ ...hit, tick: this.ticks });
       const { dust } = this.kinds;
       this.particles.emit(hit.position, [-hit.dir[0] * dust.speed, dust.lift, -hit.dir[2] * dust.speed], dust, dust.count, this.particleRng, this.tints[P_KHAKI]);
     }
+    this.bleedHits(this.rounds.bodyHits);
     for (const hit of this.rounds.impacts) {
       this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
       if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
@@ -817,6 +828,41 @@ export class Session {
     const { dust, spark } = this.kinds;
     this.particles.emit(hit.position, [n[0] * dust.speed, n[1] * dust.speed + dust.lift, n[2] * dust.speed], dust, dust.count, this.particleRng, this.tints[hit.material]);
     if (METAL.has(kindOf(hit.material))) this.particles.emit(hit.position, [n[0] * spark.speed, n[1] * spark.speed + spark.lift, n[2] * spark.speed], spark, spark.count, this.particleRng);
+  }
+
+  /**
+   * Blood where a round struck a body (the shots spec's §4), at `at` along the round's unit `dir`:
+   * [particles.blood]'s droplets thrown out of the far side and a puff of [particles.blood_mist];
+   * critical (a headshot, or the round that kills), [hits] critical_droplets and critical_mist of
+   * them; and off a `helmet`, helmet_sparks sparks back along the round. combat() bleeds the rounds
+   * into bodies; the app bleeds a kill's.
+   */
+  bleed(at: readonly number[], dir: readonly number[], critical: boolean, helmet = false): void {
+    const { blood, mist, spark } = this.kinds;
+    const b = this.bleeding;
+    const along = (spec: ParticleSpec, k: number) => [dir[0] * spec.speed * k, dir[1] * spec.speed * k + spec.lift, dir[2] * spec.speed * k];
+    this.particles.emit(at, along(blood, 1), blood, critical ? b.criticalDroplets : blood.count, this.particleRng);
+    this.particles.emit(at, along(mist, 1), mist, critical ? b.criticalMist : mist.count, this.particleRng);
+    if (helmet) this.particles.emit(at, along(spark, -1), spark, b.helmetSparks, this.particleRng);
+  }
+
+  /**
+   * The tick's rounds into bodies bled: critical in the head, whose every hit sparks off the helmet
+   * too (the ledger's ruling). A body bleeds [hits] bursts_per_tick of them at most, its headshots
+   * first: a shotgun's nine pellets bleed it twice, and never leave a headshot's burst out.
+   */
+  private bleedHits(hits: readonly BodyHit[]): void {
+    if (hits.length === 0) return;
+    const bled = new Map<number, number>();
+    for (const head of [true, false]) {
+      for (const hit of hits) {
+        if ((hit.zone === 'head') !== head) continue;
+        const n = bled.get(hit.body) ?? 0;
+        if (n >= this.bleeding.burstsPerTick) continue;
+        bled.set(hit.body, n + 1);
+        this.bleed(hit.position, hit.dir, head, head);
+      }
+    }
   }
 
   /** What combat did since the last drain, oldest first; the session's own start afresh. */

@@ -631,6 +631,23 @@ bowl_m              = 0.6      # under the mean of the ground 3 m round it
 down_s              = 4.0
 readout_s           = 1.5      # the HUD's readout of a hit
 
+[hits]
+# Hit feedback (the shots spec's §4). A critical hit (a headshot, or the round
+# that kills) bleeds more, and a helmet struck sparks. A round leans the body it
+# strikes: the torso along it from the waist, and on a headshot the head on its
+# neck as well, springing back (critically damped) within flinch_s. A killed
+# body falls toward the killing round's bearing.
+critical_droplets   = 18       # [particles.blood]'s, out of the far side
+critical_mist       = 3        # [particles.blood_mist]'s
+helmet_sparks       = 4        # [particles.spark]'s: every head hit's
+bursts_per_tick     = 2        # a body bleeds this many rounds a tick at most:
+                               # a shotgun's nine pellets bleed twice, not nine times
+flinch_deg          = 12
+head_snap_deg       = 25       # on top of the torso's lean
+flinch_s            = 0.25     # back to 2% of either
+fall_s              = 0.7      # a killed body's fall, unless told otherwise
+head_fall_s         = 0.45     # killed by a headshot
+
 # ---------------------------------------------------------------------------
 # DESTRUCTION
 #
@@ -871,6 +888,42 @@ speed               = 6.0      # up about 5 m on average
 lift                = 4.0
 spread              = 2.5
 speed_jitter        = 0.25
+
+# Blood (the shots spec's §4): a round into a body throws droplets and a puff
+# of mist out along it, beside the uniform's khaki dust; a critical hit throws
+# [hits] critical_droplets and critical_mist of them. Dark red, lit by the
+# world as dust is.
+[particles.blood]
+life_s              = 0.8
+gravity             = -9.81
+drag                = 1.2
+size_start_m        = 0.03
+size_end_m          = 0.02
+colour_start        = [0.32, 0.02, 0.02, 1.0]
+colour_end          = [0.32, 0.02, 0.02, 0.0]
+emissive            = false
+square              = false
+count               = 6        # an ordinary hit's
+speed               = 3.5      # out of the far side, along the round
+lift                = 0.0
+spread              = 0.6
+speed_jitter        = 0.3
+
+[particles.blood_mist]
+life_s              = 0.9
+gravity             = -0.4     # it hangs, growing as it thins
+drag                = 3.0
+size_start_m        = 0.15
+size_end_m          = 0.6
+colour_start        = [0.42, 0.04, 0.04, 0.45]
+colour_end          = [0.42, 0.04, 0.04, 0.0]
+emissive            = false
+square              = false
+count               = 1        # an ordinary hit's
+speed               = 0.8      # along the round
+lift                = 0.0
+spread              = 0.8
+speed_jitter        = 0.0
 
 # The sound (src/audio): every voice made in WebAudio, nothing loaded. A sound is
 # late by its distance at the speed of sound, quieter past reference_m, and duller
