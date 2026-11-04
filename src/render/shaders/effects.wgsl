@@ -102,10 +102,11 @@ struct Fragment {
   @location(4) glow: vec4f,
   // The tracers' light (1), kept at its hue; and how white it is near the eye (1 within whiteNearM).
   @location(5) tone: vec2f,
-  // A ribbon's across (-1 to 1), interpolated over the screen, not in perspective: its profile is held
-  // in pixels, and one reaching from beside the eye far out (a shot from the hip) would draw its core
-  // off its middle, along one edge of its glow, each of its quad's two triangles weighting its near
-  // corners.
+  // A tracer's across (-1 to 1), interpolated over the screen, not in perspective: its glow is held
+  // between glowMinPx and glowMaxPx, so its profile is in pixels, and one reaching from beside the eye
+  // far out (a shot from the hip) would draw its core off its middle, along one edge of its glow, each
+  // of its quad's two triangles weighting its near corners. Where its two ends are held to different
+  // widths it is within a pixel and a half of its middle. The flash's star, held in metres, keeps uv.x.
   @location(6) @interpolate(linear) across: f32,
 }
 
@@ -262,7 +263,7 @@ fn fs(f: Fragment) -> @location(0) vec4f {
       return vec4f(keepHue(core + glow, f.tone.y * share), 0.0);
     }
     // Soft across, fading from the head back to the tail.
-    let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.across * f.across);
+    let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.uv.x * f.uv.x);
     return vec4f(f.colour.rgb * a, 0.0);
   }
   if (f.alphas.x < -1.5) {

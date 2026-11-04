@@ -923,7 +923,9 @@ tracer_core_white   = 0.65     # how far the core's colour is mixed toward white
 tracer_white_near_m = 6.0      # all of it within this of the eye, falling (a smoothstep) to none
 tracer_white_far_m  = 40.0     # from here, so a far tracer is its team's colour, not white
 tracer_white_by_day = 1.0      # by day a tracer is at least this as white as near the eye, times
-                               # daylight: against sunlit ground white-hot reads, a pure colour not
+                               # daylight: against sunlit ground white-hot reads where a pure colour
+                               # does not. Seen side on at noon the stream is lit over 0.91 of its
+                               # line; at 0.8, 0.85; at 0.6, 0.68 (G1's sweep)
 tracer_glow_min_px  = 4.0      # the narrowest the glow is drawn, and the widest, in pixels of the
 tracer_glow_max_px  = 10.0     # internal image
 tracer_head_m       = 0.09     # the burning head where the round is: an emissive disc this wide,
@@ -932,10 +934,12 @@ tracer_streak_s     = 0.024    # the streak behind it: this much of its flight (
 tracer_min_m        = 2.5      # pistol's 9), more than a 60 Hz frame's (14.7 m), so a stream has no
 tracer_max_m        = 24.0     # gaps; within these, and never more than it has flown; the battle's
                                # tracers' longest is their own trail_m
-tracer_ignite_m     = 4.0      # lit in, core and glow, over its first metres of flight: aimed over
-tracer_ignite_hip_m = 1.0      # this, so a stream under the sight line does not bury the sight
-                               # picture; from the hip over this, so the stream reads from the gun;
-                               # between, by the shot's share aimed as it was fired (kept per round)
+tracer_ignite_m     = 4.0      # lit in, core and glow, over its first metres of flight: the
+tracer_ignite_hip_m = 1.0      # shooter's own aimed shot over this, so a stream under the sight line
+                               # does not bury the sight picture; from the hip over this, so the
+                               # stream reads from the gun, as does every round not the shooter's
+                               # own (others', the front's, the battle's); between, by the shot's
+                               # share aimed as it was fired (kept per round)
 tracer_head_from_m  = 1.5      # its head drawn from here
 tracer_day_boost    = 3.0      # by day it burns 1 + this × daylight as bright, to read against
 tracer_daylight_deg = [-4.0, 20.0]  # sunlit ground as at dusk against dusk; daylight rises 0 to 1

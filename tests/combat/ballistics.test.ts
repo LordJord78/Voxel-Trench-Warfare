@@ -252,7 +252,7 @@ describe('rounds in flight', () => {
   it("a tracer's segment carries where it is drawn from, how far it has flown and whose it is", () => {
     const r = new Rounds(T, world(), VOXEL);
     r.fire([6.4, 3, 0.5], [0, 0, 880], RIFLE, 1, true);
-    r.fire([3.2, 3, 0.5], [0, 0, 880], RIFLE, 0, true, [3.4, 2.9, 1.2]);
+    r.fire([3.2, 3, 0.5], [0, 0, 880], RIFLE, 0, true, { from: [3.4, 2.9, 1.2] });
     for (let k = 0; k < 3; k++) r.step(TICK);
     const { head, from, flown, owner } = r.tracerSegments(7);
     expect(Array.from(owner)).toEqual([1, 0]);

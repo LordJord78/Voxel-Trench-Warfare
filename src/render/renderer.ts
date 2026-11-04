@@ -785,6 +785,9 @@ export class Renderer {
   /** Draw one frame from `pose` (metres, degrees) at a time of day (0 dusk, 1 night), at `now` (ms). */
   render(pose: CameraPose, timeOfDay: number, now: number): void {
     const device = this.device;
+    // The bloom's share of the presented image, once a frame: the present pass mixes it in, and the
+    // effects keep the tracers' hue through the present pass on the share left to the image.
+    const bloomWeight = this.bloomWeight();
     const gap = this.lastNow !== null && now - this.lastNow > GAP_MS;
     // Real seconds since the last frame, for the exposure's adaptation (a stall counts as a tenth).
     const dt = this.lastNow === null ? 1 / 60 : Math.min(0.1, Math.max(0, (now - this.lastNow) / 1000));
@@ -954,7 +957,7 @@ export class Renderer {
     pass('cas', 'cas', this.res);
     // Timed only when they run (a slot not written this frame would hold another frame's times).
     // The tracers kept at their hue through the present pass's tone: its exposure and the image's share beside the bloom.
-    this.effects.encode(encoder, this.sceneGroup!, this.froxels.group, this.res, (name) => this.timer.writes(name), { bias: this.sky.exposure, sharpShare: 1 - (this.options.bloomWeight ?? 0.04) });
+    this.effects.encode(encoder, this.sceneGroup!, this.froxels.group, this.res, (name) => this.timer.writes(name), { bias: this.sky.exposure, sharpShare: 1 - bloomWeight });
     this.bloom.encode(encoder, this.res, this.options.bloomMax ?? 999, this.timer.writes('bloom'));
     // Without settings (tests), the zone is wide enough that nothing is ever corrected.
     this.autoExposure.encode(
@@ -972,7 +975,6 @@ export class Renderer {
       this.timer.writes('expose'),
     );
     if (this.context) {
-      const bloomWeight = this.options.bloomWeight ?? 0.04;
       // The grain's shift into the 64 × 64 noise tile: an R2 sequence, so each frame's grain is unlike the last's.
       const shift = [0.7548776662466927, 0.5698402909980532].map((a) => Math.floor(((0.5 + this.frameIndex * a) % 1) * 64));
       const [desaturate, vignette] = this.suppressionLook;
@@ -1018,6 +1020,11 @@ export class Renderer {
   /** The exposure's adaptation after the last frame: the base reckoned from the light, the correction and its want, the metered mean (stops). */
   exposureState(): Promise<ExposureState> {
     return this.autoExposure.read();
+  }
+
+  /** The bloom's share of the presented image (render.bloom_weight; 0.04 without settings): the image's own is the rest. */
+  bloomWeight(): number {
+    return this.options.bloomWeight ?? 0.04;
   }
 
   /** The exposure the last frame was presented at, read back from the GPU. */

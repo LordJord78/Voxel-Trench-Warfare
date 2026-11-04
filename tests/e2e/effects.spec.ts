@@ -393,7 +393,7 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
       h.freeze();
       await h.stepFrames(40);
       const c = h.camera();
-      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res, exposure: await h.exposure() };
+      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res, exposure: await h.exposure(), sharp: 1 - h.bloomWeight() };
     },
     DUSK,
   );
@@ -422,10 +422,11 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
     );
   const lum = (c: readonly number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
   // How a light shows: through the present pass's curve (the ACES fit, channel by channel) at the
-  // frame's exposure on the image's share beside its bloom (0.96). A tracer's light is kept at its
-  // hue through it (effects.wgsl keepHue), so its ratios in the linear image are not its colour's.
+  // frame's exposure on the image's share beside its bloom (1 - render.bloom_weight). A tracer's light
+  // is kept at its hue through it (effects.wgsl keepHue), so its ratios in the linear image are not
+  // its colour's.
   const aces = (x: number) => Math.min(1, Math.max(0, (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)));
-  const shown = (c: readonly number[]) => c.map((v) => aces(v * at.exposure * 0.96) ** (1 / 2.2));
+  const shown = (c: readonly number[]) => c.map((v) => aces(v * at.exposure * at.sharp) ** (1 / 2.2));
   const saturation = (c: readonly number[]) => {
     const d = shown(c);
     return (Math.max(...d) - Math.min(...d)) / Math.max(...d);
@@ -626,8 +627,9 @@ test("a far red tracer at night shows red on the screen, not white", async ({ pa
 });
 
 test('a tracer seen end on is its head alone: lit every frame 150 m out, held small half a metre out', async ({ page }) => {
-  // The review's case: aimed down the sights, past tracer_converge_m the player's round is drawn on
-  // a ray from the eye, so its streak is seen end on and its head is all the shooter sees of it. A
+  // The review's case: aimed down the sights, once its tracer has joined its path (where the shot
+  // was aimed) the player's round is drawn on a ray from the eye, so its streak is seen end on and
+  // its head is all the shooter sees of it. A
   // streak whose ends fall within a pixel of each other draws nothing (not a sliver of noise); its
   // head is drawn no smaller than three pixels, its light kept, so it lights the same light's worth
   // of pixels every frame however it falls among them (at its true 0.4 px, 150 m out, it lit one

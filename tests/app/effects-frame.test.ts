@@ -176,7 +176,7 @@ describe('a frame of effects', () => {
     const from: [number, number, number] = [12.98, 1.79, 3.16];
     // Aimed at something 20 m out.
     const aimedM = 20;
-    s.rounds.fire(origin, [0, 0, 880], projectileSpec(tun, 'assault_rifle'), 0, true, from, aimedM);
+    s.rounds.fire(origin, [0, 0, 880], projectileSpec(tun, 'assault_rifle'), 0, true, { from, convergeM: aimedM });
     s.rounds.step(1 / 60);
     const b = new EffectsFrameBuilder(t);
     let built = b.build(s, none());

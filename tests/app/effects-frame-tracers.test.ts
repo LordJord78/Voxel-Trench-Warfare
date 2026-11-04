@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE } from '../../src/app/effects-frame';
+import { daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, tracerWhiteAt } from '../../src/app/effects-frame';
 import type { TracerState } from '../../src/battle/tracers';
 import { projectileSpec, type ProjectileSpec } from '../../src/combat/ballistics';
 import { BILLBOARD_FLOATS } from '../../src/combat/particles';
+import { TICK_HZ } from '../../src/core/clock';
 import { loadTunables } from '../../src/core/tunables';
 import { TRACER_KIND } from '../../src/net/gear';
 import { MAX_BILLBOARDS, MAX_RIBBONS } from '../../src/render/effects';
@@ -66,7 +67,8 @@ describe("a tracer's look", () => {
     // 6.25 m), so a round's streaks overlap frame to frame and a stream leaves no gaps.
     expect(lengthOf(ribbon(built.frame.ribbons, 0))).toBeCloseTo(21.12, 3);
     expect(lengthOf(ribbon(built.frame.ribbons, 1))).toBeCloseTo(9.0, 3);
-    expect(21.12).toBeGreaterThan(880 / 60);
+    // Longer than the AK's own round flies in a tick (its muzzle velocity over the 60 Hz tick).
+    expect(lengthOf(ribbon(built.frame.ribbons, 0))).toBeGreaterThan(projectileSpec(tun, 'assault_rifle').muzzleVelocity / TICK_HZ);
     // 4.4 m out of the muzzle: a streak as long as its flight, not 21.1 m.
     const young = stand();
     young.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red);
@@ -85,9 +87,9 @@ describe("a tracer's look", () => {
     expect(lengthOf(ribbon(built.frame.ribbons, 1))).toBeCloseTo(24, 3);
   });
 
-  it('a tracer ignites over its first metres: at 1 m flown both alphas are under 0.3; at 10 m the head is 1', () => {
+  it("an aimed shot's tracer ignites over its first 4 m: at 1 m flown both alphas are under 0.3; at 10 m the head is 1", () => {
     const s = stand();
-    s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red);
+    s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red, { igniteM: tun.f('effects.tracer_ignite_m') });
     const b = new EffectsFrameBuilder(t);
     s.rounds.step(1 / 880);
     let r = ribbon(b.build(s, none()).frame.ribbons, 0);
@@ -130,7 +132,8 @@ describe("a tracer's look", () => {
 
   it("each tracer's head is an emissive billboard from 1.5 m flown, none before", () => {
     const s = stand();
-    s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red);
+    // An aimed shot's, lit in over tracer_ignite_m (4 m).
+    s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red, { igniteM: tun.f('effects.tracer_ignite_m') });
     const b = new EffectsFrameBuilder(t);
     // Seen from where it left, so its distance from the eye is its flight.
     const eye: V3 = [10, 2, 2];
@@ -184,6 +187,12 @@ describe("a tracer's look", () => {
     close(headAt(23), mixed(0.325), 4, '23 m');
     close(headAt(40), own, 4, '40 m');
     close(headAt(90), own, 4, '90 m');
+    // The law the heads are mixed by: by day at least the floor's share of it, however far.
+    expect(tracerWhiteAt(3, t)).toBeCloseTo(0.65, 6);
+    expect(tracerWhiteAt(23, t)).toBeCloseTo(0.325, 6);
+    expect(tracerWhiteAt(90, t)).toBe(0);
+    expect(tracerWhiteAt(90, t, 0.5)).toBeCloseTo(0.325, 6);
+    expect(tracerWhiteAt(3, t, 0.5)).toBeCloseTo(0.65, 6);
   });
 
   it('an ember burns brighter by day, as its tracer does: daylight 1 gives 4× the radiance of night', () => {
@@ -209,7 +218,7 @@ describe("a tracer's look", () => {
     const from: V3 = [12.98, 1.79, 2.6];
     const offset = [from[0] - origin[0], from[1] - origin[1], from[2] - origin[2]];
     // Aimed 40 m out.
-    s.rounds.fire(origin, [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red, from, 40);
+    s.rounds.fire(origin, [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red, { from, convergeM: 40 });
     const b = new EffectsFrameBuilder(t);
     let flown = 0;
     const drawnAt = (m: number) => {
@@ -259,9 +268,9 @@ describe("a tracer's look", () => {
     expect(half.share).toBeLessThan(0.6);
     expect(half.igniteM).toBeCloseTo(hipM + (aimedM - hipM) * half.share, 5);
     // Drawn, each lit in over its own: its head's alpha the share of that it has flown.
-    const litAt = (igniteM: number, m: number) => {
+    const litAt = (igniteM: number | undefined, m: number) => {
       const s = stand();
-      s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red, undefined, 0, igniteM);
+      s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red, igniteM === undefined ? {} : { igniteM });
       s.rounds.step(m / 880);
       return ribbon(new EffectsFrameBuilder(t).build(s, none()).frame.ribbons, 0).alphaHead;
     };
@@ -272,8 +281,11 @@ describe("a tracer's look", () => {
     expect(litAt(half.igniteM, 1)).toBeCloseTo(1 / half.igniteM, 4);
     expect(litAt(half.igniteM, 2.5)).toBeCloseTo(Math.min(1, 2.5 / half.igniteM), 4);
     expect(litAt(half.igniteM, half.igniteM)).toBeCloseTo(1, 4);
-    // A round fired without one (the front's, the battle's, another player's) is lit in as an aimed shot's.
-    expect(litAt(0, 1)).toBeCloseTo(0.25, 4);
+    // A round fired without one (another player's, the front's) is lit in as a hip shot's, by 1 m;
+    // one fired with none at all, from the muzzle.
+    expect(litAt(undefined, 0.5)).toBeCloseTo(0.5, 4);
+    expect(litAt(undefined, 1)).toBeCloseTo(1, 4);
+    expect(litAt(0, 0.05)).toBe(1);
   });
 
   it('a shot is aimed at the first thing on its line: a wall 30 m out, past the map (the sky) the farthest, nearer than 8 m held at 8', () => {
@@ -311,7 +323,7 @@ describe("a tracer's look", () => {
     const tracers: TracerState[] = [
       { id: 1, position: [50, 30, 80], velocity: [400, 0, 300], flown: 100 },
       { id: 2, position: [60, 31, 90], velocity: [0, 0, 2000], flown: 100 },
-      { id: 3, position: [40, 32, 70], velocity: [0, 0, 820], flown: 1 },
+      { id: 3, position: [40, 32, 70], velocity: [0, 0, 820], flown: 0.5 },
     ];
     const built = new EffectsFrameBuilder(t).build(stand(), none(), null, [50, 20, 70], { ...NO_BATTLE, tracers });
     expect(built.counts.battleTracers).toBe(3);
@@ -325,8 +337,8 @@ describe("a tracer's look", () => {
     close(first.rgb, [70, 31.5, 0], 3, 'amber');
     // 2000 m/s would be 48 m: held at the battle's 24.
     expect(lengthOf(at(tracers[1].position))).toBeCloseTo(24, 3);
-    // Lit in as the session's: a metre out, a quarter lit, and no head yet.
-    expect(at(tracers[2].position).alphaHead).toBeCloseTo(0.25, 6);
+    // Lit in as a hip shot's (tracer_ignite_hip_m): half a metre out, half lit, and no head yet.
+    expect(at(tracers[2].position).alphaHead).toBeCloseTo(0.5, 6);
     expect(built.counts.heads).toBe(2);
     const heads = billboards(built).filter((q) => q[8] === 3);
     expect(heads.map((q) => q[0]).sort()).toEqual([50, 60]);

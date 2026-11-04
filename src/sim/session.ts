@@ -387,10 +387,12 @@ export class Session {
     const round = !tracer ? TRACER_KIND.none : kind ?? (m ? m.kind : TRACER_KIND.amber);
     const from: [number, number, number] = [muzzle[0], muzzle[1], muzzle[2]];
     const reach = this.aimRange(origin, dir);
-    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, from, reach) < 0) return;
+    // Lit in as the draw's own (a hip shot's): a shot mark carries no share aimed.
+    const drawn = { from, convergeM: reach };
+    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, drawn) < 0) return;
     for (let k = 1; k < gun.pellets; k++) {
       const d = this.spreadAbout(dir, gun.coneDeg, this.remoteRng);
-      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, round, from, reach);
+      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, round, drawn);
     }
     const flashShare = m?.suppressed ? 0.12 : 1;
     this.events.remoteShots.push({
@@ -654,12 +656,12 @@ export class Session {
       const muzzle = this.muzzle();
       const reach = this.aimRange(eye, dir);
       const [hipM, aimedM] = this.tracerIgnite;
-      const lit = hipM + (aimedM - hipM) * this.aimed;
-      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, muzzle, reach, lit) >= 0) {
+      const drawn = { from: muzzle, convergeM: reach, igniteM: hipM + (aimedM - hipM) * this.aimed };
+      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, drawn) >= 0) {
         // A shotgun's other pellets, each the cone's own.
         for (let k = 1; k < w.spec.pellets; k++) {
           const d = w.aim(aim[0], aim[1], cone, this.dispersion);
-          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, muzzle, reach, lit);
+          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, drawn);
         }
         w.shot();
         this.throwShot(muzzle, arm.spec.flash);

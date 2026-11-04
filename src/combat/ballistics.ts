@@ -26,6 +26,9 @@ import type { BrickMap } from '../world/bricks';
 import { raycast, type WaterEntry } from '../world/raycast';
 import type { Zone } from './soldier-rig';
 
+/** A round's ignite distance not given (TracerDraw.igniteM): the draw lights it in as its own. */
+const UNSET = -1;
+
 /** What flies, as opposed to what fired it. */
 export interface ProjectileSpec {
   name: string;
@@ -80,6 +83,18 @@ export function ballisticsTunables(tun: Tunables): BallisticsTunables {
     maxRangeM: tun.f('ballistics.max_range_m'),
     maxFlightS: tun.f('ballistics.max_flight_time_s'),
   };
+}
+
+/**
+ * How a round's tracer is drawn, where the shooter says (Rounds.fire): from `from` (the drawn
+ * muzzle; the round's origin, unless given), joining its path `convergeM` out (aimRangeM, where the
+ * shot was aimed; 0, unless given: it leaves where it is drawn from), lit in over `igniteM` (the
+ * shooter's, by how aimed the shot was; unless given, unset (−1): the draw's own, a hip shot's).
+ */
+export interface TracerDraw {
+  from?: readonly [number, number, number];
+  convergeM?: number;
+  igniteM?: number;
 }
 
 /** Where a round stops in a body: how far along its segment (m), whose body, and where it struck. */
@@ -154,7 +169,7 @@ export class Rounds {
   private readonly origin: Float64Array;
   private readonly from: Float64Array;
   private readonly converge: Float64Array;
-  /** Over how far its tracer is lit in (m; 0: the draw's own, [effects] tracer_ignite_m): the shooter's, by how aimed the shot was. */
+  /** Over how far its tracer is lit in (m; 0 from the muzzle; −1 unset: the draw's own, [effects] tracer_ignite_hip_m): the shooter's, by how aimed the shot was. */
   private readonly ignite: Float64Array;
   /** Each round's nearest miss of the listener so far (m) and where, and whether its pass has been heard. */
   private readonly nearMiss: Float64Array;
@@ -187,13 +202,12 @@ export class Rounds {
   }
 
   /**
-   * A round leaving `origin` (m) at `velocity` (m/s), its tracer drawn from `from` (the origin
-   * unless given) and joining its path `convergeM` out (aimRangeM; 0, unless given), lit in over
-   * `igniteM` (0, unless given: the draw's own): its slot, or −1 if the pool is full or the velocity
-   * is zero. `tracer` is true (the battle's amber), false, or a kind (net/gear.ts TRACER_KIND: 0
-   * none, 2 red, 3 blue).
+   * A round leaving `origin` (m) at `velocity` (m/s), its tracer drawn as `drawn` says (TracerDraw:
+   * from its origin, on its path, lit in as the draw's own, unless given): its slot, or −1 if the pool
+   * is full or the velocity is zero. `tracer` is true (the battle's amber), false, or a kind
+   * (net/gear.ts TRACER_KIND: 0 none, 2 red, 3 blue).
    */
-  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean | number, from: readonly [number, number, number] = origin, convergeM = 0, igniteM = 0): number {
+  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean | number, drawn: TracerDraw = {}): number {
     if (velocity[0] === 0 && velocity[1] === 0 && velocity[2] === 0) return -1;
     if (this.count >= this.t.capacity) {
       this.dropped++;
@@ -210,9 +224,9 @@ export class Rounds {
     this.owner[i] = owner;
     this.tracer[i] = tracer === true ? 1 : tracer === false ? 0 : Math.max(0, Math.min(3, Math.round(tracer)));
     this.origin.set(origin, i * 3);
-    this.from.set(from, i * 3);
-    this.converge[i] = convergeM;
-    this.ignite[i] = igniteM;
+    this.from.set(drawn.from ?? origin, i * 3);
+    this.converge[i] = drawn.convergeM ?? 0;
+    this.ignite[i] = drawn.igniteM ?? UNSET;
     this.nearMiss[i] = Infinity;
     this.heard[i] = 0;
     return i;
@@ -256,8 +270,8 @@ export class Rounds {
    * Each tracer round's head and its tail, `lengthOf` its speed (m/s) back along its path, or a
    * length given outright (m), no further than it has flown, as [x, y, z] triples in metres; where
    * it left and where its tracer is drawn from, how far out its tracer joins its path and over how
-   * far it is lit in (m; 0: the draw's own), how far it has flown (m), whose it is, and its kind
-   * (its colour).
+   * far it is lit in (m; −1 unset: the draw's own), how far it has flown (m), whose it is, and its
+   * kind (its colour).
    */
   tracerSegments(lengthOf: number | ((speed: number) => number)): { head: Float32Array; tail: Float32Array; origin: Float32Array; from: Float32Array; converge: Float32Array; ignite: Float32Array; flown: Float32Array; owner: Int8Array; kind: Uint8Array } {
     let n = 0;

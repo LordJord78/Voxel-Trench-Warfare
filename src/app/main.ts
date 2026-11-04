@@ -1293,7 +1293,7 @@ async function start(): Promise<void> {
         pose: lastPose,
         gun: g.visible ? [g.box[0] * k, g.box[1] * k, g.box[2] * k, g.box[3] * k] : null,
         weapon: { automatic: session.weapon.spec.automatic, semi: session.weapon.semi, rounds: session.weapon.rounds, magazine: session.weapon.spec.magazine, id: session.arm.spec.gun.name },
-        tracers: builtDrawn.map((d) => ({ kind: d.kind, flown: d.flown, headDrawn: d.headDrawn, head: projectToPixel(lastPose, res, d.head), tail: projectToPixel(lastPose, res, d.tail), headM: d.head, tailM: d.tail })),
+        tracers: builtDrawn.map((d) => ({ kind: d.kind, flown: d.flown, headDrawn: d.headDrawn, head: projectToPixel(lastPose, res, d.head), tail: projectToPixel(lastPose, res, d.tail), headM: d.head, tailM: d.tail, joinsM: d.joinsM })),
       };
     },
     debugQuads(quads: DebugQuad[]) {
@@ -1422,6 +1422,7 @@ async function start(): Promise<void> {
     },
     timeOfDay: () => timeOfDay,
     exposure: () => renderer.exposure(),
+    bloomWeight: () => renderer.bloomWeight(),
     exposureState: () => renderer.exposureState(),
     lights: () => lit,
     battle: () => ({ seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), fires: shownBattle.fires(), plumes: shownBattle.plumes() }),
