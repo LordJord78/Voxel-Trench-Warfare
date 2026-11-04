@@ -80,10 +80,18 @@ export class Ricochets {
 
   constructor(private readonly t: RicochetTunables) {}
 
-  /** A tracer of `colourKind` (net/gear.ts TRACER_KIND) struck: its ember, and, drawn from the impact, its ricochet. */
+  /**
+   * A tracer of `colourKind` (net/gear.ts TRACER_KIND) struck: its ember, held off the face it struck
+   * by half its size (along the face's normal; back along its way for a round that started inside what
+   * it struck), so the face does not hide the half of it behind it; and, drawn from the impact, its
+   * ricochet.
+   */
   strike(i: Impact & { tick?: number }, colourKind: number): void {
     const t = this.t;
-    this.emberList.push({ at: [i.position[0], i.position[1], i.position[2]], kind: colourKind, age: 0 });
+    const half = t.emberM / 2;
+    const face = i.normal[0] !== 0 || i.normal[1] !== 0 || i.normal[2] !== 0;
+    const off = face ? i.normal.map((v) => v * half) : i.dir.map((v) => -v * half);
+    this.emberList.push({ at: [i.position[0] + off[0], i.position[1] + off[1], i.position[2] + off[2]], kind: colourKind, age: 0 });
     const seed = hash32(i.cell[0], i.cell[1], i.cell[2], i.tick ?? 0, i.material, i.owner, Math.round(i.position[0] * 100), Math.round(i.position[1] * 100), Math.round(i.position[2] * 100));
     const rng = Rng.root(seed);
     // Every draw is made whether or not it is used, so the stream never depends on the outcome.

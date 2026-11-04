@@ -221,6 +221,12 @@ export interface DebugTracer {
   kind: number;
 }
 
+/** A test's ember, drawn as a strike's is of `kind` (net/gear.ts TRACER_KIND), as bright as when newly struck. */
+export interface DebugEmber {
+  at: V3;
+  kind: number;
+}
+
 export interface BuiltEffects {
   frame: EffectsFrame;
   lights: TransientLight[];
@@ -228,7 +234,7 @@ export interface BuiltEffects {
   blasts: TransientLight[];
   /** Their smoke in the haze, and the fires' plumes: the nearest MAX_PUFFS puffs, nearest first (renderer.setSmoke). */
   smoke: SmokePuff[];
-  /** The session's tracers and the battle's, and the heads drawn on every tracer (a test's too). */
+  /** The session's tracers and the battle's, the heads drawn on every tracer and the embers (a test's too). */
   counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number };
   /**
    * The session's own tracers as drawn this frame (their offsets applied), metres: for a test to find
@@ -282,6 +288,7 @@ export class EffectsFrameBuilder {
   debug: DebugQuad[] = [];
   debugRibbons: DebugRibbon[] = [];
   debugTracers: DebugTracer[] = [];
+  debugEmbers: DebugEmber[] = [];
   debugLights: TransientLight[] = [];
   debugBlasts: TransientLight[] = [];
   debugSmoke: SmokePuff[] = [];
@@ -509,7 +516,7 @@ export class EffectsFrameBuilder {
     // flight, drawn as the tracers are, long past their lighting in (they left a wall, not a muzzle),
     // fading as they burn out.
     let embers = 0;
-    for (const e of this.ricochets.embers()) {
+    for (const e of [...this.ricochets.embers(), ...this.debugEmbers.map((d) => ({ at: d.at, size: t.ricochet.emberM, kind: d.kind, alpha: 1 }))]) {
       if (billboards >= MAX_BILLBOARDS) break;
       const colour = glows[e.kind] ?? glows[TRACER_KIND.amber];
       const burn = (t.tracerHeadGain * e.alpha) / t.particleGlow;

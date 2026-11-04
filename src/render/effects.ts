@@ -36,7 +36,7 @@ export const RIBBON_STYLE = { star: 0, tracer: 1 } as const;
  * widest, narrowed and not brightened.
  */
 export const HEAD_BILLBOARD = 3;
-/** A tracer strike's ember: emissive, kept at its hue as a tracer's head is (effects.wgsl keepHue), not held to its pixels. */
+/** A tracer strike's ember: emissive, kept at its hue as a tracer's head is (effects.wgsl keepHue), and held no smaller than MIN_HEAD_PX, its light kept, as a head is; never held narrower. */
 export const EMBER_BILLBOARD = 4;
 /** A billboard's floats, as particles.ts writes them. */
 const BILLBOARD_FLOATS = 9;

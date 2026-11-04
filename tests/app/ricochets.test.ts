@@ -119,7 +119,10 @@ describe('ricochets', () => {
     r.strike(strike(3, P.SOD, 80), 2);
     expect(r.flights()).toHaveLength(0);
     let [e] = r.embers();
-    expect(e.at).toEqual([3.5, 4, 0.5]);
+    // Held off the face it struck by half its size, along the face's normal (up, off the top of the
+    // cell), so the face does not hide the half of it behind the face.
+    const at = [3.5, 4 + t.emberM / 2, 0.5];
+    for (let k = 0; k < 3; k++) expect(e.at[k]).toBeCloseTo(at[k], 9);
     expect(e.size).toBeCloseTo(0.06, 9);
     expect(e.kind).toBe(2);
     expect(e.alpha).toBeCloseTo(1, 9);
@@ -128,5 +131,14 @@ describe('ricochets', () => {
     expect(e.alpha).toBeCloseTo(0.5, 6);
     r.step(0.18);
     expect(r.embers()).toHaveLength(0);
+  });
+
+  it("a round that started inside what it struck leaves its ember back along its way, there being no face", () => {
+    const r = new Ricochets(t);
+    const inside = { ...strike(3, P.SOD, 30), normal: [0, 0, 0] as V3 };
+    r.strike(inside, 2);
+    const [e] = r.embers();
+    for (let k = 0; k < 3; k++) expect(e.at[k]).toBeCloseTo(inside.position[k] - inside.dir[k] * (t.emberM / 2), 9);
+    expect(r.flights()).toHaveLength(0);
   });
 });

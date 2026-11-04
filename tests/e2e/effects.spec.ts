@@ -716,6 +716,66 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, held sm
   expect(errors).toEqual([]);
 });
 
+test("a strike's ember far off is lit every frame: held no smaller than a head's three pixels, its light kept", async ({ page }) => {
+  // An ember is 6 cm across: 100 m out, under half a pixel, so moving across the view it lit some
+  // frames and not others (a twinkle). It is drawn no smaller than a tracer's head is, its light
+  // kept, so it lights the same light's worth of pixels every frame however it falls among them.
+  const errors = await openGame(page);
+  const at = await hooks(page, async (h) => {
+    h.view('step');
+    h.setTimeOfDay(21);
+    h.jitter(false);
+    h.setQuality({ dynres: false, scale: 1 });
+    h.freeze();
+    await h.stepFrames(40);
+    const c = h.camera();
+    return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res };
+  });
+  const RAD = Math.PI / 180;
+  const y = at.yaw * RAD;
+  const right = [Math.cos(y), 0, -Math.sin(y)];
+  const tanHalf = Math.tan((at.fov * RAD) / 2);
+  /** The point `m` metres out along the ray `up` degrees over the view's middle and `side` pixels right of it, and the pixel it falls on. */
+  const out = (up: number, side: number, m: number) => {
+    const p = (at.pitch + up) * RAD;
+    const s = (side * Math.cos(up * RAD) * 2 * tanHalf) / at.res[0];
+    const d = [Math.sin(y) * Math.cos(p) + right[0] * s, Math.sin(p), Math.cos(y) * Math.cos(p) + right[2] * s];
+    const n = Math.hypot(d[0], d[1], d[2]);
+    return { at: d.map((v, k) => at.position[k] + (v / n) * m) as [number, number, number], px: [at.res[0] / 2 + side, at.res[1] / 2 - (Math.tan(up * RAD) / tanHalf) * (at.res[0] / 2)] };
+  };
+  // 100 m out, 20° over the view against the night sky, moving a third of a pixel right and a quarter
+  // up each frame.
+  const steps = Array.from({ length: 8 }, (_, k) => out(20 + 0.023 * k, 0.37 * k, 100));
+  const box: [number, number, number, number] = [Math.round(steps[0].px[0]) - 8, Math.round(steps[steps.length - 1].px[1]) - 8, 20, 20];
+  const frames = await hooks(
+    page,
+    async (h, arg) => {
+      const { embers, box } = arg as { embers: [number, number, number][]; box: [number, number, number, number] };
+      const lum = (a: number[], i: number) => 0.2126 * a[i * 3] + 0.7152 * a[i * 3 + 1] + 0.0722 * a[i * 3 + 2];
+      h.debugEmber(null);
+      await h.stepFrames(2);
+      const without = await h.sharpAt(box);
+      const seen: number[][] = [];
+      for (const e of embers) {
+        h.debugEmber({ at: e, kind: 2 });
+        await h.stepFrames(2);
+        const withIt = await h.sharpAt(box);
+        seen.push(Array.from({ length: box[2] * box[3] }, (_, i) => lum(withIt, i) - lum(without, i)));
+      }
+      h.debugEmber(null);
+      return seen;
+    },
+    { embers: steps.map((s) => s.at), box },
+  );
+  const totals = frames.map((f) => f.reduce((a, b) => a + b, 0));
+  const peaks = frames.map((f) => Math.max(...f));
+  const seen = JSON.stringify({ totals, peaks });
+  for (const p of peaks) expect(p, seen).toBeGreaterThan(0.05 * Math.max(...peaks));
+  expect(Math.min(...totals) / Math.max(...totals), seen).toBeGreaterThan(0.9);
+  expect(Math.min(...totals), seen).toBeGreaterThan(0);
+  expect(errors).toEqual([]);
+});
+
 test('a lit square shows as a square, where a lit disc leaves its corners', async ({ page }) => {
   // Debris is drawn as lit squares (milestone 4's plan, ruling 7).
   const errors = await openGame(page);

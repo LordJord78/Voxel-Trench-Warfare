@@ -13,7 +13,8 @@
 // than CORE_MAX_SHARE of the glow. The core is mixed toward white by all of the ribbon's whiteness
 // within whiteNearM of the eye, falling to none at whiteFarM: white-hot close by, the team's colour
 // far off. Seen end on, a tracer's ends within END_ON_PX of each other, it draws nothing: its head (a
-// held billboard, no smaller than MIN_HEAD_PX nor wider than headMaxPx) carries it.
+// held billboard, no smaller than MIN_HEAD_PX nor wider than headMaxPx) carries it. A strike's ember
+// is held no smaller than MIN_HEAD_PX too.
 // The tracers' light (their ribbons, heads and embers, the battle's and the ricochets' too) is lit to
 // keep its hue through the present pass's per-channel tone curve (keepHue): far off and in its glow a
 // tracer shows its team's colour, where the curve alone would take a bright red to white; as white as
@@ -75,9 +76,9 @@ const NEAR: f32 = 0.5;
 // The narrowest a ribbon is drawn, in pixels: wide enough that every column it crosses has a pixel
 // centre within half a pixel of its middle (its soft edge falls to a twentieth).
 const MIN_RIBBON_PX: f32 = 2.0;
-// The smallest a tracer's head (a disc) is drawn, in pixels across: from three, the light it lays on
-// the pixels it covers is within 2% of the same wherever it falls among them (at two, between half
-// and 1.4 times it), so a far head moving across the view does not twinkle.
+// The smallest a tracer's head (a disc) or a strike's ember is drawn, in pixels across: from three,
+// the light it lays on the pixels it covers is within 2% of the same wherever it falls among them (at
+// two, between half and 1.4 times it), so a far one moving across the view does not twinkle.
 const MIN_HEAD_PX: f32 = 3.0;
 // A tracer whose ends fall within this many pixels of each other is seen end on (the shooter's own
 // round, from the eye it left): it draws nothing, fading in over the next as many.
@@ -178,15 +179,14 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
       // The tracers' light: a head (its alpha -1 less its whiteness), or a strike's ember (-3 less it).
       let ember = b.colour.a < -2.5;
       tone = vec2f(1.0, clamp(select(-1.0 - b.colour.a, -3.0 - b.colour.a, ember), 0.0, 1.0));
-      colour = vec4f(b.colour.rgb, 0.0);
-      if (!ember) {
-        // A head, held as its ribbon is: no smaller than MIN_HEAD_PX, its light kept, nor wider than
-        // headMaxPx, narrowed and not brightened.
-        let pixel = pixelAt(b.centre * toVoxels) * frame.voxel;
-        let drawn = min(max(half, 0.5 * MIN_HEAD_PX * pixel), 0.5 * draw.headMaxPx * pixel);
-        colour = vec4f(b.colour.rgb * min((half / drawn) * (half / drawn), 1.0), 0.0);
-        half = drawn;
-      }
+      // Each held no smaller than MIN_HEAD_PX, its light kept, so a far one does not twinkle; a head,
+      // as its ribbon is, nor wider than headMaxPx, narrowed and not brightened (an ember, centimetres
+      // across, is never held narrower).
+      let pixel = pixelAt(b.centre * toVoxels) * frame.voxel;
+      let least = max(half, 0.5 * MIN_HEAD_PX * pixel);
+      let drawn = select(min(least, 0.5 * draw.headMaxPx * pixel), least, ember);
+      colour = vec4f(b.colour.rgb * min((half / drawn) * (half / drawn), 1.0), 0.0);
+      half = drawn;
     }
     let p = (b.centre + (frame.cam.right * corner.x + frame.cam.up * corner.y) * half) * toVoxels;
     f.clip = toClip(p);

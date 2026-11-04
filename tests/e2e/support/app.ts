@@ -138,6 +138,8 @@ export interface Hooks {
   debugRibbons(ribbons: { tail: [number, number, number]; head: [number, number, number]; width: number; colour: [number, number, number] }[]): void;
   /** A test tracer (metres) of a kind (net/gear.ts TRACER_KIND: 1 amber, 2 red, 3 blue), drawn as a round's is (core, glow and head, by the day's light), from the next frame; null for none. */
   debugTracer(tracer: { tail: [number, number, number]; head: [number, number, number]; kind: number } | null): void;
+  /** A test ember (metres) of a kind (net/gear.ts TRACER_KIND), drawn as a strike's is, as bright as when newly struck, from the next frame; null for none. */
+  debugEmber(ember: { at: [number, number, number]; kind: number } | null): void;
   /** The key light's map texels the last frame traced (all of them, a sixteenth, or none), the map's texels, and the slots it is traced in by turns. */
   keyTexels(): { traced: number; all: number; slots: number };
   /** Puffs of smoke in the haze (metres; density per metre), added to the next frames' own; [] for none. */

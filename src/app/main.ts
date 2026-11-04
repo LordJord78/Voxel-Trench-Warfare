@@ -69,7 +69,7 @@ import { copyRegion, type RegionCopy } from '../world/region-copy';
 import { CameraRig, rigTunables } from './camera-rig';
 import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
-import { daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
+import { daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type DebugEmber, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
@@ -1347,6 +1347,9 @@ async function start(): Promise<void> {
     },
     debugTracer(tracer: DebugTracer | null) {
       effects.debugTracers = tracer ? [tracer] : [];
+    },
+    debugEmber(ember: DebugEmber | null) {
+      effects.debugEmbers = ember ? [ember] : [];
     },
     sharpAt: async (box: [number, number, number, number]) => Array.from(await renderer.readColour(box, 'sharp')),
     debugLit: async () => {
