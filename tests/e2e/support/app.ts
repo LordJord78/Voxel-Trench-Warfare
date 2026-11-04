@@ -126,6 +126,8 @@ export interface Hooks {
   }>;
   /** The HUD as drawn: whether it shows, whether its crosshair does, and its words. */
   hud(): { visible: boolean; crosshair: boolean; text: string };
+  /** Suppression's look at the session's level in every mode, the flying camera's too (a test's fixed vantage); false: only while playing and paused, as the game has it. */
+  suppressionLook(always: boolean): void;
   /** The front's shells alone, for a test: the rifle fire is left as it is. */
   setShelling(i: 'off' | 'light' | 'heavy'): void;
   /** The front's fire, for this visit (the pause menu's choice is what is kept). */

@@ -1098,6 +1098,11 @@ eject_from_step_at  = 0.55     # above this you cannot stay head-up. Not a
 shake_deg_at_full   = 0.85
 shake_hz            = 7.5
 desaturate_at_full  = 0.55
+desaturate_knee     = [1.0, 4.0]  # the grey spares light shown near the tone curve's top: a
+                               # pixel whose brightest channel is presented (exposed, before the
+                               # curve) under the first is greyed all the way, from the second not
+                               # at all. The world greys; tracers, flashes and fires keep their
+                               # colour, which tells friend from foe in the firefights that suppress
 vignette_at_full    = 0.50
 blur_at_full        = 0.55
 

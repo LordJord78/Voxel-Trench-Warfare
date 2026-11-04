@@ -549,16 +549,22 @@ test("a far tracer's white-hot core stays an unbroken line, as its glow does", a
   expect(errors).toEqual([]);
 });
 
-test("a far red tracer at night shows red on the screen, not white", async ({ page }) => {
+test("a far red tracer at night shows red on the screen, not white, under fire as out of it", async ({ page }) => {
   // Far off a tracer's light is kept at its hue through the present pass's per-channel tone curve
   // (effects.wgsl keepHue), which alone takes a bright red to white; and its core has no whiteness
-  // left past tracer_white_far_m (40 m). Read on the displayed canvas, as a player sees it.
+  // left past tracer_white_far_m (40 m). Under fire the present pass greys the picture, all but the
+  // light shown near the curve's top ([suppression] desaturate_knee): greyed with the rest, at
+  // suppression's full level a far red tracer showed white, and colour tells friend from foe in
+  // exactly the firefights that suppress. Read on the displayed canvas, as a player sees it, out of
+  // fire and at suppression's full level.
   const errors = await openGame(page);
   const at = await hooks(page, async (h) => {
     h.view('step');
     h.setTimeOfDay(23);
     h.jitter(false);
     h.setQuality({ dynres: false, scale: 1 });
+    // The session's suppression shown over this fixed view as over the player's own.
+    h.suppressionLook(true);
     h.freeze();
     await h.stepFrames(40);
     const c = h.camera();
@@ -572,57 +578,68 @@ test("a far red tracer at night shows red on the screen, not white", async ({ pa
   const right = [Math.cos(y), 0, -Math.sin(y)];
   const tail = centre.map((v, k) => v - right[k] * 6) as [number, number, number];
   const head = centre.map((v, k) => v + right[k] * 6) as [number, number, number];
-  const shot = async (on: boolean) => {
+  /** The canvas with the tracer or without it, suppression at `level` (flying, the session does not run, so it holds). */
+  const shot = async (on: boolean, level: number) => {
     await hooks(
       page,
       async (h, arg) => {
-        const { tail, head, on } = arg as { tail: [number, number, number]; head: [number, number, number]; on: boolean };
+        const { tail, head, on, level } = arg as { tail: [number, number, number]; head: [number, number, number]; on: boolean; level: number };
+        h.session.suppression.level = level;
         h.debugTracer(on ? { tail, head, kind: 2 } : null);
         await h.stepFrames(2);
       },
-      { tail, head, on },
+      { tail, head, on, level },
     );
     return PNG.sync.read(await page.screenshot());
   };
-  const without = await shot(false);
-  const withIt = await shot(true);
-  await hooks(page, (h) => h.debugTracer(null));
   const lum = (d: Buffer, i: number) => 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
-  // Where it lies on the canvas: 20° over its middle, 6 m either side 80 m out (4.3°), and a band of
-  // 16 px about it (its glow and bloom; the grain elsewhere is not its).
-  const w = withIt.width;
-  const tanHalf = Math.tan((at.fov * RAD) / 2);
-  const rowAt = withIt.height / 2 - (Math.tan(20 * RAD) / tanHalf) * (w / 2);
-  const halfLength = (6 / 80 / tanHalf) * (w / 2);
-  // Its pixels: lit as the captures' rule has it, 1.5 times the sky without it and 6 steps over it.
-  let n = 0;
-  let saturation = 0;
-  let sx = 0;
-  let sy = 0;
-  for (let i = 0; i < withIt.data.length; i += 4) {
-    const px = (i / 4) % w;
-    const py = Math.floor(i / 4 / w);
-    if (Math.abs(py - rowAt) > 16 || Math.abs(px - w / 2) > halfLength + 16) continue;
-    const bg = lum(without.data, i);
-    const v = lum(withIt.data, i);
-    if (!(v >= Math.max(1.5 * bg, bg + 6))) continue;
-    const [r, g, b] = [withIt.data[i], withIt.data[i + 1], withIt.data[i + 2]];
-    const top = Math.max(r, g, b);
-    const c = top - Math.min(r, g, b);
-    let h = c > 0 ? (top === r ? ((g - b) / c) % 6 : top === g ? (b - r) / c + 2 : (r - g) / c + 4) * 60 : 0;
-    h = (h + 360) % 360;
-    n++;
-    saturation += c / top;
-    sx += c * Math.cos(h * RAD);
-    sy += c * Math.sin(h * RAD);
+  const measured: string[] = [];
+  for (const level of [0, 1]) {
+    const without = await shot(false, level);
+    const withIt = await shot(true, level);
+    // Where it lies on the canvas: 20° over its middle, 6 m either side 80 m out (4.3°), and a band of
+    // 16 px about it (its glow and bloom; the grain elsewhere is not its).
+    const w = withIt.width;
+    const tanHalf = Math.tan((at.fov * RAD) / 2);
+    const rowAt = withIt.height / 2 - (Math.tan(20 * RAD) / tanHalf) * (w / 2);
+    const halfLength = (6 / 80 / tanHalf) * (w / 2);
+    // Its pixels: lit as the captures' rule has it, 1.5 times the sky without it and 6 steps over it.
+    let n = 0;
+    let saturation = 0;
+    let sx = 0;
+    let sy = 0;
+    for (let i = 0; i < withIt.data.length; i += 4) {
+      const px = (i / 4) % w;
+      const py = Math.floor(i / 4 / w);
+      if (Math.abs(py - rowAt) > 16 || Math.abs(px - w / 2) > halfLength + 16) continue;
+      const bg = lum(without.data, i);
+      const v = lum(withIt.data, i);
+      if (!(v >= Math.max(1.5 * bg, bg + 6))) continue;
+      const [r, g, b] = [withIt.data[i], withIt.data[i + 1], withIt.data[i + 2]];
+      const top = Math.max(r, g, b);
+      const c = top - Math.min(r, g, b);
+      let h = c > 0 ? (top === r ? ((g - b) / c) % 6 : top === g ? (b - r) / c + 2 : (r - g) / c + 4) * 60 : 0;
+      h = (h + 360) % 360;
+      n++;
+      saturation += c / top;
+      sx += c * Math.cos(h * RAD);
+      sy += c * Math.sin(h * RAD);
+    }
+    const hue = ((Math.atan2(sy, sx) / RAD) + 360) % 360;
+    const seen = JSON.stringify({ level, n, saturation: saturation / Math.max(1, n), hue, rowAt, halfLength });
+    measured.push(seen);
+    expect(n, seen).toBeGreaterThan(20);
+    // Red [1.0, 0.04, 0.018] shown at its hue is (255, 59, 41): hue 5°, saturation 0.84; white has
+    // none. Over the violet night sky its edges read a little toward magenta.
+    expect(saturation / n, seen).toBeGreaterThan(0.5);
+    expect(Math.min(Math.abs(hue - 5), 360 - Math.abs(hue - 5)), seen).toBeLessThan(20);
   }
-  const hue = ((Math.atan2(sy, sx) / RAD) + 360) % 360;
-  const seen = JSON.stringify({ n, saturation: saturation / Math.max(1, n), hue, rowAt, halfLength });
-  expect(n, seen).toBeGreaterThan(20);
-  // Red [1.0, 0.04, 0.018] shown at its hue is (255, 59, 41): hue 5°, saturation 0.84; white has
-  // none. Over the violet night sky its edges read a little toward magenta.
-  expect(saturation / n, seen).toBeGreaterThan(0.5);
-  expect(Math.min(Math.abs(hue - 5), 360 - Math.abs(hue - 5)), seen).toBeLessThan(20);
+  console.log(measured.join('\n'));
+  await hooks(page, (h) => {
+    h.debugTracer(null);
+    h.session.suppression.level = 0;
+    h.suppressionLook(false);
+  });
   expect(errors).toEqual([]);
 });
 

@@ -329,6 +329,8 @@ async function start(): Promise<void> {
   let mode: Mode = 'loading';
   /** For the peak-combat driver (peak-combat.ts): the camera held in fly mode while the session runs as if playing. */
   let spectating = false;
+  /** For a test's fixed vantage: suppression's look at the session's level in every mode, flying too (the game shows it only while playing and paused). */
+  let suppressionAlways = false;
   /** The mode a pause returns to. */
   let resumeTo: 'playing' | 'fly' = 'playing';
   /** The clock, in hours; it opens at dusk. */
@@ -929,8 +931,8 @@ async function start(): Promise<void> {
     if (rifleHeld && session.alive && !scoped && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) rifle = rig.rifle(session, pose);
     else rig.hideRifle();
     renderer.setRifle(rifle);
-    // Under fire the picture greys and closes in, while playing (and paused); not flying.
-    const shaken = mode === 'playing' || mode === 'paused';
+    // Under fire the picture greys and closes in, while playing (and paused); not flying, unless a test asks.
+    const shaken = mode === 'playing' || mode === 'paused' || suppressionAlways;
     renderer.setSuppressionLook(shaken ? session.suppression.desaturation : 0, shaken ? session.suppression.vignette : 0);
     // What this frame's ticks did, once: seen, from the rifle as it is drawn, and heard.
     const events = session.drainEvents();
@@ -1305,6 +1307,10 @@ async function start(): Promise<void> {
     },
     /** What is in the hands: the gun's or the shovel's, how far up, how far aimed, the light. */
     hands: () => ({ held: session.held, ready: session.ready, aimed: session.aimed, gun: session.arm.spec.gun.key, light: session.lightOn, model: renderer.rifleModel().dims }),
+    /** Suppression's look at the session's level in every mode, the flying camera's too (a test's fixed vantage); false: only while playing and paused, as the game has it. */
+    suppressionLook(always: boolean) {
+      suppressionAlways = always;
+    },
     /** The front's shells alone, for a test. */
     setShelling(i: 'off' | 'light' | 'heavy') {
       session.artillery.intensity = i;

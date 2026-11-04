@@ -2,8 +2,9 @@
 // the texels round each sample, so it does not ring), its bloom mixed in, exposed,
 // through the ACES fit, gamma-2.2 encoded (the probe's look), grained, and
 // dithered with blue noise below a single 8-bit step, so night skies do not band.
-// Under fire the picture is greyed and its edges darkened (suppression's look);
-// with none, both are exactly nothing.
+// Under fire the picture is greyed and its edges darkened (suppression's look),
+// the grey sparing light shown near the curve's top, so tracers, flashes and
+// fires keep their colour; with none, both are exactly nothing.
 #include "catmull.wgsl"
 #include "tone.wgsl"
 
@@ -22,9 +23,11 @@ struct Present {
   // Suppression's look: how far the colour goes to grey, and how dark the corners go.
   desaturate: f32,
   vignette: f32,
+  // The grey's knee ([suppression] desaturate_knee): a pixel whose brightest channel is presented
+  // (exposed, before the curve) under kneeLo is greyed all the way, from kneeHi not at all.
+  kneeLo: f32,
+  kneeHi: f32,
   pad0: f32,
-  pad1: f32,
-  pad2: f32,
 }
 
 @group(0) @binding(0) var image: texture_2d<f32>;
@@ -64,7 +67,11 @@ fn fs(v: VOut) -> @location(0) vec4f {
   let q = clamp(v.pos.xy / present.canvas * present.res * 0.5, vec2f(0.5), ceil(present.res * 0.5) - 0.5);
   let glow = textureSampleLevel(bloom, linear, q / ceil(present.alloc * 0.5), 0.0).rgb;
   let lit = mix(sharp, glow, present.bloomWeight);
-  let c = mix(lit, vec3f(dot(lit, vec3f(0.2126, 0.7152, 0.0722))), present.desaturate) * present.exposure;
+  // Under fire the world greys, but light shown near the curve's top in a channel (a tracer, a flash,
+  // a fire) is spared it, so a far tracer still shows its team's colour. With none, none at all.
+  let top = max(lit.r, max(lit.g, lit.b)) * present.exposure;
+  let grey = select(0.0, present.desaturate * (1.0 - smoothstep(present.kneeLo, present.kneeHi, top)), present.desaturate > 0.0);
+  let c = mix(lit, vec3f(dot(lit, vec3f(0.2126, 0.7152, 0.0722))), grey) * present.exposure;
   // Darkened toward the corners, by the pixel's distance from the middle over the corner's.
   let r = length(v.pos.xy - 0.5 * present.canvas) / length(0.5 * present.canvas);
   let encoded = pow(aces(c), vec3f(1.0 / 2.2)) * (1.0 - present.vignette * smoothstep(0.35, 1.0, r));
