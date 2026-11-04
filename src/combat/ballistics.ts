@@ -62,15 +62,20 @@ export interface BallisticsTunables {
 }
 
 /**
- * How far a shot from `eye` (m) along `dir` is aimed: the first solid on its line, within `minM` and
- * `maxM` (into the sky, or nothing within `maxM`: `maxM`). A shooter's tracer joins its round's path
- * there (effects-frame.ts), so from the hip it reaches across to where the reticle sat.
+ * How far a shot from `eye` (m) along `dir` is aimed: the first thing on its line, within `minM` and
+ * `maxM` (into the sky, or nothing within `maxM`: `maxM`). The first solid, or nearer than it a body
+ * the shooter's round would strike: `body` says how far along the line (unit `u`, within `m` metres)
+ * one stops it, if one does. A shooter's tracer joins its round's path there (effects-frame.ts), so
+ * from the hip it reaches across to where the reticle sat.
  */
-export function aimRangeM(map: BrickMap, voxel: number, eye: readonly [number, number, number], dir: readonly [number, number, number], minM: number, maxM: number): number {
+export function aimRangeM(map: BrickMap, voxel: number, eye: readonly [number, number, number], dir: readonly [number, number, number], minM: number, maxM: number, body?: (u: readonly [number, number, number], m: number) => number | null): number {
   const n = hypot(dir[0], dir[1], dir[2]);
   if (!(n > 0)) return maxM;
-  const hit = raycast(map, [eye[0] / voxel, eye[1] / voxel, eye[2] / voxel], [dir[0] / n, dir[1] / n, dir[2] / n], maxM / voxel);
-  const m = hit ? hit.t * voxel : maxM;
+  const u: [number, number, number] = [dir[0] / n, dir[1] / n, dir[2] / n];
+  const hit = raycast(map, [eye[0] / voxel, eye[1] / voxel, eye[2] / voxel], u, maxM / voxel);
+  let m = hit ? hit.t * voxel : maxM;
+  const struck = body?.(u, m) ?? null;
+  if (struck !== null) m = struck;
   return Math.min(maxM, Math.max(minM, m));
 }
 

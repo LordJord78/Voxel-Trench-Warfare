@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, tracerWhiteAt } from '../../src/app/effects-frame';
 import type { TracerState } from '../../src/battle/tracers';
 import { projectileSpec, type ProjectileSpec } from '../../src/combat/ballistics';
+import { pose, toWorld } from '../../src/combat/soldier-rig';
 import { BILLBOARD_FLOATS } from '../../src/combat/particles';
 import { TICK_HZ } from '../../src/core/clock';
 import { loadTunables } from '../../src/core/tunables';
@@ -53,6 +54,9 @@ function facing(wallM: number | null): Session {
   s.drainEvents();
   return s;
 }
+
+/** The player's eye (metres): where their rounds leave. */
+const eyeOf = (s: Session): V3 => [s.player.position.x, s.player.position.y + s.controller.eyeHeight(s.player), s.player.position.z];
 
 /** The player's long gun made the M870, and up. */
 function shotgun(s: Session): Session {
@@ -387,24 +391,61 @@ describe("a tracer's look", () => {
   });
 
   it('a shot is aimed at the first thing on its line: a wall 30 m out, past the map (the sky) the farthest, nearer than 8 m held at 8', () => {
-    const eye = (s: Session): V3 => [s.player.position.x, s.player.position.y + s.controller.eyeHeight(s.player), s.player.position.z];
     const [near, far] = [tun.f('effects.tracer_converge_min_m'), tun.f('effects.tracer_converge_max_m')];
     // A shot into the wall: its round (and its tracer) joins its path there, cast once as it leaves.
     const walled = facing(30);
-    expect(walled.aimRange(eye(walled), [0, 0, 1])).toBeCloseTo(30, 0);
+    expect(walled.aimRange(0, eyeOf(walled), [0, 0, 1])).toBeCloseTo(30, 0);
     shoot(walled);
     const seg = walled.rounds.tracerSegments(t.tracerMaxM);
     expect(seg.converge.length).toBe(1);
     expect(seg.converge[0]).toBeCloseTo(30, 0);
     // Nothing on its line before the map's end, as into the sky: the farthest.
     const open = facing(null);
-    expect(open.aimRange(eye(open), [0, 0, 1])).toBe(far);
+    expect(open.aimRange(0, eyeOf(open), [0, 0, 1])).toBe(far);
     shoot(open);
     expect(open.rounds.tracerSegments(t.tracerMaxM).converge[0]).toBe(far);
-    expect(open.aimRange(eye(open), [0, 0.5, 0.866])).toBe(far);
+    expect(open.aimRange(0, eyeOf(open), [0, 0.5, 0.866])).toBe(far);
     // A wall 2 m off: held at the nearest.
     const close2 = facing(2);
-    expect(close2.aimRange(eye(close2), [0, 0, 1])).toBe(near);
+    expect(close2.aimRange(0, eyeOf(close2), [0, 0, 1])).toBe(near);
+  });
+
+  it("a body on the line is the first thing on it, if the shooter's round would strike it: a target 20 m out in front of a wall 30 m out gives 20", () => {
+    const s = facing(30);
+    // A target standing 20 m out from the eye, facing back: the range's (200 on), struck by the player's rounds alone.
+    const feet: V3 = [12.8, 0.4, 22];
+    const frames = pose({ position: feet, yaw: 180, pitch: 0, height: 1.8, speed: 0, bob: 0, deadFor: null });
+    s.targets = [{ id: 200, frames, feet }];
+    const eye = eyeOf(s);
+    const chest = toWorld(frames.torso, [0, 0.28, 0]);
+    const to = [chest[0] - eye[0], chest[1] - eye[1], chest[2] - eye[2]];
+    const n = Math.hypot(to[0], to[1], to[2]);
+    const dir: V3 = [to[0] / n, to[1] / n, to[2] / n];
+    // The player's (owner 0): at the target's chest, its front some 20 m out.
+    expect(s.aimRange(0, eye, dir)).toBeCloseTo(20, 0);
+    // The front's (owner 1), which a target does not stop: on to the wall.
+    expect(s.aimRange(1, eye, dir)).toBeCloseTo(30 / dir[2], 0);
+    // The player's shot at it, aimed (its cone tight): its tracer joins its path at the target, a tick
+    // out and 14.7 m on.
+    s.player.yaw = (Math.atan2(dir[0], dir[2]) * 180) / Math.PI;
+    s.player.pitch = (Math.asin(dir[1]) * 180) / Math.PI;
+    s.intent = { ...s.intent, aim: true };
+    while (s.aimed < 1) s.tick();
+    s.drainEvents();
+    shoot(s);
+    expect(s.rounds.count).toBe(1);
+    expect(s.rounds.tracerSegments(t.tracerMaxM).converge[0]).toBeCloseTo(20, 0);
+    // With others: another player's shot (owner 2 + their seat) at a soldier of another seat stops at
+    // him; at their own, it goes on; and the round they fire joins its path there.
+    // (This player stands aside, off the line: another's round would strike them too.)
+    const room = facing(30);
+    room.teleport([3, 0.4, 2], 0, 0);
+    room.together = true;
+    room.bodies = [{ id: 1, frames, feet }];
+    expect(room.aimRange(2, eye, dir)).toBeCloseTo(20, 0);
+    expect(room.aimRange(3, eye, dir)).toBeCloseTo(30 / dir[2], 0);
+    room.fireRemote(2, eye, dir, true, eye);
+    expect(room.rounds.tracerSegments(t.tracerMaxM).converge[0]).toBeCloseTo(20, 0);
   });
 
   it("a battle tracer is drawn as the session's are, its streak at most the battle's trail_m, its head from 1.5 m", () => {
