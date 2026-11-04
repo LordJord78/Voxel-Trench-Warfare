@@ -609,6 +609,28 @@ spread_vertical     = 0.6      # and this much of it up and down (the reference'
                                # rig); both across the line of fire
 reach_m             = 30.0     # enemy bays within this, along the line, fire
 
+[range]
+# Solo play's firing range (the shots spec's §5, combat/range.ts): dummies and
+# steel plates out along the spawn bay's facing, each this far out from the
+# spawn, across the bay's frontage. A dummy takes a match's damage, lies down_s
+# and stands again; a plate rings. A spot over water, wire, a trench or a
+# crater's bowl, or on a slope, moves sideways up to shift_m, or is left out.
+dummies_m           = [25, 40, 60, 80, 110, 150]
+movers_m            = [50, 90]
+mover_speed_mps     = 1.4      # back and forth across, a triangle wave
+mover_span_m        = 8.0
+torso_plates_m      = [30, 55, 85]
+head_plates_m       = [45, 70]
+torso_plate_m       = [0.45, 0.6]  # across and high
+head_plate_m        = [0.25, 0.3]
+plate_centre_m      = [1.3, 1.6]   # torso, head: the centre's height over the ground
+frontage_m          = 12.0     # either side of the spawn, as it faces out
+shift_m             = 3.0
+max_slope_deg       = 30.0     # over half a metre either way
+bowl_m              = 0.6      # under the mean of the ground 3 m round it
+down_s              = 4.0
+readout_s           = 1.5      # the HUD's readout of a hit
+
 # ---------------------------------------------------------------------------
 # DESTRUCTION
 #
