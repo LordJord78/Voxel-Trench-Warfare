@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { BrickMap } from '../../src/world/bricks';
+import { chip } from '../../src/world/destruction';
 import * as m from '../../src/world/materials';
 
 describe('materials', () => {
@@ -40,5 +42,24 @@ describe('materials', () => {
     const glow = m.P.LANTERN_GLOW * 8;
     expect(d[glow + 4]).toBeCloseTo(6 * Math.pow(255 / 255, 2.2), 5);
     expect(d[m.P.MUD * 8 + 4]).toBe(0);
+  });
+  it('the range adds three palette entries after the guns', () => {
+    expect([m.P.TARGET_STEEL, m.P.TARGET_STEEL_HIT, m.P.TAPE_RANGE]).toEqual([80, 81, 82]);
+    // The plates' steel, painted and splashed, is hull, so a round sparks off it; the dummies' tape
+    // is cloth, lit a little as the teams' tapes are so it reads at night.
+    expect([m.P.TARGET_STEEL, m.P.TARGET_STEEL_HIT].map((p) => m.kindOf(p))).toEqual([m.K.HULL, m.K.HULL]);
+    expect(m.kindOf(m.P.TAPE_RANGE)).toBe(m.K.CLOTH);
+    expect(m.PALETTE[m.P.TAPE_RANGE].emission).toBe(m.PALETTE[m.P.TAPE_RED].emission);
+  });
+  it('a round does not chip target steel', () => {
+    for (const p of [m.P.TARGET_STEEL, m.P.TARGET_STEEL_HIT]) {
+      const map = new BrickMap({ x: 32, y: 32, z: 32 });
+      map.set(4, 4, 4, p);
+      map.takeDirty();
+      expect(chip(map, 4, 4, 4, 1e6, 260), m.PALETTE[p]?.name).toBe(false);
+      expect(map.get(4, 4, 4)).toBe(p);
+      expect(map.takeDirty()).toEqual([]);
+      expect(m.spoilOf(p)).toBe(p);
+    }
   });
 });

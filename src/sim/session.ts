@@ -92,7 +92,7 @@ export function handsTunables(tun: Tunables): HandsTunables {
 const SHOVEL_HOLDING: Holding = { kind: 'shovel', sight: { y: 0, z: 0.4 } };
 const smooth = (t: number) => t * t * (3 - 2 * t);
 
-/** Another player's body as drawn this frame, for rounds to strike: their seat, their parts' frames, their feet. */
+/** A body as drawn this frame, for rounds to strike: another player's (their seat) or a target's (200 on), its parts' frames, its feet. */
 export interface Body {
   id: number;
   frames: Record<PartName, Frame>;
@@ -147,7 +147,7 @@ export interface CombatEvents {
   scoops: (Scoop & { tick: number })[];
   /** Other players' shots, from their eyes, their tracers and flashes at their rifles' muzzles. */
   remoteShots: (ShotEvent & { owner: number })[];
-  /** Rounds stopped by a body: whose, whose body (LOCAL_BODY the player's own), where struck. */
+  /** Rounds stopped by a body: whose, whose body (LOCAL_BODY the player's own, a target's its id), where struck. */
   hits: (BodyHit & { tick: number })[];
   /** Where rounds went into water, shells landed on it and their debris fell into it (metres), and with how much energy. */
   splashes: { tick: number; at: [number, number, number]; energyJ: number; kind: 'round' | 'shell' | 'debris' }[];
@@ -240,6 +240,11 @@ export class Session {
    */
   together = false;
   bodies: Body[] = [];
+  /**
+   * The range's dummies (the shots spec's §5), set each frame: bodies only the player's rounds
+   * strike. Up in solo, they stop no one else's round, and no round stops at the player's own body.
+   */
+  targets: Body[] = [];
   /** Killed, the player does nothing until they are back in (`respawn`). */
   alive = true;
   /** The intent the tick acts on: the player's, or idle while dead. */
@@ -339,13 +344,14 @@ export class Session {
     this.destruction = new Destruction(world.map, world.runner ?? inProcessRunner(), destructionTunables(tun, waterTable));
     this.entrenching = new Entrenching(world.map, entrenchingTunables(tun), voxel, waterTable);
     this.artillery = new Artillery(artilleryTunables(tun), world.shells ?? (plan ? planShellSource(plan) : () => null), this.streams.derive('combat.shells'));
-    this.rounds.bodies = (owner, from, dir, length) => (this.together ? this.strikeBodies(owner, from, dir, length) : null);
+    this.rounds.bodies = (owner, from, dir, length) => (this.together || this.targets.length > 0 ? this.strikeBodies(owner, from, dir, length) : null);
   }
 
   /**
-   * The nearest body a round of `owner` meets along a segment, short of `length` metres: the
-   * player's own rounds the others'; another's (owner 2 + their seat) everyone's but their own,
-   * the player's included; the front's (owner 1) the player's alone.
+   * The nearest body a round of `owner` meets along a segment, short of `length` metres. The
+   * targets, the player's rounds alone, with others or in solo. With others besides: the player's
+   * rounds the others' bodies; another's (owner 2 + their seat) everyone's but their own, the
+   * player's included; the front's (owner 1) the player's alone. Solo, there is no one else to hit.
    */
   private strikeBodies(owner: number, from: readonly [number, number, number], dir: readonly [number, number, number], length: number): { t: number; body: number; zone: 'head' | 'torso' | 'limb' } | null {
     let best: { t: number; body: number; zone: 'head' | 'torso' | 'limb' } | null = null;
@@ -358,8 +364,9 @@ export class Session {
       const h = hitParts(frames, from, dir, best ? best.t : length);
       if (h && (!best || h.t < best.t)) best = { t: h.t, body: id, zone: h.zone };
     };
-    if (owner !== 1) for (const b of this.bodies) if (b.id !== owner - 2) test(b.id, b.frames, b.feet);
-    if (owner !== 0 && this.alive) test(LOCAL_BODY, this.ownBody(), this.player.position.toArray());
+    if (this.together && owner !== 1) for (const b of this.bodies) if (b.id !== owner - 2) test(b.id, b.frames, b.feet);
+    if (owner === 0) for (const b of this.targets) test(b.id, b.frames, b.feet);
+    if (this.together && owner !== 0 && this.alive) test(LOCAL_BODY, this.ownBody(), this.player.position.toArray());
     return best;
   }
 

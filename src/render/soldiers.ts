@@ -2,7 +2,8 @@
  * The other players, drawn (the multiplayer spec's §3): each soldier's parts (combat/soldier-model.ts)
  * posed by the rig (combat/soldier-rig.ts), traced and lit after shade and before the rifle
  * (soldiers.wgsl), seen through the haze, their depth then merged into the G-buffer's so the rifle,
- * the effects and TAA take them as the world. Their tape is their team's colour.
+ * the effects and TAA take them as the world. Their tape is their team's colour, unless they are
+ * given one of their own (the range's dummies' hunter orange).
  *
  * Each frame the app hands over the soldiers to draw: their parts' frames now and (for the motion)
  * as last drawn, their team and seat. Each one's box on screen comes from its parts' boxes' corners;
@@ -63,6 +64,8 @@ export interface SoldierDraw {
   seat: number;
   feet: readonly [number, number, number];
   gear?: number;
+  /** Their tape's palette id, whatever their team's (the range's dummies wear TAPE_RANGE); none, their team's. */
+  tape?: number;
 }
 
 export interface SoldierPipelines {
@@ -320,7 +323,7 @@ export class Soldiers {
     const taken = new Set<number>();
     order.forEach(({ s, box }, i) => {
       w.set(`info.${i}.feet`, s.feet);
-      w.set(`info.${i}.tape`, TAPE[s.team]);
+      w.set(`info.${i}.tape`, s.tape ?? TAPE[s.team]);
       w.set(`info.${i}.slot`, s.seat % MAX_SOLDIERS);
       w.set(`info.${i}.weapon`, this.slotFor(s.gear ?? 0, taken));
       const was = this.before.get(s.seat) ?? s.frames;

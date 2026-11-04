@@ -53,6 +53,8 @@ export interface Figure {
   /** What they show (net/gear.ts encodeGear), and their state's flags (net/protocol.ts STATE); none, the bare AK at rest. */
   gear?: number;
   flags?: number;
+  /** Their tape's palette id, whatever their team's (the range's dummies wear TAPE_RANGE); none, their team's. */
+  tape?: number;
 }
 
 /** A teammate to mark: over their head (metres), their name and team. */
@@ -91,6 +93,7 @@ export class Gaits {
         seat: f.seat,
         feet: f.position,
         gear: f.gear ?? 0,
+        ...(f.tape === undefined ? {} : { tape: f.tape }),
       };
     });
     for (const seat of [...this.phase.keys()]) if (!seen.has(seat)) this.phase.delete(seat);

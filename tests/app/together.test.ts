@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { mapAction, relayUrl } from '../../src/app/together';
+import { Gaits, mapAction, relayUrl, type Figure } from '../../src/app/together';
+import { P } from '../../src/world/materials';
 
 describe('where the relay is', () => {
   const q = (s: string) => new URLSearchParams(s);
@@ -25,5 +26,18 @@ describe('which map a room is played on', () => {
     expect(mapAction('ravine', 'corridor', true, false)).toBe('switch');
     // A map this build does not know is not gone to.
     expect(mapAction('ravine', 'atlantis', false, false)).toBe('stay');
+  });
+});
+
+describe('figures posed as soldiers', () => {
+  it("a figure's own tape goes to its soldier; without one, the soldier wears its team's", () => {
+    const figure = (seat: number, tape?: number): Figure => ({
+      seat, team: 'blue', position: [12.8, 0.4, 30], velocity: [0, 0, 0], yaw: 180, pitch: 0, height: 1.8, deadFor: null,
+      ...(tape === undefined ? {} : { tape }),
+    });
+    const [dummy, soldier] = new Gaits().pose([figure(200, P.TAPE_RANGE), figure(3)], 1 / 60);
+    expect(dummy.tape).toBe(P.TAPE_RANGE);
+    expect(dummy.team).toBe('blue');
+    expect(soldier).not.toHaveProperty('tape');
   });
 });

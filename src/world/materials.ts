@@ -130,6 +130,11 @@ const DEFS: readonly Def[] = [
   ['LIGHT_LENS', K.PICKET, 236, 234, 214, 0.2, 1.2],
   ['SHOVEL_HANDLE', K.TIMBER, 138, 104, 66, 0.65], ['SHOVEL_BLADE', K.PICKET, 78, 82, 64, 0.55],
   ['SHOVEL_EDGE', K.PICKET, 132, 128, 118, 0.35],
+  // The range's (the shots spec's §5): its plates' white-painted steel and the lead-grey splash a
+  // round leaves on it, hull so a round sparks off them, and left as they are (spoilOf); and the
+  // dummies' hunter-orange tape, never placed in the world, lifted as the teams' tapes are.
+  ['TARGET_STEEL', K.HULL, 226, 222, 210, 0.45], ['TARGET_STEEL_HIT', K.HULL, 104, 104, 108, 0.6],
+  ['TAPE_RANGE', K.CLOTH, 255, 110, 20, 0.75, 0.6],
 ];
 
 /** Palette ids by name. Kept explicit so ids are stable and greppable; checked against DEFS below. */
@@ -148,6 +153,7 @@ export const P = {
   LEAF: 65, LEAF_DARK: 66, LEAF_DRY: 67,
   GUN_BLACK: 68, GUN_POLYMER: 69, GUN_TAN: 70, GUN_OD: 71, GUN_WOOD: 72, GUN_BRASS: 73,
   OPTIC_GLASS: 74, OPTIC_DOT: 75, LIGHT_LENS: 76, SHOVEL_HANDLE: 77, SHOVEL_BLADE: 78, SHOVEL_EDGE: 79,
+  TARGET_STEEL: 80, TARGET_STEEL_HIT: 81, TAPE_RANGE: 82,
 } as const;
 
 export const PALETTE: readonly PaletteEntry[] = DEFS.map(([name, kind, r, g, b, roughness, emission]) => ({
@@ -204,8 +210,12 @@ export function hardness(p: number): number {
   return KIND_HARDNESS[PALETTE_KIND[p]];
 }
 
-/** What a carve that does not remove a voxel leaves in its place. */
+/**
+ * What a carve that does not remove a voxel leaves in its place: its kind's spoil, but the range's
+ * steel is its own, so a round rings a plate and leaves it as it is (destruction.ts chip).
+ */
 export function spoilOf(p: number): number {
+  if (p === P.TARGET_STEEL || p === P.TARGET_STEEL_HIT) return p;
   return BASE[KIND_SPOIL[PALETTE_KIND[p]]];
 }
 
