@@ -40,6 +40,7 @@ The rooms run on a small Cloudflare Worker ([server/](server/)). Everyone needs 
 | <kbd>R</kbd> | Reload |
 | <kbd>F</kbd>, held | Dig out loose earth |
 | <kbd>Esc</kbd> | Pause: quality, mouse sensitivity, field of view, the time of day and how fast it passes, incoming fire |
+| <kbd>Alt</kbd> + <kbd>Enter</kbd> (<kbd>Option</kbd> + <kbd>Return</kbd> on a Mac) | Fullscreen and back, as the Fullscreen buttons on the start screen, in the lobby and in the pause menu do. In Chrome and Edge, Esc still pauses when fullscreen; hold it down to leave fullscreen |
 | <kbd>F3</kbd> | Frame timings |
 
 ## How it is made

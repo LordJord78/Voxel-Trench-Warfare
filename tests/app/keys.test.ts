@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { actionFor, nextTimeKey, stepTime } from '../../src/app/keys';
+import { actionFor, fullscreenKeyName, isFullscreenKey, nextTimeKey, stepTime } from '../../src/app/keys';
 import { VIEW_NAMES } from '../../src/app/views';
 import { CLOCK_KEYS } from '../../src/core/sky-clock';
 
@@ -37,5 +37,26 @@ describe('keys', () => {
     let h = 6;
     for (let i = 0; i < 24; i++) h = stepTime(h, 1);
     expect(h).toBe(12);
+  });
+  it('Alt+Enter (Option+Return on a Mac) is fullscreen, Shift held or not; a plain Enter, and Enter with Ctrl or Cmd, are not', () => {
+    const press = (code: string, held: { altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean } = {}) => ({ code, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...held });
+    expect(isFullscreenKey(press('Enter', { altKey: true }))).toBe(true);
+    expect(isFullscreenKey(press('NumpadEnter', { altKey: true }))).toBe(true);
+    // Sprinting.
+    expect(isFullscreenKey(press('Enter', { altKey: true, shiftKey: true }))).toBe(true);
+    expect(isFullscreenKey(press('Enter'))).toBe(false);
+    expect(isFullscreenKey(press('NumpadEnter'))).toBe(false);
+    // AltGr is Ctrl+Alt on Windows; Cmd+Option is the Mac's own.
+    expect(isFullscreenKey(press('Enter', { altKey: true, ctrlKey: true }))).toBe(false);
+    expect(isFullscreenKey(press('Enter', { altKey: true, metaKey: true }))).toBe(false);
+    // F digs; Esc pauses.
+    expect(isFullscreenKey(press('KeyF', { altKey: true }))).toBe(false);
+    expect(isFullscreenKey(press('Escape', { altKey: true }))).toBe(false);
+  });
+  it("names fullscreen's key as the player's keyboard does: Option+Return on a Mac, Alt+Enter elsewhere", () => {
+    expect(fullscreenKeyName('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36')).toBe('Option+Return');
+    expect(fullscreenKeyName('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0')).toBe('Alt+Enter');
+    expect(fullscreenKeyName('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36')).toBe('Alt+Enter');
+    expect(fullscreenKeyName('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36')).toBe('Alt+Enter');
   });
 });

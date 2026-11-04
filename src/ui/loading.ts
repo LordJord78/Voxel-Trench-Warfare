@@ -15,6 +15,8 @@ export class LoadingScreen {
   private readonly bar: SVGElement;
   private readonly dug: SVGPathElement;
   private readonly play: HTMLButtonElement;
+  /** Fullscreen, beside Play (ui/fullscreen.ts wires it), if the page has it. */
+  private readonly fullscreen: HTMLElement | null;
   private readonly together: HTMLElement | null;
   private readonly controls: HTMLElement;
   /** The game's still behind the sheet until the world is drawn (index.html), if the page has one. */
@@ -27,6 +29,7 @@ export class LoadingScreen {
     this.bar = this.root.querySelector('.trace')!;
     this.dug = this.root.querySelector('.trace .dug')!;
     this.play = doc.getElementById('play') as HTMLButtonElement;
+    this.fullscreen = doc.getElementById('start-fullscreen');
     this.together = doc.getElementById('together');
     this.controls = doc.getElementById('controls')!;
     this.still = doc.getElementById('still');
@@ -54,6 +57,7 @@ export class LoadingScreen {
     this.progress('Ready', null, 1);
     this.root.classList.add('over-world');
     this.play.hidden = false;
+    if (this.fullscreen) this.fullscreen.hidden = false;
     // The map: another one is another world, generated afresh.
     const pick = this.root.querySelector<HTMLLabelElement>('#map-pick');
     const select = pick?.querySelector('select');
@@ -107,6 +111,7 @@ export class LoadingScreen {
     this.root.classList.add('failed');
     this.status.textContent = message;
     this.play.hidden = true;
+    if (this.fullscreen) this.fullscreen.hidden = true;
     if (this.together) this.together.hidden = true;
     this.controls.hidden = true;
     const kit = this.root.querySelector<HTMLElement>('#kit-row');

@@ -236,6 +236,9 @@
       .kit-row + #play { margin-top: 0.9rem; }
       #lobby .deploy .kit-row { margin: 0 0 1rem; }
       #pause-loadout { margin: 0.5rem 0 0 0.6rem; }
+      /* Fullscreen (ui/fullscreen.ts): beside Play, in the lobby's rows, and under the pause menu's Resume. */
+      #start-fullscreen { margin-left: 0.6rem; }
+      #pause-fullscreen { display: block; margin-top: 0.75rem; }
 
       /* The kit in the HUD: the gun and how it fires, the kit's line; aimed, a sight's reticle or the scope. */
       #hud .weapon { font-size: 1.05rem; letter-spacing: 0.04em; }
@@ -322,6 +325,7 @@
           <dt><kbd>Tab</kbd></dt><dd>The score, with friends</dd>
           <dt><kbd>Esc</kbd></dt><dd>Pause, and the loadout</dd>
           <dt><kbd>W</kbd> + <kbd>Space</kbd> at a wall</dt><dd>Climb out of the trench</dd>
+          <dt><kbd>Alt</kbd> + <kbd>Enter</kbd></dt><dd>Fullscreen (Option + Return on a Mac)</dd>
         </dl>
       </div>
     </div>
@@ -345,6 +349,7 @@
           <p class="kit-line" id="kit-line"></p>
         </div>
         <button id="play" type="button" hidden>Play solo</button>
+        <button id="start-fullscreen" type="button" class="quiet" data-fullscreen hidden>Fullscreen · Alt+Enter</button>
         <div id="together" hidden>
           <button id="host" type="button" class="quiet">Host a game with friends</button>
           <form id="join" autocomplete="off">
@@ -371,6 +376,7 @@
           <dt><kbd>Tab</kbd></dt><dd>The score, with friends</dd>
           <dt><kbd>Esc</kbd></dt><dd>Pause, and the loadout</dd>
           <dt><kbd>W</kbd> + <kbd>Space</kbd> at a wall</dt><dd>Climb out of the trench</dd>
+          <dt><kbd>Alt</kbd> + <kbd>Enter</kbd></dt><dd>Fullscreen (Option + Return on a Mac)</dd>
           <dt><kbd>F3</kbd></dt><dd>Frame timings</dd>
         </dl>
       </div>
@@ -427,6 +433,7 @@
             <button id="ready" type="button">Ready</button>
             <button id="lobby-loadout" type="button" class="quiet">Loadout</button>
             <button id="start" type="button" hidden>Start the match</button>
+            <button id="lobby-fullscreen" type="button" class="quiet" data-fullscreen>Fullscreen · Alt+Enter</button>
             <button id="leave" type="button" class="quiet">Leave</button>
           </div>
         </div>
@@ -436,7 +443,10 @@
             <button id="deploy-loadout" type="button" class="quiet">Loadout</button>
             <p class="kit-line" id="deploy-kit"></p>
           </div>
-          <button id="go" type="button">Go</button>
+          <div class="actions">
+            <button id="go" type="button">Go</button>
+            <button id="deploy-fullscreen" type="button" class="quiet" data-fullscreen>Fullscreen · Alt+Enter</button>
+          </div>
         </div>
       </div>
     </section>
@@ -484,6 +494,7 @@
         </div>
         <button id="resume" type="button">Resume</button>
         <button id="pause-loadout" type="button" class="quiet">Loadout</button>
+        <button id="pause-fullscreen" type="button" class="quiet" data-fullscreen>Fullscreen · Alt+Enter</button>
         <div class="actions" id="pause-match" hidden>
           <button id="end-match" type="button" class="quiet" hidden>End the match</button>
           <button id="leave-match" type="button" class="quiet">Leave the game</button>

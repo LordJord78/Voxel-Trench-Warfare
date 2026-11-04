@@ -1,6 +1,7 @@
 /**
  * What the keys do until milestone 5's controls: views, time of day,
  * quality and the overlay. (Flying is held keys, read by the fly camera.)
+ * And fullscreen's key, Alt+Enter, which works anywhere in the game.
  */
 
 import { CLOCK_KEYS } from '../core/sky-clock';
@@ -41,6 +42,19 @@ export function actionFor(code: string): KeyAction | null {
     default:
       return null;
   }
+}
+
+/**
+ * Alt+Enter (on a Mac the same keys, Option+Return): fullscreen on and off. Shift may be held (a
+ * sprint); Ctrl and Cmd may not (AltGr is Ctrl+Alt on Windows). A plain Enter is not it.
+ */
+export function isFullscreenKey(e: Pick<KeyboardEvent, 'code' | 'altKey' | 'ctrlKey' | 'metaKey'>): boolean {
+  return e.altKey && !e.ctrlKey && !e.metaKey && (e.code === 'Enter' || e.code === 'NumpadEnter');
+}
+
+/** Fullscreen's key as the player's keyboard names it: Option+Return on a Mac, Alt+Enter elsewhere. */
+export function fullscreenKeyName(userAgent: string): string {
+  return /Mac/.test(userAgent) ? 'Option+Return' : 'Alt+Enter';
 }
 
 /** The clock's next key after `hours`, round the day: dusk, night, dawn, noon, dusk. */

@@ -7,10 +7,11 @@
  * "click to play" prompt. Playing, every frame turns the mouse, runs the
  * 60 Hz simulation over the frame's time, places the camera between the last
  * two ticks and draws. Esc (or losing the pointer lock) pauses to a menu with
- * the world still drawn behind it. The standard views are a free-flying
- * camera (`fly`), and the backquote key toggles it. When the game cannot run,
- * or the GPU goes away, it stops and says why. `window.__trenchline` exposes
- * hooks the tests use.
+ * the world still drawn behind it. Alt+Enter, or the menus' Fullscreen, takes
+ * the whole page fullscreen and back (ui/fullscreen.ts). The standard views
+ * are a free-flying camera (`fly`), and the backquote key toggles it. When the
+ * game cannot run, or the GPU goes away, it stops and says why.
+ * `window.__trenchline` exposes hooks the tests use.
  */
 
 import { CLOCK_KEYS } from '../core/sky-clock';
@@ -38,6 +39,7 @@ import { idleIntent, Session, SHOVEL_HELD, type CombatEvents } from '../sim/sess
 import { MAP_SEEDS, isMapId, type MapId } from '../world/generation/params';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
 import { relayUrl, Together, type Figure } from './together';
+import { Fullscreen, fullscreenButtons } from '../ui/fullscreen';
 import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
@@ -71,7 +73,7 @@ import { daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type Built
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
-import { actionFor, nextTimeKey, stepTime, type KeyAction } from './keys';
+import { actionFor, fullscreenKeyName, isFullscreenKey, nextTimeKey, stepTime, type KeyAction } from './keys';
 import { standardViews, VIEW_NAMES, type ViewName } from './views';
 import { fallbackReason, placeHere, showFallback, type FallbackReason } from './fallback';
 import { Warmup } from './tiers';
@@ -165,6 +167,26 @@ function showNote(text: string): void {
   note.hidden = false;
   setTimeout(() => (note.hidden = true), 8000);
 }
+
+/**
+ * Fullscreen (ui/fullscreen.ts): the whole page, from the buttons on the start screen, in the lobby
+ * and in the pause menu, or Alt+Enter (Option+Return on a Mac) anywhere, from the first paint. A
+ * refusal says what else to try, and play goes on. Fullscreen where the keyboard can be locked
+ * (Chrome, Edge), Esc comes to the page: it pauses as ever, the page still fullscreen, and held
+ * down it leaves. The canvas takes the new size as it takes any resize (followCanvas, each frame).
+ */
+const fullscreen = new Fullscreen(document, navigator);
+const toggleFullscreen = () =>
+  void fullscreen.toggle().then((ok) => {
+    if (!ok) showNote("Fullscreen is not available here: try the browser's own (F11, or Ctrl+Cmd+F on a Mac).");
+  });
+fullscreenButtons(document.querySelectorAll<HTMLButtonElement>('button[data-fullscreen]'), fullscreen, fullscreenKeyName(navigator.userAgent), toggleFullscreen);
+window.addEventListener('keydown', (e) => {
+  if (!isFullscreenKey(e)) return;
+  // Not also the Enter a focused button or form would take (Play, Resume, a game's code).
+  e.preventDefault();
+  if (!e.repeat) toggleFullscreen();
+});
 
 /** The next paint, so the loading screen can show a phase before work that holds the page. */
 const nextPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
@@ -689,6 +711,8 @@ async function start(): Promise<void> {
     if (e.metaKey || e.ctrlKey || e.altKey || stopped) return;
     if (e.code === 'Escape') {
       // With the pointer locked the browser takes Esc itself, and the lost lock pauses instead.
+      // Fullscreen with the keyboard locked (Chrome, Edge), Esc comes here: pause() lets the
+      // pointer go, and the page stays fullscreen.
       pause();
       return;
     }
