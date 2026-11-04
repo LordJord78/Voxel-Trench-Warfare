@@ -6,11 +6,14 @@
 // the G-buffer's depth along its pixel's ray is nearer, so walls hide what is behind them, and
 // blended premultiplied: the emissive add their light (alpha 0), dust covers what is behind it.
 // A ribbon's style is how it is lit across: a flash star's one soft term (0), or a tracer's two (1),
-// a core mixed toward white in a glow of its colour. A tracer's glow is drawn no wider than
-// glowMaxPx, narrowed and not brightened, so a round past the eye is not a bar across the view; its
-// core is its share of the width drawn, but no narrower than MIN_RIBBON_PX either, its light kept.
-// Seen end on, a tracer's ends within END_ON_PX of each other, it draws nothing: its head (a held
-// billboard, no smaller than MIN_HEAD_PX nor wider than headMaxPx) carries it.
+// a core mixed toward white in a glow of its colour. A tracer's glow is drawn no narrower than
+// glowMinPx, its light kept, so far off its colour shows round its core, nor wider than glowMaxPx,
+// narrowed and not brightened, so a round past the eye is not a bar or a wedge across the view; its
+// core is its share of the width drawn, no narrower than MIN_RIBBON_PX (its light kept) nor wider
+// than CORE_MAX_SHARE of the glow. The core is mixed toward white by all of the ribbon's whiteness
+// within whiteNearM of the eye, falling to none at whiteFarM: white-hot close by, the team's colour
+// far off. Seen end on, a tracer's ends within END_ON_PX of each other, it draws nothing: its head (a
+// held billboard, no smaller than MIN_HEAD_PX nor wider than headMaxPx) carries it.
 
 struct Lit {
   centre: vec3f,
@@ -37,9 +40,14 @@ struct Ribbon {
 struct EffectsDraw {
   billboards: u32,
   ribbons: u32,
-  // The widest a tracer's glow is drawn, and its head, in pixels.
+  // The widest a tracer's glow is drawn, and its head, and the narrowest its glow is, in pixels.
   glowMaxPx: f32,
   headMaxPx: f32,
+  glowMinPx: f32,
+  // Its core's whiteness: all of it within whiteNearM of the eye, none from whiteFarM (metres).
+  whiteNearM: f32,
+  whiteFarM: f32,
+  pad: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -60,6 +68,8 @@ const MIN_HEAD_PX: f32 = 3.0;
 // A tracer whose ends fall within this many pixels of each other is seen end on (the shooter's own
 // round, from the eye it left): it draws nothing, fading in over the next as many.
 const END_ON_PX: f32 = 1.0;
+// The widest a tracer's core is drawn, as a share of its glow: the glow's colour shows round it.
+const CORE_MAX_SHARE: f32 = 0.45;
 
 const CORNERS = array(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
 
@@ -143,11 +153,12 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
   let span = length(across);
   let along = corner.y * 0.5 + 0.5;
   let mid = mix(tail, head, along);
-  // A pixel's width where this end is (voxels), and the width drawn there: its light kept.
+  // A pixel's width where this end is (voxels), and the width drawn there: its light kept. A star's no
+  // narrower than MIN_RIBBON_PX; a tracer's glow held between glowMinPx and glowMaxPx.
   let pixel = pixelAt(mid);
   let width = r.width * toVoxels;
   let narrowest = MIN_RIBBON_PX * pixel;
-  let drawn = select(max(width, narrowest), min(max(width, narrowest), draw.glowMaxPx * pixel), isTracer);
+  let drawn = select(max(width, narrowest), clamp(width, draw.glowMinPx * pixel, draw.glowMaxPx * pixel), isTracer);
   let side = select(frame.cam.right, across / max(span, 1e-6), span > 1e-6) * (drawn * 0.5);
   let p = mid + side * corner.x;
   f.clip = toClip(p);
@@ -156,11 +167,14 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
   f.colour = vec4f(r.rgb * (width / drawn), 0.0);
   f.alphas = vec2f(r.alphaTail, r.alphaHead);
   if (isTracer) {
-    // Its core, mixed toward white at its brightest channel; each term's light kept where it is
-    // drawn wider than it is, and none added where the glow is held narrower.
+    // Its core, mixed toward white at its brightest channel by its whiteness at the ribbon's middle
+    // (all of it near the eye, none far off); each term's light kept where it is drawn wider than it
+    // is, and none added where it is held narrower.
     let core = r.coreShare * width;
-    let coreDrawn = min(max(r.coreShare * drawn, narrowest), drawn);
-    let hot = mix(r.rgb, vec3f(max(r.rgb.r, max(r.rgb.g, r.rgb.b))), r.white);
+    let coreDrawn = min(max(r.coreShare * drawn, narrowest), CORE_MAX_SHARE * drawn);
+    let metres = distance((tail + head) * 0.5, frame.cam.origin) * frame.voxel;
+    let white = r.white * (1.0 - smoothstep(draw.whiteNearM, draw.whiteFarM, metres));
+    let hot = mix(r.rgb, vec3f(max(r.rgb.r, max(r.rgb.g, r.rgb.b))), white);
     f.colour = vec4f(hot * (min(core / coreDrawn, 1.0) * shown), 0.0);
     f.glow = vec4f(r.rgb * (r.glowShare * min(width / drawn, 1.0) * shown), coreDrawn / drawn);
   }

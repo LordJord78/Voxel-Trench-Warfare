@@ -40,6 +40,8 @@ export const HEAD_BILLBOARD = 3;
 const BILLBOARD_FLOATS = 9;
 /** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4). */
 const LIT_BYTES = 32;
+/** effects.wgsl's EffectsDraw: two counts and five floats, padded to 16 bytes. */
+const DRAW_PARAMS_BYTES = 32;
 /** The particle pool, room for test quads, the battle's allowance (its flares, far shells' flashes and smoke, and fires' flames, embers and smoke), and a head for each tracer drawn. */
 export const MAX_BILLBOARDS = 4096 + 64 + 1024 + 2048;
 /** Every round in flight a tracer, the battle's nearest, and a few shots' stars. */
@@ -69,15 +71,19 @@ export interface SmokePuff {
 
 /**
  * How the billboards are lit: the emissive's glow, and how much of the key's and the sky's light the
- * rest take; and the widest a tracer's glow is drawn, in pixels, and its head (its share of that, as
- * its width is of the glow's).
+ * rest take; the narrowest and the widest a tracer's glow is drawn, in pixels, and the widest its head
+ * is (its share of that, as its width is of the glow's); and the distances (m) over which a tracer's
+ * core goes from its whiteness near the eye to none.
  */
 export interface EffectsLook {
   glow: number;
   dustKey: number;
   dustSky: number;
+  tracerGlowMinPx: number;
   tracerGlowMaxPx: number;
   tracerHeadMaxPx: number;
+  tracerWhiteNearM: number;
+  tracerWhiteFarM: number;
 }
 
 export function effectsLook(tun: Tunables): EffectsLook {
@@ -86,8 +92,11 @@ export function effectsLook(tun: Tunables): EffectsLook {
     glow: tun.f('effects.particle_glow'),
     dustKey: tun.f('effects.dust_key'),
     dustSky: tun.f('effects.dust_sky'),
+    tracerGlowMinPx: tun.f('effects.tracer_glow_min_px'),
     tracerGlowMaxPx: glowMaxPx,
     tracerHeadMaxPx: (glowMaxPx * tun.f('effects.tracer_head_m')) / tun.f('effects.tracer_glow_width_m'),
+    tracerWhiteNearM: tun.f('effects.tracer_white_near_m'),
+    tracerWhiteFarM: tun.f('effects.tracer_white_far_m'),
   };
 }
 
@@ -192,7 +201,7 @@ export class Effects {
     this.lit = device.createBuffer({ label: 'effects lit', size: MAX_BILLBOARDS * LIT_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     this.ribbons = device.createBuffer({ label: 'effects ribbons', size: MAX_RIBBONS * RIBBON_FLOATS * 4, usage: storage });
     this.lightParams = device.createBuffer({ label: 'effects light params', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.drawParams = device.createBuffer({ label: 'effects draw params', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.drawParams = device.createBuffer({ label: 'effects draw params', size: DRAW_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   }
 
   /**
@@ -238,10 +247,11 @@ export class Effects {
     new Uint32Array(light, 0, 1)[0] = this.billboardCount;
     new Float32Array(light, 4, 3).set([this.look.glow, this.look.dustKey, this.look.dustSky]);
     queue.writeBuffer(this.lightParams, 0, light);
-    // effects.wgsl's EffectsDraw: the counts, and the widest a tracer's glow and its head are drawn.
-    const draw = new ArrayBuffer(16);
+    // effects.wgsl's EffectsDraw: the counts; the widest a tracer's glow and its head are drawn, and
+    // the narrowest its glow is; where its core's whiteness starts to fall and where it is gone.
+    const draw = new ArrayBuffer(DRAW_PARAMS_BYTES);
     new Uint32Array(draw, 0, 2).set([this.billboardCount, this.ribbonCount]);
-    new Float32Array(draw, 8, 2).set([this.look.tracerGlowMaxPx, this.look.tracerHeadMaxPx]);
+    new Float32Array(draw, 8, 5).set([this.look.tracerGlowMaxPx, this.look.tracerHeadMaxPx, this.look.tracerGlowMinPx, this.look.tracerWhiteNearM, this.look.tracerWhiteFarM]);
     queue.writeBuffer(this.drawParams, 0, draw);
   }
 

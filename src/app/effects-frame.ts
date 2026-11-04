@@ -11,10 +11,11 @@
  * eye, centimetres away while walking.
  *
  * A tracer (the shots spec §1), the session's and the battle's alike: a white-
- * hot core in a coloured glow (ribbon style 1), its streak a frame's flight at
- * its speed (`tracer_streak_s`) and no more than it has flown, lit in over its
- * first `tracer_ignite_m`, a burning head from `tracer_head_from_m`, and
- * brighter by day.
+ * hot core in a coloured glow (ribbon style 1), its streak more than a frame's
+ * flight at its speed (`tracer_streak_s`) and no more than it has flown, lit in
+ * over its first `tracer_ignite_m`, a burning head from `tracer_head_from_m`,
+ * white-hot near the eye and its team's colour far off (`tracer_white_near_m`
+ * to `tracer_white_far_m`), and brighter by day.
  *
  * The team's own: tracers in its red or blue, a suppressed gun's flash a
  * wisp without its star, and the guns' lights and lasers — the player's from
@@ -73,11 +74,13 @@ export interface EffectsTunables {
   tracerColourRed: V3;
   tracerColourBlue: V3;
   tracerIntensity: number;
-  /** A tracer as drawn: its core's and glow's widths (m), the glow's brightness over the core's, and how far the core is mixed toward white. */
+  /** A tracer as drawn: its core's and glow's widths (m), the glow's brightness over the core's, and how far the core is mixed toward white near the eye, all of it within tracerWhiteNearM (m) and none from tracerWhiteFarM. */
   tracerCoreWidthM: number;
   tracerGlowWidthM: number;
   tracerGlowShare: number;
   tracerCoreWhite: number;
+  tracerWhiteNearM: number;
+  tracerWhiteFarM: number;
   /** Its head: an emissive disc this wide (m), this many times as bright as the core, over the light pass's glow for emissive billboards (`particle_glow`). */
   tracerHeadM: number;
   tracerHeadGain: number;
@@ -146,6 +149,8 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     tracerGlowWidthM: f('tracer_glow_width_m'),
     tracerGlowShare: f('tracer_glow_share'),
     tracerCoreWhite: f('tracer_core_white'),
+    tracerWhiteNearM: f('tracer_white_near_m'),
+    tracerWhiteFarM: f('tracer_white_far_m'),
     tracerHeadM: f('tracer_head_m'),
     tracerHeadGain: f('tracer_head_gain'),
     particleGlow: f('particle_glow'),
@@ -220,11 +225,21 @@ export interface BuiltEffects {
   drawn: { tail: [number, number, number]; head: [number, number, number]; kind: number; flown: number; headDrawn: boolean }[];
 }
 
+/** WGSL's smoothstep: 0 at `low`, 1 at `high`, Hermite between. */
+const smoothstep = (low: number, high: number, x: number): number => {
+  const u = Math.min(1, Math.max(0, (x - low) / (high - low)));
+  return u * u * (3 - 2 * u);
+};
+
 /** The day's share of the light for the tracers' brightness: 0 with the sun low or down, 1 once it is up (a smoothstep over `tracer_daylight_deg`). */
 export function daylightAt(sunElevationDeg: number, t: EffectsTunables): number {
   const [low, high] = t.tracerDaylightDeg;
-  const x = Math.min(1, Math.max(0, (sunElevationDeg - low) / (high - low)));
-  return x * x * (3 - 2 * x);
+  return smoothstep(low, high, sunElevationDeg);
+}
+
+/** How far a tracer's core is mixed toward white `metres` from the eye: all of tracer_core_white near it, none far off (effects.wgsl takes a ribbon's so, at its middle). */
+export function tracerWhiteAt(metres: number, t: EffectsTunables): number {
+  return t.tracerCoreWhite * (1 - smoothstep(t.tracerWhiteNearM, t.tracerWhiteFarM, metres));
 }
 
 const RAD = Math.PI / 180;
@@ -362,6 +377,8 @@ export class EffectsFrameBuilder {
       return true;
     };
 
+    // The eye the frame is seen from: a tracer's core is white-hot near it; the battle's nearest it are drawn.
+    const eyeAt = eye ?? [session.player.position.x, session.player.position.y + session.controller.eyeHeight(session.player), session.player.position.z];
     // A tracer by its kind (net/gear.ts TRACER_KIND): the battle's amber, a team's red or blue, at
     // its intensity, and brighter by day; a white-hot core in its glow (effects.wgsl's style 1).
     const day = 1 + t.tracerDayBoost * daylight;
@@ -375,9 +392,10 @@ export class EffectsFrameBuilder {
      * One tracer-like streak, `tail` to `head` (m), of `kind`, its tail and head `tailFlown` and
      * `headFlown` metres into its flight: its ribbon, lit in over its first tracer_ignite_m; and its
      * head once it is tracer_head_from_m out, an emissive disc as bright as its core there and more
-     * (its colour mixed toward white as effects.wgsl mixes the core's), held to the pixels it is
-     * drawn over as the ribbon is (HEAD_BILLBOARD). False once the ribbons are full; a head is left
-     * off once the billboards are. `fade` (0 to 1) dims all of it: a ricochet's burning out.
+     * (its colour mixed toward white as effects.wgsl mixes the core's, by its own distance from the
+     * eye), held to the pixels it is drawn over as the ribbon is (HEAD_BILLBOARD). False once the
+     * ribbons are full; a head is left off once the billboards are. `fade` (0 to 1) dims all of it:
+     * a ricochet's burning out.
      */
     const tracer = (tail: readonly number[], head: readonly number[], kind: number, tailFlown: number, headFlown: number, fade = 1): boolean => {
       const colour = glows[kind] ?? glows[TRACER_KIND.amber];
@@ -386,7 +404,8 @@ export class EffectsFrameBuilder {
       if (headFlown >= t.tracerHeadFromM && billboards < MAX_BILLBOARDS) {
         const hottest = Math.max(colour[0], colour[1], colour[2]);
         const burn = (t.tracerHeadGain * lit) / t.particleGlow;
-        const core = colour.map((c) => (c + (hottest - c) * t.tracerCoreWhite) * burn);
+        const white = tracerWhiteAt(Math.hypot(head[0] - eyeAt[0], head[1] - eyeAt[1], head[2] - eyeAt[2]), t);
+        const core = colour.map((c) => (c + (hottest - c) * white) * burn);
         this.billboards.set([head[0], head[1], head[2], t.tracerHeadM / 2, core[0], core[1], core[2], 1, HEAD_BILLBOARD], billboards * BILLBOARD_FLOATS);
         billboards++;
         heads++;
@@ -502,7 +521,6 @@ export class EffectsFrameBuilder {
     // The battle's tracers, after the session's own: drawn as theirs are, the head at the round and
     // its streak back along its way, at most battleTrailM (or its flight since it was fired or
     // struck, if shorter); the nearest the eye, at most maxBattleTracers.
-    const eyeAt = eye ?? [session.player.position.x, session.player.position.y + session.controller.eyeHeight(session.player), session.player.position.z];
     const offEye = (p: readonly number[]) => (p[0] - eyeAt[0]) ** 2 + (p[1] - eyeAt[1]) ** 2 + (p[2] - eyeAt[2]) ** 2;
     const nearest = [...battle.tracers].sort((a, b) => offEye(a.position) - offEye(b.position)).slice(0, t.maxBattleTracers);
     let battleTracers = 0;
@@ -531,7 +549,7 @@ export class EffectsFrameBuilder {
     // Each shell's smoke: smoke_puffs puffs, one over the crater and the rest a third of its radius
     // aside, rising, spreading and thinning to nothing by smoke_s; with the fires' plumes, the
     // nearest the eye drawn.
-    const from = eye ?? [session.player.position.x, session.player.position.y + session.controller.eyeHeight(session.player), session.player.position.z];
+    const from = eyeAt;
     const puffs: SmokePuff[] = [];
     for (const b of this.landed) {
       if (b.age >= t.smokeS) continue;

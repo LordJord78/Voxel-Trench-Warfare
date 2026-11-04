@@ -43,6 +43,14 @@ describe('ricochets', () => {
     expect(ricochetsOf(P.CORRUGATE, 19)).toBe(0);
   });
 
+  it('masonry rings a round off as steel does: mortar and brick at the hard chance, about 60%', () => {
+    for (const m of [P.MORTAR, P.BRICK]) {
+      const n = ricochetsOf(m, 10);
+      expect(n, `material ${m}`).toBeGreaterThan(540);
+      expect(n, `material ${m}`).toBeLessThan(660);
+    }
+  });
+
   it('soil ricochets about 25% of grazing strikes', () => {
     const soil = ricochetsOf(P.SOD, 10);
     expect(soil).toBeGreaterThan(205);

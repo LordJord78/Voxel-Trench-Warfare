@@ -377,8 +377,10 @@ test('a far tracer stays an unbroken line, at least two pixels across, its light
 
 test('a tracer is a white-hot core in a coloured glow, its glow held near the eye', async ({ page }) => {
   // The shots spec's look (§1): a team's tracer is a core mixed toward white in a glow of its
-  // colour; and a round passing the eye is drawn no wider than tracer_glow_max_px (28), not the
-  // bar across the screen its 0.22 m of glow would be there (some 280 px half a metre out).
+  // colour; and a round passing the eye is drawn no wider than tracer_glow_max_px (10), not the
+  // bar across the screen its 0.22 m of glow would be there (some 280 px half a metre out), nor
+  // the fat wedge 28 px drew; its core no wider than 0.45 of the glow drawn, so the glow's colour
+  // shows round it.
   const errors = await openGame(page);
   const at = await hooks(
     page,
@@ -447,16 +449,29 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
   expect(edge[0], farSeen).toBeGreaterThan(edge[2]);
 
   // Half a metre out along the view, 4 m long, wider than the view: a column through it is lit
-  // (over a hundredth of its brightest) across no more than the glow's 28 px.
+  // (over a hundredth of its brightest) across no more than the glow's 10 px, a pixel either side
+  // for where its edges fall.
   const near = await lightOf(across(along(at.pitch, 0.5), 2), cx, 1);
-  const column = Array.from({ length: near.length / 3 }, (_, r) => lum(near.slice(r * 3, r * 3 + 3)));
+  const rgbRow = (r: number) => near.slice(r * 3, r * 3 + 3);
+  const column = Array.from({ length: near.length / 3 }, (_, r) => lum(rgbRow(r)));
   const peak = Math.max(...column);
   const lit = column.map((v, r) => (v > 0.01 * peak ? r : -1)).filter((r) => r >= 0);
   const width = lit.length > 0 ? lit[lit.length - 1] - lit[0] + 1 : 0;
-  const nearSeen = JSON.stringify({ peak, width, first: lit[0], res: at.res });
+  // Its core apart from its glow: the glow is the tracer's own colour all across, so the green over
+  // the glow's own share of the red (as its outer rows, clear of the core, show it) is the core's
+  // alone; the core is drawn to where that falls to e⁻³ of its middle (effects.wgsl's profile).
+  const brightest = column.indexOf(peak);
+  const outer = [rgbRow(lit[0] + 1), rgbRow(lit[lit.length - 1] - 1)];
+  const glowGreen = outer.reduce((a, c) => a + c[1], 0) / Math.max(1e-9, outer.reduce((a, c) => a + c[0], 0));
+  const whiter = Array.from({ length: near.length / 3 }, (_, r) => rgbRow(r)[1] - glowGreen * rgbRow(r)[0]);
+  const coreRows = whiter.filter((v) => v > Math.exp(-3) * whiter[brightest]).length;
+  const nearSeen = JSON.stringify({ peak, width, first: lit[0], coreRows, glowGreen, res: at.res });
   expect(peak, nearSeen).toBeGreaterThan(1);
-  expect(width, nearSeen).toBeGreaterThan(20);
-  expect(width, nearSeen).toBeLessThanOrEqual(30);
+  expect(width, nearSeen).toBeGreaterThanOrEqual(8);
+  expect(width, nearSeen).toBeLessThanOrEqual(12);
+  expect(whiter[brightest], nearSeen).toBeGreaterThan(0);
+  expect(coreRows, nearSeen).toBeGreaterThanOrEqual(1);
+  expect(coreRows, nearSeen).toBeLessThanOrEqual(0.45 * width);
   expect(errors).toEqual([]);
 });
 
@@ -524,14 +539,67 @@ test("a far tracer's white-hot core stays an unbroken line, as its glow does", a
   expect(errors).toEqual([]);
 });
 
+test("a far tracer is its team's colour: its core no whiter than its glow 60 m out", async ({ page }) => {
+  // Near the eye a tracer's core is white-hot; past tracer_white_far_m (40 m) its whiteness is gone,
+  // so a far stream reads red, blue or amber and not white (the shots spec's look, Task 5's P2).
+  const errors = await openGame(page);
+  const at = await hooks(page, async (h) => {
+    h.view('step');
+    h.setTimeOfDay(21);
+    h.jitter(false);
+    h.setQuality({ dynres: false, scale: 1 });
+    h.freeze();
+    await h.stepFrames(40);
+    const c = h.camera();
+    return { position: c.position, yaw: c.yaw, pitch: c.pitch, res: h.stats().res };
+  });
+  // 60 m out, 20° over the view against the night sky, 10 m across it.
+  const RAD = Math.PI / 180;
+  const y = at.yaw * RAD;
+  const p = (at.pitch + 20) * RAD;
+  const centre = [0, 1, 2].map((k) => at.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 60);
+  const right = [Math.cos(y), 0, -Math.sin(y)];
+  const tail = centre.map((v, k) => v - right[k] * 5) as [number, number, number];
+  const head = centre.map((v, k) => v + right[k] * 5) as [number, number, number];
+  const box: [number, number, number, number] = [Math.floor(at.res[0] / 2) - 1, 0, 3, at.res[1]];
+  const light = await hooks(
+    page,
+    async (h, arg) => {
+      const { tail, head, box } = arg as { tail: [number, number, number]; head: [number, number, number]; box: [number, number, number, number] };
+      const read = async (on: boolean) => {
+        h.debugTracer(on ? { tail, head, kind: 2 } : null);
+        await h.stepFrames(2);
+        return h.sharpAt(box);
+      };
+      const without = await read(false);
+      const withIt = await read(true);
+      h.debugTracer(null);
+      return withIt.map((v, i) => v - without[i]);
+    },
+    { tail, head, box },
+  );
+  // Its line's brightest row, the middle column: the core and its glow together.
+  const rows = light.length / 9;
+  const rgbAt = (row: number) => light.slice((row * 3 + 1) * 3, (row * 3 + 1) * 3 + 3);
+  const lum = (c: readonly number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  const line = Array.from({ length: rows }, (_, r) => lum(rgbAt(r))).reduce((best, v, r, all) => (v > all[best] ? r : best), 0);
+  const middle = rgbAt(line);
+  const seen = JSON.stringify({ line, middle, res: at.res });
+  expect(lum(middle), seen).toBeGreaterThan(0.5);
+  // Red [1.0, 0.16, 0.10] all across: its green 0.16 of its red, where a core mixed 0.65 toward
+  // white would make the middle's 0.4 and more.
+  expect(middle[1] / middle[0], seen).toBeLessThan(0.25);
+  expect(errors).toEqual([]);
+});
+
 test('a tracer seen end on is its head alone: lit every frame 150 m out, held small half a metre out', async ({ page }) => {
   // The review's case: aimed down the sights, past tracer_converge_m the player's round is drawn on
   // a ray from the eye, so its streak is seen end on and its head is all the shooter sees of it. A
   // streak whose ends fall within a pixel of each other draws nothing (not a sliver of noise); its
   // head is drawn no smaller than three pixels, its light kept, so it lights the same light's worth
   // of pixels every frame however it falls among them (at its true 0.4 px, 150 m out, it lit one
-  // frame in a few), and near the eye no wider than its share of a glow held to 28 px (0.09 of 0.22:
-  // 11.5 px), where at its true size it would be 115 px.
+  // frame in a few), and near the eye no wider than its share of a glow held to 10 px (0.09 of 0.22:
+  // 4.1 px), where at its true size it would be 115 px.
   const errors = await openGame(page);
   const at = await hooks(page, async (h) => {
     h.view('step');
@@ -594,7 +662,8 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, held sm
   expect(Math.min(...totals), farSeen).toBeGreaterThan(0);
 
   // Half a metre out on the view's middle, coming at the eye, its tail 12 m back and 0.4 px aside: a
-  // row and a column through it lit (over a hundredth of its brightest) across 12 px at most.
+  // row and a column through it lit (over a hundredth of its brightest) across 6 px at most: its
+  // 4.1 px, a pixel either side for where its edges fall.
   const near = { head: out(0, 0, 0.5), tail: out(0, 0.4, 12.5) };
   const [cx, cy] = near.head.px.map(Math.round);
   const [row] = await lightOver([{ tail: near.tail.at, head: near.head.at }], [0, cy, at.res[0], 1]);
@@ -607,7 +676,7 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, held sm
   const nearSeen = JSON.stringify({ row: across(row), column: across(column) });
   for (const line of [row, column]) {
     expect(across(line).peak, nearSeen).toBeGreaterThan(1);
-    expect(across(line).width, nearSeen).toBeLessThanOrEqual(12);
+    expect(across(line).width, nearSeen).toBeLessThanOrEqual(6);
   }
   expect(errors).toEqual([]);
 });

@@ -55,32 +55,34 @@ function billboards(built: { frame: { billboards: Float32Array; billboardCount: 
 }
 
 describe("a tracer's look", () => {
-  it("a tracer's streak is its speed over a frame: 880 m/s draws 12.3 m, 375 m/s 5.25 m, never more than flown", () => {
+  it("a tracer's streak is its speed over more than a frame: 880 m/s draws 21.1 m, 375 m/s 9 m, never more than flown", () => {
     const s = stand();
     s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red);
     s.rounds.fire([14, 2, 2], [0, 0, 375], steady('m17'), 0, TRACER_KIND.red);
-    s.rounds.step(1 / 60);
+    s.rounds.step(1 / 30);
     const built = new EffectsFrameBuilder(t).build(s, none());
     expect(built.counts.tracers).toBe(2);
-    // 0.014 s of flight: 880 × 0.014 and 375 × 0.014.
-    expect(lengthOf(ribbon(built.frame.ribbons, 0))).toBeCloseTo(12.32, 3);
-    expect(lengthOf(ribbon(built.frame.ribbons, 1))).toBeCloseTo(5.25, 3);
-    // 4.4 m out of the muzzle: a streak as long as its flight, not 12.3 m.
+    // 0.024 s of flight: 880 × 0.024 and 375 × 0.024, longer than a 60 Hz frame's flight (14.7 m and
+    // 6.25 m), so a round's streaks overlap frame to frame and a stream leaves no gaps.
+    expect(lengthOf(ribbon(built.frame.ribbons, 0))).toBeCloseTo(21.12, 3);
+    expect(lengthOf(ribbon(built.frame.ribbons, 1))).toBeCloseTo(9.0, 3);
+    expect(21.12).toBeGreaterThan(880 / 60);
+    // 4.4 m out of the muzzle: a streak as long as its flight, not 21.1 m.
     const young = stand();
     young.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red);
     young.rounds.step(0.005);
     expect(lengthOf(ribbon(new EffectsFrameBuilder(t).build(young, none()).frame.ribbons, 0))).toBeCloseTo(4.4, 3);
   });
 
-  it('a slow round still draws 2.5 m once it has flown that far, and a fast one no more than 14 m', () => {
+  it('a slow round still draws 2.5 m once it has flown that far, and a fast one no more than 24 m', () => {
     const s = stand();
-    // 100 m/s would be 1.4 m, 1200 m/s 16.8 m.
+    // 100 m/s would be 2.4 m, 1200 m/s 28.8 m.
     s.rounds.fire([10, 2, 2], [0, 0, 100], steady('assault_rifle'), 0, TRACER_KIND.red);
     s.rounds.fire([14, 2, 2], [0, 0, 1200], steady('assault_rifle'), 0, TRACER_KIND.red);
     s.rounds.step(1 / 30);
     const built = new EffectsFrameBuilder(t).build(s, none());
     expect(lengthOf(ribbon(built.frame.ribbons, 0))).toBeCloseTo(2.5, 3);
-    expect(lengthOf(ribbon(built.frame.ribbons, 1))).toBeCloseTo(14, 3);
+    expect(lengthOf(ribbon(built.frame.ribbons, 1))).toBeCloseTo(24, 3);
   });
 
   it('a tracer ignites over its first metres: at 1 m flown both alphas are under 0.3; at 10 m the head is 1', () => {
@@ -97,7 +99,7 @@ describe("a tracer's look", () => {
     expect(r.alphaHead).toBe(1);
     // Its tail still at the muzzle: unlit.
     expect(r.alphaTail).toBeCloseTo(0, 4);
-    // 30 m out, its tail 17.7 m out: lit through, fading to tracer_tail_alpha at the tail.
+    // 30 m out, its tail 8.9 m out: lit through, fading to tracer_tail_alpha at the tail.
     s.rounds.step(20 / 880);
     r = ribbon(b.build(s, none()).frame.ribbons, 0);
     expect(r.alphaTail).toBeCloseTo(0.16, 6);
@@ -130,31 +132,70 @@ describe("a tracer's look", () => {
     const s = stand();
     s.rounds.fire([10, 2, 2], [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red);
     const b = new EffectsFrameBuilder(t);
+    // Seen from where it left, so its distance from the eye is its flight.
+    const eye: V3 = [10, 2, 2];
     s.rounds.step(1.4 / 880);
-    let built = b.build(s, none());
+    let built = b.build(s, none(), null, eye);
     expect(built.counts.tracers).toBe(1);
     expect(built.counts.heads).toBe(0);
     expect(built.frame.billboardCount).toBe(0);
     s.rounds.step(0.6 / 880);
-    built = b.build(s, none());
+    built = b.build(s, none(), null, eye);
     expect(built.counts.heads).toBe(1);
     // 2 m out, lit in as its streak is: half as bright as it will burn.
     const [early] = billboards(built);
-    // Its colour the core's: red at 70, [70, 11.2, 7], mixed 0.65 toward white [70, 70, 70], 1.6 times
-    // as bright, over the light pass's particle_glow (20) for emissive billboards.
-    const burning = [5.6, 3.9536, 3.836];
-    close(early.slice(4, 7), burning.map((c) => c * 0.5), 4, 'lit in');
+    // Its colour the core's: red at 70, [70, 11.2, 7], mixed toward white [70, 70, 70] (0.65 within
+    // 6 m of the eye), 1.6 times as bright, over the light pass's particle_glow (20) for emissive
+    // billboards.
+    close(early.slice(4, 7), [5.6, 3.9536, 3.836].map((c) => c * 0.5), 4, 'lit in');
     s.rounds.step(8 / 880);
-    built = b.build(s, none());
+    built = b.build(s, none(), null, eye);
     const [head] = billboards(built);
     close(head.slice(0, 3), s.rounds.position(0), 4, 'at the round');
     // 0.09 m across.
     expect(head[3]).toBeCloseTo(0.045, 6);
-    close(head.slice(4, 7), burning, 4, 'burning');
+    // 10 m from the eye: mixed 0.65 × (1 − smoothstep(6, 40, 10)) = 0.6251 toward white.
+    const white = 0.65 * (1 - (3 * (4 / 34) ** 2 - 2 * (4 / 34) ** 3));
+    close(head.slice(4, 7), [70, 11.2 + (70 - 11.2) * white, 7 + (70 - 7) * white].map((c) => c * 0.08), 4, 'burning');
     expect(head[7]).toBe(1);
     // Emissive, and held as a ribbon is to the pixels it is drawn over (kind 3, effects.wgsl): no
     // smaller than three, nor wider than its share of a tracer's glow at its widest.
     expect(head[8]).toBe(3);
+  });
+
+  it("a tracer's head is white-hot near the eye and its team's colour far from it: all of tracer_core_white within 6 m, half at 23 m, none past 40 m", () => {
+    // The ribbon carries tracer_core_white and effects.wgsl takes it down by the same law at the
+    // ribbon's middle; the head is mixed here, at its own distance.
+    const eye: V3 = [0, 10, 0];
+    const b = new EffectsFrameBuilder(t);
+    const headAt = (m: number) => {
+      b.debugTracers = [{ tail: [0, 10, m - 5], head: [0, 10, m], kind: TRACER_KIND.red }];
+      const built = b.build(stand(), none(), null, eye);
+      expect(ribbon(built.frame.ribbons, 0).white).toBeCloseTo(0.65, 6);
+      const [head] = billboards(built).filter((q) => q[8] === 3);
+      return head.slice(4, 7);
+    };
+    // Red at 70, its head 1.6 times as bright over particle_glow (20): [5.6, 0.896, 0.56] as its own.
+    const own = [5.6, 0.896, 0.56];
+    const mixed = (w: number) => own.map((c) => c + (5.6 - c) * w);
+    close(headAt(3), mixed(0.65), 4, '3 m');
+    close(headAt(6), mixed(0.65), 4, '6 m');
+    close(headAt(23), mixed(0.325), 4, '23 m');
+    close(headAt(40), own, 4, '40 m');
+    close(headAt(90), own, 4, '90 m');
+  });
+
+  it('an ember burns brighter by day, as its tracer does: daylight 1 gives 4× the radiance of night', () => {
+    const hit = { position: [10, 4, 5] as V3, normal: [0, 1, 0] as V3, cell: [10, 3, 5] as V3, material: P.SOD, speed: 800, distance: 60, energyJ: 3000, owner: 0, spec: 'ak', dir: [0, -1, 0] as V3, kind: TRACER_KIND.red, tick: 1 };
+    const ember = (daylight: number) => {
+      const built = new EffectsFrameBuilder(t).build(stand(), { ...none(), impacts: [hit] }, null, undefined, NO_BATTLE, 1, [], daylight);
+      expect(built.counts.embers).toBe(1);
+      return billboards(built).filter((q) => q[8] === 1)[0].slice(4, 7);
+    };
+    const night = ember(0);
+    // Red at 70, 1.6 times as bright over particle_glow (20), newly struck.
+    close(night, [5.6, 0.896, 0.56], 4, 'night');
+    close(ember(1), night.map((c) => c * 4), 4, 'noon');
   });
 
   it("a battle tracer is drawn as the session's are, its streak at most the battle's trail_m, its head from 1.5 m", () => {
@@ -166,14 +207,14 @@ describe("a tracer's look", () => {
     const built = new EffectsFrameBuilder(t).build(stand(), none(), null, [50, 20, 70], { ...NO_BATTLE, tracers });
     expect(built.counts.battleTracers).toBe(3);
     const at = (p: readonly number[]) => [0, 1, 2].map((i) => ribbon(built.frame.ribbons, i)).find((r) => r.head.every((v, k) => Math.abs(v - p[k]) < 1e-4))!;
-    // 500 m/s: 7 m back along its way, lit through, a tracer's style.
+    // 500 m/s: 12 m back along its way, lit through, a tracer's style.
     const first = at(tracers[0].position);
-    close(first.tail, [50 - 0.8 * 7, 30, 80 - 0.6 * 7], 4, 'tail');
+    close(first.tail, [50 - 0.8 * 12, 30, 80 - 0.6 * 12], 4, 'tail');
     expect(first.style).toBe(1);
     expect(first.alphaHead).toBe(1);
     // The battle's amber [1.0, 0.83, 0.45] at 70.
     close(first.rgb, [70, 58.1, 31.5], 3, 'amber');
-    // 2000 m/s would be 28 m: held at the battle's 24, not the session's 14.
+    // 2000 m/s would be 48 m: held at the battle's 24.
     expect(lengthOf(at(tracers[1].position))).toBeCloseTo(24, 3);
     // Lit in as the session's: a metre out, a quarter lit, and no head yet.
     expect(at(tracers[2].position).alphaHead).toBeCloseTo(0.25, 6);

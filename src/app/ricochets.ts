@@ -49,8 +49,8 @@ export function ricochetTunables(tun: Tunables): RicochetTunables {
   };
 }
 
-/** The kinds that ring a round off: wood, steel, wire and masonry. */
-const HARD = new Set<number>([K.TIMBER, K.TRUNK, K.DUCKBOARD, K.HULL, K.PICKET, K.CORRUGATE, K.WIRE, K.CONCRETE, K.BRICK]);
+/** The kinds that ring a round off: wood, steel, wire and masonry (concrete, brick and its mortar). */
+const HARD = new Set<number>([K.TIMBER, K.TRUNK, K.DUCKBOARD, K.HULL, K.PICKET, K.CORRUGATE, K.WIRE, K.CONCRETE, K.BRICK, K.MORTAR]);
 
 interface Ember {
   at: V3;
