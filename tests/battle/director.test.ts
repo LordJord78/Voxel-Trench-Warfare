@@ -358,6 +358,21 @@ describe('the machine guns', () => {
     expect(seen.size).toBeGreaterThanOrEqual(20);
   });
 
+  it('every round of a burst is a tracer: each burst plans as many shots as its rounds', () => {
+    // A burst's shots are planned whole as it starts, numbered on from the last: those new in a step
+    // are the step's bursts' (a burst that would pass the player is planned and dropped, unannounced).
+    const d = new Director(plan, tun, 7);
+    let newest = 0;
+    let bursts = 0;
+    runFor(d, dark('heavy'), 120, (e, k) => {
+      const fresh = d.shots().filter((s) => s.id > newest);
+      for (const s of fresh) newest = Math.max(newest, s.id);
+      expect(fresh.length, `step ${k}`).toBe(e.bursts.reduce((n, b) => n + b.rounds, 0));
+      bursts += e.bursts.length;
+    });
+    expect(bursts).toBeGreaterThan(50);
+  });
+
   it("from guns on both lines, none within clear_m of the player's stretch", () => {
     const d = new Director(plan, tun, 7);
     const zs = new Set<number>();
