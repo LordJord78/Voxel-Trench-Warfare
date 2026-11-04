@@ -66,7 +66,7 @@ export interface PlayerState {
   stance: number;
   height: number;
   flags: number;
-  /** What they show (net/gear.ts encodeGear): the gun in their hands and its fit, their tracers, their light. */
+  /** What they show (net/gear.ts encodeGear): the gun in their hands and its fit, and their light. */
   gear?: number;
 }
 

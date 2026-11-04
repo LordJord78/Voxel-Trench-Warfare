@@ -603,7 +603,8 @@ burst_rounds        = 8        # a machine gun's burst
 burst_rpm           = 600.0    # its cyclic rate within a burst; the pause after
                                # each is drawn about the mean that brings the
                                # rate to heavy_rpm
-tracer_every        = 1        # every round of a burst a tracer
+tracer_every        = 1        # every round a tracer: each of heavy's bursts, and each
+                               # of light's single shots
 spread_m            = 1.6      # heavy's aim scatter about the head, sideways,
 spread_vertical     = 0.6      # and this much of it up and down (the reference's
                                # rig); both across the line of fire
@@ -933,8 +934,9 @@ tracer_colour       = [1.0, 0.45, 0.0] # amber: the battle's, and the front's
 tracer_colour_red   = [1.0, 0.04, 0.018] # a player's tracers, in their team's colour
 tracer_colour_blue  = [0.05, 0.32, 1.0]
 tracer_intensity    = 70.0     # a tracer's core, linear, before the day's boost
-# A tracer as drawn (effects.wgsl's style 1): one ribbon, two terms across it. A core mixed toward
-# white in a glow of its colour, the glow drawn between tracer_glow_min_px and tracer_glow_max_px:
+# A tracer as drawn (effects.wgsl's style 1): one ribbon (two while it is lit in part way along its
+# streak: tracer_ignite_m below), two terms across it. A core mixed toward white in a glow of its
+# colour, the glow drawn between tracer_glow_min_px and tracer_glow_max_px:
 # past the eye not a bar across the screen nor a fat wedge, far off wide enough for its colour to
 # show round the core (the core no narrower than two pixels, but never wider than 0.45 of the glow,
 # which wins: 0.45 of the glow, 1.8 px at its 4 px floor; each held its light kept, narrowed and not
@@ -948,7 +950,8 @@ tracer_white_far_m  = 40.0     # from here, so a far tracer is its team's colour
 tracer_white_by_day = 1.0      # by day a tracer is at least this as white as near the eye, times
                                # daylight: against sunlit ground white-hot reads where a pure colour
                                # does not. Seen side on at noon the stream is lit over 0.91 of its
-                               # line; at 0.8, 0.85; at 0.6, 0.68 (G1's sweep)
+                               # line; at 0.8, 0.847, under the 0.85 it is held to; at 0.6, 0.68;
+                               # at 0.5, 0.59 (G1's sweep)
 tracer_glow_min_px  = 4.0      # the narrowest the glow is drawn, and the widest, in pixels of the
 tracer_glow_max_px  = 10.0     # internal image
 tracer_head_m       = 0.09     # the burning head where the round is: an emissive disc this wide,
@@ -1118,8 +1121,8 @@ head_bob_hz         = 1.9
 landing_dip         = 0.11
 
 [render]
-tracer_length_m     = 7.0      # streak behind the round, not a dot
-tracer_colour       = [1.0, 0.83, 0.45]
+tracer_length_m     = 7.0      # streak behind the round, not a dot. Nothing reads it: a tracer's
+                               # streak is [effects] tracer_streak_s's law
 upload_budget_kib   = 1024     # world edits sent to the GPU per frame, nearest first
 key_cone_deg        = 0.6      # half-angle the key light's shadow ray jitters in: soft penumbrae
 sky_ray_m           = 4.0      # how far a face looks for open sky
@@ -1328,7 +1331,8 @@ smoke_colour        = [0.06, 0.055, 0.05]   # the black smoke of high explosive:
 # fires at the player: bursts at night, every round a tracer, swept across a bearing over no man's
 # land and the field; the rifle round's ballistics simplified (its drag, gravity), without strikes.
 [battle.tracers]
-bursts_light        = 5.0      # bursts a second at the front's light intensity: some 25 tracers in flight
+bursts_light        = 5.0      # bursts a second at the front's light intensity: every round of each a
+                               # tracer, some 100 in flight (250 heavy)
 heavy_scale         = 2.5      # and heavy's over that
 rounds              = [5, 20]
 rpm                 = 600.0

@@ -49,6 +49,9 @@ export function ricochetTunables(tun: Tunables): RicochetTunables {
   };
 }
 
+/** The place a strike is hashed by, in these steps a metre (centimetres): the same strike draws the same, a float's last bits aside. */
+const HASH_STEPS_PER_M = 100;
+
 /** The kinds that ring a round off: wood, steel, wire and masonry (concrete, brick and its mortar). */
 const HARD = new Set<number>([K.TIMBER, K.TRUNK, K.DUCKBOARD, K.HULL, K.PICKET, K.CORRUGATE, K.WIRE, K.CONCRETE, K.BRICK, K.MORTAR]);
 
@@ -92,7 +95,7 @@ export class Ricochets {
     const face = i.normal[0] !== 0 || i.normal[1] !== 0 || i.normal[2] !== 0;
     const off = face ? i.normal.map((v) => v * half) : i.dir.map((v) => -v * half);
     this.emberList.push({ at: [i.position[0] + off[0], i.position[1] + off[1], i.position[2] + off[2]], kind: colourKind, age: 0 });
-    const seed = hash32(i.cell[0], i.cell[1], i.cell[2], i.tick ?? 0, i.material, i.owner, Math.round(i.position[0] * 100), Math.round(i.position[1] * 100), Math.round(i.position[2] * 100));
+    const seed = hash32(i.cell[0], i.cell[1], i.cell[2], i.tick ?? 0, i.material, i.owner, Math.round(i.position[0] * HASH_STEPS_PER_M), Math.round(i.position[1] * HASH_STEPS_PER_M), Math.round(i.position[2] * HASH_STEPS_PER_M));
     const rng = Rng.root(seed);
     // Every draw is made whether or not it is used, so the stream never depends on the outcome.
     const roll = rng.float();

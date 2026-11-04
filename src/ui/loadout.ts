@@ -220,7 +220,6 @@ export class LoadoutMenu {
     this.loadout.fits[gun] = { ...fitOf(this.loadout, gun), [key]: value } as Fit;
     this.render();
   }
-
 }
 
 /** A model drawn from its right side, the muzzle to the right, a voxel a square: the nearest voxel of each column, darker the deeper it lies, lighter where nothing is over it. */

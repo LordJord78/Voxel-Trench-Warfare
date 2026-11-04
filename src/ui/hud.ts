@@ -8,10 +8,11 @@
  * is, so it can be tested without a page.
  *
  * With the loadout: the gun in the hands and how it fires, the kit's line
- * (tracers, the light), the ticks spread as wide as the cone, and, aimed, the
- * sight's own reticle: a red dot, a holographic ring, or the scope's circle
- * with the world dark round it. Over the top a compass; over teammates' heads
- * a mark, so a friend is not shot for a foe; and H's card of the keys.
+ * (the light or laser, the guns carried), the ticks spread as wide as the
+ * cone, and, aimed, the sight's own reticle: a red dot, a holographic ring,
+ * or the scope's circle with the world dark round it. Over the top a
+ * compass; over teammates' heads a mark, so a friend is not shot for a foe;
+ * and H's card of the keys.
  */
 
 import { Stance } from '../physics/character';

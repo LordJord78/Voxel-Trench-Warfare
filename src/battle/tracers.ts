@@ -37,7 +37,7 @@ export interface TracerTunables {
   grazeShare: number;
   grazeM: [number, number];
   maxDrawn: number;
-  /** Metres of trail a tracer is drawn with: two frames' flight at 60 Hz, the streak a far one makes. */
+  /** The longest streak a tracer is drawn with (metres): its speed over [effects] tracer_streak_s, held to this as the player's is to tracer_max_m. */
   trailM: number;
   /** Per metre: the round's drag factor × the air's density. */
   k: number;
