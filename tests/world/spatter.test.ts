@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadTunables } from '../../src/core/tunables';
 import { BrickMap } from '../../src/world/bricks';
-import { BLOOD_OF, K, kindOf, P, PALETTE } from '../../src/world/materials';
+import { BLOOD_OF, hardness, isGranular, isLoose, isOpaque, isSolid, K, kindOf, P, PALETTE, spoilOf } from '../../src/world/materials';
 import type { Box } from '../../src/world/region';
 import { spatter, spatterTunables } from '../../src/world/spatter';
 
@@ -64,8 +64,8 @@ describe('spatter', () => {
     expect(T.rays).toBe(14);
     expect(T.coneDeg).toBe(25);
     expect(T.reach).toBeCloseTo(2.5 / V, 9);
-    // Every soil, in stripes across it: sod, mud, clay, subsoil and spoil all take BLOOD_SOIL.
-    const soils = [P.SOD, P.MUD_WET, P.CLAY, P.SUBSOIL, P.SPOIL];
+    // Every soil that takes blood, in stripes across it: sod, mud and clay all take BLOOD_SOIL.
+    const soils = [P.SOD, P.MUD_WET, P.CLAY];
     const make = () => wall(25, 40, (x) => soils[x % soils.length]);
     const kinds = new Set<number>();
     let wide = 0;
@@ -85,7 +85,7 @@ describe('spatter', () => {
         if (Math.hypot(x + 0.5 - FROM[0], y + 0.5 - FROM[1]) > 15 * tanDeg(18)) wide++;
       }
     }
-    expect(kinds).toEqual(new Set([K.SOD, K.MUD, K.CLAY, K.SUBSOIL, K.SPOIL]));
+    expect(kinds).toEqual(new Set([K.SOD, K.MUD, K.CLAY]));
     // Over the whole cone, not bunched in its middle: some land more than 18° out.
     expect(wide).toBeGreaterThan(0);
   });
@@ -213,6 +213,33 @@ describe('spatter', () => {
       for (const seed of SEEDS) expect(spatter(map, FROM, DIR, seed, T), PALETTE[none].name).toBe(0);
       expect(map.takeDirty()).toEqual([]);
     }
+  });
+
+  it('spoil and subsoil take none, and stop it: a spattered voxel is still what the shovel digs, a collapse slumps and a round chips; clay alone softens, to mud', () => {
+    // A parados's or a crater rim's spoil and the ground 4 m down, in stripes with what takes blood.
+    const soils = [P.SOD, P.MUD, P.CLAY, P.SUBSOIL, P.SPOIL, P.SPOIL_DRY, P.SANDBAG];
+    const none = [P.SUBSOIL, P.SPOIL, P.SPOIL_DRY];
+    const make = () => wall(25, 40, (x) => soils[x % soils.length]);
+    const taken = new Set<number>();
+    for (const seed of SEEDS) {
+      const { n, marks } = marked(make, seed);
+      expect(n).toBe(marks.length);
+      expect(n).toBeGreaterThan(0);
+      for (const [, , z, was, now] of marks) {
+        const name = PALETTE[was].name;
+        expect(none, name).not.toContain(was);
+        // On the wall's face: a ray that met spoil or subsoil stopped there.
+        expect(z, name).toBe(25);
+        taken.add(was);
+        // The shovel digs what is loose (combat/entrenching.ts), and a collapse slumps it (world/destruction.ts).
+        expect([isSolid(now), isOpaque(now), isGranular(now), isLoose(now)], name).toEqual([isSolid(was), isOpaque(was), isGranular(was), isLoose(was)]);
+        expect(spoilOf(now), name).toBe(spoilOf(was));
+        // Clay takes mud's BLOOD_SOIL, as the plan has it, and with it mud's hardness.
+        expect(hardness(now), name).toBe(hardness(was === P.CLAY ? P.MUD : was));
+      }
+    }
+    expect(taken).toEqual(new Set([P.SOD, P.MUD, P.CLAY, P.SANDBAG]));
+    for (const p of none) expect(BLOOD_OF(kindOf(p)), PALETTE[p].name).toBeNull();
   });
 
   it('voxels inside a region out are skipped', () => {

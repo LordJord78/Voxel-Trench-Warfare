@@ -7,7 +7,9 @@
  * A drop of blood flies through air and wire. It lands on anything opaque, and that includes cloth,
  * which a round goes through: a gas curtain catches it. Water swallows it, so the mud under a
  * flooded crater is not marked; the water's surface is all that is drawn of it. As a char does
- * (world/char.ts), it changes only a voxel's colour: each blood shade is of the kind it marks.
+ * (world/char.ts), it changes only a voxel's colour: each blood shade keeps the rules of the kind it
+ * marks, but clay's hardness, which becomes mud's (materials.ts BLOOD_OF). Spoil and subsoil, whose
+ * rules no shade keeps, take none.
  *
  * Positions and directions are in voxels. It is pure: the cone is drawn from the seed alone.
  */

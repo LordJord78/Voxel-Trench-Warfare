@@ -51,7 +51,7 @@ describe('materials', () => {
     expect(m.kindOf(m.P.TAPE_RANGE)).toBe(m.K.CLOTH);
     expect(m.PALETTE[m.P.TAPE_RANGE].emission).toBe(m.PALETTE[m.P.TAPE_RED].emission);
   });
-  it("blood adds five shades after the range's, each of the kind it marks; the soils all take BLOOD_SOIL", () => {
+  it("blood adds five shades after the range's, each of the kind it marks; sod, mud and clay take BLOOD_SOIL, spoil and subsoil none", () => {
     const blood = [m.P.BLOOD_SOIL, m.P.BLOOD_TIMBER, m.P.BLOOD_SANDBAG, m.P.BLOOD_DUCKBOARD, m.P.BLOOD_CLOTH];
     // Appended in order, so no id before them moves.
     expect(blood[0]).toBeGreaterThan(m.P.TAPE_RANGE);
@@ -64,12 +64,35 @@ describe('materials', () => {
       expect(m.PALETTE[p].roughness, m.PALETTE[p].name).toBe(m.PALETTE[m.baseOf(m.kindOf(p))].roughness);
       expect(m.PALETTE[p].emission).toBe(0);
     }
+    // The plan's mud and clay kinds, and sod, whose rules are mud's.
     const takes: Partial<Record<number, number>> = {
-      [m.K.SOD]: m.P.BLOOD_SOIL, [m.K.MUD]: m.P.BLOOD_SOIL, [m.K.CLAY]: m.P.BLOOD_SOIL, [m.K.SUBSOIL]: m.P.BLOOD_SOIL, [m.K.SPOIL]: m.P.BLOOD_SOIL,
+      [m.K.SOD]: m.P.BLOOD_SOIL, [m.K.MUD]: m.P.BLOOD_SOIL, [m.K.CLAY]: m.P.BLOOD_SOIL,
       [m.K.TIMBER]: m.P.BLOOD_TIMBER, [m.K.SANDBAG]: m.P.BLOOD_SANDBAG, [m.K.DUCKBOARD]: m.P.BLOOD_DUCKBOARD, [m.K.CLOTH]: m.P.BLOOD_CLOTH,
     };
     for (let k = 0; k < m.KIND_COUNT; k++) expect(m.BLOOD_OF(k), `kind ${k}`).toBe(takes[k] ?? null);
     expect(m.spoilOf(m.P.BLOOD_SOIL)).toBe(m.P.SPOIL);
+  });
+  it("a blood shade keeps every rule of each kind that takes it, so only its colour changes; clay alone softens, to the mud BLOOD_SOIL is", () => {
+    // What the world's rules read of a voxel: the shovel and a collapse move what is loose
+    // (combat/entrenching.ts, world/destruction.ts), a round chips by hardness to its spoil. In a
+    // match each client spatters its own hits, so a world spattered otherwise must differ only in
+    // colour (the shots spec's §4).
+    const rules = (k: number) => [m.KIND_SOLID[k], m.KIND_OPAQUE[k], m.KIND_BLOCKS_SIGHT[k], m.KIND_GRANULAR[k], m.KIND_LOOSE[k], m.KIND_SPOIL[k]];
+    const taken: number[] = [];
+    for (let k = 0; k < m.KIND_COUNT; k++) {
+      const blood = m.BLOOD_OF(k);
+      if (blood === null) continue;
+      taken.push(k);
+      const clean = m.baseOf(k);
+      const name = m.PALETTE[clean].name;
+      expect(rules(m.kindOf(blood)), name).toEqual(rules(k));
+      // A round's mark leaves what it would have left of the clean voxel, or leaves both alone.
+      expect(m.spoilOf(blood), name).toBe(m.spoilOf(clean));
+      expect(m.kindOf(m.spoilOf(blood)) === m.kindOf(blood), name).toBe(m.kindOf(m.spoilOf(clean)) === k);
+      // The plan gives mud and clay kinds the one BLOOD_SOIL, of mud's kind: clay's 1.1 becomes 1.0.
+      expect(m.hardness(blood), name).toBe(m.KIND_HARDNESS[k === m.K.CLAY ? m.K.MUD : k]);
+    }
+    expect(taken.length).toBeGreaterThan(0);
   });
   it('a round does not chip target steel', () => {
     for (const p of [m.P.TARGET_STEEL, m.P.TARGET_STEEL_HIT]) {
