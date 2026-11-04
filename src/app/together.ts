@@ -102,6 +102,17 @@ export class Gaits {
 }
 
 /**
+ * The colour another player's shot is drawn in (net/gear.ts TRACER_KIND), whatever their shot's word
+ * says (the shots spec §1): their seat's team's, from their soldier as drawn, or with none drawn (not
+ * yet in the room's states, away while the room still relays their shots, nothing buffered) from the
+ * room's seats; seated nowhere the room has said, none, and the word says.
+ */
+export function shotTracer(seat: number, draws: readonly { seat: number; team: Team }[], seats: readonly { id: number; team: Team }[]): number | undefined {
+  const team = draws.find((d) => d.seat === seat)?.team ?? seats.find((s) => s.id === seat)?.team;
+  return team ? teamTracer(team) : undefined;
+}
+
+/**
  * What a page playing the map `loaded` does about a room set to `room`: nothing; claim the room
  * for its own map (a room it has just made, which nobody has set yet); or go to the room's map,
  * which means generating that world (a reload).
@@ -280,7 +291,8 @@ export class Together {
   /**
    * Before the frame's ticks: the others (and any `extra` a test stands in the world) posed; the
    * living among them given to the session for rounds to strike; their shots fired, each from its
-   * shooter's eye, its tracer and flash at their soldier's muzzle. What to draw.
+   * shooter's eye, its tracer and flash at their soldier's muzzle, the tracer in their seat's team's
+   * colour (shotTracer). What to draw.
    */
   prepare(session: Session, dt: number, extra: readonly Figure[] = []): SoldierDraw[] {
     const figures = [...this.figures(), ...extra];
@@ -293,7 +305,7 @@ export class Together {
         // From the muzzle of the gun they are drawn with.
         const g = decodeGear(d?.gear ?? 0);
         const muzzle = d && g.gun !== null ? toWorld(d.frames.rifle, muzzleOf(g.gun, g.fit)) : shot.origin;
-        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark, d ? teamTracer(d.team) : undefined);
+        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark, shotTracer(seat, draws, this.net.seats));
       }
     }
     return draws;

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { Gaits, mapAction, relayUrl, type Figure } from '../../src/app/together';
+import { Gaits, mapAction, relayUrl, shotTracer, type Figure } from '../../src/app/together';
+import { TRACER_KIND } from '../../src/net/gear';
+import type { Seat } from '../../src/net/protocol';
 import { P } from '../../src/world/materials';
 
 describe('where the relay is', () => {
@@ -39,5 +41,21 @@ describe('figures posed as soldiers', () => {
     expect(dummy.tape).toBe(P.TAPE_RANGE);
     expect(dummy.team).toBe('blue');
     expect(soldier).not.toHaveProperty('tape');
+  });
+});
+
+describe("the colour another player's shot is drawn in", () => {
+  const seat = (id: number, team: 'red' | 'blue', away = false): Seat => ({ id, name: `p${id}`, team, ready: true, away });
+  const drawn = (id: number, team: 'red' | 'blue') => ({ seat: id, team });
+
+  it("is their seat's team's, from their soldier as drawn or, with none drawn, from the room's seats", () => {
+    const seats = [seat(0, 'red'), seat(1, 'blue'), seat(2, 'red', true)];
+    expect(shotTracer(1, [drawn(1, 'blue')], seats)).toBe(TRACER_KIND.blue);
+    // Away (the room still relays their shots), not yet in the states, or with nothing buffered: no
+    // soldier drawn, and their seat says their team.
+    expect(shotTracer(1, [], seats)).toBe(TRACER_KIND.blue);
+    expect(shotTracer(2, [drawn(1, 'blue')], seats)).toBe(TRACER_KIND.red);
+    // Seated nowhere the room has said: none given, and the shot's own word says.
+    expect(shotTracer(5, [drawn(1, 'blue')], seats)).toBeUndefined();
   });
 });
