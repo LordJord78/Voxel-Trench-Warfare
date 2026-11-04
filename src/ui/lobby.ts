@@ -40,6 +40,8 @@ export class Lobby {
   private readonly goButton: HTMLButtonElement;
   private ready = false;
   private shownName = '';
+  /** Whether Go was offered at the last frame of the way in: it takes the focus as it appears. */
+  private goOffered = false;
 
   constructor(
     private readonly doc: Document,
@@ -148,15 +150,20 @@ export class Lobby {
     this.root.classList.add('deploying');
     this.deployLine.textContent = line;
     this.goButton.hidden = !canGo;
-    if (canGo && this.doc.activeElement !== this.goButton) this.goButton.focus();
+    // Go takes the focus as it appears, so Enter or Space goes in; not every frame after, so the
+    // keys can reach the loadout and fullscreen.
+    if (canGo && !this.goOffered) this.goButton.focus();
+    this.goOffered = canGo;
   }
 
   /** Back to gathering, after a match. */
   gather(): void {
     this.root.classList.remove('deploying');
+    this.goOffered = false;
   }
 
   hide(): void {
     this.root.hidden = true;
+    this.goOffered = false;
   }
 }

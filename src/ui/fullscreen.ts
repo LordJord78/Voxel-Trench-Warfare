@@ -124,28 +124,34 @@ export class Fullscreen {
     try {
       this.keyboard?.unlock?.();
     } catch {
-      // Nothing was held.
+      // Letting go of nothing is no error, but this runs as the page leaves, before the listeners
+      // are told: a keyboard that throws here must not leave the buttons saying "Leave fullscreen".
     }
   }
 }
 
-/** A fullscreen button as the page has it: its words, and its click. */
+/** A fullscreen button as the page has it: its words, its click, and the press of the mouse that comes first. */
 export interface FullscreenButton {
   textContent: string | null;
-  addEventListener(type: 'click', listener: () => void): void;
+  addEventListener(type: 'click' | 'mousedown', listener: (e: { preventDefault(): void }) => void): void;
 }
 
 /**
  * The page's fullscreen buttons (the start screen's, the lobby's, the pause menu's): a click is
  * `toggle`, and each says where a click takes the page and the key that does the same, kept right
- * however the page goes in or out.
+ * however the page goes in or out. A click leaves the focus where it was (Chrome and Edge would
+ * move it to the button), so Enter or Space still plays, resumes or goes in; tabbed to, a button
+ * is still the keys'.
  */
 export function fullscreenButtons(buttons: Iterable<FullscreenButton>, fs: Fullscreen, key: string, toggle: () => void): void {
   const all = [...buttons];
   const label = (on: boolean) => {
     for (const b of all) b.textContent = `${on ? 'Leave fullscreen' : 'Fullscreen'} · ${key}`;
   };
-  for (const b of all) b.addEventListener('click', toggle);
+  for (const b of all) {
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', toggle);
+  }
   label(fs.active);
   fs.onChange(label);
 }

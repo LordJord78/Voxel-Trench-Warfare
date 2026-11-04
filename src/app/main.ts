@@ -74,6 +74,7 @@ import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
 import { actionFor, fullscreenKeyName, isFullscreenKey, nextTimeKey, stepTime, type KeyAction } from './keys';
+import { pointerLockAction } from './pointer';
 import { standardViews, VIEW_NAMES, type ViewName } from './views';
 import { fallbackReason, placeHere, showFallback, type FallbackReason } from './fallback';
 import { Warmup } from './tiers';
@@ -118,6 +119,9 @@ function stop(message: string): void {
   hooks.ready = true;
   hooks.ms ??= Math.round(performance.now());
   if (document.pointerLockElement) document.exitPointerLock();
+  // And out of fullscreen: its buttons went with the menus, and in Chrome and Edge a short Esc is
+  // still the page's, which no longer answers it.
+  void fullscreen.exit();
   // A check that cannot run still reports why, so its runner is not left waiting.
   if (checkRun) void reporter(checkRun)('report.json', JSON.stringify({ run: checkRun, userAgent: navigator.userAgent, views: [], errors: [message] }));
 }
@@ -765,7 +769,12 @@ async function start(): Promise<void> {
     else if ((mode === 'playing' || mode === 'fly') && document.pointerLockElement !== canvas) lockPointer();
   });
   document.addEventListener('pointerlockchange', () => {
-    if (document.pointerLockElement !== canvas && (mode === 'playing' || mode === 'fly')) pause();
+    // Lost in play, a pause. Granted once play has stopped (Esc paused while the request was
+    // pending, or the match ended), let go at once: fullscreen in Chrome and Edge, where Esc is
+    // the page's, a short Esc would no longer free it.
+    const action = pointerLockAction(!stopped && (mode === 'playing' || mode === 'fly'), document.pointerLockElement === canvas);
+    if (action === 'pause') pause();
+    else if (action === 'release') document.exitPointerLock();
   });
   // The trigger: the left button, with the pointer locked to the game (a click that locks it does not fire).
   window.addEventListener('mousedown', (e) => {

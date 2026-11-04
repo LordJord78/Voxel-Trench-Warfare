@@ -252,6 +252,40 @@ describe('fullscreen', () => {
     await expect(out.exit()).resolves.toBeUndefined();
   });
 
+  it("takes older Safari's request as made, since it says nothing at once, and asks no lock while the page is not fullscreen", async () => {
+    // Its refusal comes later, as a webkitfullscreenerror, and the page never goes fullscreen.
+    const page = new FakePage({ legacy: true, refuse: true });
+    const keyboard = lockingKeyboard();
+    const fs = new Fullscreen(page, { keyboard });
+    const told: boolean[] = [];
+    fs.onChange((on) => told.push(on));
+    expect(await fs.enter()).toBe(true);
+    page.frame();
+    expect(fs.active).toBe(false);
+    expect(told).toEqual([]);
+    expect(keyboard.locks).toEqual([]);
+  });
+
+  it('tells its listeners the page has left even where letting go of the keyboard throws', async () => {
+    // A keyboard of the page's own that throws must not leave the buttons saying "Leave fullscreen".
+    const page = new FakePage();
+    const keyboard: KeyboardLock = {
+      lock: () => Promise.resolve(),
+      unlock() {
+        throw new TypeError('not locked');
+      },
+    };
+    const fs = new Fullscreen(page, { keyboard });
+    const told: boolean[] = [];
+    fs.onChange((on) => told.push(on));
+    await fs.enter();
+    page.frame();
+    await fs.exit();
+    page.frame();
+    expect(fs.active).toBe(false);
+    expect(told).toEqual([true, false]);
+  });
+
   it('tells its listeners of each change once, on whichever event the browser fires', () => {
     const page = new FakePage();
     const fs = new Fullscreen(page);
@@ -277,13 +311,22 @@ describe('fullscreen', () => {
 });
 
 describe('the fullscreen buttons', () => {
-  /** A button as the page has it: its words, and its click. */
+  /** A button as the page has it: its words, its click, and a press of the mouse on it. */
   const button = () => {
-    const clicks: Listener[] = [];
+    type Handler = (e: { preventDefault(): void }) => void;
+    const listeners: Record<'click' | 'mousedown', Handler[]> = { click: [], mousedown: [] };
     return {
       textContent: '' as string | null,
-      addEventListener: (_type: 'click', listener: Listener) => void clicks.push(listener),
-      click: () => clicks.forEach((l) => l()),
+      addEventListener(type: 'click' | 'mousedown', listener: Handler) {
+        listeners[type].push(listener);
+      },
+      click: () => listeners.click.forEach((l) => l({ preventDefault() {} })),
+      /** The mouse pressed on the button: whether the page would move the focus to it, as Chrome and Edge do. */
+      press(): boolean {
+        let prevented = false;
+        for (const l of listeners.mousedown) l({ preventDefault: () => (prevented = true) });
+        return !prevented;
+      },
     };
   };
 
@@ -313,6 +356,19 @@ describe('the fullscreen buttons', () => {
     expect(fs.active).toBe(false);
     expect(words()).toEqual(['Fullscreen · Alt+Enter', 'Fullscreen · Alt+Enter']);
     expect(page.requests).toHaveLength(2);
+  });
+
+  it('leave the focus where it was when clicked (Play, Resume, Go), so Enter or Space still does what it did', async () => {
+    const page = new FakePage();
+    const fs = new Fullscreen(page);
+    const b = button();
+    fullscreenButtons([b], fs, 'Alt+Enter', () => void fs.toggle());
+    expect(b.press()).toBe(false);
+    // The click still takes the page fullscreen.
+    b.click();
+    await settled();
+    page.frame();
+    expect(fs.active).toBe(true);
   });
 
   it("name the key as the player's keyboard does, and start right on a page already fullscreen", async () => {
