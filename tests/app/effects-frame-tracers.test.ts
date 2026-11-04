@@ -129,8 +129,11 @@ describe("a tracer's look", () => {
     const built = new EffectsFrameBuilder(t).build(s, none());
     expect(lengthOf(built.drawn[0])).toBeCloseTo(2.5, 3);
     expect(lengthOf(built.drawn[1])).toBeCloseTo(24, 3);
-    // The slow one 3.3 m out, its tail 0.8 m out: lit in up to 1 m along it, two ribbons, one streak.
-    const [ramp, rest] = tracerRibbons(built);
+    // The slow one 3.3 m out, its tail 0.8 m out: lit in up to 1 m out, so two ribbons, one streak;
+    // the fast one's tail 16 m out, one.
+    const ribbons = tracerRibbons(built);
+    expect(ribbons).toHaveLength(3);
+    const [ramp, rest] = ribbons;
     expect(lengthOf(ramp) + lengthOf(rest)).toBeCloseTo(2.5, 3);
   });
 
@@ -425,8 +428,8 @@ describe("a tracer's look", () => {
     expect(s.aimRange(0, eye, dir)).toBeCloseTo(20, 0);
     // The front's (owner 1), which a target does not stop: on to the wall.
     expect(s.aimRange(1, eye, dir)).toBeCloseTo(30 / dir[2], 0);
-    // The player's shot at it, aimed (its cone tight): its tracer joins its path at the target, a tick
-    // out and 14.7 m on.
+    // The player's shot at it, aimed (its cone tight): its tracer joins its path at the target. A tick
+    // out (14.7 m) the round is still on its way to it.
     s.player.yaw = (Math.atan2(dir[0], dir[2]) * 180) / Math.PI;
     s.player.pitch = (Math.asin(dir[1]) * 180) / Math.PI;
     s.intent = { ...s.intent, aim: true };
