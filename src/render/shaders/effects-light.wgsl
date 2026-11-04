@@ -7,7 +7,9 @@
 // each is seen through the haze between it and the eye, as shade sees the world: the wall behind a
 // mote has it, and a mote without it reads as soot. One thread a billboard. A square (a shell's
 // debris, kind 2) is lit as a mote is, and handed on with its half size negative; a tracer's head
-// (kind 3) is emissive, and handed on with its alpha -1 for the draw to hold it to its pixels.
+// (kind 3) and a tracer strike's ember (kind 4) are emissive, their alpha their whiteness (1 near the
+// eye), handed on as -1 less it (a head, for the draw to hold it to its pixels) or -3 less it (an
+// ember), for the draw to keep their hue (effects.wgsl keepHue).
 #include "scene.wgsl"
 #include "sky.wgsl"
 #include "camera.wgsl"
@@ -25,7 +27,8 @@ struct EffectsLight {
 struct Lit {
   centre: vec3f,
   half: f32,
-  // Premultiplied; alpha 0 adds light, as the emissive do (-1: a tracer's head, which adds light).
+  // Premultiplied; alpha 0 adds light, as the emissive do (-1 to -2: a tracer's head, -3 to -4 an
+  // ember, which add light; less -1 or -3, their whiteness).
   colour: vec4f,
 }
 
@@ -139,7 +142,8 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   var out = vec4f(colour.rgb * look.glow, 0.0);
   let kind = billboards[o + 8u];
   let head = kind == 3.0;
-  if (kind != 1.0 && !head) {
+  let ember = kind == 4.0;
+  if (kind != 1.0 && !head && !ember) {
     let p = centre / frame.voxel;
     let near = nearLight(p);
     let around = skyAround() * look.dustSky + cellLightsAt(p);
@@ -149,5 +153,7 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   // Premultiplied: what covers adds the haze before it as much as it covers.
   let haze = hazeBefore(centre / frame.voxel);
   let half = billboards[o + 3u];
-  lit[i] = Lit(centre, select(half, -half, kind == 2.0), vec4f(out.rgb * haze.a + haze.rgb * out.a, select(out.a, -1.0, head)));
+  let white = clamp(colour.a, 0.0, 1.0);
+  let alpha = select(select(out.a, -1.0 - white, head), -3.0 - white, ember);
+  lit[i] = Lit(centre, select(half, -half, kind == 2.0), vec4f(out.rgb * haze.a + haze.rgb * out.a, alpha));
 }

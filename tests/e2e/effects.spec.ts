@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { PNG } from 'pngjs';
 import { paletteData } from '../../src/world/materials';
 import { hooks, openGame } from './support/app';
 
@@ -392,7 +393,7 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
       h.freeze();
       await h.stepFrames(40);
       const c = h.camera();
-      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res };
+      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res, exposure: await h.exposure() };
     },
     DUSK,
   );
@@ -420,7 +421,15 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
       { tracer, box: [x, 0, w, at.res[1]] },
     );
   const lum = (c: readonly number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-  const saturation = (c: readonly number[]) => (Math.max(...c) - Math.min(...c)) / Math.max(...c);
+  // How a light shows: through the present pass's curve (the ACES fit, channel by channel) at the
+  // frame's exposure on the image's share beside its bloom (0.96). A tracer's light is kept at its
+  // hue through it (effects.wgsl keepHue), so its ratios in the linear image are not its colour's.
+  const aces = (x: number) => Math.min(1, Math.max(0, (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)));
+  const shown = (c: readonly number[]) => c.map((v) => aces(v * at.exposure * 0.96) ** (1 / 2.2));
+  const saturation = (c: readonly number[]) => {
+    const d = shown(c);
+    return (Math.max(...d) - Math.min(...d)) / Math.max(...d);
+  };
   const cx = Math.floor(at.res[0] / 2);
 
   // Red, 20 m out across the view, 20° over it (against the sky), 10 m long. A pixel there is 2.9 cm:
@@ -439,11 +448,11 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
   };
   const centre = block(line);
   const edge = block(line - 3);
-  const farSeen = JSON.stringify({ line, centre, edge, glowPx: 0.22 / pixelM, res: at.res });
+  const farSeen = JSON.stringify({ line, centre, edge, shownCentre: shown(centre), shownEdge: shown(edge), glowPx: 0.22 / pixelM, res: at.res });
   expect(0.22 / pixelM, farSeen).toBeGreaterThan(6);
   expect(lum(centre), farSeen).toBeGreaterThan(1);
-  // Whiter at its core (one term of the glow's colour all across would be as saturated: 0.9); red
-  // in its glow.
+  // Whiter at its core, as shown (one term of the glow's colour all across would show as saturated);
+  // red in its glow.
   expect(saturation(centre), farSeen).toBeLessThan(saturation(edge) - 0.1);
   expect(edge[0], farSeen).toBeGreaterThan(edge[1]);
   expect(edge[0], farSeen).toBeGreaterThan(edge[2]);
@@ -539,56 +548,80 @@ test("a far tracer's white-hot core stays an unbroken line, as its glow does", a
   expect(errors).toEqual([]);
 });
 
-test("a far tracer is its team's colour: its core no whiter than its glow 60 m out", async ({ page }) => {
-  // Near the eye a tracer's core is white-hot; past tracer_white_far_m (40 m) its whiteness is gone,
-  // so a far stream reads red, blue or amber and not white (the shots spec's look, Task 5's P2).
+test("a far red tracer at night shows red on the screen, not white", async ({ page }) => {
+  // Far off a tracer's light is kept at its hue through the present pass's per-channel tone curve
+  // (effects.wgsl keepHue), which alone takes a bright red to white; and its core has no whiteness
+  // left past tracer_white_far_m (40 m). Read on the displayed canvas, as a player sees it.
   const errors = await openGame(page);
   const at = await hooks(page, async (h) => {
     h.view('step');
-    h.setTimeOfDay(21);
+    h.setTimeOfDay(23);
     h.jitter(false);
     h.setQuality({ dynres: false, scale: 1 });
     h.freeze();
     await h.stepFrames(40);
     const c = h.camera();
-    return { position: c.position, yaw: c.yaw, pitch: c.pitch, res: h.stats().res };
+    return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90 };
   });
-  // 60 m out, 20° over the view against the night sky, 10 m across it.
+  // 80 m out, 20° over the view against the night sky, 12 m across it.
   const RAD = Math.PI / 180;
   const y = at.yaw * RAD;
   const p = (at.pitch + 20) * RAD;
-  const centre = [0, 1, 2].map((k) => at.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 60);
+  const centre = [0, 1, 2].map((k) => at.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 80);
   const right = [Math.cos(y), 0, -Math.sin(y)];
-  const tail = centre.map((v, k) => v - right[k] * 5) as [number, number, number];
-  const head = centre.map((v, k) => v + right[k] * 5) as [number, number, number];
-  const box: [number, number, number, number] = [Math.floor(at.res[0] / 2) - 1, 0, 3, at.res[1]];
-  const light = await hooks(
-    page,
-    async (h, arg) => {
-      const { tail, head, box } = arg as { tail: [number, number, number]; head: [number, number, number]; box: [number, number, number, number] };
-      const read = async (on: boolean) => {
+  const tail = centre.map((v, k) => v - right[k] * 6) as [number, number, number];
+  const head = centre.map((v, k) => v + right[k] * 6) as [number, number, number];
+  const shot = async (on: boolean) => {
+    await hooks(
+      page,
+      async (h, arg) => {
+        const { tail, head, on } = arg as { tail: [number, number, number]; head: [number, number, number]; on: boolean };
         h.debugTracer(on ? { tail, head, kind: 2 } : null);
         await h.stepFrames(2);
-        return h.sharpAt(box);
-      };
-      const without = await read(false);
-      const withIt = await read(true);
-      h.debugTracer(null);
-      return withIt.map((v, i) => v - without[i]);
-    },
-    { tail, head, box },
-  );
-  // Its line's brightest row, the middle column: the core and its glow together.
-  const rows = light.length / 9;
-  const rgbAt = (row: number) => light.slice((row * 3 + 1) * 3, (row * 3 + 1) * 3 + 3);
-  const lum = (c: readonly number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-  const line = Array.from({ length: rows }, (_, r) => lum(rgbAt(r))).reduce((best, v, r, all) => (v > all[best] ? r : best), 0);
-  const middle = rgbAt(line);
-  const seen = JSON.stringify({ line, middle, res: at.res });
-  expect(lum(middle), seen).toBeGreaterThan(0.5);
-  // Red [1.0, 0.16, 0.10] all across: its green 0.16 of its red, where a core mixed 0.65 toward
-  // white would make the middle's 0.4 and more.
-  expect(middle[1] / middle[0], seen).toBeLessThan(0.25);
+      },
+      { tail, head, on },
+    );
+    return PNG.sync.read(await page.screenshot());
+  };
+  const without = await shot(false);
+  const withIt = await shot(true);
+  await hooks(page, (h) => h.debugTracer(null));
+  const lum = (d: Buffer, i: number) => 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+  // Where it lies on the canvas: 20° over its middle, 6 m either side 80 m out (4.3°), and a band of
+  // 16 px about it (its glow and bloom; the grain elsewhere is not its).
+  const w = withIt.width;
+  const tanHalf = Math.tan((at.fov * RAD) / 2);
+  const rowAt = withIt.height / 2 - (Math.tan(20 * RAD) / tanHalf) * (w / 2);
+  const halfLength = (6 / 80 / tanHalf) * (w / 2);
+  // Its pixels: lit as the captures' rule has it, 1.5 times the sky without it and 6 steps over it.
+  let n = 0;
+  let saturation = 0;
+  let sx = 0;
+  let sy = 0;
+  for (let i = 0; i < withIt.data.length; i += 4) {
+    const px = (i / 4) % w;
+    const py = Math.floor(i / 4 / w);
+    if (Math.abs(py - rowAt) > 16 || Math.abs(px - w / 2) > halfLength + 16) continue;
+    const bg = lum(without.data, i);
+    const v = lum(withIt.data, i);
+    if (!(v >= Math.max(1.5 * bg, bg + 6))) continue;
+    const [r, g, b] = [withIt.data[i], withIt.data[i + 1], withIt.data[i + 2]];
+    const top = Math.max(r, g, b);
+    const c = top - Math.min(r, g, b);
+    let h = c > 0 ? (top === r ? ((g - b) / c) % 6 : top === g ? (b - r) / c + 2 : (r - g) / c + 4) * 60 : 0;
+    h = (h + 360) % 360;
+    n++;
+    saturation += c / top;
+    sx += c * Math.cos(h * RAD);
+    sy += c * Math.sin(h * RAD);
+  }
+  const hue = ((Math.atan2(sy, sx) / RAD) + 360) % 360;
+  const seen = JSON.stringify({ n, saturation: saturation / Math.max(1, n), hue, rowAt, halfLength });
+  expect(n, seen).toBeGreaterThan(20);
+  // Red [1.0, 0.04, 0.018] shown at its hue is (255, 59, 41): hue 5°, saturation 0.84; white has
+  // none. Over the violet night sky its edges read a little toward magenta.
+  expect(saturation / n, seen).toBeGreaterThan(0.5);
+  expect(Math.min(Math.abs(hue - 5), 360 - Math.abs(hue - 5)), seen).toBeLessThan(20);
   expect(errors).toEqual([]);
 });
 

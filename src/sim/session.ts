@@ -12,7 +12,7 @@
 
 import { Artillery, artilleryTunables, planShellSource, type ShellSource } from '../combat/artillery';
 import { armSpec, GUN_DEFS, loadoutArms, type ArmSpec, type Loadout } from '../combat/arsenal';
-import { ballisticsTunables, projectileSpec, Rounds, type BodyHit, type Impact, type ProjectileSpec } from '../combat/ballistics';
+import { aimRangeM, ballisticsTunables, projectileSpec, Rounds, type BodyHit, type Impact, type ProjectileSpec } from '../combat/ballistics';
 import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
 import { Entrenching, entrenchingTunables, type Scoop } from '../combat/entrenching';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
@@ -261,6 +261,8 @@ export class Session {
   private readonly tun: Tunables;
   /** The front's rounds: the AK's, whatever the player carries. */
   private readonly frontProjectile: ProjectileSpec;
+  /** A shooter's tracer joins its round's path where the shot was aimed, within these (m; [effects] tracer_converge_min_m, _max_m). */
+  private readonly tracerConverge: [number, number];
   /** Each gun's round, pellets and cone, as another player's shots are fired. */
   private readonly remoteGuns = new Map<GunKey, { spec: ProjectileSpec; pellets: number; coneDeg: number }>();
   private readonly chipEnergyJ: number;
@@ -294,6 +296,7 @@ export class Session {
     // Until a loadout is taken in: the AK and the pistol, bare.
     this.arms = [armSpec(tun, 'ak74', BARE), armSpec(tun, 'm17', BARE)].map((a) => this.makeArm(a, false));
     this.frontProjectile = projectileSpec(tun, 'assault_rifle');
+    this.tracerConverge = [tun.f('effects.tracer_converge_min_m'), tun.f('effects.tracer_converge_max_m')];
     this.rounds = new Rounds(ballisticsTunables(tun), world.map, voxel);
     this.dispersion = this.streams.derive('combat.dispersion');
     this.recoilRng = this.streams.derive('combat.recoil');
@@ -380,10 +383,11 @@ export class Session {
     const v = spec.muzzleVelocity;
     const round = !tracer ? TRACER_KIND.none : kind ?? (m ? m.kind : TRACER_KIND.amber);
     const from: [number, number, number] = [muzzle[0], muzzle[1], muzzle[2]];
-    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, from) < 0) return;
+    const reach = this.aimRange(origin, dir);
+    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, from, reach) < 0) return;
     for (let k = 1; k < gun.pellets; k++) {
       const d = this.spreadAbout(dir, gun.coneDeg, this.remoteRng);
-      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, round, from);
+      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, round, from, reach);
     }
     const flashShare = m?.suppressed ? 0.12 : 1;
     this.events.remoteShots.push({
@@ -641,13 +645,15 @@ export class Session {
       const kind = w.tracer() ? teamTracer(this.team) : TRACER_KIND.none;
       const tracer = kind !== TRACER_KIND.none;
       // The round leaves the eye, so the reticle tells the truth; its tracer, flash and brass the
-      // drawn rifle, as it stands before this shot kicks it.
+      // drawn rifle, as it stands before this shot kicks it; the tracer joining the round's path where
+      // the shot is aimed (one cast a pull of the trigger: a shotgun's pellets share it).
       const muzzle = this.muzzle();
-      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, muzzle) >= 0) {
+      const reach = this.aimRange(eye, dir);
+      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, muzzle, reach) >= 0) {
         // A shotgun's other pellets, each the cone's own.
         for (let k = 1; k < w.spec.pellets; k++) {
           const d = w.aim(aim[0], aim[1], cone, this.dispersion);
-          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, muzzle);
+          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, muzzle, reach);
         }
         w.shot();
         this.throwShot(muzzle, arm.spec.flash);
@@ -840,6 +846,11 @@ export class Session {
       stroke = this.prevStroke + (to - this.prevStroke) * alpha;
     }
     return heldPose(this.viewmodel, this.holding(), { back: at('back'), up: at('up'), side: at('side'), pitch: at('pitch'), yaw: at('yaw'), roll: at('roll') }, sway, speedRatio, raised, aimed, ready, stroke);
+  }
+
+  /** How far out a shot from `eye` along `dir` is aimed (aimRangeM), within [effects] tracer_converge_min_m and _max_m: where its tracer joins its path. */
+  aimRange(eye: readonly [number, number, number], dir: readonly [number, number, number]): number {
+    return aimRangeM(this.map, this.voxel, eye, dir, this.tracerConverge[0], this.tracerConverge[1]);
   }
 
   /** The gun's muzzle in world metres, as the last tick left the view, the kick and the hands: where the flash and the tracers start. */

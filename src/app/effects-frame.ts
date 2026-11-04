@@ -2,8 +2,9 @@
  * A frame's effects, from the session, the events the frame drained and the
  * rifle as it is drawn: the particles' billboards, the shot's flash and brass
  * leaving the drawn rifle; each tracer round's ribbon, the player's drawn from
- * the rifle's muzzle and joining the round's path by `tracer_converge_m` (the
- * round leaves the eye, so the reticle tells the truth); and each shot's flash
+ * the rifle's muzzle and joining the round's path where the shot was aimed
+ * (Session.aimRange: the round leaves the eye, so the reticle tells the truth,
+ * and its tracer reaches across to it); and each shot's flash
  * — a star of three ribbons from the drawn muzzle along its bore and a
  * transient light there — for `flash_s` of the world's time, so as long at any
  * frame rate and held while paused (spec §4). The simulation's muzzle is the
@@ -36,7 +37,7 @@ import type { Tunables } from '../core/tunables';
 import { decodeGear, TRACER_KIND } from '../net/gear';
 import type { SoldierDraw } from '../render/soldiers';
 import { raycast } from '../world/raycast';
-import { HEAD_BILLBOARD, MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, RIBBON_STYLE, type EffectsFrame, type SmokePuff, type TransientLight } from '../render/effects';
+import { EMBER_BILLBOARD, HEAD_BILLBOARD, MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, RIBBON_STYLE, type EffectsFrame, type SmokePuff, type TransientLight } from '../render/effects';
 import { MAX_PUFFS } from '../render/frame-uniforms';
 import { throughPose, type RiflePose } from '../render/rifle';
 import { MUZZLE_ANCHOR, PORT_ANCHOR, SHOVEL_HELD, type CombatEvents, type Session } from '../sim/session';
@@ -81,6 +82,8 @@ export interface EffectsTunables {
   tracerCoreWhite: number;
   tracerWhiteNearM: number;
   tracerWhiteFarM: number;
+  /** By day a tracer's core is at least this much as white as near the eye, times daylight (effects.wgsl whiteFloor). */
+  tracerWhiteByDay: number;
   /** Its head: an emissive disc this wide (m), this many times as bright as the core, over the light pass's glow for emissive billboards (`particle_glow`). */
   tracerHeadM: number;
   tracerHeadGain: number;
@@ -100,7 +103,6 @@ export interface EffectsTunables {
   /** A laser's dot: its size, glow and colour. */
   laser: { sizeM: number; glow: number; colour: V3 };
   tracerTailAlpha: number;
-  tracerConvergeM: number;
   /** Embers and ricochets ([effects.ricochet]). */
   ricochet: RicochetTunables;
   flashS: number;
@@ -151,6 +153,7 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     tracerCoreWhite: f('tracer_core_white'),
     tracerWhiteNearM: f('tracer_white_near_m'),
     tracerWhiteFarM: f('tracer_white_far_m'),
+    tracerWhiteByDay: f('tracer_white_by_day'),
     tracerHeadM: f('tracer_head_m'),
     tracerHeadGain: f('tracer_head_gain'),
     particleGlow: f('particle_glow'),
@@ -164,7 +167,6 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     light: { rangeM: f('light_range_m'), radiusM: tun.pair('effects.light_radius_m'), intensity: f('light_intensity'), colour: rgb(tun, 'effects.light_colour') },
     laser: { sizeM: f('laser_size_m'), glow: f('laser_glow'), colour: rgb(tun, 'effects.laser_colour') },
     tracerTailAlpha: f('tracer_tail_alpha'),
-    tracerConvergeM: f('tracer_converge_m'),
     ricochet: ricochetTunables(tun),
     flashS: f('flash_s'),
     particleAttachS: f('particle_attach_s'),
@@ -237,9 +239,14 @@ export function daylightAt(sunElevationDeg: number, t: EffectsTunables): number 
   return smoothstep(low, high, sunElevationDeg);
 }
 
-/** How far a tracer's core is mixed toward white `metres` from the eye: all of tracer_core_white near it, none far off (effects.wgsl takes a ribbon's so, at its middle). */
+/** How near the eye a tracer is for its whiteness, `metres` off: 1 within tracer_white_near_m, falling to 0 at tracer_white_far_m (effects.wgsl takes a ribbon's so, at its middle). */
+export function tracerNearAt(metres: number, t: EffectsTunables): number {
+  return 1 - smoothstep(t.tracerWhiteNearM, t.tracerWhiteFarM, metres);
+}
+
+/** How far a tracer's core is mixed toward white `metres` from the eye: all of tracer_core_white near it, none far off. */
 export function tracerWhiteAt(metres: number, t: EffectsTunables): number {
-  return t.tracerCoreWhite * (1 - smoothstep(t.tracerWhiteNearM, t.tracerWhiteFarM, metres));
+  return t.tracerCoreWhite * tracerNearAt(metres, t);
 }
 
 const RAD = Math.PI / 180;
@@ -377,8 +384,10 @@ export class EffectsFrameBuilder {
       return true;
     };
 
-    // The eye the frame is seen from: a tracer's core is white-hot near it; the battle's nearest it are drawn.
+    // The eye the frame is seen from: a tracer's core is white-hot near it (and by day, at least
+    // whiteFloor of that, effects.wgsl's); the battle's nearest it are drawn.
     const eyeAt = eye ?? [session.player.position.x, session.player.position.y + session.controller.eyeHeight(session.player), session.player.position.z];
+    const whiteFloor = t.tracerWhiteByDay * daylight;
     // A tracer by its kind (net/gear.ts TRACER_KIND): the battle's amber, a team's red or blue, at
     // its intensity, and brighter by day; a white-hot core in its glow (effects.wgsl's style 1).
     const day = 1 + t.tracerDayBoost * daylight;
@@ -404,9 +413,10 @@ export class EffectsFrameBuilder {
       if (headFlown >= t.tracerHeadFromM && billboards < MAX_BILLBOARDS) {
         const hottest = Math.max(colour[0], colour[1], colour[2]);
         const burn = (t.tracerHeadGain * lit) / t.particleGlow;
-        const white = tracerWhiteAt(Math.hypot(head[0] - eyeAt[0], head[1] - eyeAt[1], head[2] - eyeAt[2]), t);
-        const core = colour.map((c) => (c + (hottest - c) * white) * burn);
-        this.billboards.set([head[0], head[1], head[2], t.tracerHeadM / 2, core[0], core[1], core[2], 1, HEAD_BILLBOARD], billboards * BILLBOARD_FLOATS);
+        // Its alpha is how near the eye it is: the draw shows it as white-hot as its core there (effects.wgsl keepHue).
+        const near = Math.max(tracerNearAt(Math.hypot(head[0] - eyeAt[0], head[1] - eyeAt[1], head[2] - eyeAt[2]), t), whiteFloor);
+        const core = colour.map((c) => (c + (hottest - c) * t.tracerCoreWhite * near) * burn);
+        this.billboards.set([head[0], head[1], head[2], t.tracerHeadM / 2, core[0], core[1], core[2], near, HEAD_BILLBOARD], billboards * BILLBOARD_FLOATS);
         billboards++;
         heads++;
       }
@@ -414,7 +424,7 @@ export class EffectsFrameBuilder {
     };
 
     // Tracers: the round's streak back along its path, its offset from where it left to where it
-    // is drawn from shrinking to nothing by tracer_converge_m.
+    // is drawn from shrinking to nothing where the shot was aimed (its own convergence, Session.aimRange).
     let tracers = 0;
     const drawn: BuiltEffects['drawn'] = [];
     const seg = session.rounds.tracerSegments((speed) => streak(speed, t.tracerMaxM));
@@ -427,7 +437,8 @@ export class EffectsFrameBuilder {
       const from = at(seg.from);
       const origin = at(seg.origin);
       const offset = [from[0] - origin[0], from[1] - origin[1], from[2] - origin[2]];
-      const share = (flown: number) => Math.max(0, 1 - flown / t.tracerConvergeM);
+      const reach = seg.converge[i];
+      const share = (flown: number) => (reach > 0 ? Math.max(0, 1 - flown / reach) : 0);
       const h = share(seg.flown[i]);
       const s = share(seg.flown[i] - length);
       const drawnTail = tail.map((v, k) => v + offset[k] * s);
@@ -437,15 +448,16 @@ export class EffectsFrameBuilder {
       tracers++;
     }
 
-    // Tracer strikes' embers, small emissive discs of their tracer's colour fading out; and the
-    // ricochets in flight, drawn as the tracers are, long past their lighting in (they left a wall,
-    // not a muzzle), fading as they burn out.
+    // Tracer strikes' embers, small emissive discs of their tracer's colour fading out, kept at its
+    // hue as a far tracer is (EMBER_BILLBOARD, its alpha its whiteness: none, but by day); and the ricochets in
+    // flight, drawn as the tracers are, long past their lighting in (they left a wall, not a muzzle),
+    // fading as they burn out.
     let embers = 0;
     for (const e of this.ricochets.embers()) {
       if (billboards >= MAX_BILLBOARDS) break;
       const colour = glows[e.kind] ?? glows[TRACER_KIND.amber];
       const burn = (t.tracerHeadGain * e.alpha) / t.particleGlow;
-      this.billboards.set([e.at[0], e.at[1], e.at[2], e.size / 2, colour[0] * burn, colour[1] * burn, colour[2] * burn, 1, 1], billboards * BILLBOARD_FLOATS);
+      this.billboards.set([e.at[0], e.at[1], e.at[2], e.size / 2, colour[0] * burn, colour[1] * burn, colour[2] * burn, whiteFloor, EMBER_BILLBOARD], billboards * BILLBOARD_FLOATS);
       billboards++;
       embers++;
     }
@@ -570,7 +582,7 @@ export class EffectsFrameBuilder {
     const smoke = [...this.debugSmoke, ...puffs.sort((a, b) => far(a) - far(b))].slice(0, MAX_PUFFS);
 
     return {
-      frame: { billboards: this.billboards, billboardCount: billboards, ribbons: this.ribbons, ribbonCount: ribbons },
+      frame: { billboards: this.billboards, billboardCount: billboards, ribbons: this.ribbons, ribbonCount: ribbons, whiteFloor },
       lights,
       blasts,
       smoke,

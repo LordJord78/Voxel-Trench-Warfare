@@ -5,6 +5,7 @@
 // Under fire the picture is greyed and its edges darkened (suppression's look);
 // with none, both are exactly nothing.
 #include "catmull.wgsl"
+#include "tone.wgsl"
 
 struct Present {
   // Internal image size, and the size its texture was allocated at.
@@ -43,10 +44,6 @@ fn vs(@builtin(vertex_index) i: u32) -> VOut {
   var o: VOut;
   o.pos = vec4f(corners[i], 0.0, 1.0);
   return o;
-}
-
-fn aces(x: vec3f) -> vec3f {
-  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3f(0.0), vec3f(1.0));
 }
 
 @fragment

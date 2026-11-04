@@ -445,7 +445,7 @@ export class Renderer {
         { binding: 1, resource: { buffer: this.cells.cells } },
       ],
     });
-    this.effects = Effects.create(device, compiled.effects, this.frameBuffer, this.cells, this.keyShadow.group, effectsLook(loadTunables()));
+    this.effects = Effects.create(device, compiled.effects, this.frameBuffer, this.cells, this.keyShadow.group, effectsLook(loadTunables()), this.autoExposure.state);
     this.rifle = Rifle.create(device, compiled.rifle, rifleModel(), this.cells, this.keyShadow.group, loadTunables().f('effects.rifle_specular'));
     this.soldiers = Soldiers.create(device, compiled.soldiers, soldierModel(), this.cells, this.keyShadow.group);
     this.lightScale = LIGHT_SCALE[this.preset];
@@ -953,7 +953,8 @@ export class Renderer {
     pass('taa', 'taa', this.res);
     pass('cas', 'cas', this.res);
     // Timed only when they run (a slot not written this frame would hold another frame's times).
-    this.effects.encode(encoder, this.sceneGroup!, this.froxels.group, this.res, (name) => this.timer.writes(name));
+    // The tracers kept at their hue through the present pass's tone: its exposure and the image's share beside the bloom.
+    this.effects.encode(encoder, this.sceneGroup!, this.froxels.group, this.res, (name) => this.timer.writes(name), { bias: this.sky.exposure, sharpShare: 1 - (this.options.bloomWeight ?? 0.04) });
     this.bloom.encode(encoder, this.res, this.options.bloomMax ?? 999, this.timer.writes('bloom'));
     // Without settings (tests), the zone is wide enough that nothing is ever corrected.
     this.autoExposure.encode(

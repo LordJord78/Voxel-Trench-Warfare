@@ -58,6 +58,19 @@ export interface BallisticsTunables {
   maxFlightS: number;
 }
 
+/**
+ * How far a shot from `eye` (m) along `dir` is aimed: the first solid on its line, within `minM` and
+ * `maxM` (into the sky, or nothing within `maxM`: `maxM`). A shooter's tracer joins its round's path
+ * there (effects-frame.ts), so from the hip it reaches across to where the reticle sat.
+ */
+export function aimRangeM(map: BrickMap, voxel: number, eye: readonly [number, number, number], dir: readonly [number, number, number], minM: number, maxM: number): number {
+  const n = hypot(dir[0], dir[1], dir[2]);
+  if (!(n > 0)) return maxM;
+  const hit = raycast(map, [eye[0] / voxel, eye[1] / voxel, eye[2] / voxel], [dir[0] / n, dir[1] / n, dir[2] / n], maxM / voxel);
+  const m = hit ? hit.t * voxel : maxM;
+  return Math.min(maxM, Math.max(minM, m));
+}
+
 export function ballisticsTunables(tun: Tunables): BallisticsTunables {
   return {
     gravity: tun.f('ballistics.gravity'),
@@ -137,9 +150,10 @@ export class Rounds {
   private readonly specIndex: Int32Array;
   private readonly owner: Int8Array;
   private readonly tracer: Uint8Array;
-  /** Where each round left, and where its tracer is drawn from: the muzzle for the player's, which leave from the eye. */
+  /** Where each round left, and where its tracer is drawn from: the muzzle for the player's, which leave from the eye; and how far out its tracer joins its path (m; 0 when it leaves where it is drawn from). */
   private readonly origin: Float64Array;
   private readonly from: Float64Array;
+  private readonly converge: Float64Array;
   /** Each round's nearest miss of the listener so far (m) and where, and whether its pass has been heard. */
   private readonly nearMiss: Float64Array;
   private readonly nearAt: Float64Array;
@@ -162,6 +176,7 @@ export class Rounds {
     this.tracer = new Uint8Array(n);
     this.origin = new Float64Array(n * 3);
     this.from = new Float64Array(n * 3);
+    this.converge = new Float64Array(n);
     this.nearMiss = new Float64Array(n);
     this.nearAt = new Float64Array(n * 3);
     this.heard = new Uint8Array(n);
@@ -170,10 +185,11 @@ export class Rounds {
 
   /**
    * A round leaving `origin` (m) at `velocity` (m/s), its tracer drawn from `from` (the origin
-   * unless given): its slot, or −1 if the pool is full or the velocity is zero. `tracer` is true
-   * (the battle's amber), false, or a kind (net/gear.ts TRACER_KIND: 0 none, 2 red, 3 blue).
+   * unless given) and joining its path `convergeM` out (aimRangeM; 0, unless given): its slot, or −1
+   * if the pool is full or the velocity is zero. `tracer` is true (the battle's amber), false, or a
+   * kind (net/gear.ts TRACER_KIND: 0 none, 2 red, 3 blue).
    */
-  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean | number, from: readonly [number, number, number] = origin): number {
+  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean | number, from: readonly [number, number, number] = origin, convergeM = 0): number {
     if (velocity[0] === 0 && velocity[1] === 0 && velocity[2] === 0) return -1;
     if (this.count >= this.t.capacity) {
       this.dropped++;
@@ -191,6 +207,7 @@ export class Rounds {
     this.tracer[i] = tracer === true ? 1 : tracer === false ? 0 : Math.max(0, Math.min(3, Math.round(tracer)));
     this.origin.set(origin, i * 3);
     this.from.set(from, i * 3);
+    this.converge[i] = convergeM;
     this.nearMiss[i] = Infinity;
     this.heard[i] = 0;
     return i;
@@ -233,16 +250,17 @@ export class Rounds {
   /**
    * Each tracer round's head and its tail, `lengthOf` its speed (m/s) back along its path, or a
    * length given outright (m), no further than it has flown, as [x, y, z] triples in metres; where
-   * it left and where its tracer is drawn from, how far it has flown (m), whose it is, and its kind
-   * (its colour).
+   * it left and where its tracer is drawn from, how far out its tracer joins its path (m), how far
+   * it has flown (m), whose it is, and its kind (its colour).
    */
-  tracerSegments(lengthOf: number | ((speed: number) => number)): { head: Float32Array; tail: Float32Array; origin: Float32Array; from: Float32Array; flown: Float32Array; owner: Int8Array; kind: Uint8Array } {
+  tracerSegments(lengthOf: number | ((speed: number) => number)): { head: Float32Array; tail: Float32Array; origin: Float32Array; from: Float32Array; converge: Float32Array; flown: Float32Array; owner: Int8Array; kind: Uint8Array } {
     let n = 0;
     for (let i = 0; i < this.count; i++) if (this.tracer[i] !== 0) n++;
     const head = new Float32Array(n * 3);
     const tail = new Float32Array(n * 3);
     const origin = new Float32Array(n * 3);
     const from = new Float32Array(n * 3);
+    const converge = new Float32Array(n);
     const flown = new Float32Array(n);
     const owner = new Int8Array(n);
     const kind = new Uint8Array(n);
@@ -259,12 +277,13 @@ export class Rounds {
         origin[o * 3 + k] = this.origin[i * 3 + k];
         from[o * 3 + k] = this.from[i * 3 + k];
       }
+      converge[o] = this.converge[i];
       flown[o] = this.distance[i];
       owner[o] = this.owner[i];
       kind[o] = this.tracer[i];
       o++;
     }
-    return { head, tail, origin, from, flown, owner, kind };
+    return { head, tail, origin, from, converge, flown, owner, kind };
   }
 
   /** One substep of round `i`: whether it is to be retired. */
@@ -390,6 +409,7 @@ export class Rounds {
     this.tracer[i] = this.tracer[last];
     this.origin.copyWithin(i * 3, last * 3, last * 3 + 3);
     this.from.copyWithin(i * 3, last * 3, last * 3 + 3);
+    this.converge[i] = this.converge[last];
     this.nearMiss[i] = this.nearMiss[last];
     this.nearAt.copyWithin(i * 3, last * 3, last * 3 + 3);
     this.heard[i] = this.heard[last];

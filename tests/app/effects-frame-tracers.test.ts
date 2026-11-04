@@ -119,8 +119,8 @@ describe("a tracer's look", () => {
     expect(tracer.coreShare).toBeCloseTo(0.035 / 0.22, 6);
     expect(tracer.glowShare).toBeCloseTo(0.35, 6);
     expect(tracer.white).toBeCloseTo(0.65, 6);
-    // The player's in solo: red [1.0, 0.16, 0.10] at 70, by night.
-    close(tracer.rgb, [70, 11.2, 7], 4, 'red');
+    // The player's in solo: red [1.0, 0.04, 0.018] at 70, by night.
+    close(tracer.rgb, [70, 2.8, 1.26], 4, 'red');
     for (let i = 1; i <= 3; i++) {
       const star = ribbon(built.frame.ribbons, i);
       expect(star.style, `ray ${i}`).toBe(0);
@@ -144,10 +144,11 @@ describe("a tracer's look", () => {
     expect(built.counts.heads).toBe(1);
     // 2 m out, lit in as its streak is: half as bright as it will burn.
     const [early] = billboards(built);
-    // Its colour the core's: red at 70, [70, 11.2, 7], mixed toward white [70, 70, 70] (0.65 within
+    // Its colour the core's: red at 70, [70, 2.8, 1.26], mixed toward white [70, 70, 70] (0.65 within
     // 6 m of the eye), 1.6 times as bright, over the light pass's particle_glow (20) for emissive
-    // billboards.
-    close(early.slice(4, 7), [5.6, 3.9536, 3.836].map((c) => c * 0.5), 4, 'lit in');
+    // billboards; its alpha how near the eye it is (all of it within 6 m), for the draw to keep its hue.
+    close(early.slice(4, 7), [70, 2.8 + 67.2 * 0.65, 1.26 + 68.74 * 0.65].map((c) => c * 0.08 * 0.5), 4, 'lit in');
+    expect(early[7]).toBe(1);
     s.rounds.step(8 / 880);
     built = b.build(s, none(), null, eye);
     const [head] = billboards(built);
@@ -155,9 +156,9 @@ describe("a tracer's look", () => {
     // 0.09 m across.
     expect(head[3]).toBeCloseTo(0.045, 6);
     // 10 m from the eye: mixed 0.65 × (1 − smoothstep(6, 40, 10)) = 0.6251 toward white.
-    const white = 0.65 * (1 - (3 * (4 / 34) ** 2 - 2 * (4 / 34) ** 3));
-    close(head.slice(4, 7), [70, 11.2 + (70 - 11.2) * white, 7 + (70 - 7) * white].map((c) => c * 0.08), 4, 'burning');
-    expect(head[7]).toBe(1);
+    const near = 1 - (3 * (4 / 34) ** 2 - 2 * (4 / 34) ** 3);
+    close(head.slice(4, 7), [70, 2.8 + (70 - 2.8) * 0.65 * near, 1.26 + (70 - 1.26) * 0.65 * near].map((c) => c * 0.08), 4, 'burning');
+    expect(head[7]).toBeCloseTo(near, 6);
     // Emissive, and held as a ribbon is to the pixels it is drawn over (kind 3, effects.wgsl): no
     // smaller than three, nor wider than its share of a tracer's glow at its widest.
     expect(head[8]).toBe(3);
@@ -175,8 +176,8 @@ describe("a tracer's look", () => {
       const [head] = billboards(built).filter((q) => q[8] === 3);
       return head.slice(4, 7);
     };
-    // Red at 70, its head 1.6 times as bright over particle_glow (20): [5.6, 0.896, 0.56] as its own.
-    const own = [5.6, 0.896, 0.56];
+    // Red at 70, its head 1.6 times as bright over particle_glow (20): [5.6, 0.224, 0.1008] as its own.
+    const own = [5.6, 0.224, 0.1008];
     const mixed = (w: number) => own.map((c) => c + (5.6 - c) * w);
     close(headAt(3), mixed(0.65), 4, '3 m');
     close(headAt(6), mixed(0.65), 4, '6 m');
@@ -190,12 +191,78 @@ describe("a tracer's look", () => {
     const ember = (daylight: number) => {
       const built = new EffectsFrameBuilder(t).build(stand(), { ...none(), impacts: [hit] }, null, undefined, NO_BATTLE, 1, [], daylight);
       expect(built.counts.embers).toBe(1);
-      return billboards(built).filter((q) => q[8] === 1)[0].slice(4, 7);
+      // An ember: emissive, kept at its hue (EMBER_BILLBOARD), its alpha its whiteness: none by
+      // night, all of it by day (tracer_white_by_day), as a tracer's core.
+      const [q] = billboards(built).filter((b) => b[8] === 4);
+      expect(q[7]).toBeCloseTo(t.tracerWhiteByDay * daylight, 6);
+      return q.slice(4, 7);
     };
     const night = ember(0);
     // Red at 70, 1.6 times as bright over particle_glow (20), newly struck.
-    close(night, [5.6, 0.896, 0.56], 4, 'night');
+    close(night, [5.6, 0.224, 0.1008], 4, 'night');
     close(ember(1), night.map((c) => c * 4), 4, 'noon');
+  });
+
+  it("a tracer joins its round's path where the shot was aimed: all of its muzzle's offset at 0 m, half at half way, none from there", () => {
+    const s = stand();
+    const origin: V3 = [12.8, 2.0, 2];
+    const from: V3 = [12.98, 1.79, 2.6];
+    const offset = [from[0] - origin[0], from[1] - origin[1], from[2] - origin[2]];
+    // Aimed 40 m out.
+    s.rounds.fire(origin, [0, 0, 880], steady('assault_rifle'), 0, TRACER_KIND.red, from, 40);
+    const b = new EffectsFrameBuilder(t);
+    let flown = 0;
+    const drawnAt = (m: number) => {
+      s.rounds.step((m - flown) / 880);
+      flown = m;
+      const built = b.build(s, none());
+      const seg = s.rounds.tracerSegments((speed) => Math.min(t.tracerMaxM, Math.max(t.tracerMinM, speed * t.tracerStreakS)));
+      expect(seg.converge[0]).toBe(40);
+      return { drawn: built.drawn[0], head: Array.from(seg.head.slice(0, 3)), tail: Array.from(seg.tail.slice(0, 3)) };
+    };
+    // A metre out: its tail at the muzzle, its whole offset.
+    const young = drawnAt(1);
+    close(young.drawn.tail, from, 4, 'tail at the muzzle');
+    close(young.drawn.head, young.head.map((v, k) => v + offset[k] * (1 - 1 / 40)), 4, '1 m');
+    const half = drawnAt(20);
+    close(half.drawn.head, half.head.map((v, k) => v + offset[k] * 0.5), 4, 'half way');
+    const there = drawnAt(40);
+    close(there.drawn.head, there.head, 4, 'there');
+    // Past it (the open ground ends 49 m on), its tail too: on its round's path.
+    const past = drawnAt(47);
+    close(past.drawn.head, past.head, 4, 'past it');
+    close(past.drawn.tail, past.tail.map((v, k) => v + offset[k] * Math.max(0, 1 - (47 - 21.12) / 40)), 4, 'its tail, 25.9 m out');
+  });
+
+  it('a shot is aimed at the first thing on its line: a wall 30 m out, past the map (the sky) the farthest, nearer than 8 m held at 8', () => {
+    /** The player 2 m along open ground looking along it (+z), a wall across it `wallM` in front of the eye. */
+    const facing = (wallM: number | null) => {
+      const map = new BrickMap({ x: 256, y: 64, z: 512 });
+      map.fillBox(0, 0, 0, 256, 4, 512, P.SOD);
+      if (wallM !== null) map.fillBox(0, 0, Math.round((2 + wallM) * 10), 256, 64, Math.round((2 + wallM) * 10) + 4, P.TIMBER);
+      const s = Session.create({ map, plan: null, spawn: { position: [12.8, 0.4, 2] } }, tun, 7, 0);
+      for (let k = 0; k < 40; k++) s.tick();
+      s.drainEvents();
+      return s;
+    };
+    const eye = (s: Session): V3 => [s.player.position.x, s.player.position.y + s.controller.eyeHeight(s.player), s.player.position.z];
+    const [near, far] = [tun.f('effects.tracer_converge_min_m'), tun.f('effects.tracer_converge_max_m')];
+    // A shot into the wall: its round (and its tracer) joins its path there, cast once as it leaves.
+    const walled = facing(30);
+    expect(walled.aimRange(eye(walled), [0, 0, 1])).toBeCloseTo(30, 0);
+    shoot(walled);
+    const seg = walled.rounds.tracerSegments(t.tracerMaxM);
+    expect(seg.converge.length).toBe(1);
+    expect(seg.converge[0]).toBeCloseTo(30, 0);
+    // Nothing on its line before the map's end, as into the sky: the farthest.
+    const open = facing(null);
+    expect(open.aimRange(eye(open), [0, 0, 1])).toBe(far);
+    shoot(open);
+    expect(open.rounds.tracerSegments(t.tracerMaxM).converge[0]).toBe(far);
+    expect(open.aimRange(eye(open), [0, 0.5, 0.866])).toBe(far);
+    // A wall 2 m off: held at the nearest.
+    const close2 = facing(2);
+    expect(close2.aimRange(eye(close2), [0, 0, 1])).toBe(near);
   });
 
   it("a battle tracer is drawn as the session's are, its streak at most the battle's trail_m, its head from 1.5 m", () => {
@@ -212,8 +279,8 @@ describe("a tracer's look", () => {
     close(first.tail, [50 - 0.8 * 12, 30, 80 - 0.6 * 12], 4, 'tail');
     expect(first.style).toBe(1);
     expect(first.alphaHead).toBe(1);
-    // The battle's amber [1.0, 0.83, 0.45] at 70.
-    close(first.rgb, [70, 58.1, 31.5], 3, 'amber');
+    // The battle's amber [1.0, 0.45, 0.0] at 70.
+    close(first.rgb, [70, 31.5, 0], 3, 'amber');
     // 2000 m/s would be 48 m: held at the battle's 24.
     expect(lengthOf(at(tracers[1].position))).toBeCloseTo(24, 3);
     // Lit in as the session's: a metre out, a quarter lit, and no head yet.
@@ -263,11 +330,20 @@ describe("a tracer's look", () => {
     const noon = built(1);
     expect(night.counts.tracers + night.counts.battleTracers).toBe(2);
     for (let i = 0; i < 2; i++) close(ribbon(noon.frame.ribbons, i).rgb, ribbon(night.frame.ribbons, i).rgb.map((c) => c * 4), 3, `ribbon ${i}`);
-    // The blue at night: [0.20, 0.50, 1.0] at 70.
-    close(ribbon(night.frame.ribbons, 0).rgb, [14, 35, 70], 4, 'blue');
-    const heads = (b: ReturnType<typeof built>) => billboards(b).map((q) => q.slice(4, 7));
+    // The blue at night: [0.05, 0.32, 1.0] at 70.
+    close(ribbon(night.frame.ribbons, 0).rgb, [3.5, 22.4, 70], 4, 'blue');
+    // Its heads 4 times as bright, and by day as white as near the eye (tracer_white_by_day): against
+    // sunlit ground white-hot reads where a pure colour does not.
+    const heads = (b: ReturnType<typeof built>) => billboards(b).map((q) => q.slice(4, 8));
     expect(heads(noon).length).toBe(2);
-    heads(noon).forEach((c, i) => close(c, heads(night)[i].map((v) => v * 4), 4, `head ${i}`));
+    // The session's blue round's head first, the battle's amber's after.
+    const own = [t.tracerColourBlue, t.tracerColour];
+    heads(noon).forEach((q, i) => {
+      const c = own[i].map((v) => v * t.tracerIntensity * 4);
+      const hottest = Math.max(...c);
+      close(q.slice(0, 3), c.map((v) => (v + (hottest - v) * t.tracerCoreWhite) * (t.tracerHeadGain / t.particleGlow)), 3, `head ${i}`);
+      expect(q[3]).toBe(1);
+    });
     // None given: night's.
     close(ribbon(built().frame.ribbons, 0).rgb, ribbon(night.frame.ribbons, 0).rgb, 6, 'default');
   });

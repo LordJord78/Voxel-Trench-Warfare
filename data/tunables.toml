@@ -902,9 +902,14 @@ max_voices          = 64       # sounding or waiting to (a distant one is schedu
 # shot's flash star and light, and how the particles take the world's light. The
 # intensities are against the world's own light; bloom takes what is too bright.
 [effects]
-tracer_colour       = [1.0, 0.83, 0.45] # the reference's: the battle's, and the front's
-tracer_colour_red   = [1.0, 0.16, 0.10] # a player's tracers, in their team's colour
-tracer_colour_blue  = [0.20, 0.50, 1.0]
+# The tracers' colours, linear, as their light is kept at its hue through the tone curve
+# (effects.wgsl keepHue): shown, at a head or a glow, amber (255, 177, 0): hue 42 degrees, saturation
+# 1.0; red (255, 59, 41): hue 5, saturation 0.84; blue (65, 152, 255): hue 213, saturation 0.75.
+# Pure enough that over the night's violet sky their glows' edges still read as their colour. A core
+# near the eye (or by day) is white-hot whatever its colour.
+tracer_colour       = [1.0, 0.45, 0.0] # amber: the battle's, and the front's
+tracer_colour_red   = [1.0, 0.04, 0.018] # a player's tracers, in their team's colour
+tracer_colour_blue  = [0.05, 0.32, 1.0]
 tracer_intensity    = 70.0     # a tracer's core, linear, before the day's boost
 # A tracer as drawn (effects.wgsl's style 1): one ribbon, two terms across it. A core mixed toward
 # white in a glow of its colour, the glow drawn between tracer_glow_min_px and tracer_glow_max_px:
@@ -917,6 +922,8 @@ tracer_glow_share   = 0.35     # the glow's brightness over the core's
 tracer_core_white   = 0.65     # how far the core's colour is mixed toward white, near the eye:
 tracer_white_near_m = 6.0      # all of it within this of the eye, falling (a smoothstep) to none
 tracer_white_far_m  = 40.0     # from here, so a far tracer is its team's colour, not white
+tracer_white_by_day = 1.0      # by day a tracer is at least this as white as near the eye, times
+                               # daylight: against sunlit ground white-hot reads, a pure colour not
 tracer_glow_min_px  = 4.0      # the narrowest the glow is drawn, and the widest, in pixels of the
 tracer_glow_max_px  = 10.0     # internal image
 tracer_head_m       = 0.09     # the burning head where the round is: an emissive disc this wide,
@@ -939,8 +946,9 @@ laser_size_m        = 0.024    # a laser's dot where it strikes, emissive
 laser_glow          = 40.0
 laser_colour        = [1.0, 0.12, 0.06]
 tracer_tail_alpha   = 0.16     # the reference's 40 of 255 at the tail, 255 at the head
-tracer_converge_m   = 20.0     # the player's tracer leaves the muzzle and joins its
-                               # round's path (from the eye) by this far
+tracer_converge_min_m = 8.0    # a tracer leaves the shooter's muzzle and joins its round's
+tracer_converge_max_m = 150.0  # path (from the eye) where the shot was aimed: the first thing on
+                               # the line of sight, within these (the sky: the farthest)
 flash_s             = 0.03     # a shot's flash star and its light, in the world's
                                # seconds: two frames at 60 Hz, five at 144
 particle_attach_s   = 0.15     # the shot's flash and brass leave the rifle as drawn,

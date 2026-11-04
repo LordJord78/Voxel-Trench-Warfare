@@ -14,6 +14,11 @@
 // within whiteNearM of the eye, falling to none at whiteFarM: white-hot close by, the team's colour
 // far off. Seen end on, a tracer's ends within END_ON_PX of each other, it draws nothing: its head (a
 // held billboard, no smaller than MIN_HEAD_PX nor wider than headMaxPx) carries it.
+// The tracers' light (their ribbons, heads and embers, the battle's and the ricochets' too) is lit to
+// keep its hue through the present pass's per-channel tone curve (keepHue): far off and in its glow a
+// tracer shows its team's colour, where the curve alone would take a bright red to white; as white as
+// its core is near the eye (or by day, whiteFloor), it shows as the curve alone shows it, white-hot.
+#include "tone.wgsl"
 
 struct Lit {
   centre: vec3f,
@@ -47,7 +52,14 @@ struct EffectsDraw {
   // Its core's whiteness: all of it within whiteNearM of the eye, none from whiteFarM (metres).
   whiteNearM: f32,
   whiteFarM: f32,
-  pad: f32,
+  // The hour's bias over the exposure (sky.exposure), and the share of the sharpened image the
+  // present pass shows (the rest is its bloom's): with exposureState, the present pass's own scale.
+  bias: f32,
+  sharpShare: f32,
+  // The least a tracer's core is as white as it is near the eye: by day it reads white-hot as before.
+  whiteFloor: f32,
+  pad0: f32,
+  pad1: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -55,6 +67,8 @@ struct EffectsDraw {
 @group(0) @binding(2) var<storage, read> ribbons: array<Ribbon>;
 @group(0) @binding(3) var gDepth: texture_2d<f32>;
 @group(0) @binding(4) var<uniform> draw: EffectsDraw;
+// The exposure's adaptation (auto-exposure.ts): this frame's base, the last frame's correction.
+@group(0) @binding(5) var<storage, read> exposureState: array<f32, 8>;
 
 // The nearest the camera anything is drawn, in voxels: clipped there, not at the eye.
 const NEAR: f32 = 0.5;
@@ -70,6 +84,8 @@ const MIN_HEAD_PX: f32 = 3.0;
 const END_ON_PX: f32 = 1.0;
 // The widest a tracer's core is drawn, as a share of its glow: the glow's colour shows round it.
 const CORE_MAX_SHARE: f32 = 0.45;
+// Shown this near the tone curve's top, a channel is shown as bright as it can be.
+const TONE_TOP: f32 = 0.9999;
 
 const CORNERS = array(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
 
@@ -84,6 +100,8 @@ struct Fragment {
   @location(3) alphas: vec2f,
   // A tracer's glow, and its core's width over the width drawn; zero for the rest.
   @location(4) glow: vec4f,
+  // The tracers' light (1), kept at its hue; and how white it is near the eye (1 within whiteNearM).
+  @location(5) tone: vec2f,
 }
 
 // As camera.wgsl's project, in clip space: perspective-correct, and clipped at NEAR.
@@ -93,6 +111,34 @@ fn toClip(p: vec3f) -> vec4f {
   let aspect = f32(frame.res.x) / f32(frame.res.y);
   let w = dot(d, c.forward);
   return vec4f(dot(d, c.right) / c.tanHalf, dot(d, c.up) / c.tanHalf * aspect, w - NEAR, w);
+}
+
+// The present pass's scale on the sharpened image: the presented exposure (histogram.wgsl's, the
+// hour's bias over the base reckoned from the light and the meter's correction, the last frame's), on
+// its share of the image.
+fn presentedScale() -> f32 {
+  return draw.bias * exposureState[0] * exp2(exposureState[1]) * draw.sharpShare;
+}
+
+// A tracer's light `c` as the present pass is to show it at its own hue: its brightest channel as it
+// is, the others so that the pass's per-channel curve shows them in proportion to it; blended back
+// toward the curve's own look (white-hot where it is bright) by `white` (0 to 1). Exact over black,
+// near it over the scene. Where a channel shows at the curve's top, and on the brightest, the light is
+// left as it was: it shows the same, and the bloom spreads it.
+fn keepHue(c: vec3f, white: f32) -> vec3f {
+  let e = presentedScale();
+  let x = c * e;
+  let m = max(x.r, max(x.g, x.b));
+  if (!(e > 0.0) || !(m > 0.0)) {
+    return c;
+  }
+  let shown = mix(aces(vec3f(m)) * x / m, aces(x), clamp(white, 0.0, 1.0));
+  let keep = (shown >= vec3f(TONE_TOP)) | (x >= vec3f(m));
+  return select(acesInverse(shown) / e, c, keep);
+}
+
+fn luma(c: vec3f) -> f32 {
+  return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
 // A pixel's width at p (voxels), in voxels.
@@ -121,19 +167,27 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
     let b = lit[i];
     var half = abs(b.half);
     var colour = b.colour;
-    if (b.colour.a < 0.0) {
-      // A tracer's head, held as its ribbon is: no smaller than MIN_HEAD_PX, its light kept, nor wider
-      // than headMaxPx, narrowed and not brightened.
-      let pixel = pixelAt(b.centre * toVoxels) * frame.voxel;
-      let drawn = min(max(half, 0.5 * MIN_HEAD_PX * pixel), 0.5 * draw.headMaxPx * pixel);
-      colour = vec4f(b.colour.rgb * min((half / drawn) * (half / drawn), 1.0), 0.0);
-      half = drawn;
+    var tone = vec2f(0.0);
+    if (b.colour.a < -0.5) {
+      // The tracers' light: a head (its alpha -1 less its whiteness), or a strike's ember (-3 less it).
+      let ember = b.colour.a < -2.5;
+      tone = vec2f(1.0, clamp(select(-1.0 - b.colour.a, -3.0 - b.colour.a, ember), 0.0, 1.0));
+      colour = vec4f(b.colour.rgb, 0.0);
+      if (!ember) {
+        // A head, held as its ribbon is: no smaller than MIN_HEAD_PX, its light kept, nor wider than
+        // headMaxPx, narrowed and not brightened.
+        let pixel = pixelAt(b.centre * toVoxels) * frame.voxel;
+        let drawn = min(max(half, 0.5 * MIN_HEAD_PX * pixel), 0.5 * draw.headMaxPx * pixel);
+        colour = vec4f(b.colour.rgb * min((half / drawn) * (half / drawn), 1.0), 0.0);
+        half = drawn;
+      }
     }
     let p = (b.centre + (frame.cam.right * corner.x + frame.cam.up * corner.y) * half) * toVoxels;
     f.clip = toClip(p);
     f.world = p;
     f.uv = corner;
     f.colour = colour;
+    f.tone = tone;
     // A disc (-1), or a square (-2: its half size came negative).
     f.alphas = vec2f(select(-1.0, -2.0, b.half < 0.0));
     return f;
@@ -173,10 +227,12 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
     let core = r.coreShare * width;
     let coreDrawn = min(max(r.coreShare * drawn, narrowest), CORE_MAX_SHARE * drawn);
     let metres = distance((tail + head) * 0.5, frame.cam.origin) * frame.voxel;
-    let white = r.white * (1.0 - smoothstep(draw.whiteNearM, draw.whiteFarM, metres));
-    let hot = mix(r.rgb, vec3f(max(r.rgb.r, max(r.rgb.g, r.rgb.b))), white);
+    // As white as near the eye within whiteNearM, none from whiteFarM; by day, at least whiteFloor.
+    let near = max(1.0 - smoothstep(draw.whiteNearM, draw.whiteFarM, metres), draw.whiteFloor);
+    let hot = mix(r.rgb, vec3f(max(r.rgb.r, max(r.rgb.g, r.rgb.b))), r.white * near);
     f.colour = vec4f(hot * (min(core / coreDrawn, 1.0) * shown), 0.0);
     f.glow = vec4f(r.rgb * (r.glowShare * min(width / drawn, 1.0) * shown), coreDrawn / drawn);
+    f.tone = vec2f(1.0, near);
   }
   return f;
 }
@@ -189,10 +245,15 @@ fn fs(f: Fragment) -> @location(0) vec4f {
   }
   if (f.alphas.x >= 0.0) {
     if (f.glow.a > 0.0) {
-      // A tracer: its core, its share of the width drawn, in its glow; both fading to the tail.
+      // A tracer: its core, its share of the width drawn, in its glow; both fading to the tail. As
+      // white as its core's share of its light where the core is white (near the eye, or by day); its
+      // glow keeps its hue.
       let u2 = f.uv.x * f.uv.x;
-      let core = f.colour.rgb * exp(-3.0 * u2 / (f.glow.a * f.glow.a));
-      return vec4f((core + f.glow.rgb * exp(-3.0 * u2)) * mix(f.alphas.x, f.alphas.y, f.uv.y), 0.0);
+      let fade = mix(f.alphas.x, f.alphas.y, f.uv.y);
+      let core = f.colour.rgb * (exp(-3.0 * u2 / (f.glow.a * f.glow.a)) * fade);
+      let glow = f.glow.rgb * (exp(-3.0 * u2) * fade);
+      let share = luma(core) / max(luma(core + glow), 1e-9);
+      return vec4f(keepHue(core + glow, f.tone.y * share), 0.0);
     }
     // Soft across, fading from the head back to the tail.
     let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.uv.x * f.uv.x);
@@ -201,5 +262,10 @@ fn fs(f: Fragment) -> @location(0) vec4f {
   if (f.alphas.x < -1.5) {
     return f.colour;
   }
-  return f.colour * (1.0 - smoothstep(0.5, 1.0, length(f.uv)));
+  let disc = f.colour * (1.0 - smoothstep(0.5, 1.0, length(f.uv)));
+  if (f.tone.x > 0.5) {
+    // A tracer's head or ember: as white as the core it burns as (near the eye, or by day).
+    return vec4f(keepHue(disc.rgb, f.tone.y), 0.0);
+  }
+  return disc;
 }

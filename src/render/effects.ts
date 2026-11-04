@@ -36,12 +36,14 @@ export const RIBBON_STYLE = { star: 0, tracer: 1 } as const;
  * widest, narrowed and not brightened.
  */
 export const HEAD_BILLBOARD = 3;
+/** A tracer strike's ember: emissive, kept at its hue as a tracer's head is (effects.wgsl keepHue), not held to its pixels. */
+export const EMBER_BILLBOARD = 4;
 /** A billboard's floats, as particles.ts writes them. */
 const BILLBOARD_FLOATS = 9;
 /** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4). */
 const LIT_BYTES = 32;
-/** effects.wgsl's EffectsDraw: two counts and five floats, padded to 16 bytes. */
-const DRAW_PARAMS_BYTES = 32;
+/** effects.wgsl's EffectsDraw: two counts and eight floats, padded to 16 bytes. */
+const DRAW_PARAMS_BYTES = 48;
 /** The particle pool, room for test quads, the battle's allowance (its flares, far shells' flashes and smoke, and fires' flames, embers and smoke), and a head for each tracer drawn. */
 export const MAX_BILLBOARDS = 4096 + 64 + 1024 + 2048;
 /** Every round in flight a tracer, the battle's nearest, and a few shots' stars. */
@@ -52,6 +54,14 @@ export interface EffectsFrame {
   billboardCount: number;
   ribbons: Float32Array;
   ribbonCount: number;
+  /** The least a tracer's core is as white as near the eye (0 to 1): by day, white-hot as before. */
+  whiteFloor?: number;
+}
+
+/** The present pass's scale on the sharpened image, as the effects keep the tracers' hue through it: the hour's bias over the exposure, and the image's share beside its bloom. */
+export interface EffectsTone {
+  bias: number;
+  sharpShare: number;
 }
 
 /** A light that lives a frame or two, as a shot's flash: added in shade outside the denoiser (Task 6). */
@@ -120,6 +130,8 @@ export class Effects {
   private target: GPUTextureView | null = null;
   private billboardCount = 0;
   private ribbonCount = 0;
+  /** The draw's parameters (effects.wgsl EffectsDraw), written when the frame is encoded. */
+  private readonly draw = new ArrayBuffer(DRAW_PARAMS_BYTES);
 
   /** Lit over the scene's group, the key light's map's (`keyRead`) and the haze's (`haze`, froxels.ts). */
   static async compile(device: GPUDevice, scene: GPUBindGroupLayout, keyRead: GPUBindGroupLayout, haze: GPUBindGroupLayout): Promise<EffectsPipelines> {
@@ -146,6 +158,7 @@ export class Effects {
         { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
         { binding: 4, visibility: VF, buffer: { type: 'uniform' } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
       ],
     });
     const lightModule = device.createShaderModule({ label: 'effects light', code: moduleSource(effectsLightSrc) });
@@ -183,9 +196,9 @@ export class Effects {
     return { light, draw, lightLayout, drawLayout };
   }
 
-  /** Over the frame's uniform, the light cells and the key light's map's group (key-shadow.ts `group`). */
-  static create(device: GPUDevice, pipelines: EffectsPipelines, frame: GPUBuffer, cells: LightCells, keyGroup: GPUBindGroup, look: EffectsLook): Effects {
-    return new Effects(device, pipelines, frame, cells, keyGroup, look);
+  /** Over the frame's uniform, the light cells, the key light's map's group (key-shadow.ts `group`) and the exposure's adaptation (auto-exposure.ts `state`). */
+  static create(device: GPUDevice, pipelines: EffectsPipelines, frame: GPUBuffer, cells: LightCells, keyGroup: GPUBindGroup, look: EffectsLook, exposureState: GPUBuffer): Effects {
+    return new Effects(device, pipelines, frame, cells, keyGroup, look, exposureState);
   }
 
   private constructor(
@@ -195,6 +208,7 @@ export class Effects {
     private readonly cells: LightCells,
     private readonly keyGroup: GPUBindGroup,
     readonly look: EffectsLook,
+    private readonly exposureState: GPUBuffer,
   ) {
     const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
     this.billboards = device.createBuffer({ label: 'effects billboards', size: MAX_BILLBOARDS * BILLBOARD_FLOATS * 4, usage: storage });
@@ -232,6 +246,7 @@ export class Effects {
         { binding: 2, resource: { buffer: this.ribbons } },
         { binding: 3, resource: gDepth.createView() },
         { binding: 4, resource: { buffer: this.drawParams } },
+        { binding: 5, resource: { buffer: this.exposureState } },
       ],
     });
   }
@@ -248,16 +263,22 @@ export class Effects {
     new Float32Array(light, 4, 3).set([this.look.glow, this.look.dustKey, this.look.dustSky]);
     queue.writeBuffer(this.lightParams, 0, light);
     // effects.wgsl's EffectsDraw: the counts; the widest a tracer's glow and its head are drawn, and
-    // the narrowest its glow is; where its core's whiteness starts to fall and where it is gone.
-    const draw = new ArrayBuffer(DRAW_PARAMS_BYTES);
-    new Uint32Array(draw, 0, 2).set([this.billboardCount, this.ribbonCount]);
-    new Float32Array(draw, 8, 5).set([this.look.tracerGlowMaxPx, this.look.tracerHeadMaxPx, this.look.tracerGlowMinPx, this.look.tracerWhiteNearM, this.look.tracerWhiteFarM]);
-    queue.writeBuffer(this.drawParams, 0, draw);
+    // the narrowest its glow is; where its core's whiteness starts to fall and where it is gone; the
+    // tone's (encode's), and how white a tracer's core is at least.
+    new Uint32Array(this.draw, 0, 2).set([this.billboardCount, this.ribbonCount]);
+    new Float32Array(this.draw, 8, 5).set([this.look.tracerGlowMaxPx, this.look.tracerHeadMaxPx, this.look.tracerGlowMinPx, this.look.tracerWhiteNearM, this.look.tracerWhiteFarM]);
+    new Float32Array(this.draw, 36, 1)[0] = frame.whiteFloor ?? 0;
   }
 
-  /** Light and draw this frame's effects into the image's `res` corner, seen through `haze` (froxels.ts `group`), timing each pass it runs. */
-  encode(encoder: GPUCommandEncoder, scene: GPUBindGroup, haze: GPUBindGroup, res: readonly [number, number], writes: Writes): void {
+  /**
+   * Light and draw this frame's effects into the image's `res` corner, seen through `haze` (froxels.ts
+   * `group`), timing each pass it runs; the tracers lit to keep their hue through the present pass's
+   * tone at `tone`.
+   */
+  encode(encoder: GPUCommandEncoder, scene: GPUBindGroup, haze: GPUBindGroup, res: readonly [number, number], writes: Writes, tone: EffectsTone = { bias: 1, sharpShare: 1 }): void {
     if (!this.target || !this.drawGroup || !this.lightGroup || this.billboardCount + this.ribbonCount === 0) return;
+    new Float32Array(this.draw, 28, 2).set([tone.bias, tone.sharpShare]);
+    this.device.queue.writeBuffer(this.drawParams, 0, this.draw);
     if (this.billboardCount > 0) {
       const p = encoder.beginComputePass({ label: 'effects light', timestampWrites: writes('effects-light') });
       p.setPipeline(this.pipelines.light);

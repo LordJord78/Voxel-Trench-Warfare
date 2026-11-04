@@ -170,11 +170,13 @@ describe('a frame of effects', () => {
     expect(built.lights.length).toBe(2);
   });
 
-  it("the player's tracer leaves the muzzle and joins the round's path by tracer_converge_m", () => {
+  it("the player's tracer leaves the muzzle and joins the round's path where it was aimed", () => {
     const s = stand();
     const origin: [number, number, number] = [12.8, 2.0, 2];
     const from: [number, number, number] = [12.98, 1.79, 3.16];
-    s.rounds.fire(origin, [0, 0, 880], projectileSpec(tun, 'assault_rifle'), 0, true, from);
+    // Aimed at something 20 m out.
+    const aimedM = 20;
+    s.rounds.fire(origin, [0, 0, 880], projectileSpec(tun, 'assault_rifle'), 0, true, from, aimedM);
     s.rounds.step(1 / 60);
     const b = new EffectsFrameBuilder(t);
     let built = b.build(s, none());
@@ -185,7 +187,7 @@ describe('a frame of effects', () => {
     const flown = path.flown[0];
     const length = Math.hypot(path.head[0] - path.tail[0], path.head[1] - path.tail[1], path.head[2] - path.tail[2]);
     for (const [end, at] of [['head', flown], ['tail', flown - length]] as const) {
-      const share = Math.max(0, 1 - at / t.tracerConvergeM);
+      const share = Math.max(0, 1 - at / aimedM);
       const round = end === 'head' ? path.head : path.tail;
       for (let k = 0; k < 3; k++) expect(drawn[end][k]).toBeCloseTo(round[k] + offset[k] * share, 3);
     }
