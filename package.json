@@ -14,7 +14,8 @@
     "safari": "node tools/safari-report.mjs",
     "stills": "node tools/stills.mjs",
     "video": "node tools/record-video.mjs",
-    "gameplay": "node tools/record-gameplay.mjs"
+    "gameplay": "node tools/record-gameplay.mjs",
+    "tracers": "node tools/tracer-captures.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
