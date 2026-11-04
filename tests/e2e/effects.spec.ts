@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { PNG } from 'pngjs';
+import { projectToPixel } from '../../src/render/camera';
 import { paletteData } from '../../src/world/materials';
 import { hooks, openGame } from './support/app';
 
@@ -489,49 +490,64 @@ test("a far tracer's white-hot core stays an unbroken line, as its glow does", a
   // A tracer's core (3.5 cm) is under a tenth of a pixel 150 m out: drawn at 0.45 of the glow there,
   // 1.8 px at the glow's 4 px floor, its light kept, as the glow's is; drawn at its share of a glow
   // two pixels across, it broke into dashes (a third of the columns all but dark, and neighbours a
-  // third apart).
+  // third apart). Read at the image's full size (dynamic resolution could change it between the two
+  // reads), and only within 12 px of the line it is drawn on: the stars twinkle over the rest of the
+  // night sky.
   const errors = await openGame(page);
   const at = await hooks(page, async (h) => {
     h.view('step');
     h.setTimeOfDay(21);
     h.jitter(false);
+    h.setQuality({ dynres: false, scale: 1 });
     h.freeze();
     await h.stepFrames(40);
-    const c = h.camera();
-    return { position: c.position, yaw: c.yaw, pitch: c.pitch };
+    return { pose: h.camera(), res: h.stats().res };
   });
   // As the far ribbon above: 150 m out, 20° over the view, 20 m across it and rising half a metre.
   const RAD = Math.PI / 180;
-  const y = at.yaw * RAD;
-  const p = (at.pitch + 20) * RAD;
-  const centre = [0, 1, 2].map((k) => at.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 150);
+  const pose = at.pose;
+  const y = pose.yaw * RAD;
+  const p = (pose.pitch + 20) * RAD;
+  const centre = [0, 1, 2].map((k) => pose.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 150);
   const right = [Math.cos(y), 0, -Math.sin(y)];
-  const tail = [0, 1, 2].map((k) => centre[k] - right[k] * 10 - (k === 1 ? 0.25 : 0));
-  const head = [0, 1, 2].map((k) => centre[k] + right[k] * 10 + (k === 1 ? 0.25 : 0));
+  const tail = [0, 1, 2].map((k) => centre[k] - right[k] * 10 - (k === 1 ? 0.25 : 0)) as [number, number, number];
+  const head = [0, 1, 2].map((k) => centre[k] + right[k] * 10 + (k === 1 ? 0.25 : 0)) as [number, number, number];
+  // Where it is drawn in the internal image: the line between its ends' pixels, as the frame's camera
+  // projects them (a straight line seen through it stays straight).
+  const ends = [tail, head].map((q) => projectToPixel(pose, at.res, q));
+  expect(ends.every((e) => e !== null)).toBe(true);
+  const [a, b] = ends as [number, number][];
   const sums = await hooks(
     page,
     async (h, arg) => {
-      const { tail, head } = arg as { tail: [number, number, number]; head: [number, number, number] };
+      const { tail, head, a, b, band, res } = arg as { tail: [number, number, number]; head: [number, number, number]; a: [number, number]; b: [number, number]; band: number; res: [number, number] };
+      // The rows the band covers, over the whole width.
+      const top = Math.max(0, Math.floor(Math.min(a[1], b[1]) - band - 1));
+      const bottom = Math.min(res[1], Math.ceil(Math.max(a[1], b[1]) + band + 1));
+      const box: [number, number, number, number] = [0, top, res[0], bottom - top];
       const read = async (on: boolean) => {
         h.debugTracer(on ? { tail, head, kind: 2 } : null);
         await h.stepFrames(2);
-        const s = h.stats();
-        const box: [number, number, number, number] = [0, 0, s.res[0], Math.floor(s.res[1] / 2)];
-        return { box, rgb: await h.sharpAt(box) };
+        const now = h.stats().res;
+        if (now[0] !== res[0] || now[1] !== res[1]) throw new Error(`the image went from ${res} to ${now}`);
+        return h.sharpAt(box);
       };
       const without = await read(false);
       const withIt = await read(true);
       h.debugTracer(null);
-      const [w, hgt] = [without.box[2], without.box[3]];
-      const lum = (a: number[], i: number) => 0.2126 * a[i * 3] + 0.7152 * a[i * 3 + 1] + 0.0722 * a[i * 3 + 2];
-      // Each column's light from the tracer, summed down it.
+      const [w, hgt] = [box[2], box[3]];
+      const lum = (c: number[], i: number) => 0.2126 * c[i * 3] + 0.7152 * c[i * 3 + 1] + 0.0722 * c[i * 3 + 2];
+      // Each column's light from the tracer, summed down the band about where the line crosses it.
       return Array.from({ length: w }, (_, x) => {
+        const line = a[1] + ((x + 0.5 - a[0]) / (b[0] - a[0])) * (b[1] - a[1]);
         let sum = 0;
-        for (let yy = 0; yy < hgt; yy++) sum += lum(withIt.rgb, yy * w + x) - lum(without.rgb, yy * w + x);
+        for (let yy = 0; yy < hgt; yy++) {
+          if (Math.abs(top + yy + 0.5 - line) <= band) sum += lum(withIt, yy * w + x) - lum(without, yy * w + x);
+        }
         return sum;
       });
     },
-    { tail, head },
+    { tail, head, a, b, band: 12, res: at.res },
   );
   // The middle 80% of the columns it crosses.
   const touched = sums.map((v, x) => (v > 0.05 ? x : -1)).filter((x) => x >= 0);
