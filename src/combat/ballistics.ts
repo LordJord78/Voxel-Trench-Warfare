@@ -16,8 +16,10 @@
  * swap-with-last. Each substep's segment is raycast through the brick map
  * (world/raycast.ts): the first solid voxel stops the round, and water, wire,
  * cloth and air let it through; where it goes into water, it splashes. A round
- * past its range or flight time, or out of the world's box, is retired; the far
- * field is not hit.
+ * past its range or flight time, or out over the world's sides or under its
+ * floor, is retired; one over its top flies on (nothing up there is solid, and
+ * the cast clips to the box), so a stream fired up does not vanish in mid-air.
+ * The far field is not hit.
  */
 
 import { hypot } from '../core/dmath';
@@ -267,7 +269,7 @@ export class Rounds {
     this.listenRadius = radiusM;
   }
 
-  /** One tick of `dt` seconds in substeps: this step's impacts, cracks and passes, and rounds retired by range, age or the world's edge. */
+  /** One tick of `dt` seconds in substeps: this step's impacts, cracks and passes, and rounds retired by range, age, the world's sides or its floor. */
   step(dt: number): void {
     this.impacts.length = 0;
     this.bodyHits.length = 0;
@@ -432,8 +434,9 @@ export class Rounds {
     const x = this.pos[p];
     const y = this.pos[p + 1];
     const z = this.pos[p + 2];
-    const [sx, sy, sz] = this.size;
-    const retired = this.distance[i] >= this.t.maxRangeM || this.age[i] >= this.t.maxFlightS || x < 0 || y < 0 || z < 0 || x >= sx || y >= sy || z >= sz;
+    // Over the world's top it flies on, to its range or its flight time: nothing above it is solid.
+    const [sx, , sz] = this.size;
+    const retired = this.distance[i] >= this.t.maxRangeM || this.age[i] >= this.t.maxFlightS || x < 0 || y < 0 || z < 0 || x >= sx || z >= sz;
     if (retired) this.hearPass(i);
     return retired;
   }
