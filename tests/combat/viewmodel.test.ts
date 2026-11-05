@@ -141,7 +141,7 @@ describe('the viewmodel', () => {
     // the hands' delta, from the eye along the view as the last tick left it, to the last bit.
     const held = (point: readonly number[], hands: HandsDelta) => {
       const p = s.player;
-      expect(s.viewAt(1)).toEqual({ yaw: 0, pitch: 0, roll: 0, fov: 0 });
+      expect(s.viewAt(1)).toEqual({ yaw: 0, pitch: 0, roll: 0, fov: 0, shake: [0, 0, 0] });
       const { forward, right, up } = viewBasis(p.yaw, p.pitch);
       const v = modelToView(heldPose(t, s.holding(), still, 0, 0, 0, 0, 1, null, hands), point);
       const eye = [p.position.x, p.position.y + s.controller.eyeHeight(p), p.position.z];

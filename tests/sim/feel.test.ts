@@ -44,7 +44,9 @@ describe('feel in play', () => {
     const impacts = hold(stand(arena()), 180, { fire: true });
     expect(impacts.length).toBeGreaterThanOrEqual(30);
     const mean = (xs: Impact[]) => xs.reduce((a, i) => a + i.position[1], 0) / xs.length;
-    expect(mean(impacts.slice(19, 30))).toBeGreaterThan(mean(impacts.slice(0, 5)) + 0.1);
+    // Higher by 0.115 m on the wall 8 m out: 0.82°, the same share of the AK's climb ceiling (1.90°,
+    // the shots spec's §3) as the 0.1 m the reference's 1.65° gave.
+    expect(mean(impacts.slice(19, 30))).toBeGreaterThan(mean(impacts.slice(0, 5)) + 0.115);
   });
 
   it('the cosmetic layer cannot move a round', () => {

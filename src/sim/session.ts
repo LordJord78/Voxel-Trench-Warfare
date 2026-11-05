@@ -106,12 +106,19 @@ export function idleIntent(): MoveIntent {
   return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false, dig: false };
 }
 
-/** How the rifle and suppression turn the view, in degrees: recoil and the flinch (yaw, pitch), the shake (pitch, roll), and the view kick's pulse of the field of view. */
+/**
+ * How the rifle and suppression turn the view, in degrees: recoil and the flinch (yaw, pitch), the
+ * shakes of suppression and a blast (pitch, roll), the view kick's pulse of the field of view, and
+ * its camera's roll and a shot's shake (pitch, yaw, and `shake`, the eye moved, in metres along the
+ * world's axes). Every round leaves the eye along the player's view plus recoil and the flinch alone:
+ * the rest is the camera's.
+ */
 export interface ViewOffsets {
   yaw: number;
   pitch: number;
   roll: number;
   fov: number;
+  shake: [number, number, number];
 }
 
 /** A shot, from where it left along its direction (unit), whether it is a tracer, and the muzzle it flashed at; `tick` is the session's tick that fired it. */
@@ -284,6 +291,8 @@ export class Session {
   private readonly dispersion: Rng;
   private readonly recoilRng: Rng;
   private readonly viewKickRng: Rng;
+  /** The view kick's camera, its roll's side and its shake: a stream of its own, so drawing them shifts no other. */
+  private readonly cameraRng: Rng;
   private readonly suppressionRng: Rng;
   /** Others' shotguns' pellets about their shot: drawn here, not by the shooter (cosmetic: hits are theirs to claim). */
   private readonly remoteRng: Rng;
@@ -337,6 +346,7 @@ export class Session {
     this.dispersion = this.streams.derive('combat.dispersion');
     this.recoilRng = this.streams.derive('combat.recoil');
     this.viewKickRng = this.streams.derive('combat.viewkick');
+    this.cameraRng = this.streams.derive('combat.viewkick.camera');
     this.suppressionRng = this.streams.derive('combat.suppression');
     this.remoteRng = this.streams.derive('combat.remote_pellets');
     this.chipEnergyJ = tun.f('destruction.chip_energy_j');
@@ -749,7 +759,7 @@ export class Session {
     this.recoil.scale = stance * (1 + (this.hands.adsRecoil - 1) * this.aimed);
     for (const a of this.arms) {
       a.recoil.tick(dt);
-      a.viewKick.tick(dt);
+      a.viewKick.tick(dt, this.cameraRng);
     }
     this.suppression.tick(dt);
     this.blastShake.tick(dt);
@@ -792,7 +802,7 @@ export class Session {
         this.throwShot(muzzle, arm.spec.flash);
         const kick = this.recoil.kickPitch;
         this.recoil.shot(this.recoilRng);
-        this.viewKick.shot(this.recoil.kickPitch - kick, this.viewKickRng);
+        this.viewKick.shot(this.recoil.kickPitch - kick, this.viewKickRng, this.cameraRng);
         this.shots.push({ origin: eye, dir, aim, tracer });
         const mark = encodeShotMark({ tracer, kind, suppressed: arm.spec.suppressed, gun: arm.spec.gun.key });
         this.events.shots.push({ tick: this.ticks, origin: eye, dir, tracer, muzzle, mark, flash: arm.spec.flash, report: arm.spec.report });
@@ -1026,11 +1036,13 @@ export class Session {
   viewAt(alpha = this.clock.alpha): ViewOffsets {
     const a = this.prevView;
     const b = this.view();
+    const at = (from: number, to: number) => from + (to - from) * alpha;
     return {
-      yaw: a.yaw + (b.yaw - a.yaw) * alpha,
-      pitch: a.pitch + (b.pitch - a.pitch) * alpha,
-      roll: a.roll + (b.roll - a.roll) * alpha,
-      fov: a.fov + (b.fov - a.fov) * alpha,
+      yaw: at(a.yaw, b.yaw),
+      pitch: at(a.pitch, b.pitch),
+      roll: at(a.roll, b.roll),
+      fov: at(a.fov, b.fov),
+      shake: [at(a.shake[0], b.shake[0]), at(a.shake[1], b.shake[1]), at(a.shake[2], b.shake[2])],
     };
   }
 
@@ -1071,14 +1083,18 @@ export class Session {
     return this.rifleToWorld(this.arm.spec.port);
   }
 
-  /** A rifle point (model metres) in the world, from the eye along the view with its offsets and the hands' as the last tick left them; the walk's sway and dip (a centimetre) are the camera's. */
+  /**
+   * A rifle point (model metres) in the world, from the eye along the view with its offsets and the
+   * hands' as the last tick left them: the gun is held in the view, so a shot's shake, which moves the
+   * eye, carries it too. The walk's sway and dip (a centimetre) are the camera's.
+   */
   private rifleToWorld(point: readonly number[]): [number, number, number] {
     const p = this.player;
     const view = this.view();
     const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
     const hands = this.handsStill ? ZERO_HANDS : this.handling.delta;
     const v = modelToView(heldPose(this.viewmodel, this.holding(), this.kick(), 0, 0, this.raised, this.aimed, this.ready, this.stroke, hands), point);
-    const eye = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
+    const eye = [p.position.x + view.shake[0], p.position.y + this.controller.eyeHeight(p) + view.shake[1], p.position.z + view.shake[2]];
     return [0, 1, 2].map((k) => eye[k] + right[k] * v[0] + up[k] * v[1] + forward[k] * v[2]) as [number, number, number];
   }
 
@@ -1088,14 +1104,19 @@ export class Session {
     return { back: k.back, up: k.up, side: k.side, pitch: k.pitch, yaw: k.yaw, roll: k.roll };
   }
 
-  /** The view's offsets as the last tick left them. */
+  /**
+   * The view's offsets as the last tick left them. The view kick's camera adds to the camera's alone:
+   * its roll to the shakes' roll, and a shot's shake to the turn and the eye.
+   */
   private view(): ViewOffsets {
     const shake = this.suppression.shake;
+    const camera = this.viewKick;
     return {
-      yaw: this.recoil.yaw + this.suppression.flinchYaw,
-      pitch: this.recoil.pitch + this.suppression.flinchPitch + shake.pitch + this.blastShake.pitch,
-      roll: shake.roll + this.blastShake.roll,
-      fov: this.viewKick.fovOffset,
+      yaw: this.recoil.yaw + this.suppression.flinchYaw + camera.shake.yaw,
+      pitch: this.recoil.pitch + this.suppression.flinchPitch + shake.pitch + this.blastShake.pitch + camera.shake.pitch,
+      roll: shake.roll + this.blastShake.roll + camera.camRoll,
+      fov: camera.fovOffset,
+      shake: [camera.shake.offset[0], camera.shake.offset[1], camera.shake.offset[2]],
     };
   }
 

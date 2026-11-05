@@ -1,9 +1,9 @@
 /**
  * The gun in the hands, moving as a held gun does (the shots spec's §2): it bobs with the stride,
  * trails the view's turn, breathes at rest, swings low and across at a sprint, dips on a hard
- * landing, and works through its reload and its pump. The session ticks it with the tick's own time
- * and turn, so the muzzle the tracers and the flash leave from is the drawn gun's; none of it moves
- * a round, which leaves from the eye.
+ * landing, overshoots the aim as the sights arrive (§3), and works through its reload and its pump.
+ * The session ticks it with the tick's own time and turn, so the muzzle the tracers and the flash
+ * leave from is the drawn gun's; none of it moves a round, which leaves from the eye.
  *
  * What it gives is a change to the held pose (viewmodel.ts `heldPose`, which adds it after the aim's
  * blend): an offset in view space, metres x right, y up and z forward, and turns in degrees, pitch
@@ -78,6 +78,9 @@ export interface HandlingTunables {
   landingHardMps: number;
   landingSettleS: number;
   landingDamping: number;
+  /** An aim-in: the pitch (°) the muzzle is carried past the aim as the sights arrive, and how long it takes to ease back. */
+  aimOvershootDeg: number;
+  aimOvershootS: number;
   /** The long guns' reload: its keys' phases and poses. */
   reloadTiltAt: number;
   reloadTiltM: V3;
@@ -150,6 +153,8 @@ export function handlingTunables(tun: Tunables): HandlingTunables {
     landingHardMps: f('landing_hard_mps'),
     landingSettleS: f('landing_settle_s'),
     landingDamping: f('landing_damping'),
+    aimOvershootDeg: f('aim_overshoot_deg'),
+    aimOvershootS: f('aim_overshoot_s'),
     reloadTiltAt: f('reload_tilt_at'),
     reloadTiltM: v('reload_tilt_m'),
     reloadTiltPitchDeg: f('reload_tilt_pitch_deg'),
@@ -328,6 +333,9 @@ export class Handling {
   private land = 0;
   private landSpeed = 0;
   private wasOnGround = true;
+  /** The aim's blend last tick, and how long since the sights arrived while their overshoot eases back (null when it has). */
+  private lastAimed = 0;
+  private overshoot: number | null = null;
   /** The stride's last phase, and whether this is the second of a pair (the swing across runs over two). */
   private lastBob = 0;
   private secondStride = false;
@@ -423,6 +431,17 @@ export class Handling {
     this.wasOnGround = i.onGround;
     o[1] -= t.landingDropM * this.land;
     d.pitch += t.landingPitchDeg * this.land;
+
+    // An aim-in: as the sights arrive (the aim's blend reaching 1), the muzzle is carried on past the
+    // aim, all of it on that tick, and eased back to it over aim_overshoot_s, as a reload let go is.
+    if (aimed >= 1 && this.lastAimed < 1) this.overshoot = 0;
+    else if (this.overshoot !== null) this.overshoot += i.dt;
+    this.lastAimed = aimed;
+    if (this.overshoot !== null) {
+      const left = 1 - smooth(Math.min(1, this.overshoot / t.aimOvershootS));
+      if (left > 0) d.pitch += t.aimOvershootDeg * left;
+      else this.overshoot = null;
+    }
 
     addScaled(d, this.reloadPose(i, cues), 1);
 

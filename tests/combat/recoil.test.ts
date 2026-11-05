@@ -7,7 +7,8 @@ import { loadTunables, Tunables } from '../../src/core/tunables';
 
 // Ported from reference/python/tests/test_recoil.py: the rifle's brief — a tiny kick, a fast
 // recovery, a quick vertical climb that plateaus, a mild rightward drift after about six rounds —
-// as numbers, against the tuning file.
+// as numbers, against the tuning file. Its numbers are the shots spec's §3 table (the AK: a kick of
+// 0.44°, its climb's ceiling 1.90°): kick ×1.3, climb ×1.2 and ceiling ×1.15 on the reference's.
 const TICK = 1 / 60;
 const WEAPON = 'assault_rifle';
 const tun = loadTunables();
@@ -69,6 +70,26 @@ describe('recoil', () => {
       }
     });
 
+    it("every gun's kick, climb per shot and ceiling are the shots spec's §3 table, and the defaults scale the same way", () => {
+      // Degrees: the reference's kick ×1.3, climb per shot ×1.2 and ceiling ×1.15.
+      const table: Record<string, [number, number, number]> = {
+        defaults: [0.39, 0.36, 2.3],
+        assault_rifle: [0.44, 0.32, 1.9],
+        m4: [0.39, 0.26, 1.67],
+        mp5: [0.23, 0.16, 1.09],
+        m249: [0.42, 0.2, 2.53],
+        svd: [2.08, 1.08, 2.88],
+        m870: [3.9, 1.8, 3.45],
+        m17: [1.17, 0.66, 2.3],
+        pm: [1.37, 0.72, 2.3],
+      };
+      expect(tun.sections('recoil')).toEqual(Object.keys(table).sort());
+      for (const [key, row] of Object.entries(table)) {
+        const p = recoilProfile(tun, key);
+        expect([p.kickPitchDeg, p.climbPerShotDeg, p.climbCeilingDeg], key).toEqual(row);
+      }
+    });
+
     it('a profile missing a field says which', () => {
       const broken = new Tunables({ recoil: { defaults: { kick_pitch_deg: 0.3 }, broken: {} } });
       expect(() => recoilProfile(broken, 'broken')).toThrow(/settle_time_s/);
@@ -85,7 +106,7 @@ describe('recoil', () => {
     it('peaks at the angle it was tuned to', () => {
       const { recoil, rng } = make();
       recoil.shot(rng);
-      expect(Math.abs(recoil.kickPitch / 0.34 - 1)).toBeLessThanOrEqual(0.25);
+      expect(Math.abs(recoil.kickPitch / 0.44 - 1)).toBeLessThanOrEqual(0.25);
     });
 
     it('is at its peak on the tick the round leaves', () => {
@@ -132,12 +153,26 @@ describe('recoil', () => {
       const late = pitches[29] - pitches[25];
       expect(early).toBeGreaterThan(0);
       expect(late).toBeLessThan(early * 0.25);
-      expect(pitches[29]).toBeLessThanOrEqual(1.65 * 1.35);
+      expect(pitches[29]).toBeLessThanOrEqual(1.9 * 1.35);
+    });
+
+    it("arrives at its plateau in about 8 rounds, as the rifle's table says", () => {
+      // [recoil.assault_rifle] climb_per_shot_deg: "so the plateau arrives in about 8 rounds". Each
+      // round climbs its share of what is left under the ceiling, and nothing bleeds off mid-burst:
+      // three quarters of the way up by round 8, and not yet by round 6.
+      const ceiling = recoilProfile(tun, WEAPON).climbCeilingDeg;
+      const after = (rounds: number) => {
+        const r = make();
+        burst(r, rounds);
+        return r.recoil.climbPitch / ceiling;
+      };
+      expect(after(8)).toBeGreaterThanOrEqual(0.75);
+      expect(after(6)).toBeLessThan(0.75);
     });
 
     it('never points you at the sky', () => {
       const shots = burst(make(), 120);
-      expect(shots[shots.length - 1][1]).toBeLessThan(1.65 * 1.5);
+      expect(shots[shots.length - 1][1]).toBeLessThan(1.9 * 1.5);
     });
 
     it('bleeds off when you stop', () => {

@@ -3,10 +3,11 @@
  * the eye (which follows the body's height, so crouching is smooth), bobbing
  * with the stride, dipping on a hard landing, and narrowing for the periscope,
  * eased so raising it does not read as a cut; turned by the rifle's recoil,
- * suppression's flinch and shake, and the view kick's pulse of the field of
- * view, interpolated between ticks as the foot is; and narrowed by the sight's magnification
+ * suppression's flinch and shake, the view kick's pulse of the field of view
+ * and its camera's roll, and turned and moved by a shot's shake, interpolated
+ * between ticks as the foot is; and narrowed by the sight's magnification
  * as the sights come up. Python's `_place_camera`
- * and `_place_viewmodel`, without the stride's roll (the shake's it carries).
+ * and `_place_viewmodel`, without the stride's roll (the shakes' it carries).
  *
  * At 10 cm the ground is all steps: the body snaps up and down them, and
  * stands or raises the periscope in a tick. The eye eases those jumps out
@@ -98,12 +99,13 @@ export class CameraRig {
     // The sway leans along the camera's right, a few millimetres each stride.
     const yaw = player.yaw * RAD;
     const lean = sway * 0.4;
-    // The view as the rifle sees it: its recoil and the flinch, with the shake of suppression and
-    // the view kick's pulse of the field of view (the round leaves before the shake: it is the
-    // camera's alone), between ticks as the foot is.
+    // The view as the rifle sees it: its recoil and the flinch, with the shakes, the view kick's pulse
+    // of the field of view and its camera's roll, and a shot's shake moving the eye (the round leaves
+    // along the aim alone: these are the camera's), between ticks as the foot is.
     const view = session.viewAt();
+    const [sx, sy, sz] = view.shake;
     return {
-      position: [foot.x + Math.cos(yaw) * lean, body + this.trail + bob + dip, foot.z - Math.sin(yaw) * lean],
+      position: [foot.x + Math.cos(yaw) * lean + sx, body + this.trail + bob + dip + sy, foot.z - Math.sin(yaw) * lean + sz],
       yaw: player.yaw + view.yaw,
       pitch: player.pitch + view.pitch,
       roll: view.roll,

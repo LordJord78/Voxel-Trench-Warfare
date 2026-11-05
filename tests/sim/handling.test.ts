@@ -529,9 +529,18 @@ describe('the gun in the hands, in play', () => {
     still.handsStill = true;
     for (const s of [moving, still]) s.intent = { ...idleIntent(), aim: true };
     const ups: number[] = [];
+    let arrived: number | null = null;
     for (let k = 0; k < 240; k++) {
       for (const s of [moving, still]) s.tick();
       if (moving.aimed < 1) continue;
+      // As the sights arrive, the muzzle overshoots the aim (the shots spec's §3), eased back to it
+      // over aim_overshoot_s: the hands' pitch, from the tick the sights are up.
+      arrived ??= k;
+      if ((k - arrived) * TICK < ht.aimOvershootS) {
+        expect(moving.handling.delta.pitch, `tick ${k}`).toBeGreaterThan(0);
+        if (k === arrived) expect(moving.handling.delta.pitch).toBe(ht.aimOvershootDeg);
+        continue;
+      }
       // Still and aimed, the hands' delta is breathing alone, at 0.35 of it, carried along the view.
       const hands = moving.handling.delta;
       expect([hands.offset[2], hands.pitch, hands.yaw, hands.roll]).toEqual([0, 0, 0, 0]);

@@ -70,6 +70,8 @@ describe('handling', () => {
       shellPushM: [0, 0.02, 0], shellPitchDeg: 6, shellBaseS: 0.5, shellEachS: 0.5,
       pumpAfterS: 0.12, pumpBackM: 0.035, pumpStrokeS: 0.12,
       dryReloadS: 0.25,
+      // The shots spec's §3: an aim-in overshoots.
+      aimOvershootDeg: 0.4, aimOvershootS: 0.15,
     });
   });
 
@@ -257,6 +259,40 @@ describe('handling', () => {
     expect(soft.tick({ ...REST, landingImpact: 2 }).delta.offset[1]).toBeCloseTo((-0.03 * 2) / 8, 12);
     // Standing, an impact the body still carries is no landing.
     for (const r of run(new Handling(t), 10, () => ({ landingImpact: 9 }))) expect(r.delta).toEqual(ZERO_HANDS);
+  });
+
+  it('an aim-in overshoots: the muzzle 0.4° past the aim as the sights arrive, eased back to it over 0.15 s', () => {
+    // The shots spec's §3. Held at breathing's zero (time 0), nothing else moves the gun: none of it
+    // while the sights come up (over 0.2 s); all of it, muzzle up, on the tick the aim's blend reaches
+    // 1; then less each tick, never past the aim, and none from 0.15 s on. The gun's pitch alone.
+    const up = Math.round(0.2 / TICK);
+    const coming = run(new Handling(t), 40, (k) => ({ aimed: Math.min(1, (k + 1) / up) })).map((r) => r.delta);
+    const arrived = up - 1;
+    for (let k = 0; k < arrived; k++) expect(coming[k], `tick ${k}`).toEqual(ZERO_HANDS);
+    expect(coming[arrived]).toEqual({ offset: [0, 0, 0], pitch: 0.4, yaw: 0, roll: 0 });
+    for (let k = arrived + 1; k < 40; k++) {
+      const d = coming[k];
+      expect([...d.offset, d.yaw, d.roll], `tick ${k}`).toEqual([0, 0, 0, 0, 0]);
+      if ((k - arrived) * TICK < t.aimOvershootS) {
+        expect(d.pitch, `tick ${k}`).toBeGreaterThan(0);
+        expect(d.pitch, `tick ${k}`).toBeLessThan(coming[k - 1].pitch);
+      } else {
+        expect(d, `tick ${k}`).toEqual(ZERO_HANDS);
+      }
+    }
+    // Eased back, not snapped: most of it a tick on, half of it at about half the time.
+    expect(coming[arrived + 1].pitch).toBeGreaterThan(0.4 * 0.9);
+    expect(coming[arrived + 4].pitch).toBeGreaterThan(0.4 / 2);
+    expect(coming[arrived + 5].pitch).toBeLessThan(0.4 / 2);
+    // Only an arrival: the sights brought most of the way up (to 0.9) and down again move nothing.
+    for (const r of run(new Handling(t), 61, (k) => ({ aimed: Math.max(0, 0.9 - Math.abs(k - 30) * 0.03) }))) expect(r.delta).toEqual(ZERO_HANDS);
+    // Up (arriving on the first tick), held, down and up again: once each time they arrive, and
+    // not as they leave.
+    const script = (k: number) => (k < 30 ? 1 : k < 42 ? 1 - (k - 29) / 12 : Math.min(1, (k - 41) / 12));
+    const pitches = run(new Handling(t), 80, (k) => ({ aimed: script(k) })).map((r) => r.delta.pitch);
+    const over = (k: number) => (k >= 0 && k * TICK < t.aimOvershootS) || (k >= 53 && (k - 53) * TICK < t.aimOvershootS);
+    pitches.forEach((p, k) => (over(k) ? expect(p, `tick ${k}`).toBeGreaterThan(0) : expect(p, `tick ${k}`).toBe(0)));
+    expect([pitches[0], pitches[53]]).toEqual([0.4, 0.4]);
   });
 
   it("a long gun's reload passes mag-out at 0.28, mag-in at 0.62 and bolt at 0.82, each once", () => {

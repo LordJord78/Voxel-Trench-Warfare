@@ -24,7 +24,7 @@ function standing(t = tun): Session {
 }
 
 describe('the camera rig', () => {
-  it('carries recoil, flinch, shake and the FOV pulse in the pose, eased between ticks as the foot is', () => {
+  it("carries recoil, flinch, shake, the camera's roll and the FOV pulse in the pose, and the shot's shake in the eye, eased between ticks as the foot is", () => {
     // Mouse look turns the view every frame, and frames do not fall on ticks: offsets that moved
     // only on ticks would judder against it.
     const s = standing();
@@ -33,16 +33,36 @@ describe('the camera rig', () => {
     s.suppression.crack(0.5, Rng.root(1).derive('crack'));
     const offsets = () => {
       const shake = s.suppression.shake;
-      return { yaw: s.recoil.yaw + s.suppression.flinchYaw, pitch: s.recoil.pitch + s.suppression.flinchPitch + shake.pitch, roll: shake.roll, fov: s.viewKick.fovOffset };
+      // The view kick's camera: its roll, and a shot's shake, which turns the view and moves the eye.
+      const k = s.viewKick;
+      return {
+        yaw: s.recoil.yaw + s.suppression.flinchYaw + k.shake.yaw,
+        pitch: s.recoil.pitch + s.suppression.flinchPitch + shake.pitch + k.shake.pitch,
+        roll: shake.roll + k.camRoll,
+        fov: k.fovOffset,
+        x: k.shake.offset[0],
+        y: k.shake.offset[1],
+        z: k.shake.offset[2],
+      };
     };
     const before = offsets();
     s.tick();
     const after = offsets();
+    // A body standing on the ground records a little landing each tick (0.29 m/s): as standing() does, none.
+    s.player.landingImpact = 0;
     expect(Math.abs(s.recoil.pitch)).toBeGreaterThan(0);
     expect(Math.abs(s.suppression.flinchPitch)).toBeGreaterThan(0);
     expect(Math.abs(after.roll)).toBeGreaterThan(0);
     expect(Math.abs(after.pitch - before.pitch)).toBeGreaterThan(1e-3);
+    // A shot's own: the camera rolled, and the eye shaking on both ticks.
+    expect(Math.abs(s.viewKick.camRoll)).toBeGreaterThan(0);
+    for (const o of [before, after]) expect(Math.hypot(o.x, o.y, o.z)).toBeGreaterThan(0);
     const rig = new CameraRig(rigTunables(tun));
+    // Standing still, the eye is the foot's, raised: no bob, lean, dip or step to ease.
+    const eye = () => {
+      const f = s.footAt();
+      return [f.x, f.y + s.controller.eyeHeight(s.player), f.z];
+    };
     // No tick runs while the frames creep a quarter, then three quarters, of the way to the next.
     for (const [creep, alpha] of [[0, 0], [0.25, 0.25], [0.5, 0.75]]) {
       expect(s.clock.advance(creep / 60)).toBe(0);
@@ -53,6 +73,8 @@ describe('the camera rig', () => {
       expect(pose.pitch).toBeCloseTo(s.player.pitch + at('pitch'), 9);
       expect(pose.roll).toBeCloseTo(at('roll'), 9);
       expect(pose.fov).toBeCloseTo(tun.f('camera.fov') + at('fov'), 9);
+      const e = eye();
+      (['x', 'y', 'z'] as const).forEach((c, i) => expect(pose.position[i], c).toBeCloseTo(e[i] + at(c), 9));
     }
   });
 
@@ -198,6 +220,27 @@ describe('the rifle as the rig draws it', () => {
     // 0) and the session fires from the last, and a still gun breathes between the two. A shot's own
     // muzzle is carried to the drawn gun's in effects-frame (its drift), as in play.
     s.handsStill = true;
+    const rig = new CameraRig(rigTunables(tun));
+    const drawn = through(rig.rifle(s, rig.pose(s, 1 / 60)).toWorld, rifleModel().muzzle);
+    const fired = s.muzzle();
+    for (let k = 0; k < 3; k++) expect(drawn[k]).toBeCloseTo(fired[k], 5);
+  });
+
+  it('its muzzle is drawn where the session fires from with the camera rolled and shaken by a shot', () => {
+    // The gun is held in the view: the camera's roll turns it and the shot's shake moves it with the
+    // eye, so the session's muzzle (where the tracer and flash start) is carried by both as well.
+    const s = standing();
+    s.handsStill = true;
+    s.intent = { ...idleIntent(), fire: true };
+    s.tick();
+    s.intent = idleIntent();
+    s.tick();
+    expect(Math.abs(s.viewKick.camRoll)).toBeGreaterThan(0);
+    expect(Math.hypot(...s.viewKick.shake.offset)).toBeGreaterThan(0);
+    // No landing's dip of the eye (the camera's alone), as standing() has it.
+    s.player.landingImpact = 0;
+    // A frame a whisker short of the next tick: drawn as the last tick left the view.
+    expect(s.clock.advance(s.clock.dt * (1 - 1e-9))).toBe(0);
     const rig = new CameraRig(rigTunables(tun));
     const drawn = through(rig.rifle(s, rig.pose(s, 1 / 60)).toWorld, rifleModel().muzzle);
     const fired = s.muzzle();
