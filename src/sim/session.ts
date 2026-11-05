@@ -515,6 +515,8 @@ export class Session {
     this.stroke = this.prevStroke = null;
     this.lightOn = false;
     this.prevKick = this.kick();
+    // A press waiting out a sprint was made for the last gun: none fires the new one.
+    this.pressWaiting = false;
   }
 
   /** What the player shows the others (net/gear.ts): what is in their hands and its fit, their light. */
@@ -559,6 +561,8 @@ export class Session {
     this.stroke = this.prevStroke = null;
     this.suppression.calm();
     this.digging = false;
+    // Nor does one from the last life: a match's end and the next one's deploy run no tick between.
+    this.pressWaiting = false;
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -573,8 +577,11 @@ export class Session {
     this.acting = this.alive ? this.intent : idleIntent();
     const p = this.player;
     // Firing (a press waiting for the gun to come up out of a sprint as well), aiming or aimed down
-    // the sights the player does not sprint.
-    if ((this.acting.fire || this.pressWaiting || this.acting.aim === true || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
+    // the sights the player does not sprint. The trigger and the sights are a gun's: a button drops
+    // the sprint only while a gun is up to take it, as handle()'s canAim has it (the shovel out,
+    // digging, the periscope up or a climb under way, it does not), the hands as the last tick left them.
+    const gunUp = this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && p.climbTo === null;
+    if ((((this.acting.fire || this.acting.aim === true) && gunUp) || this.pressWaiting || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
     // Suppression as the last tick left it slows the feet and pins the player off the step; what
     // is in the hands, and the sights up, slow them too.
     const carried = this.held === SHOVEL_HELD ? 1 : this.arm.spec.move;
@@ -661,12 +668,13 @@ export class Session {
    * muzzle as drawn this tick. It is fed the body as the controller left it; this tick's turn of the
    * view, from the last tick's the short way round; the controller's sprint, on the ground, once fire
    * and the sights have dropped it; the sights; and the gun's reload and shot clock (the shovel has
-   * neither). What it does that is heard is heard this tick.
+   * neither). What it does that is heard is heard this tick. Killed, the hands are quiet: they work no
+   * reload and no pump, so the gun eases to rest, and nothing they do is heard.
    */
   private moveHands(dt: number): void {
     const p = this.player;
     const w = this.weapon;
-    const gun = this.held !== SHOVEL_HELD;
+    const gun = this.held !== SHOVEL_HELD && this.alive;
     const turn = (now: number, was: number) => {
       const d = now - was;
       return d - 360 * Math.round(d / 360);
@@ -683,6 +691,7 @@ export class Session {
       speedRatio: p.velocity.horizontalLength / this.handling.t.runMps,
       bobPhase: p.bobPhase,
       onGround: p.onGround,
+      // As the controller left it: a tick decayed already (0.9 of the landing speed), as the eye's dip reads it.
       landingImpact: p.landingImpact,
       sprinting: sprints(this.acting, p) && p.onGround,
       aimed: this.aimed,
@@ -690,7 +699,9 @@ export class Session {
       sinceShot: gun ? w.sinceShot : Number.POSITIVE_INFINITY,
       gun: gunClass(this.arm.spec.gun.key),
     });
-    this.heard.push(...cues);
+    // Dead, nothing is heard: not even a pump still to come, which the shot clock's end (+∞) crosses
+    // on the first tick dead.
+    if (this.alive) this.heard.push(...cues);
   }
 
   /**

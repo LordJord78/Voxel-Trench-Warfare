@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Loadout } from '../../src/combat/arsenal';
-import { handlingTunables, ZERO_HANDS, type HandlingCue } from '../../src/combat/handling';
+import { gunClass, Handling, handlingTunables, ZERO_HANDS, type HandlingCue, type HandsDelta } from '../../src/combat/handling';
 import { heldPose, viewBasis, viewmodelTunables } from '../../src/combat/viewmodel';
 import { loadTunables } from '../../src/core/tunables';
 import type { GunKey } from '../../src/net/gear';
 import { Stance, type MoveIntent } from '../../src/physics/character';
-import { idleIntent, Session, type CombatEvents } from '../../src/sim/session';
+import { idleIntent, Session, SHOVEL_HELD, type CombatEvents } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
 import { P } from '../../src/world/materials';
 
@@ -202,6 +202,113 @@ describe('the gun in the hands, in play', () => {
     expect(s.weapon.shotsFired).toBe(0);
   });
 
+  it('a press waiting out a sprint outlives no loadout and no life: equip and respawn let it go', () => {
+    // A tap in a sprint's last ticks, then, with no tick between: the next match's deploy (equip,
+    // then respawn), a loadout taken in a pause (equip), or a life begun afresh (respawn). Nothing
+    // fires that was not pressed for the gun in the hands, in this life.
+    const takes: [string, (s: Session) => void][] = [
+      [
+        'equip, then respawn',
+        (s) => {
+          s.equip(bare('svd'));
+          s.respawn([12.8, 0.4, 2], 0);
+        },
+      ],
+      ['equip', (s) => s.equip(bare('svd'))],
+      ['respawn', (s) => s.respawn([12.8, 0.4, 2], 0)],
+    ];
+    for (const [label, take] of takes) {
+      const s = sprinting();
+      sprintTick(s, true);
+      // The press waits, the gun still swung low.
+      expect(s.handling.sprint, label).toBeGreaterThanOrEqual(ht.sprintBlocksFire);
+      expect(s.shots, label).toHaveLength(0);
+      take(s);
+      s.intent = idleIntent();
+      for (let k = 0; k < 30; k++) {
+        s.tick();
+        expect(s.shots, `${label}, tick ${k}`).toHaveLength(0);
+      }
+      // The gun came up, and nothing was waiting for it.
+      expect(s.handling.sprint, label).toBe(0);
+      expect(s.weapon.shotsFired, label).toBe(0);
+    }
+  });
+
+  it("killed, the hands are quiet: a reload under way and the shotgun's pump to come are not heard, and the gun eases to rest", () => {
+    // Each gun killed part-way through its reload, its first mark heard and more to come: the AK, the
+    // M249, the M870 (three shells) and the pistol. The reload runs out while the player is dead.
+    const cases: [Loadout, number][] = [
+      [bare('ak74'), 0],
+      [bare('m249'), 0],
+      [bare('m870'), 0],
+      [bare('ak74'), 1],
+    ];
+    for (const [loadout, slot] of cases) {
+      const label = slot === 0 ? loadout.primary : loadout.secondary;
+      const s = stand(loadout);
+      s.intent = { ...idleIntent(), swap: slot };
+      for (let k = 0; k < 60; k++) s.tick();
+      const w = s.weapon;
+      w.rounds = w.spec.magazine - 3;
+      s.intent = { ...idleIntent(), reload: true };
+      s.tick();
+      s.intent = idleIntent();
+      s.drainEvents();
+      let first: HandlingCue[] = [];
+      while (first.length === 0) {
+        s.tick();
+        first = s.drainEvents().handling.map((c) => c.cue);
+      }
+      expect(first, label).toEqual([label === 'm870' ? 'shell' : 'mag-out']);
+      const was = s.handling.delta;
+      s.alive = false;
+      const deltas: HandsDelta[] = [];
+      for (let k = 0; k < 8 * 60 && (k < 20 || w.reloading); k++) {
+        s.tick();
+        expect(s.drainEvents().handling, `${label}, ${k + 1} ticks dead`).toEqual([]);
+        deltas.push(s.handling.delta);
+      }
+      expect(w.reloading, label).toBe(false);
+      // The gun eases to rest from where it was, as one put away mid-reload does: no snap, falling
+      // all the way, and none of the reload's turn or its push back left once reload_cut_s is past.
+      for (const k of ['pitch', 'roll'] as const) {
+        if (Math.abs(was[k]) < 1) continue;
+        expect(deltas[0][k] / was[k], `${label}: ${k}`).toBeGreaterThan(0.9);
+        for (let j = 1; j < deltas.length; j++) expect(Math.abs(deltas[j][k]), `${label}: ${k}, ${j + 1} ticks dead`).toBeLessThanOrEqual(Math.abs(deltas[j - 1][k]) + 1e-12);
+      }
+      const rest = deltas[Math.round(ht.reloadCutS / TICK) - 1];
+      for (const v of [rest.pitch, rest.yaw, rest.roll, rest.offset[2]]) expect(v, label).toBeCloseTo(0, 9);
+      if (label !== 'ak74') continue;
+      // Back in, the hands are heard again.
+      s.respawn([12.8, 0.4, 2], 0);
+      for (let k = 0; k < 30; k++) s.tick();
+      s.drainEvents();
+      s.weapon.rounds = 10;
+      s.intent = { ...idleIntent(), reload: true };
+      const back: HandlingCue[] = [];
+      for (let k = 0; k < 4 * 60; k++) {
+        s.tick();
+        s.intent = idleIntent();
+        back.push(...s.drainEvents().handling.map((c) => c.cue));
+      }
+      expect(back).toEqual(['mag-out', 'mag-in', 'bolt']);
+    }
+    // The shotgun killed two ticks after its shot, its pump (0.12 s on) still to come: not heard.
+    const g = stand(bare('m870'));
+    g.intent = { ...idleIntent(), fire: true };
+    g.tick();
+    expect(g.shots).toHaveLength(1);
+    g.intent = idleIntent();
+    for (let k = 0; k < 2; k++) g.tick();
+    expect(g.drainEvents().handling).toEqual([]);
+    g.alive = false;
+    for (let k = 0; k < 60; k++) {
+      g.tick();
+      expect(g.drainEvents().handling, `the pump, ${k + 1} ticks dead`).toEqual([]);
+    }
+  });
+
   it('the sights held drop the sprint at once, as fire does', () => {
     const s = stand();
     s.intent = { ...idleIntent(), forward: 1, sprint: true };
@@ -222,6 +329,40 @@ describe('the gun in the hands, in play', () => {
       t.tick();
       expect(t.handling.sprint).toBe(0);
       expect(t.player.velocity.horizontalLength).toBeLessThanOrEqual(walk + 1e-9);
+    }
+  });
+
+  it("only a gun's trigger and sights drop the sprint: with the shovel out, a sprint stays one with either button held", () => {
+    for (const button of ['fire', 'aim'] as const) {
+      const press = (i: MoveIntent): MoveIntent => (button === 'fire' ? { ...i, fire: true } : { ...i, aim: true });
+      const s = stand();
+      const walk = s.controller.t.stances[Stance.STANDING].speed;
+      // F held with Shift and W: the gun put away and the shovel out (the sod is no shovel work, so nothing is dug).
+      const dig = { ...idleIntent(), forward: 1, sprint: true, dig: true };
+      s.intent = dig;
+      for (let k = 0; k < 60; k++) s.tick();
+      expect([s.held, s.ready, s.digging, s.handling.sprint], button).toEqual([SHOVEL_HELD, 1, true, 1]);
+      const speed = s.player.velocity.horizontalLength;
+      expect(speed, button).toBeGreaterThan(walk * 1.3);
+      // The button held as well: nothing to fire and no sights to raise, so the sprint goes on.
+      s.intent = press(dig);
+      for (let k = 0; k < 30; k++) {
+        s.tick();
+        expect(s.handling.sprint, `${button}, tick ${k}`).toBe(1);
+        expect(s.player.velocity.horizontalLength, `${button}, tick ${k}`).toBe(speed);
+      }
+      expect([s.shots.length, s.aimed], button).toEqual([0, 0]);
+      // F let go: the shovel goes down and the gun comes up, and the sprint goes on until the gun is
+      // up to take the button. Up, the button drops the sprint on the next tick, as Task 2 pinned.
+      s.intent = press({ ...idleIntent(), forward: 1, sprint: true });
+      let ticks = 0;
+      while (!(s.held === 0 && s.ready >= 1)) {
+        s.tick();
+        expect(s.handling.sprint, `${button}, the gun coming up, tick ${ticks}`).toBe(1);
+        expect(++ticks).toBeLessThan(60);
+      }
+      s.tick();
+      expect(s.handling.sprint, button).toBeCloseTo(1 - TICK / ht.sprintOutS, 12);
     }
   });
 
@@ -502,6 +643,8 @@ describe('the gun in the hands, in play', () => {
       g.tick();
       pushed += shells();
     }
+    // None pushed while it was put away.
+    expect(pushed).toBe(2);
     expect(m870.reloadPhase).toBeNull();
     expect(m870.rounds).toBe(2);
     g.intent = { ...idleIntent(), swap: 0 };
@@ -540,5 +683,95 @@ describe('the gun in the hands, in play', () => {
     }
     s.handsStill = true;
     for (const alpha of [0, 0.3, 0.75]) expect(s.viewmodelAt(alpha, 0.004, 0.6)).toEqual(heldPose(vt, s.holding(), STILL_KICK, 0.004, 0.6, 0, 0, 1, null));
+  });
+
+  it("the hands are fed the body's share of a run, stride, ground and landing: a Handling fed them alike moves alike", () => {
+    // From the session's first tick: settling from the spawn, standing, then walking forward at the
+    // standing speed, lifted a metre mid-stride and landing again. A Handling of the test's own is
+    // fed what the session reads off the body each tick (its share of a run is its speed over
+    // run_mps), and must agree to the bit.
+    const s = Session.create({ map: arena(), plan: null, spawn: { position: [12.8, 0.4, 2] } }, tun, 7, 0);
+    const twin = new Handling(handlingTunables(tun));
+    const dt = s.clock.dt;
+    const walk = s.controller.t.stances[Stance.STANDING].speed * s.arm.spec.move;
+    let ratio = 0;
+    let peak = -1;
+    let landings = 0;
+    let landedAt = 0;
+    for (let k = 0; k < 360; k++) {
+      if (k === 240) {
+        const at = s.player.position;
+        s.teleport([at.x, at.y + 1, at.z], s.player.yaw, s.player.pitch);
+      }
+      s.intent = k < 40 ? idleIntent() : { ...idleIntent(), forward: 1 };
+      const wasOnGround = s.player.onGround;
+      s.tick();
+      const p = s.player;
+      twin.tick({
+        dt,
+        time: s.ticks * dt,
+        yawRate: 0,
+        pitchRate: 0,
+        speedRatio: p.velocity.horizontalLength / ht.runMps,
+        bobPhase: p.bobPhase,
+        onGround: p.onGround,
+        landingImpact: p.landingImpact,
+        sprinting: false,
+        aimed: s.aimed,
+        reload: null,
+        sinceShot: s.weapon.sinceShot,
+        gun: gunClass(s.arm.spec.gun.key),
+      });
+      expect(s.handling.delta, `tick ${k}`).toEqual(twin.delta);
+      if (k > 40 && !wasOnGround && p.onGround) {
+        landings++;
+        landedAt = p.landingImpact;
+      }
+      // At a steady walk, breathing (what is left of it) taken out: the up-down bob alone.
+      if (k >= 120 && k < 240) {
+        expect(p.velocity.horizontalLength).toBeCloseTo(walk, 9);
+        ratio = p.velocity.horizontalLength / ht.runMps;
+        const breath = (1 - ratio) * ht.breathUpM * Math.sin(2 * Math.PI * ht.breathUpHz * s.ticks * dt);
+        peak = Math.max(peak, s.handling.delta.offset[1] - breath);
+      }
+    }
+    // The fall's landing was hard enough to dip the hands well (more than half a hard one).
+    expect(landings).toBe(1);
+    expect(landedAt).toBeGreaterThan(0.5 * ht.landingHardMps);
+    // The bob's height: 0.008 m by the walk's share of a run (4.1 / 5), at the stride's top.
+    expect(ratio).toBeCloseTo(walk / ht.runMps, 12);
+    expect(peak).toBeLessThanOrEqual(ht.bobUpM * ratio + 1e-9);
+    expect(peak).toBeGreaterThan(0.99 * ht.bobUpM * ratio);
+  });
+
+  it('a landing dips the gun on the tick it lands, by its share of a hard one: 0.03 m and 4° × min(1, landingImpact / 8)', () => {
+    // A jump, and falls of 1 m (most of a hard landing) and 3 m (more than one: the full dip). A jump
+    // on flat ground ends its last tick in the air inside the ground probe's 0.06 m (character.ts),
+    // which sets the body down without its landing speed, so its share is only what standing left:
+    // it lands by the same rule all the same.
+    for (const [how, drop] of [['a jump', 0], ['a fall of 1 m', 1], ['a fall of 3 m', 3]] as const) {
+      const s = stand();
+      if (drop > 0) s.teleport([12.8, 0.4 + drop, 2], 0, 0);
+      s.intent = { ...idleIntent(), jump: drop === 0 };
+      let share = -1;
+      for (let k = 0; k < 120 && share < 0; k++) {
+        const wasOnGround = s.player.onGround;
+        s.tick();
+        s.intent = idleIntent();
+        if (wasOnGround || !s.player.onGround) continue;
+        // The tick it lands, standing still: the dip on whatever breathing has the gun doing.
+        share = Math.min(1, s.player.landingImpact / ht.landingHardMps);
+        const d = s.handling.delta;
+        const breath = ht.breathUpM * Math.sin(2 * Math.PI * ht.breathUpHz * s.ticks * TICK);
+        expect(d.pitch, how).toBeCloseTo(ht.landingPitchDeg * share, 12);
+        expect(d.offset[1] - breath, how).toBeCloseTo(-ht.landingDropM * share, 9);
+      }
+      expect(share, how).toBeGreaterThanOrEqual(0);
+      if (drop === 1) {
+        expect(share, how).toBeGreaterThan(0.5);
+        expect(share, how).toBeLessThan(1);
+      }
+      if (drop === 3) expect(share, how).toBe(1);
+    }
   });
 });

@@ -193,7 +193,7 @@ describe('the rifle', () => {
 
   it("sinceShot is the shot's clock: from the last shot, held at one interval while the trigger rests", () => {
     const w = new Weapon(weaponSpec(tun, 'm870'));
-    const interval = 60 / 75;
+    const interval = 60 / weaponSpec(tun, 'm870').rpm;
     expect(w.sinceShot).toBe(interval);
     w.tick(TICK);
     expect(w.wants(true)).toBe(true);

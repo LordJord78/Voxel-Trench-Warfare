@@ -65,10 +65,13 @@ export class CameraRig {
     this.t = t;
   }
 
-  /** How fast the player walks of a run's 5 m/s, and the stride's sideways sway (metres). */
+  /**
+   * How fast the player moves of a run's speed (`[handling] run_mps`, the hands' own share of a run),
+   * and the stride's sideways sway (metres), which the eye leans with.
+   */
   private stride(session: Session): { speedRatio: number; sway: number } {
     const player = session.player;
-    const speedRatio = Math.min(1, player.velocity.horizontalLength / 5);
+    const speedRatio = Math.min(1, player.velocity.horizontalLength / session.handling.t.runMps);
     return { speedRatio, sway: Math.sin(player.bobPhase * 0.5) * this.t.bobAmplitude * 0.6 * speedRatio };
   }
 
@@ -110,11 +113,13 @@ export class CameraRig {
 
   /**
    * Where the rifle is drawn this frame, held in the view `pose` shows (combat/viewmodel.ts), and
-   * where it was the last frame the rifle was drawn (itself, after a frame without it).
+   * where it was the last frame the rifle was drawn (itself, after a frame without it). Its stride's
+   * motion is the hands' (handling.ts's bob, either side of centre by turns), so the eye's sway is
+   * not given to it: only a run's share, for its dip at speed.
    */
   rifle(session: Session, pose: CameraPose): RiflePose {
-    const { speedRatio, sway } = this.stride(session);
-    const held = session.viewmodelAt(undefined, sway, speedRatio);
+    const { speedRatio } = this.stride(session);
+    const held = session.viewmodelAt(undefined, 0, speedRatio);
     const { forward, right, up } = cameraBasis(pose.yaw, pose.pitch, pose.roll ?? 0);
     const toWorld = (v: readonly number[]) => [0, 1, 2].map((k) => right[k] * v[0] + up[k] * v[1] + forward[k] * v[2]);
     const origin = modelToView(held, [0, 0, 0]);
