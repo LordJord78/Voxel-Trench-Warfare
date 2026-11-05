@@ -12,14 +12,14 @@
  *
  * At 10 cm the ground is all steps: the body snaps up and down them, and
  * stands or raises the periscope in a tick. The eye eases those jumps out
- * over a few frames; motion the velocity explains (a fall, a jump) over the
- * time the simulation actually ran it follows exactly — none while paused,
- * and only what the clock let through after a hitch — and a teleport it
- * does not ease at all. A landing is not a step: it ends the fall at a
- * standstill, which leaves the velocity nothing to explain the drop the
- * frames still show by, so over those frames the session's own account of
- * the body's rise explains it (Session.risen), and a landing's feel is the
- * dip alone. A step taken as the body lands is still a step.
+ * over a few frames, and a teleport it does not ease at all. The body's own
+ * motion (a fall, a jump) it follows exactly, by the session's account of
+ * the body's rise at its own speed (Session.risen), drawn between ticks as
+ * the foot is: none while paused, and only what the clock let through after
+ * a hitch. Neither a takeoff nor a landing is a step: the velocity after
+ * either explains none of the tick before it, which the frames still show,
+ * but the account does, and a landing's feel is the dip alone. A step taken
+ * as the body lands is still a step.
  */
 
 import { modelToView } from '../combat/viewmodel';
@@ -65,8 +65,9 @@ export class CameraRig {
   private lastSimTime = 0;
   /** How far the body had risen at its own speed (Session.risenAt) as the last frame showed it. */
   private lastRisen = 0;
-  /** The session's ticks run when the last frame was drawn: a landing on that tick or any since is still being shown. */
+  /** The ticks the session had run, and its clock had let through, when the last frame was drawn: in play the two keep step (Session.advance). */
   private lastTicks = 0;
+  private lastClockTick = 0;
   /** Where the rifle was drawn the last frame it was. */
   private lastRifle: Float32Array | null = null;
 
@@ -98,18 +99,21 @@ export class CameraRig {
     const simTime = clock.simTime + clock.alpha * clock.dt;
     const risen = session.risenAt();
     if (this.lastEye !== null) {
-      // The motion the body made at its own speed, which the eye follows exactly: its velocity's over
-      // the time the simulation ran. A frame between ticks shows the last tick's motion, which the
-      // velocity after it explains; but a landing ends the fall at a standstill, so the velocity
-      // explains none of what the frames still show of it: the fall's last before the landing tick,
-      // and that tick's drop (the fall, and the ground's catch that ends it). A landing is not a step:
-      // the frames that show any of it, from the first drawn after the landing tick to the first drawn
-      // after the tick that follows it, take the session's own account of the body's rise, the drop at
-      // the speed it came down at. A step or a teleport among them is still the eye's to ease or snap,
-      // one taken on the landing tick itself too (a lip stepped up onto in the air as the fall meets
-      // it, the controller's unstick): the account takes no rise on a landing tick.
-      const landing = session.landedTick >= this.lastTicks;
-      const moved = landing ? risen - this.lastRisen : player.velocity.y * (simTime - this.lastSimTime);
+      // The motion the body made at its own speed, which the eye follows exactly: the session's own
+      // account of its rise (Session.risenAt), which a frame between ticks shows as it shows the foot,
+      // each tick's motion at that tick's own speed. The velocity after the last tick explains that
+      // tick's alone, and a frame that runs ticks still shows some of the one before them: the first
+      // after the tick a jump leaves the ground on, the body standing; the first after a landing, the
+      // fall's last and the landing tick's drop (the fall, and the ground's catch that ends it at a
+      // standstill). Neither a takeoff nor a landing is a step. A step, a stand, a climb or a teleport
+      // is none of the body's own motion, nor is a step taken on a landing tick (a lip stepped up onto
+      // in the air as the fall meets it, the controller's unstick: the account takes no rise there),
+      // so the eye eases or snaps it as it always has. A session moved on by hand, its clock letting
+      // through ticks it ran none of (never in play, where Session.advance runs each tick the clock
+      // lets through), has no account of that time: its velocity over the clock's time explains such a
+      // frame, as it did before the account.
+      const byHand = clock.tick - this.lastClockTick > session.ticks - this.lastTicks;
+      const moved = byHand ? player.velocity.y * (simTime - this.lastSimTime) : risen - this.lastRisen;
       const jump = body - this.lastEye - moved;
       if (Math.abs(jump) > TELEPORT_M) this.trail = 0;
       else if (Math.abs(jump) > JUMP_M) this.trail -= jump;
@@ -118,6 +122,7 @@ export class CameraRig {
     this.lastSimTime = simTime;
     this.lastRisen = risen;
     this.lastTicks = session.ticks;
+    this.lastClockTick = clock.tick;
     this.trail = Math.min(TRAIL_M, Math.max(-TRAIL_M, this.trail * Math.exp(-Math.max(0, frameDt) / EASE_S)));
     const target = session.controller.fovScale(player);
     this.fovScale += (target - this.fovScale) * Math.min(1, this.t.fovLerpPerS * Math.max(1e-4, frameDt));

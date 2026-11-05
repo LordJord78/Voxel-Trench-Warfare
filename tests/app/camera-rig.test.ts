@@ -503,6 +503,69 @@ describe('the rifle as the rig draws it', () => {
     expect(most, cases.join('; ')).toBeLessThan(1e-3);
   });
 
+  it("a takeoff is not a step either: one rig, drawing every frame through a jump from a standstill and then a running one, keeps the muzzle on the session's from each takeoff through its landing and 0.5 s on, at 120 Hz and at 30 to 240", () => {
+    // The takeoff tick sets the body rising at the jump's speed, and the frames run a tick behind: the
+    // first frame after it still shows the tick before, the body standing. Explained by the velocity
+    // after it over the frame's whole time, that frame's motion fell short of it, and the rest, eased as
+    // a step, held the drawn eye, and the gun with it, up to 66 mm over the session's muzzle (the
+    // tracer's start, the flash, the brass, the cues) for a tenth of a second after every jump. One rig,
+    // kept as the game keeps it, draws each frame at the clock's alpha through both jumps in turn, the
+    // ticks run as Session.advance runs them; the session's muzzle for a frame is between the last two
+    // ticks' as the foot is. Zeroed: the camera's own stride (the eye's bob and lean, the gun's run dip),
+    // which the session's muzzle leaves out, and the sprint's turn of the gun, whose few degrees a tick,
+    // drawn between ticks, bow the muzzle up to 1.6 mm off the straight line between two ticks' muzzles.
+    // What is left is the eye's own.
+    const raw = tun.raw();
+    (raw.camera as Record<string, unknown>).head_bob_amplitude = 0;
+    (raw.viewmodel as Record<string, unknown>).run_dip_m = 0;
+    Object.assign(raw.handling as Record<string, unknown>, { sprint_pitch_deg: 0, sprint_yaw_deg: 0, sprint_roll_deg: 0 });
+    const t = new Tunables(raw);
+    const cases: string[] = [];
+    let most = 0;
+    for (const hz of [120, 60, 144, 240, 30]) {
+      // A long flat field, faced down (+z).
+      const map = new BrickMap({ x: 256, y: 64, z: 512 });
+      map.fillBox(0, 0, 0, 256, 4, 512, P.SOD);
+      const s = Session.create({ map, plan: null, spawn: { position: [12.8, 0.4, 2] } }, t, 7, 0);
+      for (let k = 0; k < 10; k++) s.tick();
+      const rig = new CameraRig(rigTunables(t));
+      let [was, now] = [s.muzzle(), s.muzzle()];
+      let f = 0;
+      for (const [how, running] of [['a jump from a standstill', false], ['a running jump', true]] as const) {
+        // Standing a tenth of a second, or running a second (the sprint's pose all in), then a tap of jump.
+        const tapAt = f + Math.round((running ? 1 : 0.1) * hz);
+        let leapt = false;
+        let [takeoff, landed, speed, impact, gap, at] = [-1, -1, 0, 0, 0, -1];
+        for (; landed < 0 ? f < tapAt + 2 * hz : f - landed <= 0.5 * hz; f++) {
+          const ticks = s.clock.advance(1 / hz);
+          for (let i = 0; i < ticks; i++) {
+            s.intent = { ...idleIntent(), forward: running ? 1 : 0, sprint: running, jump: !leapt && f >= tapAt };
+            leapt ||= s.intent.jump;
+            const grounded = s.player.onGround;
+            s.tick();
+            [was, now] = [now, s.muzzle()];
+            if (takeoff < 0 && grounded && !s.player.onGround && s.player.velocity.y > 0) [takeoff, speed] = [f, s.player.velocity.horizontalLength];
+            else if (takeoff >= 0 && landed < 0 && !grounded && s.player.onGround) [landed, impact] = [f, s.player.landingImpact];
+          }
+          const drawn = through(rig.rifle(s, rig.pose(s, 1 / hz)).toWorld, s.arm.spec.muzzle);
+          const a = s.clock.alpha;
+          const off = Math.hypot(...[0, 1, 2].map((k) => drawn[k] - (was[k] + (now[k] - was[k]) * a)));
+          if (takeoff >= 0 && off > gap) [gap, at] = [off, f - takeoff];
+        }
+        const label = `${how} at ${hz} Hz`;
+        // It left the ground, standing still or at a sprint (a walk is 4.1 m/s), and came down.
+        expect(takeoff, label).toBeGreaterThanOrEqual(0);
+        if (running) expect(speed, label).toBeGreaterThan(6);
+        else expect(speed, label).toBeLessThan(0.01);
+        expect(landed, label).toBeGreaterThan(takeoff);
+        expect(impact, label).toBeGreaterThan(4);
+        cases.push(`${label}: ${(gap * 1000).toFixed(3)} mm (frame +${at})`);
+        most = Math.max(most, gap);
+      }
+    }
+    expect(most, cases.join('; ')).toBeLessThan(1e-3);
+  });
+
   it('turns with the view, its axes square', () => {
     const s = standing();
     s.player.yaw = 90;

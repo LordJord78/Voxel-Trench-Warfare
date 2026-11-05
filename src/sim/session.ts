@@ -206,8 +206,8 @@ export class Session {
    * tick itself: a lip up to [player] air_step_up stepped up onto in the air as the fall meets it, a
    * settle's lift of a body put into the ground, the controller's unstick. Nor are a climb, a lift out
    * of the ground (liftOut) or a teleport (a teleport holds it where the frames between ticks showed
-   * it). The camera explains the frames that show a landing by it, not as a step, and eases the rest
-   * as it eases any step (camera-rig.ts).
+   * it). The camera explains every frame's motion by it, a takeoff's and a landing's too, not as a
+   * step, and eases what it has not as it eases any step (camera-rig.ts).
    */
   risen = 0;
   prevRisen = 0;
