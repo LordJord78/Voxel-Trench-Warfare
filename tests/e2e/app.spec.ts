@@ -115,11 +115,12 @@ test('the page loads to a click-to-play prompt over the world, and a teleport st
   expect(errors).toEqual([]);
 });
 
-test('the start screen stands at its foot from 1280 × 720 up, as it did, and under 720 px tall scrolls with its head in reach', async ({ page }) => {
+test('the start screen stands at its foot from 1280 × 720 up, as it did, and in a smaller window scrolls with its head in reach', async ({ page }) => {
   // Its ready block (the map, the loadout, Play, Fullscreen, the way in with friends, the keys) is some
   // 940 px tall. From 1280 × 720 up the sheet stands as it always has: the block at its foot, nothing
-  // to scroll (so no scroll bar at 1920 × 1080). Under 720 px tall it scrolls as the pause menu and the
-  // lobby do, its head in reach: at 800 × 500 Host was above the window's top.
+  // to scroll (so no scroll bar at 1920 × 1080). In a window short of that either way it scrolls as the
+  // pause menu and the lobby do, its head in reach: at 800 × 500 Host was above the window's top, and
+  // at 540 × 800 (the keys in two columns) the map's picker.
   await page.setViewportSize({ width: 1280, height: 720 });
   const errors = await openGame(page);
   await expect(page.locator('#host')).toBeVisible();
@@ -135,9 +136,10 @@ test('the start screen stands at its foot from 1280 × 720 up, as it did, and un
     expect(s.range, `nothing to scroll at ${w} × ${h}`).toBe(0);
     expect(Math.abs(s.bottom - s.foot), `the block at the sheet's foot at ${w} × ${h}: ${JSON.stringify(s)}`).toBeLessThanOrEqual(1);
   }
-  for (const [w, h] of [[1280, 719], [800, 500]] as const) {
+  for (const [w, h] of [[1280, 719], [1279, 720], [800, 500], [540, 800]] as const) {
     await page.setViewportSize({ width: w, height: h });
     await expect(page.locator('#loading h1'), `the title at ${w} × ${h}`).toBeInViewport({ ratio: 1 });
+    await expect(page.locator('#map-pick'), `the map's picker at ${w} × ${h}`).toBeInViewport({ ratio: 1 });
     await expect(page.locator('#host'), `Host at ${w} × ${h}`).toBeInViewport({ ratio: 1 });
   }
   expect(errors).toEqual([]);

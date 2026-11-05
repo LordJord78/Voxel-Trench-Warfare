@@ -89,11 +89,12 @@
          than rise off the top: the sheet sets its block at the foot, and an auto margin gives way. */
       #pause, #lobby { overflow-y: auto; }
       #pause .block, #lobby .block { margin-top: auto; }
-      /* The start screen does so under 720 px tall, where Host rose off the top (an 800 × 500 window). From
+      /* The start screen does so in a window short of 1280 × 720 either way, where its controls rose off the
+         top (Host in an 800 × 500 window; at 540 px wide, its keys in two columns, the map's picker). From
          1280 × 720 up it stands as it did, at the foot with nothing to scroll: its ready block is some 940 px,
          so until about 1080 px tall its head rises off the top (at 720, the title down to the map picker's
          foot), its controls still in reach. */
-      @media (max-height: 719px) {
+      @media (max-width: 1279px), (max-height: 719px) {
         #loading { overflow-y: auto; }
         #loading .block { margin-top: auto; }
       }
