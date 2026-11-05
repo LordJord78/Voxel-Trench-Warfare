@@ -1,8 +1,8 @@
 // Measures over screenshots as displayed, for the capture tools (tools/tracer-captures.mjs; G2's range
 // captures): sRGB-encoded 0-255 RGBA, luminance by Rec. 709 weights on those values. A decoded image,
-// the per-pixel maximum of a run of frames (as the eye holds a stream) with each pixel's least over them
-// (its background), a ring's mean round a point, the brightest pixel and channel near one, colour as
-// HSV, and whether a pixel is lit over its background. Pure but for the PNG codec; tests/tools/
+// a run of frames as the eye holds a stream (each pixel as its frame most unlike its background, its
+// least over the frames no tracer is drawn near it), a ring's mean round a point, the brightest pixel
+// and channel near one, colour as HSV, and whether a pixel is lit over its background. Pure but for the PNG codec; tests/tools/
 // capture-measures.test.ts reads them on synthetic images.
 import { PNG } from 'pngjs';
 
@@ -24,19 +24,66 @@ export function encode(data, w, h) {
   return PNG.sync.write(png);
 }
 
-/** The per-pixel maximum of the frames (each channel), its luminance, and each pixel's least luminance over them (its background). */
-export function composite(imgs) {
+/**
+ * The frames as the eye holds them. Each pixel's background: its least luminance over the frames in which
+ * no tracer is drawn near it (`near[i]`, a byte a pixel, if given; over every frame when none is clear),
+ * and that frame's colour (`back`). Each pixel shown as its frame most unlike that background (the
+ * farthest in RGB): a tracer's light added shows as its brightest frame, as each channel's most over the
+ * frames did, and one that covers a bright haze behind it (by day: effects.wgsl tracerLight) shows as it
+ * is drawn, darker and redder, where each channel's most gave its red over the haze's green and blue.
+ */
+export function composite(imgs, near = null) {
   const { w, h } = imgs[0];
-  const data = Buffer.from(imgs[0].data);
-  const least = Float32Array.from(imgs[0].lum);
-  for (const img of imgs.slice(1)) {
-    if (img.w !== w || img.h !== h) throw new Error(`a frame is ${img.w}x${img.h}, the first ${w}x${h}`);
-    for (let i = 0; i < data.length; i++) if (img.data[i] > data[i]) data[i] = img.data[i];
-    for (let i = 0; i < least.length; i++) if (img.lum[i] < least[i]) least[i] = img.lum[i];
+  for (const img of imgs.slice(1)) if (img.w !== w || img.h !== h) throw new Error(`a frame is ${img.w}x${img.h}, the first ${w}x${h}`);
+  if (near && near.length !== imgs.length) throw new Error(`${near.length} masks for ${imgs.length} frames`);
+  const n = w * h;
+  const data = Buffer.alloc(n * 4);
+  const least = new Float32Array(n);
+  const back = new Uint8Array(n * 3);
+  for (let p = 0; p < n; p++) {
+    let bi = -1;
+    let bl = Infinity;
+    for (let i = 0; i < imgs.length; i++) {
+      if (near && near[i][p]) continue;
+      if (imgs[i].lum[p] < bl) {
+        bl = imgs[i].lum[p];
+        bi = i;
+      }
+    }
+    if (bi < 0) {
+      for (let i = 0; i < imgs.length; i++) {
+        if (imgs[i].lum[p] < bl) {
+          bl = imgs[i].lum[p];
+          bi = i;
+        }
+      }
+    }
+    least[p] = bl;
+    const o = p * 4;
+    const B = imgs[bi].data;
+    const [r0, g0, b0] = [B[o], B[o + 1], B[o + 2]];
+    back[p * 3] = r0;
+    back[p * 3 + 1] = g0;
+    back[p * 3 + 2] = b0;
+    let mi = bi;
+    let md = -1;
+    for (let i = 0; i < imgs.length; i++) {
+      const D = imgs[i].data;
+      const d = (D[o] - r0) ** 2 + (D[o + 1] - g0) ** 2 + (D[o + 2] - b0) ** 2;
+      if (d > md) {
+        md = d;
+        mi = i;
+      }
+    }
+    const M = imgs[mi].data;
+    data[o] = M[o];
+    data[o + 1] = M[o + 1];
+    data[o + 2] = M[o + 2];
+    data[o + 3] = M[o + 3];
   }
-  const lum = new Float32Array(w * h);
-  for (let i = 0; i < lum.length; i++) lum[i] = luminance(data[i * 4], data[i * 4 + 1], data[i * 4 + 2]);
-  return { data, lum, least, w, h };
+  const lum = new Float32Array(n);
+  for (let i = 0; i < n; i++) lum[i] = luminance(data[i * 4], data[i * 4 + 1], data[i * 4 + 2]);
+  return { data, lum, least, back, w, h };
 }
 
 /** The index of the pixel under a point (continuous pixels), or -1 off the image. */

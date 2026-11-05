@@ -8,7 +8,13 @@
 //     hours, aimed at dusk, and seen from the side (a witness 8 m aside, as a man along the trench sees
 //     the stream; from the shooter's eye a round is seen end on once its tracer has joined its path,
 //     where the shot was aimed: Session.aimRange); and at night far and side on as Blue (Session.team);
-//   - graze: at the parapet's crest just in front, at night, for the rounds that glance off.
+//   - graze: at the parapet's crest just in front, at night, for the rounds that glance off;
+//   - wall: at a wall of timber built 10 m out (and the ground put back after), at night: each round
+//     strikes within its first tick, so it is drawn once, from the muzzle to the wall.
+// 17:35 is seen side on as Blue too, and with the enemy line's rifle fire heavy (its amber in the frame:
+// the battle does not fire by day), set once the shooter has settled on the step; the shooter's
+// suppression is held at none through that burst (the line's heavy fire pins a man off the step within
+// it, and his stream with him) and each frame's level, after its tick, reported.
 // The front's shelling is off (a crater in the step would move the shooter between captures); its
 // rifle fire goes on, and each window frame's suppression is reported. A burst whose shooter is not on
 // the firing step fails.
@@ -35,7 +41,7 @@ import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { encode, p95, round3 } from './lib/image.mjs';
 import { failedEntry, readReport, removePictures, stamp, writeReport } from './lib/report.mjs';
-import { CAPTURES, gateCapture, kindOf, LIT, marked, markedComposite, measureCapture, MIN_GPU_SAMPLES, MIN_RATIO, NOON_HEAD_MIN, pathSamples, RING_MIN_PIXELS, STREAM_AIM_PX, STREAM_FROM_M, TARGET, TEAM, trackRound } from './lib/tracer-measures.mjs';
+import { CAPTURES, gateCapture, kindOf, LIT, marked, markedComposite, measureCapture, MIN_GPU_SAMPLES, MIN_RATIO, NOON_HEAD_MIN, pathSamples, RING_MIN_PIXELS, STREAM_AIM_PX, STREAM_FROM_M, TARGET, TEAM, TINT, trackRound, WALL } from './lib/tracer-measures.mjs';
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 
@@ -65,6 +71,8 @@ const BURSTS = {
   far: { pitch: 0, what: 'level, over the enemy parapet 52 m out' },
   // The parapet's crest just in front, struck at a few degrees (tracers.spec's graze).
   graze: { pitch: -6, what: "the parapet's crest" },
+  // A wall built WALL.outM out across the view, level: each round strikes it within its first tick.
+  wall: { pitch: 0, what: `a wall ${WALL.outM} m out`, wall: true },
 };
 /** The witness's place beside the shooter (m): aside along the trench to the left, up, back; looking at the round's path this far out. */
 const WITNESS = { aside: 8, up: 1.5, back: 2, lookAtM: 50 };
@@ -84,7 +92,7 @@ async function captureAt(page, c) {
   const kind = kindOf(c);
   const shooter = await withTimeout(
     page.evaluate(
-      async ({ hours, aimed, settle, pitch, side, witness, team }) => {
+      async ({ hours, aimed, settle, pitch, side, witness, team, wall }) => {
         const h = window.__trenchline;
         h.thaw();
         h.trigger(false);
@@ -95,6 +103,28 @@ async function captureAt(page, c) {
         h.session.team = team;
         h.setLoadout({ primary: 'assault_rifle', secondary: 'm17', fits: {} });
         const v = h.views.step;
+        if (wall) {
+          // A wall across the view `outM` out from the eye, square to the axis nearest the view: what was
+          // there kept, to be put back.
+          const R = Math.PI / 180;
+          const f = [Math.sin(v.yaw * R), 0, Math.cos(v.yaw * R)];
+          const thin = Math.abs(f[0]) > Math.abs(f[2]) ? 0 : 2;
+          const wide = thin === 0 ? 2 : 0;
+          const c = [v.position[0] + f[0] * wall.outM, v.position[1], v.position[2] + f[2] * wall.outM];
+          const lo = [0, c[1] - wall.belowM, 0];
+          const hi = [0, c[1] + wall.aboveM, 0];
+          lo[thin] = c[thin] - wall.thickM / 2;
+          hi[thin] = c[thin] + wall.thickM / 2;
+          lo[wide] = c[wide] - wall.halfWidthM;
+          hi[wide] = c[wide] + wall.halfWidthM;
+          const vx = h.session.voxel;
+          const box = [...lo.map((m) => Math.floor(m / vx)), ...hi.map((m) => Math.ceil(m / vx))];
+          const map = h.world.map;
+          const saved = [];
+          for (let z = box[2]; z < box[5]; z++) for (let y = box[1]; y < box[4]; y++) for (let x = box[0]; x < box[3]; x++) saved.push(map.get(x, y, z));
+          window.__tracerWall = { box, saved };
+          map.fillBox(box[0], box[1], box[2], box[3], box[4], box[5], wall.material);
+        }
         const stand = (p) => h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: p });
         stand(pitch);
         h.aim(aimed);
@@ -111,16 +141,25 @@ async function captureAt(page, c) {
         await h.waitFrames(settle);
         return { ...h.player(), team: h.session.team, sunElevation: h.sunElevation() };
       },
-      { hours: c.hours, aimed: !!c.aimed, settle: SETTLE_FRAMES, pitch: b.pitch, side: !!c.side, witness: WITNESS, team: c.team ?? 'red' },
+      { hours: c.hours, aimed: !!c.aimed, settle: SETTLE_FRAMES, pitch: b.pitch, side: !!c.side, witness: WITNESS, team: c.team ?? 'red', wall: b.wall ? WALL : null },
     ),
     `${c.name}: setting up`,
   );
   if (!shooter.onFiringStep) throw new Error(`${c.name}: the shooter is not on the firing step: ${JSON.stringify(shooter)}`);
   if (shooter.team !== (c.team ?? 'red')) throw new Error(`${c.name}: the shooter fights for ${shooter.team}, not ${c.team ?? 'red'}`);
+  // The enemy line's rifle fire for the burst, once the shooter has settled on the step (its shells off).
+  if (c.front) {
+    await page.evaluate((front) => {
+      const h = window.__trenchline;
+      h.setIntensity(front);
+      h.setShelling('off');
+    }, c.front);
+  }
   const step = () =>
     withTimeout(
-      page.evaluate(async (kind) => {
+      page.evaluate(async ({ kind, hold }) => {
         const h = window.__trenchline;
+        if (hold) h.session.suppression.level = 0;
         await h.stepFrames(1);
         const s = h.stats();
         const t = h.tracerPixels();
@@ -129,7 +168,7 @@ async function captureAt(page, c) {
         // The effects' own passes (the billboards' light and the draw), the latest measured frame's: what the tracers' look costs.
         const fxMs = (s.ownLast?.['effects-light'] ?? 0) + (s.ownLast?.effects ?? 0);
         return { frame: h.frames(), gpu: s.gpuLastMs, gpuSamples: s.gpuSamples, fxMs, rounds: t.weapon.rounds, live: own.length, heads: own.filter((x) => x.headDrawn).length, ricochets: fx.ricochets, embers: fx.embers, ricochetsByKind: fx.ricochetsByKind, embersByKind: fx.embersByKind };
-      }, kind),
+      }, { kind, hold: !!c.front }),
       `${c.name}: a frame`,
     );
   /** The frame just stepped, read whole: the tracers drawn, the drawn muzzle, the internal image's size, the shooter's suppression; aimed, the G-buffer's depth round the middle. */
@@ -236,6 +275,16 @@ async function captureAt(page, c) {
       h.trigger(false);
       h.spectate(null);
       h.session.team = 'red';
+      // The enemy line's rifle fire back to solo's light, its shells off; a wall's place put back.
+      h.setIntensity('light');
+      h.setShelling('off');
+      const w = window.__tracerWall;
+      if (w) {
+        const [x0, y0, z0, x1, y1, z1] = w.box;
+        let i = 0;
+        for (let z = z0; z < z1; z++) for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) h.world.map.set(x, y, z, w.saved[i++]);
+        delete window.__tracerWall;
+      }
     });
   }
   if (firstShotAt === null || frames.length < PERSIST_FRAMES || retired === null) throw new Error(`${c.name}: the burst did not run: first shot ${firstShotAt}, ${frames.length} frames photographed, retired ${retired}`);
@@ -314,7 +363,8 @@ try {
         ...stamp(),
         hours: c.hours, burst: c.burst, aimed: !!c.aimed, side: !!c.side, team: c.team ?? 'red', kind, weapon: cap.frames[shot].info.weapon, burstFrames: cap.burst, gpuSamples: cap.gpu.length, gpuP95, effectsGpu: { p95: effectsP95, mean: effectsMean },
         most: cap.most, failures: found,
-        thresholds: { minRatio: MIN_RATIO, minRatioIn: "the head's top channel over the ring's mean in it", battleGated: !!c.battle, noonHeadChannelMin: NOON_HEAD_MIN, stream: { fromM: STREAM_FROM_M, aimPx: STREAM_AIM_PX }, minGpuSamples: MIN_GPU_SAMPLES, ringMinPixels: RING_MIN_PIXELS, lit: LIT, targets: TARGET, team: TEAM },
+        thresholds: { minRatio: MIN_RATIO, minRatioIn: "the head's top channel over the ring's mean in it", battleGated: !!c.battle, noonHeadChannelMin: NOON_HEAD_MIN, stream: { fromM: STREAM_FROM_M, aimPx: STREAM_AIM_PX }, minGpuSamples: MIN_GPU_SAMPLES, ringMinPixels: RING_MIN_PIXELS, lit: LIT, tint: TINT, targets: TARGET, team: TEAM },
+        front: c.front ?? 'light',
         ...m,
         pathCover: m.pathCover ? cover : null,
         stream: m.stream ? stream : null,
@@ -326,10 +376,11 @@ try {
       const bits = [
         hl ? `head ${hl.headTop} ${hl.headChannel} / ring ${hl.headTop} ${hl.ringMeanTop.toFixed(1)} = ${hl.ratioTop.toFixed(2)} (V ${hl.ratioV.toFixed(2)}, luminance ${hl.headLum.toFixed(1)} / ${hl.ringMean.toFixed(1)} = ${hl.ratio.toFixed(2)})` : `no head (${m.headsDrawn} drawn)`,
         m.nearWidth ? `(a) ${m.nearWidth.px} px (lit ${m.nearWidth.litPx})` : null,
-        m.farColour ? `(b) sat ${round3(m.farColour.saturation)} hue ${m.farColour.hueDeg?.toFixed(1)} (n ${m.farColour.n})` : null,
+        m.farColour ? `(b) sat ${round3(m.farColour.saturation)} hue ${m.farColour.hueDeg?.toFixed(1)} (n ${m.farColour.n}; tinted sat ${round3(m.farColour.tint.saturation)} hue ${m.farColour.tint.hueDeg?.toFixed(1)} n ${m.farColour.tint.n})` : null,
         m.battleColour ? `battle sat ${round3(m.battleColour.saturation)} hue ${m.battleColour.hueDeg?.toFixed(1)} (n ${m.battleColour.n})` : null,
         m.stream ? `(e) ${round3(m.stream.share)} of ${m.stream.samples ?? 0}, reach ${m.stream.reachPx}/${m.stream.muzzlePx} = ${round3(m.stream.span)} (lit ${m.stream.innerPx}-${m.stream.reachPx} px: ${round3(m.stream.extent)}; ${STREAM_FROM_M} m at ${m.stream.atFromPx} px, 1 m ${m.stream.at1mPx}, 3 m ${m.stream.at3mPx})` : null,
-        m.pathCover ? `(c) ${round3(m.pathCover.share)} over ${m.pathCover.lengthPx} px of the ${m.pathCover.fit ?? '-'} line${m.pathCover.endOn ? ' (end on)' : ''}${m.pathCover.behindGun ? `, ${m.pathCover.behindGun} behind the gun` : ''}${m.pathCover.hiddenByWorld ? `, ${m.pathCover.hiddenByWorld} hidden` : ''}` : null,
+        m.pathCover ? `(c) ${round3(m.pathCover.share)} over ${m.pathCover.lengthPx} px of the ${m.pathCover.fit ?? '-'} line${m.pathCover.endOn ? ' (end on)' : ''}${m.pathCover.behindGun ? `, ${m.pathCover.behindGun} behind the gun` : ''}${m.pathCover.hiddenByWorld ? `, ${m.pathCover.hiddenByWorld} hidden` : ''} (tinted ${round3(m.pathCover.tint?.share)}, hue ${m.pathCover.tint?.hueDeg?.toFixed(1)} sat ${round3(m.pathCover.tint?.saturation)})` : null,
+        m.frontColour?.drawn ? `the front's amber: ${m.frontColour.drawn} drawn, tinted n ${m.frontColour.n} hue ${m.frontColour.hueDeg?.toFixed(1)} sat ${round3(m.frontColour.saturation)}` : null,
         m.noonContrast ? `(d) ${round3(m.noonContrast.ratio)}` : null,
         `ricochets ${cap.most.ricochetsByKind[kind]} the player's of ${cap.most.ricochets}, embers ${cap.most.embersByKind[kind]} of ${cap.most.embers}`,
         `suppression ${levels.every((v) => v === 0) ? 'none' : levels.map((v) => v.toFixed(2)).join(' ')}`,

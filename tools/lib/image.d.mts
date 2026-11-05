@@ -8,9 +8,10 @@ export interface Image {
   h: number;
 }
 
-/** The per-pixel maximum of frames, and each pixel's least luminance over them. */
+/** Frames as the eye holds them: each pixel as its frame most unlike its background; the background's luminance (`least`) and colour (`back`, RGB a pixel), its least over the frames no tracer is drawn near it. */
 export interface Composite extends Image {
   least: Float32Array;
+  back: Uint8Array;
 }
 
 export interface Ring {
@@ -40,7 +41,7 @@ export interface LitRule {
 export function luminance(r: number, g: number, b: number): number;
 export function decode(buffer: Uint8Array): Image;
 export function encode(data: Uint8Array, w: number, h: number): Buffer;
-export function composite(imgs: readonly Image[]): Composite;
+export function composite(imgs: readonly Image[], near?: readonly Uint8Array[] | null): Composite;
 export function at(img: { w: number; h: number }, q: readonly number[]): number;
 export function ringMean(img: Image, cx: number, cy: number, radii: readonly [number, number] | readonly number[], drop?: (x: number, y: number, lum: number) => boolean): Ring;
 export function brightest(img: Image, cx: number, cy: number, r: number): number;

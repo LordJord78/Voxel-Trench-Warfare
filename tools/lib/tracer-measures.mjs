@@ -29,10 +29,18 @@
 //     to within STREAM_AIM_PX of the point of aim, the share lit, and how far out the lit stream reaches
 //     over the muzzle's distance from the point of aim.
 //   - the graze: a ricochet of the player's kind drawn in the burst (not the front's amber beside it).
+//   - the wall (10 m out, at night): its rounds strike within their first tick, each drawn once, to the
+//     wall: gated on (a) and (e) as a near burst is, its stream the struck rounds'; its head, drawn only
+//     in the frame its round is fired, beside that shot's flash, reported.
 // "Lit": LIT.ratio times the background and LIT.min over it, the background the pixel's least over
-// the 8 frames (a round lights a pixel of its path in 2 of them). A round's last streak, ending where
-// it struck, is drawn and measured as any other. Every gate fails on a measure that is missing where
-// it is gated.
+// the 8 frames in which no tracer is drawn near it (a round lights a pixel of its path in 2 of them;
+// by day a tracer's light covers what is behind it, effects.wgsl tracerLight, so a frame it is drawn in
+// can be darker than its background). The composite shows each pixel as its frame most unlike its
+// background (image.mjs composite). "Tinted" (reported, not gated: luminance cannot see it): a pixel
+// showing its team's colour over its background (TINT), as a red glow covering the low sun's bright haze
+// does while darker than it; (c) and (b) report it beside "lit", and the front's amber is read so. A
+// round's last streak, ending where it struck, is drawn and measured as any other. Every gate fails on
+// a measure that is missing where it is gated.
 import { readFileSync } from 'node:fs';
 import { parse } from 'smol-toml';
 import { basis, dist, dot, lerp, project, RAD, sub, unit } from './camera.mjs';
@@ -99,6 +107,24 @@ const NOON_AT_M = 40;
 export const NOON_RING_PX = [16, 20];
 const NOON_CLEAR_PX = 8;
 const NOON_RING_MIN = 100;
+/**
+ * A pixel tinted by a tracer of a team (TEAM's entry): its saturation at least TINT.saturation, its chroma
+ * TINT.chroma or more over its background's, its hue within TARGET.farHueDeg of its team's and at least
+ * TINT.apart times as near it as any other kind's (a red glow added over the low sun's haze, orange-
+ * peach at some 23 degrees, is as near amber's 42 as red's 5, and is not red's).
+ */
+export const TINT = { saturation: 0.5, chroma: 32, apart: 2 };
+/** The tracer kinds' hues as shown (TEAM's, set below). */
+let KIND_HUES = [];
+export function tinted(rgb, bg, team) {
+  const c = hsv(rgb);
+  const b = hsv(bg);
+  if (!(c.saturation >= TINT.saturation && c.chroma >= b.chroma + TINT.chroma)) return false;
+  const off = hueOff(c.hue, team.hue);
+  if (!(off <= TARGET.farHueDeg)) return false;
+  return KIND_HUES.every((h) => h === team.hue || TINT.apart * off <= hueOff(c.hue, h));
+}
+
 /** Task 5's targets, as fix round 1 ruled them: (a) to 14 page pixels at half height; (b) a far tracer at its team's colour (its displayed hue within farHueDeg); the battle's amber at night; (e) the stream from the hip. */
 export const TARGET = { nearWidthPx: 14, farSaturation: 0.5, farHueDeg: 20, battleSaturation: 0.4, pathCover: 0.85, noonContrast: 1.4, streamCover: 0.7, streamSpan: 0.6 };
 
@@ -110,6 +136,7 @@ const AK_FRAME_M = TUN.weapon.assault_rifle.muzzle_velocity / 60;
 /** A colour (linear) as shown with its hue kept (effects.wgsl keepHue): its channels over its brightest, sRGB-encoded (gamma 2.2). */
 const shown = (c) => c.map((v) => 255 * (v / Math.max(...c)) ** (1 / 2.2));
 export const TEAM = { red: hsv(shown(FX.tracer_colour_red)), blue: hsv(shown(FX.tracer_colour_blue)), amber: hsv(shown(FX.tracer_colour)) };
+KIND_HUES = [TEAM.red.hue, TEAM.blue.hue, TEAM.amber.hue];
 /** The tracer kinds (net/gear.ts TRACER_KIND) and their colours (linear), by kind. */
 const KIND = { amber: 1, red: 2, blue: 3 };
 const COLOUR = [FX.tracer_colour, FX.tracer_colour, FX.tracer_colour_red, FX.tracer_colour_blue];
@@ -125,10 +152,21 @@ export function teamChannel(kind) {
 /** 17:35, the clock's dusk key (core/sky-clock.ts CLOCK_KEYS.dusk): the hour solo opens at, its sun 4.5 degrees up. */
 const LOW_SUN = 17 + 35 / 60;
 /**
+ * The wall the wall burst strikes: across the shooter's view this far out (m, under an AK round's first
+ * tick, 14.7 m, so each round is drawn once, to it), this wide each side, from this far under the eye to
+ * this far over it, this thick; of the game's timber (world/materials.ts P.TIMBER). What was there is put
+ * back after.
+ */
+export const WALL = { outM: 10, halfWidthM: 3, belowM: 3, aboveM: 2, thickM: 0.4, material: 19 };
+/** A burst at a man's chest or a wall: its stream from the hip to the point of aim gated. */
+export const nearLike = (c) => c.burst === 'near' || c.burst === 'wall';
+/**
  * The captures. Bursts (BURSTS in the tool): near, a man's chest 30 m out (pitch -0.76 degrees); far,
  * level over the enemy parapet 52 m out, so rounds fly past 90 m; graze, the parapet's crest just in
- * front. `side`: seen by a witness along the trench; `battle`: the battle's amber gated; `team`: the
- * shooter's (Session.team), red unless given.
+ * front; wall, a wall 10 m out (WALL). `side`: seen by a witness along the trench; `battle`: the
+ * battle's amber gated; `team`: the shooter's (Session.team), red unless given; `front`: the enemy
+ * line's rifle fire for the burst (light unless given; at heavy its amber is in the frame at 17:35, when
+ * the battle does not fire).
  */
 export const CAPTURES = [
   { name: 'noon', hours: 12, burst: 'near' },
@@ -144,10 +182,13 @@ export const CAPTURES = [
   { name: 'far-dusk-aimed', hours: 19.5, burst: 'far', aimed: true },
   { name: 'side-noon', hours: 12, burst: 'far', side: true },
   { name: 'side-1735', hours: LOW_SUN, burst: 'far', side: true },
+  { name: 'side-1735-blue', hours: LOW_SUN, burst: 'far', side: true, team: 'blue' },
+  { name: 'side-1735-heavy', hours: LOW_SUN, burst: 'far', side: true, front: 'heavy' },
   { name: 'side-dusk', hours: 19.5, burst: 'far', side: true },
   { name: 'side-night', hours: 22.5, burst: 'far', side: true, battle: true },
   { name: 'side-night-blue', hours: 22.5, burst: 'far', side: true, team: 'blue' },
   { name: 'graze-night', hours: 22.5, burst: 'graze', battle: true },
+  { name: 'wall-night', hours: 22.5, burst: 'wall' },
 ];
 /** By day: noon, and 17:35 (the sun is down by 19:30). Gated as noon is: the head at the display's top in its own channel, (b) reported. */
 export const byDay = (c) => c.hours < 19;
@@ -155,6 +196,63 @@ export const byDay = (c) => c.hours < 19;
 const own = (f, kind) => f.info.tracers.filter((t) => t.kind === kind && t.headM && t.tailM);
 /** A drawn tracer's flight at its tail: its head's, less its drawn length (exact once it has joined its round's path; short of that, within the offset's change along it, a few centimetres). */
 const tailFlown = (t) => t.flown - dist(t.headM, t.tailM);
+
+/** A tracer drawn within this many pixels of a pixel in a frame: that frame is not its background (a glow is drawn 10 px across at most, a head 4.1). */
+const NEAR_TRACER_PX = 8;
+
+/** Mark (1) the pixels of `mask` (w × h) within `r` of the segment a to b. */
+function markSegment(mask, w, h, a, b, r) {
+  const x0 = Math.max(0, Math.floor(Math.min(a[0], b[0]) - r));
+  const x1 = Math.min(w - 1, Math.ceil(Math.max(a[0], b[0]) + r));
+  const y0 = Math.max(0, Math.floor(Math.min(a[1], b[1]) - r));
+  const y1 = Math.min(h - 1, Math.ceil(Math.max(a[1], b[1]) + r));
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const l2 = dx * dx + dy * dy;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const px = x + 0.5;
+      const py = y + 0.5;
+      const s = l2 > 0 ? Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / l2)) : 0;
+      if (Math.hypot(px - a[0] - dx * s, py - a[1] - dy * s) <= r) mask[y * w + x] = 1;
+    }
+  }
+}
+
+/** Each frame's tracers on its image (the session's of every kind, and the battle's streams), NEAR_TRACER_PX about each: the pixels whose background that frame is not. */
+export function tracerMasks(frames, w, h) {
+  const trail = TUN.battle.tracers.trail_m;
+  return frames.map((f) => {
+    const mask = new Uint8Array(w * h);
+    const { pose, res } = f.info;
+    const k = w / res[0];
+    const put = (a, b) => markSegment(mask, w, h, [a[0] * k, a[1] * k], [b[0] * k, b[1] * k], NEAR_TRACER_PX);
+    for (const t of f.info.tracers) if (t.head && t.tail) put(t.tail, t.head);
+    for (const b of f.battle ?? []) {
+      const speed = Math.hypot(b.v[0], b.v[1], b.v[2]);
+      if (!(speed > 0)) continue;
+      const len = Math.min(Math.min(trail, Math.max(FX.tracer_min_m, speed * FX.tracer_streak_s)), b.flown);
+      const A = project(pose, res, [0, 1, 2].map((j) => b.p[j] - (b.v[j] * len) / speed));
+      const B = project(pose, res, b.p);
+      if (A && B) put(A, B);
+    }
+    return mask;
+  });
+}
+
+/** The pixels within `r` of `q` on `img` tinted by a tracer of `team` over the composite's background, each once (`taken`), pushed to `out` with their colour. */
+function tintNear(img, comp, q, r, taken, out, team) {
+  for (let y = Math.floor(q[1] - r); y <= Math.floor(q[1] + r); y++) {
+    for (let x = Math.floor(q[0] - r); x <= Math.floor(q[0] + r); x++) {
+      if (x < 0 || y < 0 || x >= img.w || y >= img.h || Math.hypot(x + 0.5 - q[0], y + 0.5 - q[1]) > r) continue;
+      const k = y * img.w + x;
+      if (taken.has(k)) continue;
+      taken.add(k);
+      const rgb = [img.data[k * 4], img.data[k * 4 + 1], img.data[k * 4 + 2]];
+      if (tinted(rgb, [comp.back[k * 3], comp.back[k * 3 + 1], comp.back[k * 3 + 2]], team)) out.push({ at: [x, y], rgb });
+    }
+  }
+}
 
 /** The sky's 99th percentile and the gun's mask box (null when it is the whole view) of an image, for a ring. */
 function ringContext(img, info) {
@@ -260,27 +358,58 @@ export function nearWidth(imgs, frames, kind) {
   return { ...(best ?? { px: null }), samples };
 }
 
-/** (b): the colour of the player's tracers' lit pixels past FAR_M of flight (their ribbons and heads), over the window's frames. */
-export function farColour(imgs, comp, frames, kind) {
+/**
+ * (b): the colour of the player's tracers' lit pixels past FAR_M of flight (their ribbons and heads), over
+ * the window's frames; and, reported beside it, of their pixels tinted by their team's colour (`tint`: by
+ * day a red one covering the haze is darker than it, and none of its pixels is lit).
+ */
+export function farColour(imgs, comp, frames, kind, team) {
   const pixels = [];
+  const tints = [];
   frames.forEach((f, i) => {
     const img = imgs[i];
     const { pose, res } = f.info;
     const taken = new Set();
+    const tintTaken = new Set();
     for (const t of own(f, kind)) {
       if (t.flown < FAR_M) continue;
       const tail = tailFlown(t);
       const u0 = Math.max(0, Math.min(1, (FAR_M - tail) / Math.max(1e-6, t.flown - tail)));
       for (let j = 0; j <= 200; j++) {
         const q = project(pose, res, lerp(t.tailM, t.headM, u0 + ((1 - u0) * j) / 200));
-        if (q) litNear(img, comp, q, FAR_RADIUS_PX, taken, pixels);
+        if (!q) continue;
+        litNear(img, comp, q, FAR_RADIUS_PX, taken, pixels);
+        tintNear(img, comp, q, FAR_RADIUS_PX, tintTaken, tints, team);
       }
       const h = t.headDrawn ? project(pose, res, t.headM) : null;
-      if (h) litNear(img, comp, h, FAR_HEAD_PX, taken, pixels);
+      if (h) {
+        litNear(img, comp, h, FAR_HEAD_PX, taken, pixels);
+        tintNear(img, comp, h, FAR_HEAD_PX, tintTaken, tints, team);
+      }
     }
   });
   const c = colourOf(pixels);
-  return { ...c, measured: c.n >= FAR_LIT_MIN, pixels: pixels.slice(0, 400) };
+  return { ...c, measured: c.n >= FAR_LIT_MIN, pixels: pixels.slice(0, 400), tint: colourOf(tints) };
+}
+
+/** The enemy line's rounds (the session's amber) as drawn over the window's frames: their pixels tinted amber over the composite's background, reported (at 17:35 the battle does not fire; the front's fire is the amber in the frame). */
+export function frontColour(imgs, comp, frames) {
+  const tints = [];
+  let drawn = 0;
+  frames.forEach((f, i) => {
+    const img = imgs[i];
+    const { pose, res } = f.info;
+    const taken = new Set();
+    for (const t of own(f, KIND.amber)) {
+      const A = project(pose, res, t.tailM);
+      const B = project(pose, res, t.headM);
+      if (!A || !B) continue;
+      drawn++;
+      const n = Math.max(1, Math.ceil(Math.hypot(B[0] - A[0], B[1] - A[1])));
+      for (let j = 0; j <= n; j++) tintNear(img, comp, [A[0] + ((B[0] - A[0]) * j) / n, A[1] + ((B[1] - A[1]) * j) / n], FAR_RADIUS_PX, taken, tints, TEAM.amber);
+    }
+  });
+  return { drawn, ...colourOf(tints) };
 }
 
 /** The battle's streams' lit pixels' colour: each tracer's streak as effects-frame draws it (its speed over tracer_streak_s, within tracer_min_m and the battle's trail_m, no more than it has flown). */
@@ -434,8 +563,13 @@ export function pathSamples(frames, track) {
   return { points, metres, n, lengthPx, end };
 }
 
-/** (c): the share of the round's path (PATH_M of flight) lit in the composite, sampled a pixel apart on the image (by the window's middle frame's camera), over the samples the world does not hide (by `pathDepth`, the G-buffer's depth along them) and, aimed, the gun covers in no frame. */
-export function pathCover(comp, frames, track, aimed, pathDepth) {
+/**
+ * (c): the share of the round's path (PATH_M of flight) lit in the composite, sampled a pixel apart on the
+ * image (by the window's middle frame's camera), over the samples the world does not hide (by
+ * `pathDepth`, the G-buffer's depth along them) and, aimed, the gun covers in no frame; and, reported
+ * beside it, the share tinted by its team's colour (`team`), and the tinted samples' colour.
+ */
+export function pathCover(comp, frames, track, aimed, pathDepth, team) {
   if (!track?.path) return { share: null, why: `no round followed ${PATH_M[0]} m out` };
   const ps = pathSamples(frames, track);
   if (!ps) return { share: null, why: 'the path is behind the camera or off the image' };
@@ -453,19 +587,27 @@ export function pathCover(comp, frames, track, aimed, pathDepth) {
     const hidden = !gun && pathDepth && pathDepth.length === ps.points.length ? pathDepth[j] < HIDDEN_SHARE * ps.metres[j] : false;
     let best = 0;
     const bgs = [];
+    let tint = null;
     for (let o = -PATH_ACROSS_PX; o <= PATH_ACROSS_PX + 1e-9; o += 0.5) {
       const k = at(comp, [q[0] + n[0] * o, q[1] + n[1] * o]);
       if (k < 0) continue;
       best = Math.max(best, comp.lum[k]);
       bgs.push(comp.least[k]);
+      const rgb = [comp.data[k * 4], comp.data[k * 4 + 1], comp.data[k * 4 + 2]];
+      if (!tint && team && tinted(rgb, [comp.back[k * 3], comp.back[k * 3 + 1], comp.back[k * 3 + 2]], team)) tint = rgb;
     }
     const bg = median(bgs);
-    samples.push({ at: q, gun, hidden, covered: bg !== null && lit(best, bg), lum: best, bg });
+    samples.push({ at: q, gun, hidden, covered: bg !== null && lit(best, bg), tint, lum: best, bg });
   }
   const counted = samples.filter((s) => !s.gun && !s.hidden);
   const share = counted.length ? counted.filter((s) => s.covered).length / counted.length : null;
+  const tints = counted.filter((s) => s.tint);
   const behindGun = samples.filter((s) => s.gun).length;
-  return { share, fit: track.path.fit, spanM: [PATH_M[0], Math.round(end * 10) / 10], lengthPx: Math.round(lengthPx * 10) / 10, endOn: lengthPx < DEGENERATE_PX, samples: samples.length, behindGun, hiddenByWorld: samples.filter((s) => s.hidden).length, depthRead: !!pathDepth, counted: counted.length, why: counted.length ? undefined : behindGun ? 'every sample is behind the gun' : 'every sample is hidden', marks: samples };
+  return {
+    share,
+    tint: { share: counted.length ? tints.length / counted.length : null, ...colourOf(tints.map((s) => ({ rgb: s.tint }))) },
+    fit: track.path.fit, spanM: [PATH_M[0], Math.round(end * 10) / 10], lengthPx: Math.round(lengthPx * 10) / 10, endOn: lengthPx < DEGENERATE_PX, samples: samples.length, behindGun, hiddenByWorld: samples.filter((s) => s.hidden).length, depthRead: !!pathDepth, counted: counted.length, why: counted.length ? undefined : behindGun ? 'every sample is behind the gun' : 'every sample is hidden', marks: samples,
+  };
 }
 
 /** (d): the round's brightest pixel at NOON_AT_M of flight over its ring, in the frame whose head is nearest past that point. */
@@ -524,7 +666,7 @@ export function marked(img, m) {
   return encode(data, img.w, img.h);
 }
 
-/** The composite marked: (c)'s path a few pixels aside (green lit, red not, grey behind the gun), (a)'s run (cyan), (b)'s pixels (yellow), (d)'s point and ring (magenta). */
+/** The composite marked: (c)'s path a few pixels aside (green lit, blue tinted by its team's colour and not lit, red neither, grey behind the gun or hidden), (a)'s run (cyan), (b)'s pixels (yellow), (d)'s point and ring (magenta). */
 export function markedComposite(comp, m) {
   const data = Buffer.from(comp.data);
   const put = (x, y, c) => {
@@ -537,7 +679,7 @@ export function markedComposite(comp, m) {
     data[i + 2] = c[2];
     data[i + 3] = 255;
   };
-  if (m.pathCover?.marks) for (const s of m.pathCover.marks) for (const o of [5, 6]) put(s.at[0], s.at[1] + o, s.gun || s.hidden ? [128, 128, 128] : s.covered ? [0, 255, 0] : [255, 0, 0]);
+  if (m.pathCover?.marks) for (const s of m.pathCover.marks) for (const o of [5, 6]) put(s.at[0], s.at[1] + o, s.gun || s.hidden ? [128, 128, 128] : s.covered ? [0, 255, 0] : s.tint ? [0, 96, 255] : [255, 0, 0]);
   const a = m.nearWidth;
   if (a?.px != null) for (let o = -a.px / 2; o <= a.px / 2; o += 0.5) put(a.at[0] + a.normal[0] * o, a.at[1] + a.normal[1] * o, [0, 255, 255]);
   if (m.farColour?.pixels) {
@@ -555,8 +697,9 @@ export function markedComposite(comp, m) {
 /** Every measure of a capture (`cap`: its window's frames, each with its PNG; the depth along the path), the images it read, the composite, and which frame is the shot. */
 export function measureCapture(c, cap) {
   const kind = kindOf(c);
+  const team = c.team === 'blue' ? TEAM.blue : TEAM.red;
   const imgs = cap.frames.map((f) => decode(f.png));
-  const comp = composite(imgs);
+  const comp = composite(imgs, tracerMasks(cap.frames, imgs[0].w, imgs[0].h));
   // The shot: the first frame of the window clear of the flash with the player's head drawn (else the first with it).
   const headed = (f, i) => i >= FLASH_FRAMES && own(f, kind).some((t) => t.headDrawn);
   const clear = cap.frames.findIndex(headed);
@@ -572,10 +715,11 @@ export function measureCapture(c, cap) {
     ...hr,
     bestOfAnyKind: every,
     nearWidth: hip && c.burst !== 'graze' ? nearWidth(imgs, cap.frames, kind) : null,
-    farColour: c.burst === 'far' && !c.aimed ? farColour(imgs, comp, cap.frames, kind) : null,
+    farColour: c.burst === 'far' && !c.aimed ? farColour(imgs, comp, cap.frames, kind, team) : null,
     battleColour: byDay(c) ? null : battleColour(imgs, comp, cap.frames),
-    stream: hip && c.burst === 'near' ? streamCover(comp, cap.frames, track) : null,
-    pathCover: c.burst === 'far' ? pathCover(comp, cap.frames, track, !!c.aimed, cap.pathDepth) : null,
+    frontColour: frontColour(imgs, comp, cap.frames),
+    stream: hip && nearLike(c) ? streamCover(comp, cap.frames, track) : null,
+    pathCover: c.burst === 'far' ? pathCover(comp, cap.frames, track, !!c.aimed, cap.pathDepth, team) : null,
     noonContrast: c.burst === 'far' && byDay(c) ? noonContrast(imgs, cap.frames, track, kind) : null,
     followed: track ? track.seen.map((s) => Math.round(s.t.flown * 10) / 10) : null,
     // Each frame's exposure, effects and the shooter's suppression (the front fires on in the far captures; a suppressed frame greys the world, not the tracers).
@@ -593,7 +737,8 @@ const num = (x) => typeof x === 'number' && Number.isFinite(x);
  * `gpuSamples`). Which gates apply is the capture's (the G1 ledger's rulings), never whether a measure
  * came back: a measure missing where it is gated fails.
  *   - Every hip capture but the graze: (a). Near ones: a head drawn and measured, by day at the
- *     display's top in its own channel, after dark MIN_RATIO over its ring in it; and (e).
+ *     display's top in its own channel, after dark MIN_RATIO over its ring in it; near ones and the
+ *     wall: (e) (the wall's head, beside its own shot's flash in every frame it is drawn, reported).
  *   - Far (from the eye or the side, not aimed): (b) after dark, against the shooter's team's hue (by
  *     day reported); (d) at noon (at 17:35 reported). Side on: (c).
  *   - `battle`: the battle's amber. The graze: a ricochet of the player's kind. Every capture: enough GPU samples.
@@ -612,6 +757,8 @@ export function gateCapture(c, m, burst) {
     else if (day) {
       if (!(num(hl.headChannel) && hl.headChannel >= NOON_HEAD_MIN)) failures.push(`by day: the head's brightest channel ${hl.headChannel} < ${NOON_HEAD_MIN}`);
     } else if (!(num(hl.ratioTop) && hl.ratioTop >= MIN_RATIO)) failures.push(`head over ring in its top channel (${hl.headTop}) ${hl.headChannel}/${hl.ringMeanTop?.toFixed(1)} = ${hl.ratioTop?.toFixed(2)} < ${MIN_RATIO} (V ${hl.ratioV?.toFixed(2)}, luminance ${hl.ratio?.toFixed(2)})`);
+  }
+  if (hip && nearLike(c)) {
     const e = m.stream;
     if (!(num(e?.share) && e.share >= TARGET.streamCover && num(e.span) && e.span >= TARGET.streamSpan)) failures.push(`(e) the stream from the hip: lit ${round3(e?.share)} (>= ${TARGET.streamCover}) of ${e?.samples ?? 0} samples, reaching ${e?.reachPx ?? '-'} of ${e?.muzzlePx ?? '-'} px to the muzzle: ${round3(e?.span)} (>= ${TARGET.streamSpan})${e?.why ? ` (${e.why})` : ''}`);
   }

@@ -7,7 +7,8 @@ import { Rng } from '../../src/core/rng';
 import { project } from '../../tools/lib/camera.mjs';
 import { at, brightest, colourOf, composite, decode, encode, hsv, hueOff, lit, luminance, median, p95, percentile, ringMean, topChannel, type Image } from '../../tools/lib/image.mjs';
 import { failedEntry, removePictures, stamp } from '../../tools/lib/report.mjs';
-import { CAPTURES, FAR_LIT_MIN, gateCapture, headRing, kindOf, MIN_GPU_SAMPLES, TARGET, TEAM, teamChannel, trackRound, type Burst, type Capture, type Frame, type Measures } from '../../tools/lib/tracer-measures.mjs';
+import { CAPTURES, FAR_LIT_MIN, gateCapture, headRing, kindOf, MIN_GPU_SAMPLES, nearLike, TARGET, TEAM, teamChannel, tinted, trackRound, WALL, type Burst, type Capture, type Frame, type Measures } from '../../tools/lib/tracer-measures.mjs';
+import { P } from '../../src/world/materials';
 
 // The capture tools' measures (tools/lib: the pixels of a screenshot as displayed, the game's camera, a
 // report's entries) and G1's proof's own (tools/lib/tracer-measures.mjs), read on synthetic images: every
@@ -39,16 +40,57 @@ describe("the capture tools' image measures", () => {
     expect(at(img, [-0.1, 0])).toBe(-1);
   });
 
-  it("a composite is each channel's most over the frames, and each pixel's least luminance its background", () => {
-    const a = image(2, 1, [10, 10, 10], (set) => set(1, 0, [200, 0, 0]));
-    const b = image(2, 1, [30, 5, 5], (set) => set(1, 0, [0, 0, 200]));
-    const c = composite([a, b]);
-    expect(Array.from(c.data.subarray(0, 3))).toEqual([30, 10, 10]);
-    expect(Array.from(c.data.subarray(4, 7))).toEqual([200, 0, 200]);
-    expect(c.least[0]).toBeCloseTo(Math.min(a.lum[0], b.lum[0]), 4);
-    expect(c.least[1]).toBeCloseTo(Math.min(a.lum[1], b.lum[1]), 4);
-    expect(c.lum[1]).toBeCloseTo(luminance(200, 0, 200), 4);
+  it("a composite shows each pixel as its frame most unlike its background, the background its least luminance", () => {
+    // A tracer's light added (pixel 0, brighter in the second frame) shows as that frame, as each
+    // channel's most over the frames did; one that covers a bright haze behind it (pixel 1, by day:
+    // darker, redder in the third) is no longer brighter than its background.
+    const haze = [220, 190, 150];
+    const a = image(2, 1, haze, (set) => set(0, 0, [10, 10, 10]));
+    const b = image(2, 1, haze, (set) => set(0, 0, [200, 40, 30]));
+    const c3 = image(2, 1, haze, (set) => {
+      set(0, 0, [12, 10, 10]);
+      set(1, 0, [250, 80, 55]);
+    });
+    const c = composite([a, b, c3]);
+    expect(Array.from(c.data.subarray(0, 3))).toEqual([200, 40, 30]);
+    expect(c.lum[0]).toBeCloseTo(luminance(200, 40, 30), 4);
+    // The background: pixel 0's darkest frame. Pixel 1's, with nothing to say a tracer was over it,
+    // is its darkest too, the covered frame, and the haze is what is most unlike it: so the tool says
+    // where each frame's tracers are drawn (`near`, below).
+    expect(c.least[0]).toBeCloseTo(a.lum[0], 4);
+    expect(Array.from(c.back.subarray(0, 3))).toEqual([10, 10, 10]);
+    expect(c.least[1]).toBeCloseTo(luminance(250, 80, 55), 4);
+    expect(Array.from(c.data.subarray(4, 7))).toEqual(haze);
     expect(() => composite([a, image(1, 1, [0, 0, 0])])).toThrow();
+  });
+
+  it('a pixel with a tracer drawn near it in a frame (`near`) takes its background from the frames without one: a covering tracer is not the background', () => {
+    const haze = [220, 190, 150];
+    const frames = [image(2, 1, haze), image(2, 1, haze, (set) => set(1, 0, [250, 80, 55])), image(2, 1, haze)];
+    // The second frame drew a tracer over pixel 1.
+    const near = [new Uint8Array([0, 0]), new Uint8Array([0, 1]), new Uint8Array([0, 0])];
+    const c = composite(frames, near);
+    expect(c.least[1]).toBeCloseTo(luminance(haze[0], haze[1], haze[2]), 4);
+    expect(Array.from(c.back.subarray(3, 6))).toEqual(haze);
+    // And it still shows in the composite, as drawn.
+    expect(Array.from(c.data.subarray(4, 7))).toEqual([250, 80, 55]);
+    // Every frame with a tracer near it: the least over them all.
+    const all = composite(frames, [new Uint8Array([1, 1]), new Uint8Array([1, 1]), new Uint8Array([1, 1])]);
+    expect(all.least[1]).toBeCloseTo(luminance(250, 80, 55), 4);
+  });
+
+  it("a pixel tinted by a tracer: its team's hue within reach, saturated, and more coloured than its background", () => {
+    const haze = [220, 190, 150];
+    // Red's glow covering the low sun's haze, and red's glow added to it (orange-peach).
+    expect(tinted([250, 80, 55], haze, TEAM.red)).toBe(true);
+    expect(tinted([255, 176, 127], haze, TEAM.red)).toBe(false);
+    // A blue one covering it, and added to it (lavender-white).
+    expect(tinted([121, 164, 252], haze, TEAM.blue)).toBe(true);
+    expect(tinted([223, 213, 255], haze, TEAM.blue)).toBe(false);
+    // Over the night's violet sky, red shows; the sky itself is no tracer, nor a red-brown wall.
+    expect(tinted([255, 59, 60], [60, 50, 104], TEAM.red)).toBe(true);
+    expect(tinted([60, 50, 104], [60, 50, 104], TEAM.red)).toBe(false);
+    expect(tinted([150, 60, 50], [140, 58, 50], TEAM.red)).toBe(false);
   });
 
   it("a ring's mean is its annulus's, less what is dropped; with nothing left, nulls", () => {
@@ -198,16 +240,25 @@ const frameOf = (k: number, tracers: Frame['info']['tracers'], res: [number, num
 
 describe("G1's proof: its measures", () => {
   it('a capture fires its team: Blue captures are blue, and red the rest', () => {
-    expect(CAPTURES.filter((c) => c.team === 'blue').map((c) => c.name).sort()).toEqual(['far-night-blue', 'side-night-blue']);
+    expect(CAPTURES.filter((c) => c.team === 'blue').map((c) => c.name).sort()).toEqual(['far-night-blue', 'side-1735-blue', 'side-night-blue']);
     for (const c of CAPTURES) expect(kindOf(c), c.name).toBe(c.team === 'blue' ? 3 : 2);
     // Each team's own channel: red's R, blue's B, amber's R.
     expect([teamChannel(2), teamChannel(3), teamChannel(1)]).toEqual([0, 2, 0]);
   });
 
-  it("17:35 is photographed near, far and side on, and night far and side on as Blue", () => {
+  it("17:35 is photographed near, far and side on, side on as Blue and with the front's fire heavy; night far and side on as Blue; and a wall 10 m out at night", () => {
     const names = CAPTURES.map((c) => c.name);
-    for (const n of ['1735', 'far-1735', 'side-1735', 'far-night-blue', 'side-night-blue']) expect(names).toContain(n);
+    for (const n of ['1735', 'far-1735', 'side-1735', 'side-1735-blue', 'side-1735-heavy', 'far-night-blue', 'side-night-blue', 'wall-night']) expect(names).toContain(n);
     for (const c of CAPTURES.filter((x) => x.name.includes('1735'))) expect(c.hours).toBeCloseTo(17 + 35 / 60, 9);
+    expect(CAPTURES.find((c) => c.name === 'side-1735-heavy')!.front).toBe('heavy');
+    expect(CAPTURES.filter((c) => c.front).map((c) => c.name)).toEqual(['side-1735-heavy']);
+    const wall = CAPTURES.find((c) => c.name === 'wall-night')!;
+    expect(wall.burst).toBe('wall');
+    expect(nearLike(wall)).toBe(true);
+    // Its rounds strike within their first tick (an AK's 14.7 m), so each is drawn once, to the wall.
+    expect(WALL.outM).toBeLessThan(880 / 60);
+    // Of the game's timber (world/materials.ts P), and the wall's place is put back after.
+    expect(WALL.material).toBe(P.TIMBER);
   });
 
   it("a white-hot head's top channel is its team's: a blue head is read in blue against the ring's blue", () => {
@@ -277,7 +328,8 @@ function gated(c: Capture): string[] {
   const day = c.hours < 19;
   const far = c.burst === 'far' && !c.aimed;
   const paths: string[] = [];
-  if (hip && c.burst === 'near') paths.push('headline', day ? 'headline.headChannel' : 'headline.ratioTop', 'headsDrawn', 'stream', 'stream.share', 'stream.span');
+  if (hip && c.burst === 'near') paths.push('headline', day ? 'headline.headChannel' : 'headline.ratioTop', 'headsDrawn');
+  if (hip && (c.burst === 'near' || c.burst === 'wall')) paths.push('stream', 'stream.share', 'stream.span');
   if (hip && c.burst !== 'graze') paths.push('nearWidth', 'nearWidth.px');
   if (far && !day) paths.push('farColour', 'farColour.measured', 'farColour.saturation', 'farColour.hueDeg');
   if (far && c.hours === 12) paths.push('noonContrast', 'noonContrast.ratio');
@@ -319,7 +371,7 @@ describe("G1's proof: its gates", () => {
   });
 
   it("17:35's far colour and contrast, Blue's battle and the eye's path are reported, not gated", () => {
-    for (const name of ['far-1735', 'side-1735']) {
+    for (const name of ['far-1735', 'side-1735', 'side-1735-blue', 'side-1735-heavy']) {
       const c = CAPTURES.find((x) => x.name === name)!;
       expect(gateCapture(c, without(without(passing(c), 'farColour'), 'noonContrast'), burstOf()), name).toEqual([]);
     }
@@ -331,6 +383,21 @@ describe("G1's proof: its gates", () => {
       const c = CAPTURES.find((x) => x.name === name)!;
       expect(gateCapture(c, without(passing(c), 'pathCover'), burstOf()), name).toEqual([]);
     }
+  });
+
+  it("17:35 side on is gated on its path's cover as side-1735 is, as Blue and with the front heavy too; the wall at night on its stream and near width as a near burst is, its head reported", () => {
+    for (const name of ['side-1735', 'side-1735-blue', 'side-1735-heavy']) {
+      const c = CAPTURES.find((x) => x.name === name)!;
+      const m = passing(c);
+      expect(gateCapture(c, { ...m, pathCover: { share: TARGET.pathCover - 0.01 } }, burstOf()).length, name).toBe(1);
+    }
+    const wall = CAPTURES.find((x) => x.name === 'wall-night')!;
+    const m = passing(wall);
+    expect(gateCapture(wall, { ...m, stream: { ...m.stream, share: TARGET.streamCover - 0.01 } }, burstOf()).length).toBe(1);
+    expect(gateCapture(wall, { ...m, nearWidth: { px: TARGET.nearWidthPx + 1, samples: 10 } }, burstOf()).length).toBe(1);
+    // Its head is drawn only in the frame its round is fired, its own shot's flash beside it: reported.
+    expect(gateCapture(wall, { ...m, headline: { ...m.headline, ratioTop: 2.9 } }, burstOf())).toEqual([]);
+    expect(gateCapture(wall, without(m, 'headline'), burstOf())).toEqual([]);
   });
 
   it("a Blue capture's far colour is gated against blue: red there fails", () => {

@@ -2,15 +2,16 @@
 import type { Composite, Hsv, Image } from './image.mjs';
 import type { Pose } from './camera.mjs';
 
-/** A capture: its name, the clock (hours), the burst fired, aimed or seen from the side, whether the battle's amber is gated, and the shooter's team (red unless given). */
+/** A capture: its name, the clock (hours), the burst fired, aimed or seen from the side, whether the battle's amber is gated, the shooter's team (red unless given), and the enemy line's rifle fire for the burst (light unless given). */
 export interface Capture {
   name: string;
   hours: number;
-  burst: 'near' | 'far' | 'graze';
+  burst: 'near' | 'far' | 'graze' | 'wall';
   aimed?: boolean;
   side?: boolean;
   battle?: boolean;
   team?: 'red' | 'blue';
+  front?: 'light' | 'heavy';
 }
 
 /** A tracer as tracerPixels() gives it. */
@@ -70,18 +71,24 @@ export const PATH_M: readonly number[];
 export const NOON_RING_PX: readonly number[];
 export const TARGET: { nearWidthPx: number; farSaturation: number; farHueDeg: number; battleSaturation: number; pathCover: number; noonContrast: number; streamCover: number; streamSpan: number };
 export const TEAM: { red: Hsv; blue: Hsv; amber: Hsv };
+export const TINT: { saturation: number; chroma: number; apart: number };
+export const WALL: { outM: number; halfWidthM: number; belowM: number; aboveM: number; thickM: number; material: number };
 
 export function kindOf(c: Capture): number;
+export function nearLike(c: Capture): boolean;
+export function tinted(rgb: readonly number[], bg: readonly number[], team: Hsv): boolean;
+export function tracerMasks(frames: readonly Frame[], w: number, h: number): Uint8Array[];
 export function teamChannel(kind: number): number;
 export function byDay(c: Capture): boolean;
 export function headRing(img: Image, info: Frame['info'], kind: number, anyKind?: boolean): Measures;
 export function nearWidth(imgs: readonly Image[], frames: readonly Frame[], kind: number): Measures;
-export function farColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[], kind: number): Measures;
+export function farColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[], kind: number, team: Hsv): Measures;
+export function frontColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[]): Measures;
 export function battleColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[]): Measures;
 export function streamCover(comp: Composite, frames: readonly Frame[], track: Track | null): Measures;
 export function trackRound(frames: readonly Frame[], kind: number): Track | null;
 export function pathSamples(frames: readonly Frame[], track: Track | null): { points: [number, number][]; metres: number[]; n: number[]; lengthPx: number; end: number } | null;
-export function pathCover(comp: Composite, frames: readonly Frame[], track: Track | null, aimed: boolean, pathDepth: ArrayLike<number> | null): Measures;
+export function pathCover(comp: Composite, frames: readonly Frame[], track: Track | null, aimed: boolean, pathDepth: ArrayLike<number> | null, team?: Hsv): Measures;
 export function noonContrast(imgs: readonly Image[], frames: readonly Frame[], track: Track | null, kind: number): Measures;
 export function marked(img: Image, m: Measures): Buffer;
 export function markedComposite(comp: Composite, m: Measures): Buffer;
