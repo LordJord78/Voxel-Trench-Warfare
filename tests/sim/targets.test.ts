@@ -95,6 +95,21 @@ describe("the range's targets", () => {
     }
   });
 
+  it("the player's rounds carry the tick their pull left on to the target, though they strike it a tick or more later: a shotgun's pellets the one", () => {
+    for (const primary of ['ak74', 'm870'] as const) {
+      const s = range();
+      s.equip({ primary, secondary: 'm17', fits: {} });
+      const dummy = standing(200, 25);
+      s.targets = [dummy];
+      const pulled = s.ticks + 1;
+      const { hits } = shoot(s, chest(dummy.frames));
+      expect(hits.length, primary).toBeGreaterThan(primary === 'm870' ? 1 : 0);
+      // 20 m out, each strikes after the tick it left on, and carries that tick, not its own.
+      expect(hits.filter((h) => h.tick <= pulled), primary).toEqual([]);
+      expect(hits.map((h) => h.shot), primary).toEqual(hits.map(() => pulled));
+    }
+  });
+
   it("the front's round passes through a target", () => {
     for (const together of [false, true]) {
       const s = range(together);

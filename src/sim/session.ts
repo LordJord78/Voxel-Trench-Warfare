@@ -150,7 +150,10 @@ export interface CombatEvents {
   scoops: (Scoop & { tick: number })[];
   /** Other players' shots, from their eyes, their tracers and flashes at their rifles' muzzles. */
   remoteShots: (ShotEvent & { owner: number })[];
-  /** Rounds stopped by a body: whose, whose body (LOCAL_BODY the player's own, a target's its id), where struck. */
+  /**
+   * Rounds stopped by a body: whose, whose body (LOCAL_BODY the player's own, a target's its id),
+   * where struck; the player's say the pull they left on (`shot`: that shot event's tick).
+   */
   hits: (BodyHit & { tick: number })[];
   /** Where rounds went into water, shells landed on it and their debris fell into it (metres), and with how much energy. */
   splashes: { tick: number; at: [number, number, number]; energyJ: number; kind: 'round' | 'shell' | 'debris' }[];
@@ -782,11 +785,13 @@ export class Session {
       const reach = this.aimRange(0, eye, dir);
       const [hipM, aimedM] = this.tracerIgnite;
       const drawn = { from: muzzle, convergeM: reach, igniteM: hipM + (aimedM - hipM) * this.aimed };
-      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, drawn) >= 0) {
+      // Every round of the pull carries it, as this tick (its shot event's): what it strikes says
+      // which pull it was, however long it flies (the range counts a kill's shots by them).
+      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, drawn, this.ticks) >= 0) {
         // A shotgun's other pellets, each the cone's own.
         for (let k = 1; k < w.spec.pellets; k++) {
           const d = w.aim(aim[0], aim[1], cone, this.dispersion);
-          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, drawn);
+          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, drawn, this.ticks);
         }
         w.shot();
         this.throwShot(muzzle, arm.spec.flash);

@@ -59,6 +59,18 @@ function run(s: Session, ticks: number): CombatEvents {
   return s.drainEvents();
 }
 
+/**
+ * The view turned from the eye onto `at`, less the muzzle's recoil as the last tick left it: a held
+ * trigger's rounds stay on it.
+ */
+function holdOn(s: Session, at: readonly number[]): void {
+  const p = s.player;
+  const eye = [p.position.x, p.position.y + s.controller.eyeHeight(p), p.position.z];
+  const d = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+  p.yaw = (Math.atan2(d[0], d[2]) * 180) / Math.PI - s.recoil.yaw;
+  p.pitch = (Math.atan2(d[1], Math.hypot(d[0], d[2])) * 180) / Math.PI - s.recoil.pitch;
+}
+
 /** One pull of the player's trigger aimed from the eye at `at`, and the ticks the round needs: what combat did. */
 function shoot(s: Session, at: readonly number[], ticks = 20): CombatEvents {
   const p = s.player;
@@ -254,7 +266,7 @@ describe('the range in the app', () => {
     expect(view.state().dummies[0]).toMatchObject({ id: FIRST_DUMMY, hp: 100, down: false });
   });
 
-  it("shots are counted by the player's shots' ticks: each pull that strikes is one, a shotgun's nine pellets one", () => {
+  it("shots are counted by the pulls that fired the rounds: each pull that strikes is one, a shotgun's nine pellets one", () => {
     for (const primary of ['ak74', 'm870'] as const) {
       const s = field();
       s.equip({ primary, secondary: 'm17', fits: {} });
@@ -287,6 +299,64 @@ describe('the range in the app', () => {
       // The hits before the kill are events; a downed dummy takes nothing more: the kill is the last.
       expect(events.at(-1)).toBe(kill);
     }
+  });
+
+  it("a round still in the air as the next pull leaves counts for its own pull: the AK held on the 80 m dummy, two of its rounds at 110 m, three of the MP5's at 40 m", () => {
+    const cases = [
+      { primary: 'ak74', m: 80, pulls: Infinity, struck: 2 },
+      { primary: 'ak74', m: 110, pulls: 2, struck: 2 },
+      { primary: 'mp5', m: 40, pulls: 3, struck: 3 },
+    ] as const;
+    for (const c of cases) {
+      const label = `${c.primary} at ${c.m} m`;
+      const s = field();
+      s.equip({ primary: c.primary, secondary: 'm17', fits: {} });
+      const view = new RangeView(tun);
+      view.raise(s, SPAWN);
+      view.frame(s, DT, now(s));
+      const id = FIRST_DUMMY + t.dummiesM.indexOf(c.m);
+      const feet = view.state().dummies.find((d) => d.id === id)!.position;
+      const chest = [feet[0], feet[1] + 1.2, feet[2]];
+      /** The ticks the pulls left on, and the ticks the dummy was struck on. */
+      const pulls: number[] = [];
+      const struck: number[] = [];
+      const events: RangeEvent[] = [];
+      for (let k = 0; k < 40; k++) {
+        view.frame(s, DT, now(s));
+        holdOn(s, chest);
+        // The trigger held for the burst's pulls, or until the dummy drops.
+        s.intent = { ...idleIntent(), fire: pulls.length < c.pulls && !events.some((e) => e.kind === 'kill') };
+        s.tick();
+        const fired = s.drainEvents();
+        pulls.push(...fired.shots.map((sh) => sh.tick));
+        struck.push(...fired.hits.filter((h) => h.body === id).map((h) => h.tick));
+        events.push(...view.after(fired, now(s)));
+      }
+      expect(struck, label).toHaveLength(c.struck);
+      // Rounds still in the air as the next pull left: told by the ticks alone (the latest pull at or
+      // before each strike), two of the strikes would be one pull's.
+      const latest = (tick: number) => Math.max(...pulls.filter((p) => p <= tick));
+      expect(new Set(struck.map(latest)).size, label).toBeLessThan(struck.length);
+      // One round a pull: each that struck is a pull that struck.
+      const kill = events.find((e) => e.kind === 'kill');
+      expect(kill, label).toMatchObject({ kind: 'kill', id, shots: c.struck });
+      expect(events.at(-1), label).toBe(kill);
+    }
+  });
+
+  it("a kill's shots are the pulls its rounds left on, whatever ticks they struck on", () => {
+    const s = field();
+    const view = new RangeView(tun);
+    view.raise(s, SPAWN);
+    view.frame(s, DT, now(s));
+    const [a, b] = view.state().dummies;
+    /** A round of the player's into dummy `body` (no gun's: 55 to the torso), struck on `tick`, from the pull on tick `shot`. */
+    const round = (body: number, tick: number, shot: number): CombatEvents['hits'][number] => ({ owner: 0, body, zone: 'torso', position: [0, 0, 0], dir: [0, 0, 1], distance: 25, shot, tick });
+    // One pull's two rounds struck on two ticks (a shotgun's pellets either side of one): one shot.
+    // Two pulls' rounds struck on one tick: two.
+    const hits = [round(a.id, 50, 44), round(a.id, 51, 44), round(b.id, 52, 45), round(b.id, 52, 48)];
+    const events = view.after({ ...s.drainEvents(), hits }, now(s));
+    expect(events.map((e) => [e.kind, e.kind === 'kill' ? e.shots : null])).toEqual([['hit', null], ['kill', 1], ['hit', null], ['kill', 2]]);
   });
 
   it("raise keeps the front's shells range_shell_clear_m off every spot, a mover's walk too; lower lets them back", () => {

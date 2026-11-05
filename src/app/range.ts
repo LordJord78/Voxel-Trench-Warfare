@@ -17,8 +17,10 @@
  *   hit. They never go to together.prepare, whose bodies everyone's rounds strike.
  * - **After the ticks** (after): the player's rounds into the dummies (body 200 on) and into target
  *   steel, as the range's events, oldest first. A hit; a kill, with the shots it took, a shot being
- *   a pull of the trigger, told by the shots' ticks (a shotgun's pellets are one); a plate, the voxel
- *   struck repainted lead-grey (TARGET_STEEL_HIT). Others' rounds only spark off the steel.
+ *   a pull of the trigger, told by the pull each round carries to what it strikes (the tick it left
+ *   on), so a shotgun's pellets are one, and a round still in the air as the next pull leaves is
+ *   its own; a plate, the voxel struck repainted lead-grey (TARGET_STEEL_HIT). Others' rounds only
+ *   spark off the steel.
  */
 
 import { FIRST_DUMMY, plateVoxels, Range, rangeLayout, rangeTunables, type RangeBay, type RangeEvent, type RangeTunables } from '../combat/range';
@@ -71,8 +73,6 @@ export class RangeView {
   private on: Up | null = null;
   /** The seconds the range was last brought to: its clock, which never goes back. */
   private now = 0;
-  /** The tick of the player's latest shot the events have told. */
-  private lastShot = -1;
 
   constructor(tun: Tunables) {
     this.t = rangeTunables(tun);
@@ -161,36 +161,30 @@ export class RangeView {
 
   /**
    * After the frame's ticks, at `nowS` (the session's seconds): what the player's rounds did on the
-   * range, oldest first. Each hit on a dummy counts the trigger's shot it came from: the latest of
-   * the player's shots at or before its tick. None while down.
+   * range, oldest first. Each hit on a dummy counts the pull of the trigger its round left on
+   * (BodyHit.shot, the tick of that pull's shot), whatever tick it struck on. None while down.
    */
   after(events: CombatEvents, nowS: number): RangeEvent[] {
-    const shots = events.shots;
-    let next = 0;
-    const shotOf = (tick: number): number => {
-      while (next < shots.length && shots[next].tick <= tick) this.lastShot = shots[next++].tick;
-      return this.lastShot;
-    };
-    const out: { tick: number; e: RangeEvent }[] = [];
     const on = this.on;
-    if (on) {
-      const now = this.clock(nowS);
-      for (const h of events.hits) {
-        if (h.owner !== 0 || h.body < FIRST_DUMMY) continue;
-        const e = on.range.hit(h.body, h.zone, h.gun, h.distance, shotOf(h.tick), now);
-        if (e) out.push({ tick: h.tick, e });
-      }
-      for (const i of events.impacts) {
-        if (i.owner !== 0 || (i.material !== P.TARGET_STEEL && i.material !== P.TARGET_STEEL_HIT)) continue;
-        const [x, y, z] = i.cell;
-        const index = on.steel.get(keyOf(on.map, x, y, z));
-        if (index === undefined) continue;
-        on.map.set(x, y, z, P.TARGET_STEEL_HIT);
-        on.plates[index].hits++;
-        out.push({ tick: i.tick, e: on.range.plate(index, i.distance) });
-      }
+    if (!on) return [];
+    const now = this.clock(nowS);
+    const out: { tick: number; e: RangeEvent }[] = [];
+    for (const h of events.hits) {
+      if (h.owner !== 0 || h.body < FIRST_DUMMY) continue;
+      // Every pull of the player's says itself on its rounds (session.combat); a round that says
+      // none (fired into the pool by hand) counts as a pull of the tick it struck on.
+      const e = on.range.hit(h.body, h.zone, h.gun, h.distance, h.shot ?? h.tick, now);
+      if (e) out.push({ tick: h.tick, e });
     }
-    shotOf(Number.POSITIVE_INFINITY);
+    for (const i of events.impacts) {
+      if (i.owner !== 0 || (i.material !== P.TARGET_STEEL && i.material !== P.TARGET_STEEL_HIT)) continue;
+      const [x, y, z] = i.cell;
+      const index = on.steel.get(keyOf(on.map, x, y, z));
+      if (index === undefined) continue;
+      on.map.set(x, y, z, P.TARGET_STEEL_HIT);
+      on.plates[index].hits++;
+      out.push({ tick: i.tick, e: on.range.plate(index, i.distance) });
+    }
     // Stable: a tick's dummies before its plates, each as the rounds struck.
     return out.sort((a, b) => a.tick - b.tick).map((o) => o.e);
   }
