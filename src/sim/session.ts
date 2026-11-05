@@ -445,7 +445,7 @@ export class Session {
     const v = spec.muzzleVelocity;
     const round = !tracer ? TRACER_KIND.none : kind ?? (m ? m.kind : TRACER_KIND.amber);
     const from: [number, number, number] = [muzzle[0], muzzle[1], muzzle[2]];
-    const reach = this.aimRange(origin, dir);
+    const reach = this.aimRange(owner, origin, dir);
     // Lit in as the draw's own (a hip shot's): a shot mark carries no share aimed.
     const drawn = { from, convergeM: reach };
     if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, drawn) < 0) return;
@@ -792,7 +792,7 @@ export class Session {
       // the shot is aimed (one cast a pull of the trigger: a shotgun's pellets share it), and lit in
       // by a metre from the hip, so a stream reads from the gun, further aimed, clear of the sights.
       const muzzle = this.muzzle();
-      const reach = this.aimRange(eye, dir);
+      const reach = this.aimRange(0, eye, dir);
       const [hipM, aimedM] = this.tracerIgnite;
       const drawn = { from: muzzle, convergeM: reach, igniteM: hipM + (aimedM - hipM) * this.aimed };
       if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, drawn) >= 0) {
@@ -1071,9 +1071,14 @@ export class Session {
     return heldPose(this.viewmodel, this.holding(), { back: at('back'), up: at('up'), side: at('side'), pitch: at('pitch'), yaw: at('yaw'), roll: at('roll') }, sway, speedRatio, raised, aimed, ready, stroke, hands);
   }
 
-  /** How far out a shot from `eye` along `dir` is aimed (aimRangeM), within [effects] tracer_converge_min_m and _max_m: where its tracer joins its path. */
-  aimRange(eye: readonly [number, number, number], dir: readonly [number, number, number]): number {
-    return aimRangeM(this.map, this.voxel, eye, dir, this.tracerConverge[0], this.tracerConverge[1]);
+  /**
+   * How far out a shot of `owner`'s (0 the player, 2 + a seat another player) from `eye` along `dir` is
+   * aimed (aimRangeM): the first thing on its line, the world or a body that owner's round would strike
+   * (the round's own test, Rounds.bodies), within [effects] tracer_converge_min_m and _max_m: where its
+   * tracer joins its path.
+   */
+  aimRange(owner: number, eye: readonly [number, number, number], dir: readonly [number, number, number]): number {
+    return aimRangeM(this.map, this.voxel, eye, dir, this.tracerConverge[0], this.tracerConverge[1], (u, m) => this.rounds.bodies?.(owner, eye, u, m)?.t ?? null);
   }
 
   /** The gun's muzzle in world metres, as the last tick left the view, the kick and the hands: where the flash and the tracers start. */

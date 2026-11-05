@@ -4,7 +4,10 @@
  * leaving the drawn rifle; each tracer round's ribbon, the player's drawn from
  * the rifle's muzzle and joining the round's path where the shot was aimed
  * (Session.aimRange: the round leaves the eye, so the reticle tells the truth,
- * and its tracer reaches across to it); and each shot's flash
+ * and its tracer reaches across to it), and each round that struck in the
+ * frame's ticks once more, by the same law, ending where it struck (so one
+ * whose whole flight fitted in the ticks is seen), held as a live round is in
+ * each frame until the next tick runs; and each shot's flash
  * — a star of three ribbons from the drawn muzzle along its bore and a
  * transient light there — for `flash_s` of the world's time, so as long at any
  * frame rate and held while paused (spec §4). The simulation's muzzle is the
@@ -13,11 +16,14 @@
  *
  * A tracer (the shots spec §1), the session's and the battle's alike: a white-
  * hot core in a coloured glow (ribbon style 1), its streak more than a frame's
- * flight at its speed (`tracer_streak_s`) and no more than it has flown, lit in
- * over its first metre (`tracer_ignite_hip_m`; the shooter's own aimed shot over
- * `tracer_ignite_m`, clear of the sights), a burning head from `tracer_head_from_m`,
- * white-hot near the eye and its team's colour far off (`tracer_white_near_m`
- * to `tracer_white_far_m`), and brighter by day.
+ * flight at its speed (`tracer_streak_s`) and no more than it has flown, fading
+ * toward its tail; lit in from nothing at the muzzle to full a metre out
+ * (`tracer_ignite_hip_m`; the shooter's own aimed shot `tracer_ignite_m` out,
+ * clear of the sights) and full past it, along the streak: a round's first
+ * frame reaches back to the muzzle, so a streak that spans that point is drawn
+ * as two ribbons, the ramp and the rest. A burning head from
+ * `tracer_head_from_m`, white-hot near the eye and its team's colour far off
+ * (`tracer_white_near_m` to `tracer_white_far_m`), and brighter by day.
  *
  * The team's own: tracers in its red or blue, a suppressed gun's flash a
  * wisp without its star, and the guns' lights and lasers — the player's from
@@ -32,6 +38,7 @@ import { flareTunables, type FlareState, type FlareTunables } from '../battle/fl
 import { tracerTunables, type TracerState } from '../battle/tracers';
 import { Ricochets, ricochetTunables, type RicochetTunables } from './ricochets';
 import { beamOf } from '../combat/arsenal';
+import type { StrikeDraw } from '../combat/ballistics';
 import { BILLBOARD_FLOATS } from '../combat/particles';
 import { toWorld } from '../combat/soldier-rig';
 import type { Tunables } from '../core/tunables';
@@ -44,6 +51,15 @@ import { throughPose, type RiflePose } from '../render/rifle';
 import { MUZZLE_ANCHOR, PORT_ANCHOR, SHOVEL_HELD, type CombatEvents, type Session } from '../sim/session';
 
 type V3 = [number, number, number];
+
+/** A round that struck, to be drawn to where it struck: there (m), its way, its flight, its head held off what it struck by `lift` (m), and how its tracer is drawn. */
+interface Ended {
+  at: readonly number[];
+  dir: readonly number[];
+  flown: number;
+  lift: V3;
+  draw: StrikeDraw;
+}
 
 /** The battle as a frame draws it (src/battle/director.ts): at its moment, its flares, its newest distant shells' flashes, the far shells' smoke, the machine guns' tracers, and the fires' flames, embers and plumes. */
 export interface ShownBattle {
@@ -99,6 +115,8 @@ export interface EffectsTunables {
   /** By day, 1 + this × daylight as bright; daylight rising 0 to 1 as the sun climbs between these elevations (degrees). */
   tracerDayBoost: number;
   tracerDaylightDeg: [number, number];
+  /** Its light covering what is behind it (effects.wgsl tracerLight) rising 0 to all of `tracer_cover` as the sun climbs between these elevations (degrees): coverAt. */
+  tracerCoverDeg: [number, number];
   /** A weapon light: how far its beam reaches, the light where it strikes (its radius near and far, its intensity, colour). */
   light: { rangeM: number; radiusM: [number, number]; intensity: number; colour: V3 };
   /** A laser's dot: its size, glow and colour. */
@@ -165,6 +183,7 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     tracerHeadFromM: f('tracer_head_from_m'),
     tracerDayBoost: f('tracer_day_boost'),
     tracerDaylightDeg: tun.pair('effects.tracer_daylight_deg'),
+    tracerCoverDeg: tun.pair('effects.tracer_cover_deg'),
     light: { rangeM: f('light_range_m'), radiusM: tun.pair('effects.light_radius_m'), intensity: f('light_intensity'), colour: rgb(tun, 'effects.light_colour') },
     laser: { sizeM: f('laser_size_m'), glow: f('laser_glow'), colour: rgb(tun, 'effects.laser_colour') },
     tracerTailAlpha: f('tracer_tail_alpha'),
@@ -215,6 +234,12 @@ export interface DebugTracer {
   kind: number;
 }
 
+/** A test's ember, drawn as a strike's is of `kind` (net/gear.ts TRACER_KIND), as bright as when newly struck. */
+export interface DebugEmber {
+  at: V3;
+  kind: number;
+}
+
 export interface BuiltEffects {
   frame: EffectsFrame;
   lights: TransientLight[];
@@ -222,10 +247,16 @@ export interface BuiltEffects {
   blasts: TransientLight[];
   /** Their smoke in the haze, and the fires' plumes: the nearest MAX_PUFFS puffs, nearest first (renderer.setSmoke). */
   smoke: SmokePuff[];
-  /** The session's tracers and the battle's, and the heads drawn on every tracer (a test's too). */
-  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number };
-  /** The session's own tracers as drawn this frame (their offsets applied), metres: for a test to find them on the image. `headDrawn`: the burning head is drawn (past tracer_head_from_m); `joinsM`: how far out the tracer joins its round's path (0: drawn on it). */
-  drawn: { tail: [number, number, number]; head: [number, number, number]; kind: number; flown: number; headDrawn: boolean; joinsM: number }[];
+  /** The session's tracers and the battle's, the heads drawn on every tracer and the embers (a test's too); the ricochets and embers by their tracer's kind too (indexed by TRACER_KIND). */
+  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number; ricochetsByKind: number[]; embersByKind: number[] };
+  /**
+   * The session's own tracers as drawn this frame (their offsets applied), metres: for a test to find
+   * them on the image. `headDrawn`: the burning head is drawn (past tracer_head_from_m); `joinsM`: how
+   * far out the tracer joins its round's path (0: drawn on it); `struck`: a round that struck in the
+   * frame's ticks (in a frame that runs none, the last ticks run), drawn once more, ending where it
+   * struck.
+   */
+  drawn: { tail: [number, number, number]; head: [number, number, number]; kind: number; flown: number; headDrawn: boolean; joinsM: number; struck: boolean }[];
 }
 
 /** WGSL's smoothstep: 0 at `low`, 1 at `high`, Hermite between. */
@@ -237,6 +268,17 @@ const smoothstep = (low: number, high: number, x: number): number => {
 /** The day's share of the light for the tracers' brightness: 0 with the sun low or down, 1 once it is up (a smoothstep over `tracer_daylight_deg`). */
 export function daylightAt(sunElevationDeg: number, t: EffectsTunables): number {
   const [low, high] = t.tracerDaylightDeg;
+  return smoothstep(low, high, sunElevationDeg);
+}
+
+/**
+ * How much of `tracer_cover` a tracer's light covers what is behind it, by the sun (a smoothstep over
+ * `tracer_cover_deg`): all of it while the sun is up, the haze behind a tracer bright (at 17:35 its
+ * light added alone showed the haze's hue, a red tracer orange); none from dusk on, the sky behind it
+ * dark and its light added alone brighter, as approved.
+ */
+export function coverAt(sunElevationDeg: number, t: EffectsTunables): number {
+  const [low, high] = t.tracerCoverDeg;
   return smoothstep(low, high, sunElevationDeg);
 }
 
@@ -271,6 +313,7 @@ export class EffectsFrameBuilder {
   debug: DebugQuad[] = [];
   debugRibbons: DebugRibbon[] = [];
   debugTracers: DebugTracer[] = [];
+  debugEmbers: DebugEmber[] = [];
   debugLights: TransientLight[] = [];
   debugBlasts: TransientLight[] = [];
   debugSmoke: SmokePuff[] = [];
@@ -284,6 +327,12 @@ export class EffectsFrameBuilder {
   private landed: { at: V3; radiusM: number; age: number }[] = [];
   /** The world's time the last frame showed. */
   private shown: number | null = null;
+  /**
+   * The rounds that struck in the last frame whose ticks ran (or whose drain had strikes), of `session`
+   * at its `ticks`: drawn again in each frame that runs none, as a live round is drawn where its last
+   * tick left it until the next runs (at 120 Hz every other frame; every frame while paused).
+   */
+  private struck: { session: Session | null; ticks: number; ended: Ended[] } = { session: null, ticks: -1, ended: [] };
 
   /** Tracer strikes' embers and the ricochets that glanced off, aged by the world's time. */
   private readonly ricochets: Ricochets;
@@ -297,9 +346,10 @@ export class EffectsFrameBuilder {
    * (metres), the player's eye if not given; `battle`, the battle seen, its flares dimmed by the
    * sky's flares key `flareKey` as their light is; `others`, the other players as drawn, for their
    * lights and lasers; `daylight`, the day's share of the light (daylightAt), the tracers burning
-   * brighter by it.
+   * brighter by it; `cover`, the sun's share of how much a tracer's light covers what is behind it
+   * (coverAt).
    */
-  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battle: ShownBattle = NO_BATTLE, flareKey = 1, others: readonly SoldierDraw[] = [], daylight = 0): BuiltEffects {
+  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battle: ShownBattle = NO_BATTLE, flareKey = 1, others: readonly SoldierDraw[] = [], daylight = 0, cover = 0): BuiltEffects {
     const t = this.t;
     // Flashes age with the world's time as the frame shows it: none while paused.
     const shown = (session.ticks + session.clock.alpha) * session.clock.dt;
@@ -375,6 +425,9 @@ export class EffectsFrameBuilder {
       billboards++;
       flames++;
     }
+    // From here the billboards are the tracers' own (their heads and embers) and other emissive ones:
+    // drawn over the ribbons (effects.ts), a tracer's light covering what is behind it.
+    const tracerBillboardsFrom = billboards;
 
     let ribbons = 0;
     /** A ribbon, `look` its style and a tracer's shares (effects.ts RIBBON_FLOATS): false once they are full. */
@@ -401,18 +454,29 @@ export class EffectsFrameBuilder {
     let heads = 0;
     /**
      * One tracer-like streak, `tail` to `head` (m), of `kind`, its tail and head `tailFlown` and
-     * `headFlown` metres into its flight: its ribbon, lit in over its first `igniteM` (its round's,
-     * by how aimed its shot was; unless given, a hip shot's, tracer_ignite_hip_m); and its
-     * head once it is tracer_head_from_m out, an emissive disc as bright as its core there and more
-     * (its colour mixed toward white as effects.wgsl mixes the core's, by its own distance from the
-     * eye), held to the pixels it is drawn over as the ribbon is (HEAD_BILLBOARD). False once the
-     * ribbons are full; a head is left off once the billboards are. `fade` (0 to 1) dims all of it:
-     * a ricochet's burning out.
+     * `headFlown` metres into its flight: its ribbon, fading toward its tail (tracer_tail_alpha), lit
+     * in from nothing at the muzzle to full `igniteM` out (its round's, by how aimed its shot was;
+     * unless given, a hip shot's, tracer_ignite_hip_m) and full past it. A streak that spans that
+     * point (a round's first frame or two, its streak reaching back to the muzzle) is drawn as two
+     * ribbons, the ramp up to it and the rest, so it is lit as the law says along its length, not only
+     * at its ends. Then its head once it is tracer_head_from_m out, an emissive disc as bright as its
+     * core there and more (its colour mixed toward white as effects.wgsl mixes the core's, by its own
+     * distance from the eye), held to the pixels it is drawn over as the ribbon is (HEAD_BILLBOARD).
+     * False once the ribbons are full; a head is left off once the billboards are. `fade` (0 to 1)
+     * dims all of it: a ricochet's burning out.
      */
     const tracer = (tail: readonly number[], head: readonly number[], kind: number, tailFlown: number, headFlown: number, fade = 1, igniteM = t.tracerIgniteHipM): boolean => {
       const colour = glows[kind] ?? glows[TRACER_KIND.amber];
       const lit = ignite(headFlown, igniteM) * fade;
-      if (!ribbon(tail, head, t.tracerGlowWidthM, colour, t.tracerTailAlpha * ignite(tailFlown, igniteM) * fade, lit, tracerLook)) return false;
+      const fromTail = t.tracerTailAlpha * ignite(tailFlown, igniteM) * fade;
+      if (tailFlown < igniteM && igniteM < headFlown) {
+        // Where it is fully lit, `u` of the way along, as bright there as the streak's own fade.
+        const u = (igniteM - tailFlown) / (headFlown - tailFlown);
+        const at = [0, 1, 2].map((k) => tail[k] + (head[k] - tail[k]) * u);
+        const there = (t.tracerTailAlpha + (1 - t.tracerTailAlpha) * u) * fade;
+        if (!ribbon(tail, at, t.tracerGlowWidthM, colour, fromTail, there, tracerLook)) return false;
+        if (!ribbon(at, head, t.tracerGlowWidthM, colour, there, lit, tracerLook)) return false;
+      } else if (!ribbon(tail, head, t.tracerGlowWidthM, colour, fromTail, lit, tracerLook)) return false;
       if (headFlown >= t.tracerHeadFromM && billboards < MAX_BILLBOARDS) {
         const hottest = Math.max(colour[0], colour[1], colour[2]);
         const burn = (t.tracerHeadGain * lit) / t.particleGlow;
@@ -433,25 +497,56 @@ export class EffectsFrameBuilder {
     // is drawn from shrinking to nothing where the shot was aimed (its own convergence, Session.aimRange).
     let tracers = 0;
     const drawn: BuiltEffects['drawn'] = [];
-    const seg = session.rounds.tracerSegments((speed) => streak(speed, t.tracerMaxM));
-    for (let i = 0; i < seg.flown.length; i++) {
-      const at = (a: Float32Array) => [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
-      const head = at(seg.head);
-      const tail = at(seg.tail);
+    /**
+     * A round's streak, `tail` to `head` on its path (m), its head `flown` metres into its flight, of
+     * `kind`: drawn from where its tracer leaves, `offset` off its path at the muzzle, the offset
+     * shrinking to none `reach` metres out; lit in over `igniteM` (−1 unset: a hip shot's). `lift`,
+     * for a round that struck: its head held off what it struck by so much (m). False once the ribbons
+     * are full.
+     */
+    const round = (tail: readonly number[], head: readonly number[], flown: number, offset: readonly number[], reach: number, igniteM: number, kind: number, lift: readonly number[] | null): boolean => {
       const length = Math.hypot(head[0] - tail[0], head[1] - tail[1], head[2] - tail[2]);
-      if (!(length > 0)) continue;
-      const from = at(seg.from);
-      const origin = at(seg.origin);
-      const offset = [from[0] - origin[0], from[1] - origin[1], from[2] - origin[2]];
-      const reach = seg.converge[i];
-      const share = (flown: number) => (reach > 0 ? Math.max(0, 1 - flown / reach) : 0);
-      const h = share(seg.flown[i]);
-      const s = share(seg.flown[i] - length);
-      const drawnTail = tail.map((v, k) => v + offset[k] * s);
-      const drawnHead = head.map((v, k) => v + offset[k] * h);
-      if (!tracer(drawnTail, drawnHead, seg.kind[i], seg.flown[i] - length, seg.flown[i], 1, seg.ignite[i] >= 0 ? seg.ignite[i] : t.tracerIgniteHipM)) break;
-      drawn.push({ tail: drawnTail as [number, number, number], head: drawnHead as [number, number, number], kind: seg.kind[i], flown: seg.flown[i], headDrawn: seg.flown[i] >= t.tracerHeadFromM, joinsM: reach });
+      if (!(length > 0)) return true;
+      const share = (f: number) => (reach > 0 ? Math.max(0, 1 - f / reach) : 0);
+      const h = share(flown);
+      const s = share(flown - length);
+      const drawnTail = tail.map((v, k) => v + offset[k] * s) as V3;
+      const drawnHead = head.map((v, k) => v + offset[k] * h + (lift ? lift[k] : 0)) as V3;
+      if (!tracer(drawnTail, drawnHead, kind, flown - length, flown, 1, igniteM >= 0 ? igniteM : t.tracerIgniteHipM)) return false;
+      drawn.push({ tail: drawnTail, head: drawnHead, kind, flown, headDrawn: flown >= t.tracerHeadFromM, joinsM: reach, struck: lift !== null });
       tracers++;
+      return true;
+    };
+    let full = false;
+    const seg = session.rounds.tracerSegments((speed) => streak(speed, t.tracerMaxM));
+    for (let i = 0; i < seg.flown.length && !full; i++) {
+      const at = (a: Float32Array) => [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
+      full = !round(at(seg.tail), at(seg.head), seg.flown[i], sub(at(seg.from), at(seg.origin)), seg.converge[i], seg.ignite[i], seg.kind[i], null);
+    }
+    // The rounds that struck in the frame's ticks, drawn once more, by the same law, at the end of
+    // their flight: one whose whole flight fitted in the ticks is seen at all (its tail at the muzzle),
+    // and a stream reaches what it struck rather than stopping a tick short. Each joins its path where
+    // it struck if that is nearer than where it was aimed, and its head is held off what it struck by
+    // its own radius, so the face does not hide half of it: off a face along its normal; off a body,
+    // or the voxel a round started in, back along its way. Held as a live round is: a frame that runs
+    // no tick (the session's ticks where the last frame left them) draws the last tick's strikes again;
+    // the next to run a tick, or another session's first, draws its own drain's (none, it may be).
+    const r = t.tracerHeadM / 2;
+    const drained: Ended[] = [];
+    for (const hit of events.impacts) {
+      if (!hit.draw) continue;
+      const n = hit.normal;
+      const lift: V3 = n[0] === 0 && n[1] === 0 && n[2] === 0 ? [-hit.dir[0] * r, -hit.dir[1] * r, -hit.dir[2] * r] : [n[0] * r, n[1] * r, n[2] * r];
+      drained.push({ at: hit.position, dir: hit.dir, flown: hit.distance, lift, draw: hit.draw });
+    }
+    for (const hit of events.hits) if (hit.draw) drained.push({ at: hit.position, dir: hit.dir, flown: hit.distance, lift: [-hit.dir[0] * r, -hit.dir[1] * r, -hit.dir[2] * r], draw: hit.draw });
+    if (session !== this.struck.session || session.ticks !== this.struck.ticks || drained.length > 0) this.struck = { session, ticks: session.ticks, ended: drained };
+    for (const e of this.struck.ended) {
+      if (full) break;
+      const d = e.draw;
+      const back = Math.min(streak(d.speed, t.tracerMaxM), e.flown);
+      const tail = [0, 1, 2].map((k) => e.at[k] - e.dir[k] * back);
+      full = !round(tail, e.at, e.flown, sub(d.from, d.origin), Math.min(d.convergeM, e.flown), d.igniteM, d.kind, e.lift);
     }
 
     // Tracer strikes' embers, small emissive discs of their tracer's colour fading out, kept at its
@@ -459,19 +554,25 @@ export class EffectsFrameBuilder {
     // flight, drawn as the tracers are, long past their lighting in (they left a wall, not a muzzle),
     // fading as they burn out.
     let embers = 0;
-    for (const e of this.ricochets.embers()) {
+    const embersByKind = [0, 0, 0, 0];
+    const glowing = this.ricochets.embers();
+    for (const d of this.debugEmbers) glowing.push({ at: d.at, size: t.ricochet.emberM, kind: d.kind, alpha: 1 });
+    for (const e of glowing) {
       if (billboards >= MAX_BILLBOARDS) break;
       const colour = glows[e.kind] ?? glows[TRACER_KIND.amber];
       const burn = (t.tracerHeadGain * e.alpha) / t.particleGlow;
       this.billboards.set([e.at[0], e.at[1], e.at[2], e.size / 2, colour[0] * burn, colour[1] * burn, colour[2] * burn, whiteFloor, EMBER_BILLBOARD], billboards * BILLBOARD_FLOATS);
       billboards++;
       embers++;
+      if (e.kind >= 0 && e.kind < embersByKind.length) embersByKind[e.kind]++;
     }
     let ricochets = 0;
+    const ricochetsByKind = [0, 0, 0, 0];
     for (const f of this.ricochets.flights()) {
       if (!(Math.hypot(f.head[0] - f.tail[0], f.head[1] - f.tail[1], f.head[2] - f.tail[2]) > 0)) continue;
       if (!tracer(f.tail, f.head, f.kind, LONG_FLOWN, LONG_FLOWN, f.alpha)) break;
       ricochets++;
+      if (f.kind >= 0 && f.kind < ricochetsByKind.length) ricochetsByKind[f.kind]++;
     }
 
     // Each live flash: its star and its light, at the drawn muzzle (where the shot left it when
@@ -588,11 +689,11 @@ export class EffectsFrameBuilder {
     const smoke = [...this.debugSmoke, ...puffs.sort((a, b) => far(a) - far(b))].slice(0, MAX_PUFFS);
 
     return {
-      frame: { billboards: this.billboards, billboardCount: billboards, ribbons: this.ribbons, ribbonCount: ribbons, whiteFloor },
+      frame: { billboards: this.billboards, billboardCount: billboards, ribbons: this.ribbons, ribbonCount: ribbons, whiteFloor, cover, tracerBillboardsFrom },
       lights,
       blasts,
       smoke,
-      counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames, heads, ricochets, embers },
+      counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames, heads, ricochets, embers, ricochetsByKind, embersByKind },
       drawn,
     };
   }

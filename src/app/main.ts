@@ -69,7 +69,7 @@ import { copyRegion, type RegionCopy } from '../world/region-copy';
 import { CameraRig, rigTunables } from './camera-rig';
 import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
-import { daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
+import { coverAt, daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type DebugEmber, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
@@ -302,7 +302,7 @@ async function start(): Promise<void> {
   const hearing = audioTunables(tun);
   const audio = new AudioEngine(hearing, { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') });
   let builtDrawn: BuiltEffects['drawn'] = [];
-  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0, ricochets: 0, embers: 0 };
+  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0, ricochets: 0, embers: 0, ricochetsByKind: [0, 0, 0, 0], embersByKind: [0, 0, 0, 0] };
   /** Whether the rifle is in hand (tests put it down to read the world behind it). */
   let rifleHeld = true;
   const input = new Input();
@@ -329,6 +329,8 @@ async function start(): Promise<void> {
   let mode: Mode = 'loading';
   /** For the peak-combat driver (peak-combat.ts): the camera held in fly mode while the session runs as if playing. */
   let spectating = false;
+  /** For a test's fixed vantage: suppression's look at the session's level in every mode, flying too (the game shows it only while playing and paused). */
+  let suppressionAlways = false;
   /** The mode a pause returns to. */
   let resumeTo: 'playing' | 'fly' = 'playing';
   /** The clock, in hours; it opens at dusk. */
@@ -929,8 +931,8 @@ async function start(): Promise<void> {
     if (rifleHeld && session.alive && !scoped && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) rifle = rig.rifle(session, pose);
     else rig.hideRifle();
     renderer.setRifle(rifle);
-    // Under fire the picture greys and closes in, while playing (and paused); not flying.
-    const shaken = mode === 'playing' || mode === 'paused';
+    // Under fire the picture greys and closes in, while playing (and paused); not flying, unless a test asks.
+    const shaken = mode === 'playing' || mode === 'paused' || suppressionAlways;
     renderer.setSuppressionLook(shaken ? session.suppression.desaturation : 0, shaken ? session.suppression.vignette : 0);
     // What this frame's ticks did, once: seen, from the rifle as it is drawn, and heard.
     const events = session.drainEvents();
@@ -946,8 +948,10 @@ async function start(): Promise<void> {
     const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
     renderer.setSoldiers(draws);
     together.after(session, events, draws, performance.now());
-    // The tracers burn brighter by day, by the sun the frame is lit with.
-    const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares, draws, daylightAt(skyNow().sunElevationDeg, effects.t));
+    // The tracers burn brighter by day, by the sun the frame is lit with, and while it is up their light
+    // covers the haze behind them.
+    const sun = skyNow().sunElevationDeg;
+    const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares, draws, daylightAt(sun, effects.t), coverAt(sun, effects.t));
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
     audio.play(planVoices(hearing, events, pose.position, battleEvents));
@@ -1305,6 +1309,10 @@ async function start(): Promise<void> {
     },
     /** What is in the hands: the gun's or the shovel's, how far up, how far aimed, the light. */
     hands: () => ({ held: session.held, ready: session.ready, aimed: session.aimed, gun: session.arm.spec.gun.key, light: session.lightOn, model: renderer.rifleModel().dims }),
+    /** Suppression's look at the session's level in every mode, the flying camera's too (a test's fixed vantage); false: only while playing and paused, as the game has it. */
+    suppressionLook(always: boolean) {
+      suppressionAlways = always;
+    },
     /** The front's shells alone, for a test. */
     setShelling(i: 'off' | 'light' | 'heavy') {
       session.artillery.intensity = i;
@@ -1315,7 +1323,7 @@ async function start(): Promise<void> {
       session.artillery.intensity = i;
     },
     effects: () => built,
-    /** For the tracer captures: the session's tracers of the last frame on the canvas (CSS pixels, by the frame's camera) and where they are drawn (`headM`, `tailM`: metres), the rifle's drawn box scaled to it, and the weapon's state. */
+    /** For the tracer captures: the session's tracers of the last frame on the canvas (CSS pixels, by the frame's camera) and where they are drawn (`headM`, `tailM`: metres; `struck`, a round's last streak, ending where it struck), the rifle's drawn box scaled to it, and the weapon's state. */
     tracerPixels: () => {
       const res: [number, number] = [Math.max(1, canvas.clientWidth), Math.max(1, canvas.clientHeight)];
       const g = renderer.rifleState();
@@ -1326,7 +1334,7 @@ async function start(): Promise<void> {
         pose: lastPose,
         gun: g.visible ? [g.box[0] * k, g.box[1] * k, g.box[2] * k, g.box[3] * k] : null,
         weapon: { automatic: session.weapon.spec.automatic, semi: session.weapon.semi, rounds: session.weapon.rounds, magazine: session.weapon.spec.magazine, id: session.arm.spec.gun.name },
-        tracers: builtDrawn.map((d) => ({ kind: d.kind, flown: d.flown, headDrawn: d.headDrawn, head: projectToPixel(lastPose, res, d.head), tail: projectToPixel(lastPose, res, d.tail), headM: d.head, tailM: d.tail, joinsM: d.joinsM })),
+        tracers: builtDrawn.map((d) => ({ kind: d.kind, flown: d.flown, headDrawn: d.headDrawn, head: projectToPixel(lastPose, res, d.head), tail: projectToPixel(lastPose, res, d.tail), headM: d.head, tailM: d.tail, joinsM: d.joinsM, struck: d.struck })),
       };
     },
     debugQuads(quads: DebugQuad[]) {
@@ -1347,6 +1355,9 @@ async function start(): Promise<void> {
     },
     debugTracer(tracer: DebugTracer | null) {
       effects.debugTracers = tracer ? [tracer] : [];
+    },
+    debugEmber(ember: DebugEmber | null) {
+      effects.debugEmbers = ember ? [ember] : [];
     },
     sharpAt: async (box: [number, number, number, number]) => Array.from(await renderer.readColour(box, 'sharp')),
     debugLit: async () => {

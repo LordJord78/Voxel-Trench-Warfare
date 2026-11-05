@@ -47,7 +47,7 @@
  * unless told otherwise, and its textures can be read back by name.
  */
 
-import { loadTunables } from '../core/tunables';
+import { loadTunables, type Tunables } from '../core/tunables';
 import type { WorldPlan } from '../world/generation/plan';
 import { Atmosphere, atmosphereModel, type AtmospherePipelines } from './atmosphere';
 import { AutoExposure, type AutoExposurePipelines, type ExposureState } from './auto-exposure';
@@ -144,6 +144,19 @@ export function internalSize(width: number, height: number, megapixels: number):
   const aspect = width / height;
   const w = Math.round(Math.sqrt(megapixels * 1e6 * aspect));
   return [w, Math.round(w / aspect)];
+}
+
+/** The least a knee's top lies over its foot: WGSL's smoothstep is undefined where its ends meet. */
+const KNEE_MIN_WIDTH = 1e-3;
+
+/**
+ * Where suppression's grey spares light ([suppression] desaturate_knee): a pixel's brightest channel as
+ * presented, greyed all the way under the first, not at all from the second; the second held at least
+ * KNEE_MIN_WIDTH over the first, so an equal-ended knee greys as a step would rather than undefined.
+ */
+export function desaturateKneeOf(tun: Tunables): [number, number] {
+  const [lo, hi] = tun.pair('suppression.desaturate_knee');
+  return [lo, Math.max(hi, lo + KNEE_MIN_WIDTH)];
 }
 
 async function compute(device: GPUDevice, label: string, source: string, layouts: GPUBindGroupLayout[], entryPoint = 'main'): Promise<GPUComputePipeline> {
@@ -395,6 +408,8 @@ export class Renderer {
   private puffs: SmokePuff[] = [];
   /** Suppression's look, as the present pass draws it: desaturation and vignette, 0 to 1. */
   private suppressionLook: [number, number] = [0, 0];
+  /** Where its grey spares light ([suppression] desaturate_knee): a pixel's brightest channel as presented, greyed all the way under the first, not at all from the second. */
+  private readonly desaturateKnee = desaturateKneeOf(loadTunables());
   /** A large edit waits for its bricks to be up before the key's map is traced outright. */
   private largeEditPending = false;
 
@@ -418,7 +433,7 @@ export class Renderer {
     this.format = navigator.gpu.getPreferredCanvasFormat();
     this.timer = new GpuTimer(device, gpu.timestamps, PASSES);
     this.frameBuffer = device.createBuffer({ label: 'frame', size: this.writer.buffer.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    // The present pass's uniform: the image's sizes, the exposure, the bloom's weight, the grain, suppression's look (16 floats).
+    // The present pass's uniform: the image's sizes, the exposure, the bloom's weight, the grain, suppression's look and its grey's knee (16 floats).
     this.presentBuffer = device.createBuffer({
       label: 'present',
       size: 64,
@@ -609,7 +624,7 @@ export class Renderer {
     this.puffs = puffs.slice(0, MAX_PUFFS);
   }
 
-  /** Suppression's look from now on: how far the picture goes to grey, and how dark its corners go (0 to 1 each). */
+  /** Suppression's look from now on: how far the picture goes to grey (light shown near the tone curve's top spared it), and how dark its corners go (0 to 1 each). */
   setSuppressionLook(desaturate: number, vignette: number): void {
     this.suppressionLook = [desaturate, vignette];
   }
@@ -978,7 +993,8 @@ export class Renderer {
       // The grain's shift into the 64 × 64 noise tile: an R2 sequence, so each frame's grain is unlike the last's.
       const shift = [0.7548776662466927, 0.5698402909980532].map((a) => Math.floor(((0.5 + this.frameIndex * a) % 1) * 64));
       const [desaturate, vignette] = this.suppressionLook;
-      const present = new Float32Array([this.res[0], this.res[1], this.alloc[0], this.alloc[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, bloomWeight, this.sky.grain, shift[0], shift[1], desaturate, vignette, 0, 0, 0]);
+      const [kneeLo, kneeHi] = this.desaturateKnee;
+      const present = new Float32Array([this.res[0], this.res[1], this.alloc[0], this.alloc[1], this.canvasSize[0], this.canvasSize[1], this.sky.exposure, bloomWeight, this.sky.grain, shift[0], shift[1], desaturate, vignette, kneeLo, kneeHi, 0]);
       device.queue.writeBuffer(this.presentBuffer, 0, present);
       const p = encoder.beginRenderPass({
         label: 'present',

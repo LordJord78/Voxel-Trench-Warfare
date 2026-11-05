@@ -2,9 +2,10 @@
  * What a player carries, as the room and the others need to know it (the loadout): the guns in
  * the order every client and the room number them, what each one's round does to a body against
  * the zones' damage (match-rules.ts), and the gear a player shows, packed into an integer: the
- * gun in their hands (or the shovel), what is fitted to it and whether their light is on. It rides above
- * the eight bits of their state's flags, and a shot's own word says which gun fired it, its tracer's colour and whether it was suppressed: the room relays both
- * as they are, so none of this changes what it is sent.
+ * gun in their hands (or the shovel), what is fitted to it and whether their light is on. It rides
+ * above the eight bits of their state's flags, and a shot's own word says which gun fired it, its
+ * tracer's colour and whether it was suppressed: the room relays both as they are, so none of this
+ * changes what it is sent.
  *
  * Pure and small, because the room imports it.
  */

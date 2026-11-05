@@ -16,8 +16,10 @@
  * swap-with-last. Each substep's segment is raycast through the brick map
  * (world/raycast.ts): the first solid voxel stops the round, and water, wire,
  * cloth and air let it through; where it goes into water, it splashes. A round
- * past its range or flight time, or out of the world's box, is retired; the far
- * field is not hit.
+ * past its range or flight time, or out over the world's sides or under its
+ * floor, is retired; one over its top flies on (nothing up there is solid, and
+ * the cast clips to the box), so a stream fired up does not vanish in mid-air.
+ * The far field is not hit.
  */
 
 import { hypot } from '../core/dmath';
@@ -62,15 +64,20 @@ export interface BallisticsTunables {
 }
 
 /**
- * How far a shot from `eye` (m) along `dir` is aimed: the first solid on its line, within `minM` and
- * `maxM` (into the sky, or nothing within `maxM`: `maxM`). A shooter's tracer joins its round's path
- * there (effects-frame.ts), so from the hip it reaches across to where the reticle sat.
+ * How far a shot from `eye` (m) along `dir` is aimed: the first thing on its line, within `minM` and
+ * `maxM` (into the sky, or nothing within `maxM`: `maxM`). The first solid, or nearer than it a body
+ * the shooter's round would strike: `body` says how far along the line (unit `u`, within `m` metres)
+ * one stops it, if one does. A shooter's tracer joins its round's path there (effects-frame.ts), so
+ * from the hip it reaches across to where the reticle sat.
  */
-export function aimRangeM(map: BrickMap, voxel: number, eye: readonly [number, number, number], dir: readonly [number, number, number], minM: number, maxM: number): number {
+export function aimRangeM(map: BrickMap, voxel: number, eye: readonly [number, number, number], dir: readonly [number, number, number], minM: number, maxM: number, body?: (u: readonly [number, number, number], m: number) => number | null): number {
   const n = hypot(dir[0], dir[1], dir[2]);
   if (!(n > 0)) return maxM;
-  const hit = raycast(map, [eye[0] / voxel, eye[1] / voxel, eye[2] / voxel], [dir[0] / n, dir[1] / n, dir[2] / n], maxM / voxel);
-  const m = hit ? hit.t * voxel : maxM;
+  const u: [number, number, number] = [dir[0] / n, dir[1] / n, dir[2] / n];
+  const hit = raycast(map, [eye[0] / voxel, eye[1] / voxel, eye[2] / voxel], u, maxM / voxel);
+  let m = hit ? hit.t * voxel : maxM;
+  const struck = body?.(u, m) ?? null;
+  if (struck !== null) m = struck;
   return Math.min(maxM, Math.max(minM, m));
 }
 
@@ -100,6 +107,22 @@ export interface TracerDraw {
 /** Where a round stops in a body: how far along its segment (m), whose body, and where it struck. */
 export type BodyTest = (owner: number, from: readonly [number, number, number], dir: readonly [number, number, number], length: number) => { t: number; body: number; zone: Zone } | null;
 
+/**
+ * A tracer round's draw, carried by the strike that retired it (the pool's own; never sent to the
+ * room): where it left and where its tracer is drawn from, how far out it joins its path (m; 0: drawn
+ * on it), over how far it is lit in (m; −1 unset: the draw's own), its speed as it struck (m/s), and
+ * its kind (net/gear.ts TRACER_KIND). The frame that drains the strike draws the last of its flight by
+ * it (effects-frame.ts), so a round whose flight ends within the frame's ticks is seen.
+ */
+export interface StrikeDraw {
+  origin: [number, number, number];
+  from: [number, number, number];
+  convergeM: number;
+  igniteM: number;
+  speed: number;
+  kind: number;
+}
+
 export interface BodyHit {
   owner: number;
   body: number;
@@ -110,6 +133,8 @@ export interface BodyHit {
   distance: number;
   /** The gun it left (its spec's), if it says. */
   gun?: number;
+  /** A tracer round's draw (StrikeDraw); none for a round that burns no tracer. */
+  draw?: StrikeDraw;
 }
 
 /** A round stopped by the world. */
@@ -132,6 +157,8 @@ export interface Impact {
   dir: [number, number, number];
   /** Its tracer kind (net/gear.ts TRACER_KIND): 0 for a round that burns no tracer. */
   kind: number;
+  /** A tracer round's draw (StrikeDraw); none for a round that burns no tracer. */
+  draw?: StrikeDraw;
 }
 
 export class Rounds {
@@ -242,7 +269,7 @@ export class Rounds {
     this.listenRadius = radiusM;
   }
 
-  /** One tick of `dt` seconds in substeps: this step's impacts, cracks and passes, and rounds retired by range, age or the world's edge. */
+  /** One tick of `dt` seconds in substeps: this step's impacts, cracks and passes, and rounds retired by range, age, the world's sides or its floor. */
   step(dt: number): void {
     this.impacts.length = 0;
     this.bodyHits.length = 0;
@@ -368,6 +395,7 @@ export class Rounds {
           dir,
           distance: this.distance[i] + body.t,
           ...(spec.gun === undefined ? {} : { gun: spec.gun }),
+          ...(this.tracer[i] ? { draw: this.strikeDraw(i, speed) } : {}),
         });
         this.hearPass(i);
         return true;
@@ -392,6 +420,7 @@ export class Rounds {
           spec: spec.name,
           dir,
           kind: this.tracer[i],
+          ...(this.tracer[i] ? { draw: this.strikeDraw(i, speed) } : {}),
         });
         // Stopped before it passed: heard as near as it came.
         this.hearPass(i);
@@ -405,10 +434,24 @@ export class Rounds {
     const x = this.pos[p];
     const y = this.pos[p + 1];
     const z = this.pos[p + 2];
-    const [sx, sy, sz] = this.size;
-    const retired = this.distance[i] >= this.t.maxRangeM || this.age[i] >= this.t.maxFlightS || x < 0 || y < 0 || z < 0 || x >= sx || y >= sy || z >= sz;
+    // Over the world's top it flies on, to its range or its flight time: nothing above it is solid.
+    const [sx, , sz] = this.size;
+    const retired = this.distance[i] >= this.t.maxRangeM || this.age[i] >= this.t.maxFlightS || x < 0 || y < 0 || z < 0 || x >= sx || z >= sz;
     if (retired) this.hearPass(i);
     return retired;
+  }
+
+  /** Round `i`'s tracer as it strikes at `speed` (m/s): what its last streak is drawn by. */
+  private strikeDraw(i: number, speed: number): StrikeDraw {
+    const p = i * 3;
+    return {
+      origin: [this.origin[p], this.origin[p + 1], this.origin[p + 2]],
+      from: [this.from[p], this.from[p + 1], this.from[p + 2]],
+      convergeM: this.converge[i],
+      igniteM: this.ignite[i],
+      speed,
+      kind: this.tracer[i],
+    };
   }
 
   /** Round `i` is heard passing the listener, once, if it has come within reach. */

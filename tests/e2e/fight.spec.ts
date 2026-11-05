@@ -35,6 +35,9 @@ async function open(browser: Browser, path: string): Promise<{ page: Page; error
 /** A host and a friend in one room, the friend on `friendTeam`, the match started, both gone in, respawning after `respawnS`. */
 async function match(browser: Browser, friendTeam: 'red' | 'blue', respawnS: number) {
   const host = await open(browser, `/?relay=${RELAY}`);
+  // The start screen is taller than this 800 × 500 window: it scrolls with its head in reach, as the
+  // pause menu and the lobby do, rather than rise off the top, so Host lies inside the window.
+  await expect(host.page.locator('#host')).toBeInViewport({ ratio: 1 });
   await host.page.locator('#host').click();
   await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.room() !== null);
   const room = (await h(host.page, (x) => x.together.room()))!;

@@ -19,7 +19,7 @@
  * column of smoke. Every shell landed is a flash; the sky takes the newest.
  *
  * And the machine guns (§4): at night, bursts from guns on both lines further than `clear_m` along
- * them from the player, every fifth round a tracer (tracers.ts) swept across a bearing over no man's
+ * them from the player, every round a tracer (tracers.ts), swept across a bearing over no man's
  * land and the field, ending on the field's undisturbed ground; a burst whose fire would pass within
  * `miss_m` of the player is not fired.
  *

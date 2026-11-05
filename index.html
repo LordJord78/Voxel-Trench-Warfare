@@ -89,6 +89,15 @@
          than rise off the top: the sheet sets its block at the foot, and an auto margin gives way. */
       #pause, #lobby { overflow-y: auto; }
       #pause .block, #lobby .block { margin-top: auto; }
+      /* The start screen does so in a window short of 1280 × 720 either way, where its controls rose off the
+         top (Host in an 800 × 500 window; at 540 px wide, its keys in two columns, the map's picker). From
+         1280 × 720 up it stands as it did, at the foot with nothing to scroll: its ready block is some 940 px,
+         so until about 1080 px tall its head rises off the top (at 720, the title down to the map picker's
+         foot), its controls still in reach. */
+      @media (max-width: 1279px), (max-height: 719px) {
+        #loading { overflow-y: auto; }
+        #loading .block { margin-top: auto; }
+      }
       .setting { display: grid; grid-template-columns: 1fr auto; align-items: baseline; margin: 0 0 1.1rem; }
       .setting label, .setting .name { color: var(--haze); }
       .setting output { color: var(--duckboard); font-variant-numeric: tabular-nums; }
@@ -218,7 +227,7 @@
       .gun-pick span { color: var(--duckboard); font-style: italic; font-size: 0.86rem; }
       .gun-pick.on { border-color: var(--flare); background: rgba(242, 227, 179, 0.13); }
       .gun-pick.editing { box-shadow: inset 3px 0 0 var(--flare); }
-      .choice-row, .fit-row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
+      .fit-row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
       .pick { font-size: 0.86rem; padding: 0.28em 0.75em; background: transparent; color: var(--duckboard); border: 1px solid rgba(231, 211, 184, 0.3); }
       .pick:hover { background: rgba(231, 211, 184, 0.1); color: var(--haze); }
       .pick.on { color: var(--night); background: var(--haze); border-color: var(--haze); }

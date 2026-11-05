@@ -1,8 +1,9 @@
 /**
  * Another player's body as it is drawn: their states as the room stamped them, played back a
  * little behind the room's clock (INTERP_DELAY_MS), so there is nearly always a state on either
- * side to blend between. Position and the view are blended; stance, height and the flags are the
- * nearer state's. Past the newest state the body is held there (it is not guessed onward).
+ * side to blend between. Position, the view and height are blended; stance, the flags and the gear
+ * (what is in their hands, its fit, their light) are the nearer state's. Past the newest state the
+ * body is held there (it is not guessed onward).
  */
 
 import type { PlayerState } from './protocol';
@@ -55,6 +56,7 @@ export class SnapshotBuffer {
       stance: near.stance,
       height: mix(a.s.height, b.s.height),
       flags: near.flags,
+      ...(near.gear === undefined ? {} : { gear: near.gear }),
     };
   }
 }

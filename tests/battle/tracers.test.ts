@@ -62,6 +62,26 @@ describe("a tracer's flight", () => {
     expect(quarters.size).toBe(4);
   });
 
+  it('after a strike it carries how far it had flown: its first leg\'s whole flight, none before it', () => {
+    // What effects-frame lights a leg by (its ignition is the muzzle's, not the strike's): a ricochet
+    // must not light in again from where it struck.
+    const ground = () => muzzle[1] - 5;
+    const shot = Array.from({ length: 600 }, (_, i) => shoot(level((i + 1) * 7, -10), ground, i + 1)).find((s) => s.legs.length === 2);
+    expect(shot).toBeDefined();
+    const [first, second] = shot!.legs;
+    // On its first leg it carries nothing.
+    expect(tracerAt(shot!, (first.t0 + first.t1) / 2, tt)).not.toHaveProperty('carried');
+    // On its second, all of its first leg's flight, by the law of its flight: ln(1 + k·v0·s) / k.
+    const struckAt = Math.log(1 + tt.k * first.v0 * (first.t1 - first.t0)) / tt.k;
+    expect(tracerAt(shot!, first.t1 - 1e-9, tt)!.flown).toBeCloseTo(struckAt, 3);
+    for (const u of [0.01, 0.5, 0.99]) {
+      const on = tracerAt(shot!, second.t0 + (second.t1 - second.t0) * u, tt)!;
+      expect(on.carried).toBeCloseTo(struckAt, 6);
+      // Its own flight counted from the strike.
+      expect(on.flown).toBeCloseTo(Math.log(1 + tt.k * second.v0 * (second.t1 - second.t0) * u) / tt.k, 6);
+    }
+  });
+
   it('burns out after burn_s however it flies', () => {
     const shot = shoot(level(0, 45), () => -1e9);
     expect(tracerAt(shot, 10 + tt.burnS - 0.01, tt)).not.toBeNull();

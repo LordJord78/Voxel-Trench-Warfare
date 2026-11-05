@@ -167,6 +167,35 @@ describe('rounds in flight', () => {
     expect(r.count).toBe(0);
   });
 
+  it("a round fired up over the world's top flies on, striking nothing, until its range runs out", () => {
+    // 20° up from 3 m: over the 6.4 m top some 9 m out, and still over it where its 400 m run out,
+    // some 376 m on (the map ends 409.6 m on). Nothing is solid up there to strike, and a stream fired
+    // up from the step should not vanish in mid-air at the box's lid.
+    const map = new BrickMap({ x: 128, y: 64, z: 4096 });
+    map.fillBox(0, 0, 0, 128, 4, 4096, P.SUBSOIL);
+    const r = new Rounds(T, map, VOXEL);
+    const up = (20 * Math.PI) / 180;
+    r.fire([6.4, 3, 0.5], [0, 880 * Math.sin(up), 880 * Math.cos(up)], RIFLE, 0, true);
+    const impacts = [];
+    let ticks = 0;
+    let flown = 0;
+    let highest = 0;
+    while (r.count > 0 && ticks < 600) {
+      r.step(TICK);
+      ticks++;
+      impacts.push(...r.impacts);
+      if (r.count === 0) break;
+      flown = r.tracerSegments(7).flown[0];
+      highest = Math.max(highest, r.position(0)[1]);
+    }
+    expect(impacts).toEqual([]);
+    expect(highest).toBeGreaterThan(100);
+    // Its last tick in the air was within a tick's flight (some 9 m by then) of its range.
+    expect(flown).toBeGreaterThan(T.maxRangeM - 10);
+    expect(flown).toBeLessThan(T.maxRangeM);
+    expect(ticks).toBeGreaterThan(30);
+  });
+
   it("a round leaving over the map's edge is retired", () => {
     const r = new Rounds(T, world(), VOXEL);
     r.fire([12.7, 3, 128], [880, 0, 0], RIFLE, 0, false);

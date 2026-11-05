@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { PNG } from 'pngjs';
+import { projectToPixel } from '../../src/render/camera';
 import { paletteData } from '../../src/world/materials';
 import { hooks, openGame } from './support/app';
 
@@ -381,8 +382,11 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
   // colour; and a round passing the eye is drawn no wider than tracer_glow_max_px (10), not the
   // bar across the screen its 0.22 m of glow would be there (some 280 px half a metre out), nor
   // the fat wedge 28 px drew; its core no wider than 0.45 of the glow drawn, so the glow's colour
-  // shows round it.
+  // shows round it. Its light alone, read as the image with it less the image without: at 17:35 the
+  // sun is up, and a tracer's light covers the haze behind it ([effects] tracer_cover, its own test
+  // below), so the look's cover is held at none while it is read here, as a tunable would set it.
   const errors = await openGame(page);
+  type Look = { renderer: { effects: { look: { tracerCover: number } } } };
   const at = await hooks(
     page,
     async (h, hours) => {
@@ -390,13 +394,17 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
       h.setTimeOfDay(hours as number);
       h.jitter(false);
       h.setQuality({ dynres: false, scale: 1 });
+      const look = (h as unknown as Look).renderer.effects.look;
+      const cover = look.tracerCover;
+      look.tracerCover = 0;
       h.freeze();
       await h.stepFrames(40);
       const c = h.camera();
-      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res, exposure: await h.exposure(), sharp: 1 - h.bloomWeight() };
+      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res, exposure: await h.exposure(), sharp: 1 - h.bloomWeight(), cover };
     },
     DUSK,
   );
+  expect(at.cover).toBeGreaterThan(0);
   const RAD = Math.PI / 180;
   const y = at.yaw * RAD;
   const along = (up: number, m: number) => [Math.sin(y) * Math.cos(up * RAD), Math.sin(up * RAD), Math.cos(y) * Math.cos(up * RAD)].map((v, k) => at.position[k] + v * m);
@@ -482,55 +490,78 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
   expect(whiter[brightest], nearSeen).toBeGreaterThan(0);
   expect(coreRows, nearSeen).toBeGreaterThanOrEqual(1);
   expect(coreRows, nearSeen).toBeLessThanOrEqual(0.45 * width);
+  await hooks(
+    page,
+    (h, cover) => {
+      (h as unknown as Look).renderer.effects.look.tracerCover = cover as number;
+    },
+    at.cover,
+  );
   expect(errors).toEqual([]);
 });
 
 test("a far tracer's white-hot core stays an unbroken line, as its glow does", async ({ page }) => {
-  // A tracer's core (3.5 cm) is under a tenth of a pixel 150 m out: drawn no narrower than two
-  // pixels, its light kept, as the glow is; drawn at its share of the glow's two, it broke into
-  // dashes (a third of the columns all but dark, and neighbours a third apart).
+  // A tracer's core (3.5 cm) is under a tenth of a pixel 150 m out: drawn at 0.45 of the glow there,
+  // 1.8 px at the glow's 4 px floor, its light kept, as the glow's is; drawn at its share of a glow
+  // two pixels across, it broke into dashes (a third of the columns all but dark, and neighbours a
+  // third apart). Read at the image's full size (dynamic resolution could change it between the two
+  // reads), and only within 12 px of the line it is drawn on: the stars twinkle over the rest of the
+  // night sky.
   const errors = await openGame(page);
   const at = await hooks(page, async (h) => {
     h.view('step');
     h.setTimeOfDay(21);
     h.jitter(false);
+    h.setQuality({ dynres: false, scale: 1 });
     h.freeze();
     await h.stepFrames(40);
-    const c = h.camera();
-    return { position: c.position, yaw: c.yaw, pitch: c.pitch };
+    return { pose: h.camera(), res: h.stats().res };
   });
   // As the far ribbon above: 150 m out, 20° over the view, 20 m across it and rising half a metre.
   const RAD = Math.PI / 180;
-  const y = at.yaw * RAD;
-  const p = (at.pitch + 20) * RAD;
-  const centre = [0, 1, 2].map((k) => at.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 150);
+  const pose = at.pose;
+  const y = pose.yaw * RAD;
+  const p = (pose.pitch + 20) * RAD;
+  const centre = [0, 1, 2].map((k) => pose.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 150);
   const right = [Math.cos(y), 0, -Math.sin(y)];
-  const tail = [0, 1, 2].map((k) => centre[k] - right[k] * 10 - (k === 1 ? 0.25 : 0));
-  const head = [0, 1, 2].map((k) => centre[k] + right[k] * 10 + (k === 1 ? 0.25 : 0));
+  const tail = [0, 1, 2].map((k) => centre[k] - right[k] * 10 - (k === 1 ? 0.25 : 0)) as [number, number, number];
+  const head = [0, 1, 2].map((k) => centre[k] + right[k] * 10 + (k === 1 ? 0.25 : 0)) as [number, number, number];
+  // Where it is drawn in the internal image: the line between its ends' pixels, as the frame's camera
+  // projects them (a straight line seen through it stays straight).
+  const ends = [tail, head].map((q) => projectToPixel(pose, at.res, q));
+  expect(ends.every((e) => e !== null)).toBe(true);
+  const [a, b] = ends as [number, number][];
   const sums = await hooks(
     page,
     async (h, arg) => {
-      const { tail, head } = arg as { tail: [number, number, number]; head: [number, number, number] };
+      const { tail, head, a, b, band, res } = arg as { tail: [number, number, number]; head: [number, number, number]; a: [number, number]; b: [number, number]; band: number; res: [number, number] };
+      // The rows the band covers, over the whole width.
+      const top = Math.max(0, Math.floor(Math.min(a[1], b[1]) - band - 1));
+      const bottom = Math.min(res[1], Math.ceil(Math.max(a[1], b[1]) + band + 1));
+      const box: [number, number, number, number] = [0, top, res[0], bottom - top];
       const read = async (on: boolean) => {
         h.debugTracer(on ? { tail, head, kind: 2 } : null);
         await h.stepFrames(2);
-        const s = h.stats();
-        const box: [number, number, number, number] = [0, 0, s.res[0], Math.floor(s.res[1] / 2)];
-        return { box, rgb: await h.sharpAt(box) };
+        const now = h.stats().res;
+        if (now[0] !== res[0] || now[1] !== res[1]) throw new Error(`the image went from ${res} to ${now}`);
+        return h.sharpAt(box);
       };
       const without = await read(false);
       const withIt = await read(true);
       h.debugTracer(null);
-      const [w, hgt] = [without.box[2], without.box[3]];
-      const lum = (a: number[], i: number) => 0.2126 * a[i * 3] + 0.7152 * a[i * 3 + 1] + 0.0722 * a[i * 3 + 2];
-      // Each column's light from the tracer, summed down it.
+      const [w, hgt] = [box[2], box[3]];
+      const lum = (c: number[], i: number) => 0.2126 * c[i * 3] + 0.7152 * c[i * 3 + 1] + 0.0722 * c[i * 3 + 2];
+      // Each column's light from the tracer, summed down the band about where the line crosses it.
       return Array.from({ length: w }, (_, x) => {
+        const line = a[1] + ((x + 0.5 - a[0]) / (b[0] - a[0])) * (b[1] - a[1]);
         let sum = 0;
-        for (let yy = 0; yy < hgt; yy++) sum += lum(withIt.rgb, yy * w + x) - lum(without.rgb, yy * w + x);
+        for (let yy = 0; yy < hgt; yy++) {
+          if (Math.abs(top + yy + 0.5 - line) <= band) sum += lum(withIt, yy * w + x) - lum(without, yy * w + x);
+        }
         return sum;
       });
     },
-    { tail, head },
+    { tail, head, a, b, band: 12, res: at.res },
   );
   // The middle 80% of the columns it crosses.
   const touched = sums.map((v, x) => (v > 0.05 ? x : -1)).filter((x) => x >= 0);
@@ -549,16 +580,22 @@ test("a far tracer's white-hot core stays an unbroken line, as its glow does", a
   expect(errors).toEqual([]);
 });
 
-test("a far red tracer at night shows red on the screen, not white", async ({ page }) => {
+test("a far red tracer at night shows red on the screen, not white, under fire as out of it", async ({ page }) => {
   // Far off a tracer's light is kept at its hue through the present pass's per-channel tone curve
   // (effects.wgsl keepHue), which alone takes a bright red to white; and its core has no whiteness
-  // left past tracer_white_far_m (40 m). Read on the displayed canvas, as a player sees it.
+  // left past tracer_white_far_m (40 m). Under fire the present pass greys the picture, all but the
+  // light shown near the curve's top ([suppression] desaturate_knee): greyed with the rest, at
+  // suppression's full level a far red tracer showed white, and colour tells friend from foe in
+  // exactly the firefights that suppress. Read on the displayed canvas, as a player sees it, out of
+  // fire and at suppression's full level.
   const errors = await openGame(page);
   const at = await hooks(page, async (h) => {
     h.view('step');
     h.setTimeOfDay(23);
     h.jitter(false);
     h.setQuality({ dynres: false, scale: 1 });
+    // The session's suppression shown over this fixed view as over the player's own.
+    h.suppressionLook(true);
     h.freeze();
     await h.stepFrames(40);
     const c = h.camera();
@@ -572,61 +609,196 @@ test("a far red tracer at night shows red on the screen, not white", async ({ pa
   const right = [Math.cos(y), 0, -Math.sin(y)];
   const tail = centre.map((v, k) => v - right[k] * 6) as [number, number, number];
   const head = centre.map((v, k) => v + right[k] * 6) as [number, number, number];
-  const shot = async (on: boolean) => {
+  /** The canvas with the tracer or without it, suppression at `level` (flying, the session does not run, so it holds). */
+  const shot = async (on: boolean, level: number) => {
     await hooks(
       page,
       async (h, arg) => {
-        const { tail, head, on } = arg as { tail: [number, number, number]; head: [number, number, number]; on: boolean };
+        const { tail, head, on, level } = arg as { tail: [number, number, number]; head: [number, number, number]; on: boolean; level: number };
+        h.session.suppression.level = level;
         h.debugTracer(on ? { tail, head, kind: 2 } : null);
         await h.stepFrames(2);
       },
-      { tail, head, on },
+      { tail, head, on, level },
     );
     return PNG.sync.read(await page.screenshot());
   };
-  const without = await shot(false);
-  const withIt = await shot(true);
-  await hooks(page, (h) => h.debugTracer(null));
   const lum = (d: Buffer, i: number) => 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
-  // Where it lies on the canvas: 20° over its middle, 6 m either side 80 m out (4.3°), and a band of
-  // 16 px about it (its glow and bloom; the grain elsewhere is not its).
-  const w = withIt.width;
-  const tanHalf = Math.tan((at.fov * RAD) / 2);
-  const rowAt = withIt.height / 2 - (Math.tan(20 * RAD) / tanHalf) * (w / 2);
-  const halfLength = (6 / 80 / tanHalf) * (w / 2);
-  // Its pixels: lit as the captures' rule has it, 1.5 times the sky without it and 6 steps over it.
+  const measured: string[] = [];
+  for (const level of [0, 1]) {
+    const without = await shot(false, level);
+    const withIt = await shot(true, level);
+    // Where it lies on the canvas: 20° over its middle, 6 m either side 80 m out (4.3°), and a band of
+    // 16 px about it (its glow and bloom; the grain elsewhere is not its).
+    const w = withIt.width;
+    const tanHalf = Math.tan((at.fov * RAD) / 2);
+    const rowAt = withIt.height / 2 - (Math.tan(20 * RAD) / tanHalf) * (w / 2);
+    const halfLength = (6 / 80 / tanHalf) * (w / 2);
+    // Its pixels: lit as the captures' rule has it, 1.5 times the sky without it and 6 steps over it.
+    let n = 0;
+    let saturation = 0;
+    let sx = 0;
+    let sy = 0;
+    for (let i = 0; i < withIt.data.length; i += 4) {
+      const px = (i / 4) % w;
+      const py = Math.floor(i / 4 / w);
+      if (Math.abs(py - rowAt) > 16 || Math.abs(px - w / 2) > halfLength + 16) continue;
+      const bg = lum(without.data, i);
+      const v = lum(withIt.data, i);
+      if (!(v >= Math.max(1.5 * bg, bg + 6))) continue;
+      const [r, g, b] = [withIt.data[i], withIt.data[i + 1], withIt.data[i + 2]];
+      const top = Math.max(r, g, b);
+      const c = top - Math.min(r, g, b);
+      let h = c > 0 ? (top === r ? ((g - b) / c) % 6 : top === g ? (b - r) / c + 2 : (r - g) / c + 4) * 60 : 0;
+      h = (h + 360) % 360;
+      n++;
+      saturation += c / top;
+      sx += c * Math.cos(h * RAD);
+      sy += c * Math.sin(h * RAD);
+    }
+    const hue = ((Math.atan2(sy, sx) / RAD) + 360) % 360;
+    const seen = JSON.stringify({ level, n, saturation: saturation / Math.max(1, n), hue, rowAt, halfLength });
+    measured.push(seen);
+    expect(n, seen).toBeGreaterThan(20);
+    // Red [1.0, 0.04, 0.018] shown at its hue is (255, 59, 41): hue 5°, saturation 0.84; white has
+    // none. Over the violet night sky its edges read a little toward magenta.
+    expect(saturation / n, seen).toBeGreaterThan(0.5);
+    expect(Math.min(Math.abs(hue - 5), 360 - Math.abs(hue - 5)), seen).toBeLessThan(20);
+  }
+  console.log(measured.join('\n'));
+  await hooks(page, (h) => {
+    h.debugTracer(null);
+    h.session.suppression.level = 0;
+    h.suppressionLook(false);
+  });
+  expect(errors).toEqual([]);
+});
+
+/** A screenshot as decoded: its size and its RGBA. */
+type Shot = { width: number; height: number; data: Buffer };
+
+/**
+ * The pixels a tracer changed on the canvas (any channel by `least` or more) whose centres lie `band`
+ * ([inner, outer] pixels) off the row `rowAt` (a line across the view), in columns `cols`: their
+ * colour's mean saturation and hue (a circular mean, each weighted by its chroma).
+ */
+function changedColour(without: Shot, withIt: Shot, rowAt: number, band: [number, number], cols: [number, number], least: number) {
+  const RAD = Math.PI / 180;
   let n = 0;
   let saturation = 0;
   let sx = 0;
   let sy = 0;
-  for (let i = 0; i < withIt.data.length; i += 4) {
-    const px = (i / 4) % w;
-    const py = Math.floor(i / 4 / w);
-    if (Math.abs(py - rowAt) > 16 || Math.abs(px - w / 2) > halfLength + 16) continue;
-    const bg = lum(without.data, i);
-    const v = lum(withIt.data, i);
-    if (!(v >= Math.max(1.5 * bg, bg + 6))) continue;
-    const [r, g, b] = [withIt.data[i], withIt.data[i + 1], withIt.data[i + 2]];
-    const top = Math.max(r, g, b);
-    const c = top - Math.min(r, g, b);
-    let h = c > 0 ? (top === r ? ((g - b) / c) % 6 : top === g ? (b - r) / c + 2 : (r - g) / c + 4) * 60 : 0;
-    h = (h + 360) % 360;
-    n++;
-    saturation += c / top;
-    sx += c * Math.cos(h * RAD);
-    sy += c * Math.sin(h * RAD);
+  const w = withIt.width;
+  for (let y = Math.max(0, Math.floor(rowAt - band[1])); y <= Math.min(withIt.height - 1, Math.ceil(rowAt + band[1])); y++) {
+    const off = Math.abs(y + 0.5 - rowAt);
+    if (off < band[0] || off > band[1]) continue;
+    for (let x = Math.max(0, Math.floor(cols[0])); x <= Math.min(w - 1, Math.ceil(cols[1])); x++) {
+      const i = (y * w + x) * 4;
+      const [r, g, b] = [withIt.data[i], withIt.data[i + 1], withIt.data[i + 2]];
+      if (Math.max(Math.abs(r - without.data[i]), Math.abs(g - without.data[i + 1]), Math.abs(b - without.data[i + 2])) < least) continue;
+      const top = Math.max(r, g, b);
+      const c = top - Math.min(r, g, b);
+      let h = c > 0 ? (top === r ? ((g - b) / c) % 6 : top === g ? (b - r) / c + 2 : (r - g) / c + 4) * 60 : 0;
+      h = (h + 360) % 360;
+      n++;
+      saturation += top > 0 ? c / top : 0;
+      sx += c * Math.cos(h * RAD);
+      sy += c * Math.sin(h * RAD);
+    }
   }
-  const hue = ((Math.atan2(sy, sx) / RAD) + 360) % 360;
-  const seen = JSON.stringify({ n, saturation: saturation / Math.max(1, n), hue, rowAt, halfLength });
-  expect(n, seen).toBeGreaterThan(20);
-  // Red [1.0, 0.04, 0.018] shown at its hue is (255, 59, 41): hue 5°, saturation 0.84; white has
-  // none. Over the violet night sky its edges read a little toward magenta.
-  expect(saturation / n, seen).toBeGreaterThan(0.5);
-  expect(Math.min(Math.abs(hue - 5), 360 - Math.abs(hue - 5)), seen).toBeLessThan(20);
+  return { n, saturation: saturation / Math.max(1, n), hue: ((Math.atan2(sy, sx) / RAD) + 360) % 360 };
+}
+
+/** How far apart two hues are (degrees, 0 to 180). */
+const hueOff = (a: number, b: number) => Math.abs(((a - b + 540) % 360) - 180);
+
+test("a tracer over the low sun's haze shows its team's colour: red, not orange; blue, not lavender; and red apart from amber", async ({ page }) => {
+  // At 17:35, the hour solo opens at, the shooter faces the low sun through a bright haze, some (220,
+  // 190, 150) as shown. A tracer's light only added to it: its brightest channel clipped at the
+  // display's top while the others stayed the haze's, so a red tracer showed the haze's hue pulled a
+  // little toward red (orange-peach, some 23 degrees, halfway to the enemy's amber at 42), a blue one
+  // lavender-white, and the amber pale. While the sun is up its light covers what is behind it as much
+  // as it shows its colour ([effects] tracer_cover), so each shows its own over the haze, as over the
+  // night. Read on the displayed canvas, as a player sees it.
+  const errors = await openGame(page);
+  const at = await hooks(
+    page,
+    async (h, hours) => {
+      h.view('step');
+      h.setTimeOfDay(hours as number);
+      h.jitter(false);
+      h.setQuality({ dynres: false, scale: 1 });
+      h.freeze();
+      await h.stepFrames(40);
+      const c = h.camera();
+      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90 };
+    },
+    DUSK,
+  );
+  // 30 m out, 15° over the view against the haze over the low sun, 10 m across it.
+  const RAD = Math.PI / 180;
+  const y = at.yaw * RAD;
+  const p = (at.pitch + 15) * RAD;
+  const centre = [0, 1, 2].map((k) => at.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 30);
+  const right = [Math.cos(y), 0, -Math.sin(y)];
+  const tail = centre.map((v, k) => v - right[k] * 5) as [number, number, number];
+  const head = centre.map((v, k) => v + right[k] * 5) as [number, number, number];
+  const shot = async (kind: number | null) => {
+    await hooks(
+      page,
+      async (h, arg) => {
+        const { tail, head, kind } = arg as { tail: [number, number, number]; head: [number, number, number]; kind: number | null };
+        h.debugTracer(kind === null ? null : { tail, head, kind });
+        await h.stepFrames(2);
+      },
+      { tail, head, kind },
+    );
+    return PNG.sync.read(await page.screenshot());
+  };
+  // Each kind's colour as shown at its kept hue: red (255, 59, 41), 5°; blue (65, 152, 255), 213°; the
+  // enemy line's and the battle's amber (255, 177, 0), 42°.
+  const teams = [
+    { name: 'red', kind: 2, hue: 5 },
+    { name: 'blue', kind: 3, hue: 213 },
+    { name: 'amber', kind: 1, hue: 42 },
+  ];
+  const without = await shot(null);
+  const measured = [];
+  for (const team of teams) {
+    const withIt = await shot(team.kind);
+    // Where it lies on the canvas: 15° over its middle, 5 m either side 30 m out. Its glow as drawn
+    // (0.22 m, some 5 px there, held between 4 and 10), clear of its ends and of its core's middle
+    // (white-hot by day, as it is meant to be), and of it the pixels it changed by a step of 32 or
+    // more: its glow, not its bloom round it (over the haze a blue one's lifts the blue all round, as
+    // any bright light's does).
+    const w = withIt.width;
+    const tanHalf = Math.tan((at.fov * RAD) / 2);
+    const rowAt = withIt.height / 2 - (Math.tan(15 * RAD) / tanHalf) * (w / 2);
+    const halfLength = (5 / 30 / tanHalf) * (w / 2);
+    const pixelM = (2 * 30 * Math.cos(15 * RAD) * tanHalf) / w;
+    const glowPx = Math.min(10, Math.max(4, 0.22 / pixelM));
+    const seen = changedColour(without, withIt, rowAt, [0.75, glowPx / 2 + 0.5], [w / 2 - halfLength + 16, w / 2 + halfLength - 16], 32);
+    measured.push({ ...team, ...seen, off: hueOff(seen.hue, team.hue) });
+  }
+  const report = JSON.stringify(measured);
+  console.log(report);
+  for (const seen of measured) {
+    expect(seen.n, report).toBeGreaterThan(300);
+    // Its team's hue, within 12° (a third of the way from red to the battle's amber), and coloured, not
+    // the haze's pastel (added alone, red's glow showed 0.33 and blue's 0.15). The bloom's own share of
+    // the picture (render.bloom_weight) is the haze's all round, so over it a thin glow shows a little
+    // of it whatever it covers: blue, whose own colour shows at 0.75 to red's 0.84, the more.
+    expect(seen.off, report).toBeLessThan(12);
+    expect(seen.saturation, report).toBeGreaterThan(0.4);
+  }
+  // Friend from foe at a glance: red's glow and amber's at least 25° apart (added alone, 20°).
+  const [red, , amber] = measured;
+  expect(hueOff(red.hue, amber.hue), report).toBeGreaterThan(25);
+  await hooks(page, (h) => h.debugTracer(null));
   expect(errors).toEqual([]);
 });
 
-test('a tracer seen end on is its head alone: lit every frame 150 m out, held small half a metre out', async ({ page }) => {
+test('a tracer seen end on is its head alone: lit every frame 150 m out, its cap under three pixels or not; held small half a metre out', async ({ page }) => {
   // The review's case: aimed down the sights, once its tracer has joined its path (where the shot
   // was aimed) the player's round is drawn on a ray from the eye, so its streak is seen end on and
   // its head is all the shooter sees of it. A
@@ -634,7 +806,8 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, held sm
   // head is drawn no smaller than three pixels, its light kept, so it lights the same light's worth
   // of pixels every frame however it falls among them (at its true 0.4 px, 150 m out, it lit one
   // frame in a few), and near the eye no wider than its share of a glow held to 10 px (0.09 of 0.22:
-  // 4.1 px), where at its true size it would be 115 px.
+  // 4.1 px), where at its true size it would be 115 px. Its cap is never under its three pixels: a
+  // glow_max_px under 7.33 would set it there, and capped first it drew every far head smaller.
   const errors = await openGame(page);
   const at = await hooks(page, async (h) => {
     h.view('step');
@@ -697,21 +870,173 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, held sm
   expect(Math.min(...totals), farSeen).toBeGreaterThan(0);
 
   // Half a metre out on the view's middle, coming at the eye, its tail 12 m back and 0.4 px aside: a
-  // row and a column through it lit (over a hundredth of its brightest) across 6 px at most: its
-  // 4.1 px, a pixel either side for where its edges fall.
+  // row and a column through it lit (over a hundredth of its brightest), and the light it lays round
+  // it. At the cap as shipped it is held to its 4.1 px.
   const near = { head: out(0, 0, 0.5), tail: out(0, 0.4, 12.5) };
   const [cx, cy] = near.head.px.map(Math.round);
-  const [row] = await lightOver([{ tail: near.tail.at, head: near.head.at }], [0, cy, at.res[0], 1]);
-  const [column] = await lightOver([{ tail: near.tail.at, head: near.head.at }], [cx, 0, 1, at.res[1]]);
   const across = (line: number[]) => {
     const peak = Math.max(...line);
     const lit = line.map((v, i) => (v > 0.01 * peak ? i : -1)).filter((i) => i >= 0);
     return { peak, width: lit.length > 0 ? lit[lit.length - 1] - lit[0] + 1 : 0 };
   };
-  const nearSeen = JSON.stringify({ row: across(row), column: across(column) });
-  for (const line of [row, column]) {
-    expect(across(line).peak, nearSeen).toBeGreaterThan(1);
-    expect(across(line).width, nearSeen).toBeLessThanOrEqual(6);
+  const nearHead = async () => {
+    const one = [{ tail: near.tail.at, head: near.head.at }];
+    const [row] = await lightOver(one, [0, cy, at.res[0], 1]);
+    const [column] = await lightOver(one, [cx, 0, 1, at.res[1]]);
+    const [round] = await lightOver(one, [cx - 8, cy - 8, 16, 16]);
+    return { row: across(row), column: across(column), light: round.reduce((a, b) => a + b, 0) };
+  };
+  const shipped = await nearHead();
+
+  // The same heads with the cap at 2 px, as a glow_max_px of 4.9 would set it: the look the renderer's
+  // effects were made with (effectsLook, from the tunables), changed here as a tunable would change it.
+  // Held at three far off all the same, it lights every frame alike; held to two, the light it laid
+  // swung by some 40% from frame to frame as it moved among the pixels. And the cap reaches the draw:
+  // half a metre out the head is held to the three pixels, not its 4.1.
+  type Look = { renderer: { effects: { look: { tracerHeadMaxPx: number } } } };
+  const cap = await hooks(page, (h) => {
+    const look = (h as unknown as Look).renderer.effects.look;
+    const was = look.tracerHeadMaxPx;
+    look.tracerHeadMaxPx = 2;
+    return was;
+  });
+  const capped = await lightOver(far.map((f) => ({ tail: f.tail.at, head: f.head.at })), [x0, y0, 20, 20]);
+  const cappedNear = await nearHead();
+  await hooks(
+    page,
+    (h, was) => {
+      (h as unknown as Look).renderer.effects.look.tracerHeadMaxPx = was as number;
+    },
+    cap,
+  );
+  const cappedTotals = capped.map((f) => f.reduce((a, b) => a + b, 0));
+  const cappedPeaks = capped.map((f) => Math.max(...f));
+  const cappedSeen = JSON.stringify({ cap, totals: cappedTotals, peaks: cappedPeaks });
+  expect(cap, cappedSeen).toBeGreaterThan(3);
+  for (const p of cappedPeaks) expect(p, cappedSeen).toBeGreaterThan(0.05 * Math.max(...cappedPeaks));
+  expect(Math.min(...cappedTotals) / Math.max(...cappedTotals), cappedSeen).toBeGreaterThan(0.9);
+  expect(Math.min(...cappedTotals), cappedSeen).toBeGreaterThan(0);
+
+  // Near: as shipped, lit across 6 px at most (its 4.1 px, a pixel either side for where its edges
+  // fall). Its light, as bright a disc either way (held narrower, not brightened), goes as its
+  // drawn width squared: capped at 2 it is held to 3 px, (3 / 4.1)² of the light (0.54), and its
+  // width from that, 4.1 × √(the light's share), about 3 px.
+  const drawnPx = cap * Math.sqrt(cappedNear.light / shipped.light);
+  const nearSeen = JSON.stringify({ cap, shipped, capped: cappedNear, drawnPx });
+  for (const line of ['row', 'column'] as const) {
+    expect(shipped[line].peak, nearSeen).toBeGreaterThan(1);
+    expect(shipped[line].width, nearSeen).toBeLessThanOrEqual(6);
+    expect(cappedNear[line].width, nearSeen).toBeLessThan(shipped[line].width);
+  }
+  expect(drawnPx, nearSeen).toBeGreaterThan(2.7);
+  expect(drawnPx, nearSeen).toBeLessThan(3.3);
+  expect(errors).toEqual([]);
+});
+
+test("a strike's ember far off is lit every frame: held no smaller than a head's three pixels, its light kept; near the eye held to ember_max_px across, not brightened", async ({ page }) => {
+  // An ember is 6 cm across: 100 m out, under half a pixel, so moving across the view it lit some
+  // frames and not others (a twinkle). It is drawn no smaller than a tracer's head is, its light
+  // kept, so it lights the same light's worth of pixels every frame however it falls among them.
+  // Near the eye it is held no wider than [effects.ricochet] ember_max_px (12 px across), narrowed and
+  // not brightened, as a head is held to its cap: 1.5 m out its 6 cm would be a ball some 26 px across
+  // on this 1280 px image (32 on the captures' 1600).
+  const errors = await openGame(page);
+  const at = await hooks(page, async (h) => {
+    h.view('step');
+    h.setTimeOfDay(21);
+    h.jitter(false);
+    h.setQuality({ dynres: false, scale: 1 });
+    h.freeze();
+    await h.stepFrames(40);
+    const c = h.camera();
+    return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res };
+  });
+  const RAD = Math.PI / 180;
+  const y = at.yaw * RAD;
+  const right = [Math.cos(y), 0, -Math.sin(y)];
+  const tanHalf = Math.tan((at.fov * RAD) / 2);
+  /** The point `m` metres out along the ray `up` degrees over the view's middle and `side` pixels right of it, and the pixel it falls on. */
+  const out = (up: number, side: number, m: number) => {
+    const p = (at.pitch + up) * RAD;
+    const s = (side * Math.cos(up * RAD) * 2 * tanHalf) / at.res[0];
+    const d = [Math.sin(y) * Math.cos(p) + right[0] * s, Math.sin(p), Math.cos(y) * Math.cos(p) + right[2] * s];
+    const n = Math.hypot(d[0], d[1], d[2]);
+    return { at: d.map((v, k) => at.position[k] + (v / n) * m) as [number, number, number], px: [at.res[0] / 2 + side, at.res[1] / 2 - (Math.tan(up * RAD) / tanHalf) * (at.res[0] / 2)] };
+  };
+  /** The light each ember adds over `box` of the internal image (each, less the image without it): luminance, a row at a time. */
+  const emberLight = (embers: [number, number, number][], box: [number, number, number, number]) =>
+    hooks(
+      page,
+      async (h, arg) => {
+        const { embers, box } = arg as { embers: [number, number, number][]; box: [number, number, number, number] };
+        const lum = (a: number[], i: number) => 0.2126 * a[i * 3] + 0.7152 * a[i * 3 + 1] + 0.0722 * a[i * 3 + 2];
+        h.debugEmber(null);
+        await h.stepFrames(2);
+        const without = await h.sharpAt(box);
+        const seen: number[][] = [];
+        for (const e of embers) {
+          h.debugEmber({ at: e, kind: 2 });
+          await h.stepFrames(2);
+          const withIt = await h.sharpAt(box);
+          seen.push(Array.from({ length: box[2] * box[3] }, (_, i) => lum(withIt, i) - lum(without, i)));
+        }
+        h.debugEmber(null);
+        return seen;
+      },
+      { embers, box },
+    );
+  // 100 m out, 20° over the view against the night sky, moving a third of a pixel right and a quarter
+  // up each frame.
+  const steps = Array.from({ length: 8 }, (_, k) => out(20 + 0.023 * k, 0.37 * k, 100));
+  const box: [number, number, number, number] = [Math.round(steps[0].px[0]) - 8, Math.round(steps[steps.length - 1].px[1]) - 8, 20, 20];
+  const frames = await emberLight(steps.map((s) => s.at), box);
+  const totals = frames.map((f) => f.reduce((a, b) => a + b, 0));
+  const peaks = frames.map((f) => Math.max(...f));
+  const seen = JSON.stringify({ totals, peaks });
+  for (const p of peaks) expect(p, seen).toBeGreaterThan(0.05 * Math.max(...peaks));
+  expect(Math.min(...totals) / Math.max(...totals), seen).toBeGreaterThan(0.9);
+  expect(Math.min(...totals), seen).toBeGreaterThan(0);
+
+  // 1.5 m out, 10° over the view's middle against the night sky: a row and a column through it lit
+  // (over a hundredth of its brightest) across 12 px at most. Then with the look's cap lifted (as a
+  // tunable would lift it: the renderer's effects' look, from the tunables), across its own 6 cm (some
+  // 26 px), and as bright at its middle: held narrower, not brightened.
+  const near = out(10, 0, 1.5);
+  const [cx, cy] = near.px.map(Math.round);
+  const ownPx = (0.06 * at.res[0]) / (2 * 1.5 * Math.cos(10 * RAD) * tanHalf);
+  const across = (line: number[]) => {
+    const peak = Math.max(...line);
+    const lit = line.map((v, i) => (v > 0.01 * peak ? i : -1)).filter((i) => i >= 0);
+    return { peak, width: lit.length > 0 ? lit[lit.length - 1] - lit[0] + 1 : 0 };
+  };
+  const nearLines = async () => {
+    const [row] = await emberLight([near.at], [0, cy, at.res[0], 1]);
+    const [column] = await emberLight([near.at], [cx, 0, 1, at.res[1]]);
+    return { row: across(row), column: across(column) };
+  };
+  const capped = await nearLines();
+  type Look = { renderer: { effects: { look: { emberMaxPx: number } } } };
+  const cap = await hooks(page, (h) => {
+    const look = (h as unknown as Look).renderer.effects.look;
+    const was = look.emberMaxPx;
+    look.emberMaxPx = 1000;
+    return was;
+  });
+  const lifted = await nearLines();
+  await hooks(
+    page,
+    (h, was) => {
+      (h as unknown as Look).renderer.effects.look.emberMaxPx = was as number;
+    },
+    cap,
+  );
+  const nearSeen = JSON.stringify({ cap, ownPx, capped, lifted });
+  for (const line of ['row', 'column'] as const) {
+    expect(capped[line].peak, nearSeen).toBeGreaterThan(1);
+    expect(capped[line].width, nearSeen).toBeLessThanOrEqual(12);
+    expect(lifted[line].width, nearSeen).toBeGreaterThanOrEqual(ownPx - 3);
+    expect(capped[line].peak / lifted[line].peak, nearSeen).toBeGreaterThan(0.9);
+    expect(capped[line].peak / lifted[line].peak, nearSeen).toBeLessThan(1.1);
   }
   expect(errors).toEqual([]);
 });

@@ -126,18 +126,22 @@ export interface Hooks {
   }>;
   /** The HUD as drawn: whether it shows, whether its crosshair does, and its words. */
   hud(): { visible: boolean; crosshair: boolean; text: string };
+  /** Suppression's look at the session's level in every mode, the flying camera's too (a test's fixed vantage); false: only while playing and paused, as the game has it. */
+  suppressionLook(always: boolean): void;
   /** The front's shells alone, for a test: the rifle fire is left as it is. */
   setShelling(i: 'off' | 'light' | 'heavy'): void;
   /** The front's fire, for this visit (the pause menu's choice is what is kept). */
   setIntensity(i: 'off' | 'light' | 'heavy'): void;
-  /** What the last frame's effects held: particles' billboards, tracers, flash stars, transient lights; the battle's tracers, fires' flames, and every tracer's head. */
-  effects(): { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number };
+  /** What the last frame's effects held: particles' billboards, tracers, flash stars, transient lights; the battle's tracers, fires' flames, and every tracer's head; the ricochets and embers, and them by their tracer's kind (TRACER_KIND: none, amber, red, blue). */
+  effects(): { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number; ricochetsByKind: number[]; embersByKind: number[] };
   /** Test quads (metres, metres across, linear colour) drawn with the effects from the next frame, emissive or `lit` as dust is; [] for none. */
   debugQuads(quads: { position: [number, number, number]; size: number; colour: [number, number, number]; lit?: boolean; square?: boolean }[]): void;
   /** Emissive test ribbons (metres; metres across; linear colour), as a flash star's rays are drawn, from the next frame; [] for none. */
   debugRibbons(ribbons: { tail: [number, number, number]; head: [number, number, number]; width: number; colour: [number, number, number] }[]): void;
   /** A test tracer (metres) of a kind (net/gear.ts TRACER_KIND: 1 amber, 2 red, 3 blue), drawn as a round's is (core, glow and head, by the day's light), from the next frame; null for none. */
   debugTracer(tracer: { tail: [number, number, number]; head: [number, number, number]; kind: number } | null): void;
+  /** A test ember (metres) of a kind (net/gear.ts TRACER_KIND), drawn as a strike's is, as bright as when newly struck, from the next frame; null for none. */
+  debugEmber(ember: { at: [number, number, number]; kind: number } | null): void;
   /** The key light's map texels the last frame traced (all of them, a sixteenth, or none), the map's texels, and the slots it is traced in by turns. */
   keyTexels(): { traced: number; all: number; slots: number };
   /** Puffs of smoke in the haze (metres; density per metre), added to the next frames' own; [] for none. */

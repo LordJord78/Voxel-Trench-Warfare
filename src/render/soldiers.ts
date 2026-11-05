@@ -240,8 +240,8 @@ export class Soldiers {
   }
 
   /**
-   * The weapon slot holding what `gear` shows (the gun and its fit, or the shovel; its tracers and
-   * light change nothing drawn): one already holding it, or the one longest unseen, filled now.
+   * The weapon slot holding what `gear` shows (the gun and its fit, or the shovel; its light changes
+   * nothing drawn): one already holding it, or the one longest unseen, filled now.
    * `taken`, the slots this frame has already given.
    */
   private slotFor(gear: number, taken: Set<number>): number {

@@ -53,6 +53,14 @@ function stillMuzzle(s: Session): [number, number, number] {
   s.handsStill = was;
   return m;
 }
+/**
+ * The tick's strikes as their rounds made them. A tracer round's strike also carries how its last
+ * streak is drawn (ballistics.ts StrikeDraw), from the muzzle as drawn when it left: the hands move
+ * that and nothing else of it, so it is set aside here and held to its shot's muzzle (drawnFrom).
+ */
+const struck = (s: Session) => s.rounds.impacts.map(({ draw, ...hit }) => (draw ? { ...hit, draw: { ...draw, from: null } } : hit));
+/** Where the tick's tracer strikes draw their last streaks from (StrikeDraw.from). */
+const drawnFrom = (s: Session) => s.rounds.impacts.flatMap((h) => (h.draw ? [h.draw.from] : []));
 /** `stand`, with the gun in `slot` up, then Shift and W held for a second: a full sprint. */
 function sprinting(loadout?: Loadout, slot = 0): Session {
   const s = stand(loadout);
@@ -492,6 +500,7 @@ describe('the gun in the hands, in play', () => {
     for (const s of [moving, still]) s.intent = { ...idleIntent(), fire: true };
     let shots = 0;
     let impacts = 0;
+    const froms: [number, number, number][][] = [[], []];
     for (let k = 0; k < 60; k++) {
       for (const s of [moving, still]) {
         s.player.yaw = (s.player.yaw + 100 * TICK) % 360;
@@ -500,7 +509,8 @@ describe('the gun in the hands, in play', () => {
       // Where the rounds leave and go: the eye, the view's line, the same whatever the hands do.
       expect(moving.shots).toEqual(still.shots);
       for (const shot of moving.shots) expect(shot.origin).toEqual(eyeOf(moving));
-      expect(moving.rounds.impacts).toEqual(still.rounds.impacts);
+      expect(struck(moving)).toEqual(struck(still));
+      [moving, still].forEach((s, j) => froms[j].push(...drawnFrom(s)));
       expect(moving.rounds.count).toBe(still.rounds.count);
       for (let i = 0; i < moving.rounds.count; i++) expect(moving.rounds.position(i)).toEqual(still.rounds.position(i));
       shots += moving.shots.length;
@@ -519,6 +529,10 @@ describe('the gun in the hands, in play', () => {
     // And their tracers leave the drawn muzzles: the events carry each its own.
     const [a, b] = [moving.drainEvents().shots, still.drainEvents().shots];
     expect(a.map((e) => e.muzzle)).not.toEqual(b.map((e) => e.muzzle));
+    // As do their strikes' last streaks: each from a muzzle its own session's shots left as drawn.
+    expect(froms[0].length).toBeGreaterThan(0);
+    for (const f of froms[0]) expect(a.map((e) => e.muzzle)).toContainEqual(f);
+    for (const f of froms[1]) expect(b.map((e) => e.muzzle)).toContainEqual(f);
   });
 
   it('aimed, breathing still moves the drawn gun, a third of it, and never the round', () => {
@@ -569,13 +583,19 @@ describe('the gun in the hands, in play', () => {
     expect(Math.max(...ups) - Math.min(...ups)).toBeGreaterThan(0.0005);
     // A shot from each: the same round, from the eye, and the same where it lands.
     for (const s of [moving, still]) s.intent = { ...s.intent, fire: true };
+    const froms: [number, number, number][][] = [[], []];
     for (let k = 0; k < 60; k++) {
       for (const s of [moving, still]) s.tick();
       expect(moving.shots).toEqual(still.shots);
       for (const shot of moving.shots) expect(shot.origin).toEqual(eyeOf(moving));
-      expect(moving.rounds.impacts).toEqual(still.rounds.impacts);
+      expect(struck(moving)).toEqual(struck(still));
+      [moving, still].forEach((s, j) => froms[j].push(...drawnFrom(s)));
     }
     expect(moving.weapon.shotsFired).toBe(1);
+    // Its strike's last streak drawn from the muzzle it left, as each session drew it.
+    const [a, b] = [moving.drainEvents().shots, still.drainEvents().shots];
+    expect(froms[0]).toEqual([a[0].muzzle]);
+    expect(froms[1]).toEqual([b[0].muzzle]);
   });
 
   it('a round fired while the sights overshoot leaves along the aim, exactly as with the hands held still', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ServerClock } from '../../src/net/clock';
+import { BARE, encodeGear } from '../../src/net/gear';
 import { INTERP_DELAY_MS, SnapshotBuffer } from '../../src/net/interp';
 import type { PlayerState } from '../../src/net/protocol';
 
@@ -30,6 +31,24 @@ describe('the snapshot buffer', () => {
     // Before the first and after the last: held at the ends, not guessed beyond them.
     expect(b.sample(900)!.position[0]).toBe(0);
     expect(b.sample(2000)!.position[0]).toBe(1);
+  });
+
+  it('keeps what they show between two states: the gear as the flags are, the nearer state\'s', () => {
+    // An SVD with its scope and its light on, then the shovel (net/gear.ts): a sample nearly always
+    // falls between two states, and without the gear every other player was drawn with the bare AK.
+    const svd = encodeGear({ gun: 'svd', fit: { ...BARE, optic: 'scope', side: 'flashlight' }, light: true });
+    const shovel = encodeGear({ gun: null, fit: BARE, light: false });
+    expect(svd).not.toBe(shovel);
+    const b = new SnapshotBuffer();
+    b.push(1000, { ...at(0, 0, 1), gear: svd });
+    b.push(1050, { ...at(1, 0, 4), gear: shovel });
+    expect(b.sample(1020)!.gear).toBe(svd);
+    expect(b.sample(1030)!.gear).toBe(shovel);
+    // A state that says nothing of it (an older sender's) says nothing in a blend either.
+    const bare = new SnapshotBuffer();
+    bare.push(1000, at(0, 0, 1));
+    bare.push(1050, at(1, 0, 4));
+    expect(bare.sample(1020)).not.toHaveProperty('gear');
   });
 
   it('drops states out of order, and lets go of old ones', () => {

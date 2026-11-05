@@ -4,20 +4,28 @@
 // a line rather than breaking into dashes between pixel centres (this is after TAA). Projected
 // through the frame's camera without jitter (this is after TAA), each fragment is dropped where
 // the G-buffer's depth along its pixel's ray is nearer, so walls hide what is behind them, and
-// blended premultiplied: the emissive add their light (alpha 0), dust covers what is behind it.
+// blended premultiplied: the emissive add their light (alpha 0), dust covers what is behind it, and
+// the tracers' light covers it as much as it shows its colour (tracerLight).
 // A ribbon's style is how it is lit across: a flash star's one soft term (0), or a tracer's two (1),
 // a core mixed toward white in a glow of its colour. A tracer's glow is drawn no narrower than
 // glowMinPx, its light kept, so far off its colour shows round its core, nor wider than glowMaxPx,
 // narrowed and not brightened, so a round past the eye is not a bar or a wedge across the view; its
-// core is its share of the width drawn, no narrower than MIN_RIBBON_PX (its light kept) nor wider
-// than CORE_MAX_SHARE of the glow. The core is mixed toward white by all of the ribbon's whiteness
-// within whiteNearM of the eye, falling to none at whiteFarM: white-hot close by, the team's colour
-// far off. Seen end on, a tracer's ends within END_ON_PX of each other, it draws nothing: its head (a
-// held billboard, no smaller than MIN_HEAD_PX nor wider than headMaxPx) carries it.
+// core is its share of the width drawn, no narrower than MIN_RIBBON_PX (its light kept), but never
+// wider than CORE_MAX_SHARE of the glow, which wins: 0.45 of the glow, 1.8 px at its 4 px floor. The
+// core is mixed toward white by all of the ribbon's whiteness within whiteNearM of the eye, falling to
+// none at whiteFarM: white-hot close by, the team's colour far off. Seen end on, a tracer's ends
+// within END_ON_PX of each other, it draws nothing: its head (a held billboard, no smaller than
+// MIN_HEAD_PX nor wider than headMaxPx, a cap never under that floor) carries it. A strike's ember is
+// held so too, between MIN_HEAD_PX and its own cap, emberMaxPx.
 // The tracers' light (their ribbons, heads and embers, the battle's and the ricochets' too) is lit to
 // keep its hue through the present pass's per-channel tone curve (keepHue): far off and in its glow a
 // tracer shows its team's colour, where the curve alone would take a bright red to white; as white as
 // its core is near the eye (or by day, whiteFloor), it shows as the curve alone shows it, white-hot.
+// And while the sun is up it covers what is behind it as much as it shows its colour (tracerLight,
+// draw.cover): added alone, its brightest channel clipped at the display's top while the others stayed
+// the haze's, so over the low sun's it showed the haze's hue pulled toward its own, a red tracer orange
+// and a blue one lavender. From dusk on draw.cover is none: over the night's dark sky its light added
+// alone reads brighter, as approved.
 #include "tone.wgsl"
 
 struct Lit {
@@ -58,8 +66,11 @@ struct EffectsDraw {
   sharpShare: f32,
   // The least a tracer's core is as white as it is near the eye: by day it reads white-hot as before.
   whiteFloor: f32,
-  pad0: f32,
-  pad1: f32,
+  // How much of what is behind it a tracer's light covers where it shows its colour at the curve's
+  // top: [effects] tracer_cover while the sun is up, none from dusk on (tracerLight).
+  cover: f32,
+  // The widest a strike's ember is drawn, in pixels ([effects.ricochet] ember_max_px).
+  emberMaxPx: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -75,9 +86,9 @@ const NEAR: f32 = 0.5;
 // The narrowest a ribbon is drawn, in pixels: wide enough that every column it crosses has a pixel
 // centre within half a pixel of its middle (its soft edge falls to a twentieth).
 const MIN_RIBBON_PX: f32 = 2.0;
-// The smallest a tracer's head (a disc) is drawn, in pixels across: from three, the light it lays on
-// the pixels it covers is within 2% of the same wherever it falls among them (at two, between half
-// and 1.4 times it), so a far head moving across the view does not twinkle.
+// The smallest a tracer's head (a disc) or a strike's ember is drawn, in pixels across: from three,
+// the light it lays on the pixels it covers is within 2% of the same wherever it falls among them (at
+// two, between half and 1.4 times it), so a far one moving across the view does not twinkle.
 const MIN_HEAD_PX: f32 = 3.0;
 // A tracer whose ends fall within this many pixels of each other is seen end on (the shooter's own
 // round, from the eye it left): it draws nothing, fading in over the next as many.
@@ -143,6 +154,19 @@ fn keepHue(c: vec3f, white: f32) -> vec3f {
   return select(acesInverse(shown) / e, c, keep);
 }
 
+// A tracer's light `c` as keepHue shows it, premultiplied over what is behind it: covering it by
+// draw.cover where it shows its colour at the curve's top, as much less as it shows less (its brightest
+// channel through the curve), and none of it as white as it is (`white`, as keepHue's): where it is
+// white-hot it only adds light, brighter than anything behind it. So by day its colour is its team's
+// over a bright haze as it is over the night, its glow's and its head's alike, and a fading ember or
+// ricochet covers no more than it shows.
+fn tracerLight(c: vec3f, white: f32) -> vec4f {
+  let e = presentedScale();
+  let m = max(c.r, max(c.g, c.b)) * e;
+  let shows = select(0.0, aces(vec3f(m)).r, e > 0.0 && m > 0.0);
+  return vec4f(keepHue(c, white), draw.cover * shows * (1.0 - clamp(white, 0.0, 1.0)));
+}
+
 fn luma(c: vec3f) -> f32 {
   return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
@@ -178,15 +202,17 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
       // The tracers' light: a head (its alpha -1 less its whiteness), or a strike's ember (-3 less it).
       let ember = b.colour.a < -2.5;
       tone = vec2f(1.0, clamp(select(-1.0 - b.colour.a, -3.0 - b.colour.a, ember), 0.0, 1.0));
-      colour = vec4f(b.colour.rgb, 0.0);
-      if (!ember) {
-        // A head, held as its ribbon is: no smaller than MIN_HEAD_PX, its light kept, nor wider than
-        // headMaxPx, narrowed and not brightened.
-        let pixel = pixelAt(b.centre * toVoxels) * frame.voxel;
-        let drawn = min(max(half, 0.5 * MIN_HEAD_PX * pixel), 0.5 * draw.headMaxPx * pixel);
-        colour = vec4f(b.colour.rgb * min((half / drawn) * (half / drawn), 1.0), 0.0);
-        half = drawn;
-      }
+      // Each held no smaller than MIN_HEAD_PX, its light kept, so a far one does not twinkle; nor wider
+      // than its cap, narrowed and not brightened: a head as its ribbon is (headMaxPx), so a round past
+      // the eye is not a ball across the view, and an ember by its own (emberMaxPx), so a strike at the
+      // shooter's feet is not either. A cap never under the floor: a glow_max_px under 7.33 puts
+      // headMaxPx under three pixels, and capped there every far head twinkled again.
+      let pixel = pixelAt(b.centre * toVoxels) * frame.voxel;
+      let least = max(half, 0.5 * MIN_HEAD_PX * pixel);
+      let cap = select(draw.headMaxPx, draw.emberMaxPx, ember);
+      let drawn = min(least, 0.5 * max(cap, MIN_HEAD_PX) * pixel);
+      colour = vec4f(b.colour.rgb * min((half / drawn) * (half / drawn), 1.0), 0.0);
+      half = drawn;
     }
     let p = (b.centre + (frame.cam.right * corner.x + frame.cam.up * corner.y) * half) * toVoxels;
     f.clip = toClip(p);
@@ -254,13 +280,13 @@ fn fs(f: Fragment) -> @location(0) vec4f {
     if (f.glow.a > 0.0) {
       // A tracer: its core, its share of the width drawn, in its glow; both fading to the tail. As
       // white as its core's share of its light where the core is white (near the eye, or by day); its
-      // glow keeps its hue.
+      // glow keeps its hue, and covers what is behind it.
       let u2 = f.across * f.across;
       let fade = mix(f.alphas.x, f.alphas.y, f.uv.y);
       let core = f.colour.rgb * (exp(-3.0 * u2 / (f.glow.a * f.glow.a)) * fade);
       let glow = f.glow.rgb * (exp(-3.0 * u2) * fade);
       let share = luma(core) / max(luma(core + glow), 1e-9);
-      return vec4f(keepHue(core + glow, f.tone.y * share), 0.0);
+      return tracerLight(core + glow, f.tone.y * share);
     }
     // Soft across, fading from the head back to the tail.
     let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.uv.x * f.uv.x);
@@ -271,8 +297,9 @@ fn fs(f: Fragment) -> @location(0) vec4f {
   }
   let disc = f.colour * (1.0 - smoothstep(0.5, 1.0, length(f.uv)));
   if (f.tone.x > 0.5) {
-    // A tracer's head or ember: as white as the core it burns as (near the eye, or by day).
-    return vec4f(keepHue(disc.rgb, f.tone.y), 0.0);
+    // A tracer's head or ember: as white as the core it burns as (near the eye, or by day), covering
+    // what is behind it as a tracer's glow does.
+    return tracerLight(disc.rgb, f.tone.y);
   }
   return disc;
 }
