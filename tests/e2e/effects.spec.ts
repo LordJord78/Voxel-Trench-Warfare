@@ -869,10 +869,30 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, its cap
   expect(Math.min(...totals) / Math.max(...totals), farSeen).toBeGreaterThan(0.9);
   expect(Math.min(...totals), farSeen).toBeGreaterThan(0);
 
-  // The same head with its cap at 2 px, as a glow_max_px of 4.9 would set it: the look the renderer's
+  // Half a metre out on the view's middle, coming at the eye, its tail 12 m back and 0.4 px aside: a
+  // row and a column through it lit (over a hundredth of its brightest), and the light it lays round
+  // it. At the cap as shipped it is held to its 4.1 px.
+  const near = { head: out(0, 0, 0.5), tail: out(0, 0.4, 12.5) };
+  const [cx, cy] = near.head.px.map(Math.round);
+  const across = (line: number[]) => {
+    const peak = Math.max(...line);
+    const lit = line.map((v, i) => (v > 0.01 * peak ? i : -1)).filter((i) => i >= 0);
+    return { peak, width: lit.length > 0 ? lit[lit.length - 1] - lit[0] + 1 : 0 };
+  };
+  const nearHead = async () => {
+    const one = [{ tail: near.tail.at, head: near.head.at }];
+    const [row] = await lightOver(one, [0, cy, at.res[0], 1]);
+    const [column] = await lightOver(one, [cx, 0, 1, at.res[1]]);
+    const [round] = await lightOver(one, [cx - 8, cy - 8, 16, 16]);
+    return { row: across(row), column: across(column), light: round.reduce((a, b) => a + b, 0) };
+  };
+  const shipped = await nearHead();
+
+  // The same heads with the cap at 2 px, as a glow_max_px of 4.9 would set it: the look the renderer's
   // effects were made with (effectsLook, from the tunables), changed here as a tunable would change it.
   // Held at three far off all the same, it lights every frame alike; held to two, the light it laid
-  // swung by some 40% from frame to frame as it moved among the pixels.
+  // swung by some 40% from frame to frame as it moved among the pixels. And the cap reaches the draw:
+  // half a metre out the head is held to the three pixels, not its 4.1.
   type Look = { renderer: { effects: { look: { tracerHeadMaxPx: number } } } };
   const cap = await hooks(page, (h) => {
     const look = (h as unknown as Look).renderer.effects.look;
@@ -881,6 +901,7 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, its cap
     return was;
   });
   const capped = await lightOver(far.map((f) => ({ tail: f.tail.at, head: f.head.at })), [x0, y0, 20, 20]);
+  const cappedNear = await nearHead();
   await hooks(
     page,
     (h, was) => {
@@ -896,23 +917,19 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, its cap
   expect(Math.min(...cappedTotals) / Math.max(...cappedTotals), cappedSeen).toBeGreaterThan(0.9);
   expect(Math.min(...cappedTotals), cappedSeen).toBeGreaterThan(0);
 
-  // Half a metre out on the view's middle, coming at the eye, its tail 12 m back and 0.4 px aside: a
-  // row and a column through it lit (over a hundredth of its brightest) across 6 px at most: its
-  // 4.1 px, a pixel either side for where its edges fall.
-  const near = { head: out(0, 0, 0.5), tail: out(0, 0.4, 12.5) };
-  const [cx, cy] = near.head.px.map(Math.round);
-  const [row] = await lightOver([{ tail: near.tail.at, head: near.head.at }], [0, cy, at.res[0], 1]);
-  const [column] = await lightOver([{ tail: near.tail.at, head: near.head.at }], [cx, 0, 1, at.res[1]]);
-  const across = (line: number[]) => {
-    const peak = Math.max(...line);
-    const lit = line.map((v, i) => (v > 0.01 * peak ? i : -1)).filter((i) => i >= 0);
-    return { peak, width: lit.length > 0 ? lit[lit.length - 1] - lit[0] + 1 : 0 };
-  };
-  const nearSeen = JSON.stringify({ row: across(row), column: across(column) });
-  for (const line of [row, column]) {
-    expect(across(line).peak, nearSeen).toBeGreaterThan(1);
-    expect(across(line).width, nearSeen).toBeLessThanOrEqual(6);
+  // Near: as shipped, lit across 6 px at most (its 4.1 px, a pixel either side for where its edges
+  // fall). Its light, as bright a disc either way (held narrower, not brightened), goes as its
+  // drawn width squared: capped at 2 it is held to 3 px, (3 / 4.1)² of the light (0.54), and its
+  // width from that, 4.1 × √(the light's share), about 3 px.
+  const drawnPx = cap * Math.sqrt(cappedNear.light / shipped.light);
+  const nearSeen = JSON.stringify({ cap, shipped, capped: cappedNear, drawnPx });
+  for (const line of ['row', 'column'] as const) {
+    expect(shipped[line].peak, nearSeen).toBeGreaterThan(1);
+    expect(shipped[line].width, nearSeen).toBeLessThanOrEqual(6);
+    expect(cappedNear[line].width, nearSeen).toBeLessThan(shipped[line].width);
   }
+  expect(drawnPx, nearSeen).toBeGreaterThan(2.7);
+  expect(drawnPx, nearSeen).toBeLessThan(3.3);
   expect(errors).toEqual([]);
 });
 
