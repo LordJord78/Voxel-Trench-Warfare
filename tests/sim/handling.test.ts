@@ -613,6 +613,9 @@ describe('the gun in the hands, in play', () => {
     let firing = false;
     let was = 0;
     const left = { rising: 0, easing: 0, after: 0 };
+    // Each session's strikes' drawn starts, and the muzzles its shots left as drawn (see `struck`).
+    const froms: [number, number, number][][] = [[], [], []];
+    const muzzles: [number, number, number][][] = [[], [], []];
     for (let k = 0; k < 60; k++) {
       // As the session raises the sights: this tick's blend reaches 1, and the trigger is pulled with it.
       firing ||= Math.min(1, moving.aimed + TICK / ads) >= 1;
@@ -624,10 +627,13 @@ describe('the gun in the hands, in play', () => {
       expect(flat.handling.delta.pitch, `tick ${k}`).toBe(0);
       for (const other of [still, flat]) {
         expect(moving.shots, `tick ${k}`).toEqual(other.shots);
-        expect(moving.rounds.impacts, `tick ${k}`).toEqual(other.rounds.impacts);
+        expect(struck(moving), `tick ${k}`).toEqual(struck(other));
       }
+      [moving, still, flat].forEach((s, j) => froms[j].push(...drawnFrom(s)));
       for (const shot of moving.shots) expect(shot.origin).toEqual(eyeOf(moving));
-      const [a, b, c] = [moving, still, flat].map((s) => s.drainEvents().shots.map((e) => [e.origin, e.dir, e.tracer]));
+      const events = [moving, still, flat].map((s) => s.drainEvents().shots);
+      events.forEach((es, j) => muzzles[j].push(...es.map((e) => e.muzzle)));
+      const [a, b, c] = events.map((es) => es.map((e) => [e.origin, e.dir, e.tracer]));
       expect(a, `tick ${k}`).toEqual(b);
       expect(a, `tick ${k}`).toEqual(c);
       if (a.length > 0) {
@@ -642,6 +648,11 @@ describe('the gun in the hands, in play', () => {
     expect(left.rising).toBeGreaterThan(0);
     expect(left.easing).toBeGreaterThan(0);
     expect(left.after).toBeGreaterThan(0);
+    // Their strikes' last streaks start where their own session's gun was drawn as each round left.
+    expect(froms[0].length).toBeGreaterThan(0);
+    froms.forEach((fs, j) => {
+      for (const f of fs) expect(muzzles[j]).toContainEqual(f);
+    });
   });
 
   it('handling is deterministic: two sessions, same intents, same muzzles', () => {
