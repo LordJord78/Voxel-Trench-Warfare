@@ -107,7 +107,7 @@ The spec is silent on the following; they are decided here.
     - a round stopped by a body that one client draws and another doesn't;
     - a crater whose job asks for a wider region just as a neighbour goes out;
     - two players digging the same ground within a round trip: their clients apply the two scoops in opposite orders;
-    - blood spatter (sub-project 7): per page, colour only. Each page draws a kill's spatter from its own tick, and the victim's page draws none, but every `BLOOD_*` shade keeps the kind it marks, so every shared edit reads the same world. Task 8's two-page comparisons that span a death mask it.
+    - blood spatter (sub-project 7): per page, colour only. Each page spatters a headshot or a kill from its own tick, and the victim's page none. Each `BLOOD_*` shade keeps the rules of what it marks (sod takes `BLOOD_SOIL`, mud's kind, whose rules are sod's), so every shared edit reads the same world. Task 8's two-page comparisons mask it.
 
     The spec's Deferred section lists these.
 
@@ -255,7 +255,8 @@ git commit -m "Room time: the battle, the lights and the time of day on the matc
 - Test:
   - `tests/net/shelling.test.ts` (new);
   - `tests/net/protocol.test.ts` and `tests/net/room-core.test.ts` (add);
-  - `tests/world/generation/world.test.ts` and `tests/world/generation/corridor.test.ts` (add one pin each).
+  - `tests/world/generation/world.test.ts` and `tests/world/generation/corridor.test.ts` (add one pin each);
+  - `tests/app/net-client.test.ts` (change, only if `parseRoom` refuses a welcome without a log: see Interfaces).
 
 **Interfaces:**
 - Produces:
@@ -289,6 +290,7 @@ export const LOG_CHARS_MAX = 900_000;
 ```
 - **The relay's imports.** Every `src/net` file imports only from `src/net`, `core/rng`, `core/hash` and `core/dmath`. `Intensity` comes from `./protocol`, never `combat/front`, which reaches `core/tunables` and the TOML (TS2307 in the server typecheck).
 - **`HURT_MAX`.** `parseClient` takes a hurt's `a` in (0, `HURT_MAX`], where it has a literal 200 today.
+- **Task 1's welcomes.** `tests/app/net-client.test.ts` (Task 1) sends welcomes with no `log`. If `parseRoom` refuses a welcome without one, those welcomes gain `log: { shells: [], digs: [] }`. Step 4 runs the whole suite, so a refused welcome fails in this task, not in Task 3. Step 5 stages the file; `git add` leaves it alone if it is unchanged.
 - **The `Shelling` algorithm.** The tests don't fix the draws, but the room must make the same shells however its time is asked for, so the draw order is fixed here:
   - One stream: `Rng.root(seed).derive('shelling')`.
   - For each slot:
@@ -376,12 +378,12 @@ Expected: PASS.
 
 - [ ] **Step 4: Implement `Shelling`, the protocol and the room, then run**
 
-Run: `npx vitest run tests/net tests/architecture.test.ts && npx tsc --noEmit && npm --prefix server run typecheck`
-Expected: PASS, no type errors in either project.
+Run: `npx vitest run && npx tsc --noEmit && npm --prefix server run typecheck`
+Expected: PASS, the whole suite (`tests/app` included), no type errors in either project.
 
 - [ ] **Step 5: Commit**
 ```bash
-git add data/tunables.toml src/net src/world/generation/shell-field.ts server/bots.mjs tests/net tests/world/generation/world.test.ts tests/world/generation/corridor.test.ts
+git add data/tunables.toml src/net src/world/generation/shell-field.ts server/bots.mjs tests/net tests/world/generation/world.test.ts tests/world/generation/corridor.test.ts tests/app/net-client.test.ts
 git commit -m "The room runs the shelling: each shell told 1.5 s ahead from its map's field, its scoops relayed, both kept in its log; protocol 2" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -514,6 +516,8 @@ it("in a room a shell by the player is a harm of its blast's by distance and cov
 it("whistles a shell from when it is heard, for the time it has left, and lands it when the room's clock reaches it", ...)
   // hear(landAt 10_000) at 8_600 → one incoming, landsInS 1.4; tick(9_999) → no blast; tick(10_000) → one blast at its (x, z)
 it('lands a shell heard late at once, without a whistle, and a shell heard twice once', ...)
+  // hear(landAt 10_000) at 10_500, within SILENT_STEP_S → no incoming; tick(10_500) → its blast, not a quiet landing;
+  // heard again and ticked → no second crater
 it('lands shells in id order, however they were heard', ...)   // hear 3 then 2, both due → craters land 2 then 3
 it('two clients whose clocks disagree by 0.2 s, and whose craters come back at different times, cut the same craters', ...)   // Review Focus: clock skew
   // six overlapping shells on the parapet 2.5 s apart; A: clock true, frames 60 a second, in-process runner; B: clock − 200 ms, frames 45 a second,
@@ -554,14 +558,16 @@ git commit -m "Every client lands the room's shells at room time, in order, wher
 **Files:**
 - Modify: `src/combat/front.ts` and `src/sim/session.ts`.
 - Modify: `data/tunables.toml`: `[room_battle] crest_clear_m = 0.3`.
-- Modify: `src/app/main.ts`: `deploy`, `ended`, and `startOf` (each team's starts).
+- Modify: `src/app/main.ts`: `deploy`, `ended`, `startOf` (each team's starts), and the `frontDamageScale` it gives `HitFeedback`.
 - Modify: `src/app/hit-feedback.ts`: in a room, the being-hit estimate of a front's hit (see Notes).
 - Test:
-  - `tests/combat/front.test.ts`, `tests/sim/generated-world.test.ts` and `tests/world/generation/corridor.test.ts` (add);
+  - `tests/combat/front.test.ts`, `tests/sim/generated-world.test.ts`, `tests/world/generation/corridor.test.ts` and `tests/app/hit-feedback.test.ts` (add);
   - `tests/sim/room-front.test.ts` (new).
 
 **Interfaces:**
-- Consumes: from Task 3, `Session.room`, `Session.sight` (private there), `Harm`, `frontHarm` and `harmTunables`.
+- Consumes:
+  - from Task 3: `Session.room`, `Session.sight` (private there), `Harm`, `frontHarm` and `harmTunables`;
+  - from sub-project 7: `HitFeedback.frame`'s estimate of a hit on the player (body `LOCAL_BODY`, owner ≠ 0). In a room (`session.room`), an owner-1 hit's estimate is also × `frontDamageScale`, which main.ts gives it from `harmTunables(tun)`.
 - Produces:
 ```ts
 export function planSource(plan: WorldPlan, reachM: number, side: 0 | 1 = 1): FrontSource;  // that side's fire trench
@@ -621,11 +627,15 @@ it("frontFrom(side) fires from that side's front line", ...)
   // frontShots > 0; every origin within 0.5 m (z) of the far edge of one of that side's bays; frontSide === side
 // tests/world/generation/corridor.test.ts
 it('in a room the front sees no one standing at a Red or Blue start', ...)   // the same case on the Corridor, where Task 8 plays
+// tests/app/hit-feedback.test.ts (sub-project 7's: a fake HitMarker, a real Session)
+it("in a room the front's hit on the player flashes as the harm it sends", ...)
+  // an owner-1 torso hit on LOCAL_BODY (the front has no gun, so its estimate is the zone's damage alone):
+  // session.room true → the being-hit flash of a hit of 33; room false → of 55
 ```
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `npx vitest run tests/combat/front.test.ts tests/sim/room-front.test.ts tests/sim/generated-world.test.ts tests/world/generation/corridor.test.ts`
+Run: `npx vitest run tests/combat/front.test.ts tests/sim/room-front.test.ts tests/sim/generated-world.test.ts tests/world/generation/corridor.test.ts tests/app/hit-feedback.test.ts`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement, then run**
@@ -635,7 +645,7 @@ Expected: PASS.
 
 - [ ] **Step 4: Commit**
 ```bash
-git add data/tunables.toml src/combat/front.ts src/sim/session.ts src/app/main.ts src/app/hit-feedback.ts tests/combat/front.test.ts tests/sim/room-front.test.ts tests/sim/generated-world.test.ts tests/world/generation/corridor.test.ts
+git add data/tunables.toml src/combat/front.ts src/sim/session.ts src/app/main.ts src/app/hit-feedback.ts tests/combat/front.test.ts tests/sim/room-front.test.ts tests/sim/generated-world.test.ts tests/world/generation/corridor.test.ts tests/app/hit-feedback.test.ts
 git commit -m "The front in a room: fire from the line across from the player's team, at them when it can see them, over their crest when not; its hits hurt, its rounds chip nothing" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -781,8 +791,11 @@ it("a dig stamped after a shell landed waits for its crater, then goes in: the d
 it('a dig stamped before a shell lands goes in first, on a client whose clock has not reached it too', ...)
 it('held digs go in in the order they came', ...)
 it('sends each scoop it dug, and nothing while not in play', ...)
-  // B, given A's dig through dug, then ticked until it is applied: B.outgoing(B.session.drainEvents(), true) holds no { t: 'dig' },
-  // and the drained scoops is empty
+  // A (roomClient) digs: in each frame's events, as step hands them to `each`, A.battle.outgoing(events, true) holds one { t: 'dig', c }
+  // per scoop, c its cells, and A.battle.outgoing(events, false) holds none. B (roomClient, not digging), given A's dig through
+  // B.battle.dug, then stepped until B.battle.held is empty (the dig applied): in every frame's events step hands to `each`,
+  // events.scoops is empty and B.battle.outgoing(events, true) holds no { t: 'dig' }. Read the events in `each`: step drains the
+  // session every frame, so a drainEvents() after it finds nothing.
 it("a dig held when the match ends goes in during the next: the digger's world and the holder's agree", ...)
   // B holds A's dig behind a pending crater: finish() returns it; a new RoomBattle on B's session, given it through dug before its
   // first tick, applies it once the crater is in → sameWorld(A.map, B.map)
@@ -894,8 +907,8 @@ settle: destruction.tick() until nothing is pending, awaiting yieldNow() between
 it("a joiner caught up from the log has the world of a client that was there: craters, scoops and fires' chars", ...)
   // 8 shells on the timber in its first 12 s (seeds chosen so at least two fires light, the first shell's among them), a scoop at 12 s,
   // 40 s of the match: the joiner's catchUp at 40 s → sameWorld with the live client's; the live client's world has CHAR_TIMBER in it,
-  // and so does the joiner's. The joiner's session has room = false when catchUp is called: without catchUp's own room = true, the
-  // first shell lights no fire and this fails.
+  // and so does the joiner's. The joiner's session has room = false when catchUp is called (a joiner made with roomClient has its
+  // session.room set back to false first): without catchUp's own room = true, the first shell lights no fire and this fails.
 it('a shell in the air at the join whistles for the time it has left, and lands at its time', ...)   // Review Focus: a late join mid-shell
   // the log holds an earlier shell, which the catch-up lands and settles, so it yields; its last shell lands 0.9 s after the catch-up began,
   // and the test's yieldNow moves the clock on 0.5 s at its first call: after catchUp, one incoming with landsInS 0.4, no blast;
@@ -953,18 +966,18 @@ git commit -m "A reload or a late join catches up from the room's log: its crate
   - `together.digs()` → `{ sent: together.net?.digsSent ?? 0, heard: together.net?.digsHeard ?? 0 }`;
   - `together.pending()` → `session.destruction.pending + (together.battle?.held.length ?? 0)`: craters queued or out, plus held digs (`peakGame` already has a `pending`);
   - `together.blood()` → the packed cells (`packCell`) of every voxel that holds a `BLOOD_*` id: the palette's names starting `BLOOD_`, ids 83–90;
-  - `fingerprint(mask?: readonly number[])`: as today, with each masked cell read as AIR;
+  - `fingerprint(mask?: readonly number[])`: with no mask, `fingerprint(world.map)` as today. With one (packed cells, in `packCell`'s order), on a page `sameWorlds` has frozen: it keeps each masked cell's id and sets the cell to AIR with `world.map.set`, awaits `fingerprint(world.map)`, then puts each cell back (in a `finally`). `src/world/fingerprint.ts` is unchanged;
   - "idle" in the e2e means `together.pending() === 0` and no heard shell is due.
 - Create: `tests/net/shared-world.test.ts` and `tests/e2e/battle.spec.ts`.
 - Modify, only if it flakes: `tests/e2e/together.spec.ts` (Step 4).
 
 **Interfaces:**
 - Consumes: everything above, through the same calls `Together` and `main.ts` make; and, besides those calls:
-  - from Task 3: `Session.room`. Together sets it true in a match; without it a crater is not onGround, has no material and lights no fire. And `tests/support/worlds.ts`'s `lateRunner` and `roomClient`;
+  - from Task 3: `Session.room`. Together sets it true in a match; without it a crater is not onGround, has no material and lights no fire. `Together.battle`, and `RoomBattle.waiting` and `landed` (for `together.shells()` and "idle"). And `tests/support/worlds.ts`'s `lateRunner` and `roomClient`;
   - from Task 4: `Session.frontSide`;
   - from Task 5: `Session.seat`. Together sets it to `net.you`;
   - from Task 6: `RoomBattle.held`, `NetClient.digsSent` and `NetClient.digsHeard`; `packCell`;
-  - from Task 7: `RoomBattle.catchUp` and the `BattleCatchUp.runTo` contract.
+  - from Task 7: `RoomBattle.catchUp` and the `BattleCatchUp.runTo` contract; `Together.caughtUp` (for `together.caughtUp()`).
 
 **The Node clients:**
 - They use the real `RoomCore`, with JSON over fake conns, and the generated Corridor (`MAP_SEEDS.corridor`, generated once in `beforeAll`, 180 s).
@@ -976,7 +989,7 @@ git commit -m "A reload or a late join catches up from the room's log: its crate
 - Once welcomed, each client sets, each frame, as `Together` does: `session.room = true` and `session.seat = welcome.you`. `session.together` stays false. The harness draws no bodies, so `together` would only let a client's own body stop another's pellets on its own world (note 12).
 - Before each step: the room's shells and digs, in arrival order, go to `battle.hear(shell, serverNow())` and `battle.dug(dig)`; then `battle.tick(serverNow())`; then the room's shots go to `fireRemote(2 + seat, origin, dir, tracer, muzzle, mark, kind, tick)`.
 - After the step: `strikes(events)` go to the Director, and `outgoing(events, inPlay)` goes to the room.
-- C does none of this while catching up. C's session is not set to room before its welcome; its catch-up sets it. C's `BattleCatchUp` follows the same contract as main.ts's (Task 7): its strikes go to the Director first, with `tick(0, …)`, even with no time to run.
+- C does none of this while catching up. C's session is not set to room before its welcome; its catch-up sets it. If C is made with `roomClient`, its `session.room` is set back to false until then. C's `BattleCatchUp` follows the same contract as main.ts's (Task 7): its strikes go to the Director first, with `tick(0, …)`, even with no time to run.
 - A carries out the scripted actions. Before the match, every map gets the same spoil heap, 1.6 × 0.8 × 1.4 m, 8 m along Red's first start's bay, and a SOD block 1 m on a side, 4 m from the heap toward that start, in A's sight. Shells keep 15 m from every start, so the block is at least 11 m from any landing. That is beyond any crater's work (about 7.5 m for a 3.4 m shell).
   - **Digging:** A stands at the heap and digs for 8 s from 20 s. Its `outgoing` digs go to the room.
   - **Shooting:** A, at the heap, fires three m870 shots into the SOD block at 50, 51 and 52 s, after C has joined. Its shots go out in its states. B and C fire them from the room's frames, as `Together.prepare` does.
@@ -987,7 +1000,7 @@ git commit -m "A reload or a late join catches up from the room's log: its crate
   - So a pellet chips sod, mud and timber within about 8 m, and duckboard to about 20 m. It never chips clay, subsoil, sandbag or corrugate, and spoil and rubble never change.
   - Don't change `chip()`, `chip_energy_j`, `[weapon.m870]` or any hardness to make a test pass.
 - Keep every client stepping until 20 s after the last strike before settling and hashing. A fire starts live when its crater settles, and in a catch-up at its shell's landS. A char only recolours within a kind, so the worlds meet once every fire has grown to its full size (`[battle.fires] grow_s` 20).
-- Sub-project 7's blood spatter is per page and colour only (note 12). The e2e's world comparisons that span a death mask every voxel where either page holds a `BLOOD_*` id (the palette's names starting `BLOOD_`, ids 83–90), as `sameWorlds` below does. The Node clients draw no bodies, so they need no mask.
+- Sub-project 7's blood spatter is per page and colour only (note 12). The e2e's world comparisons that span a headshot or a death mask every voxel where either page holds a `BLOOD_*` id (the palette's names starting `BLOOD_`, ids 83–90), as `sameWorlds` below does. The Node clients draw no bodies, so they need no mask.
 
 - [ ] **Step 1: Write the tests**
 ```ts

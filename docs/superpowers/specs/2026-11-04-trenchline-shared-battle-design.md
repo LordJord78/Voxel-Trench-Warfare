@@ -108,7 +108,7 @@ Playing with friends needs the battle in the room, and the same world for everyo
   - a round stopped by a body that one client draws and another doesn't;
   - a crater whose job asks for a wider region just as a neighbour goes out;
   - two players digging the same ground within a round trip: their clients apply the two scoops in opposite orders;
-  - blood spatter (sub-project 7): per page and colour only. Every blood shade keeps the kind it marks, so the shared edits read the same world.
+  - blood spatter (sub-project 7): per page and colour only. Each blood shade keeps the rules of what it marks (sod's is mud's kind, whose rules are the same), so the shared edits read the same world.
 
 ## Corrections from planning (2026-11-04)
 
