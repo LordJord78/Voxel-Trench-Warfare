@@ -156,6 +156,73 @@ describe("the camera's roll and shake", () => {
     }
   });
 
+  it("beside a shell's blast, an M870 firing at its rate under the heavy front: the camera is given its roll held within 3° on every tick and between them, though the shares add past it, and no round moves", () => {
+    // A shell lands 2.2 m from the eye just before each shot, 1.5 m from the feet on fresh ground
+    // about them. Its blast rolls the camera up to 1.4° either way at 11 Hz as it dies away; the shot
+    // rolls it its whole 1.8° on its tick, to a side of its own; and suppression's shake adds up to
+    // 0.6°. When they line up, as here (seed 11), they pass the spec's 3°. The camera is given their
+    // sum held to [camera] roll_max_deg, which is the camera's alone: without it, every round leaves
+    // and lands alike.
+    const bound = tun.f('camera.roll_max_deg');
+    expect(bound).toBe(3);
+    /** viewAt's interpolation between two ticks' rolls, to its rounding. */
+    const rounding = 1e-12;
+    const fire = (t: Tunables) => {
+      const s = armed('m870', t, { seed: 11, front: lineSource(22, 0.4), wall: false });
+      // Looking 10° down, so the pellets strike the floor ahead (there is no wall, for the front's fire).
+      s.player.pitch = -10;
+      s.front.intensity = 'heavy';
+      for (let k = 0; k < 360 && s.suppression.level < 0.9; k++) s.tick();
+      expect(s.suppression.level).toBeGreaterThanOrEqual(0.9);
+      const interval = 60 / s.weapon.spec.rpm;
+      const mag = s.weapon.spec.magazine;
+      const rolls: number[] = [];
+      const sums: number[] = [];
+      const shots: CombatEvents['shots'] = [];
+      const impacts: string[] = [];
+      // The tube, and a second more as the camera settles and the last pellets land.
+      for (let k = 0; k < 400; k++) {
+        // Pressed the tick the pump lets it fire, a shell landing beside the player just before.
+        const pull = s.weapon.shotsFired < mag && s.weapon.sinceShot + TICK + 1e-9 >= interval;
+        if (pull) {
+          const around = (2 * Math.PI * s.weapon.shotsFired) / mag;
+          const p = s.player.position;
+          expect(s.land(p.x + 1.5 * Math.cos(around), p.z + 1.5 * Math.sin(around), 0.6, k), `shot ${s.weapon.shotsFired}`).not.toBeNull();
+        }
+        s.intent = { ...idleIntent(), fire: pull };
+        s.tick();
+        const e = s.drainEvents();
+        shots.push(...e.shots);
+        for (const i of e.impacts) if (i.owner === 0) impacts.push(`${i.cell.join()}@${i.position.map((v) => v.toFixed(9)).join()}`);
+        sums.push(s.suppression.shake.roll + s.blastShake.roll + s.viewKick.camRoll);
+        rolls.push(s.viewAt(1).roll);
+        if (t === tun) for (const alpha of [0.25, 0.5, 0.75]) expect(Math.abs(s.viewAt(alpha).roll), `tick ${k}, ${alpha} on`).toBeLessThanOrEqual(bound + rounding);
+      }
+      expect(s.weapon.shotsFired).toBe(mag);
+      return { shots, impacts, rolls, sums };
+    };
+    const held = fire(tun);
+    // Every tick: the shares' sum, held to ±3°, the bound itself wherever the sum is past it.
+    held.rolls.forEach((roll, k) => {
+      expect(Math.abs(roll), `tick ${k}`).toBeLessThanOrEqual(bound + rounding);
+      expect(roll, `tick ${k}`).toBeCloseTo(Math.max(-bound, Math.min(bound, held.sums[k])), 12);
+    });
+    // The shares did add past it: the bound was needed.
+    expect(Math.max(...held.sums.map(Math.abs))).toBeGreaterThan(bound);
+    expect(held.rolls.filter((r) => Math.abs(r) > bound - rounding).length).toBeGreaterThan(0);
+    // Unbounded, the camera rolls past 3°, and every round leaves and lands as with the bound.
+    const raw = tun.raw();
+    (raw.camera as Record<string, unknown>).roll_max_deg = 1000;
+    const free = fire(new Tunables(raw));
+    free.rolls.forEach((roll, k) => expect(roll, `tick ${k}`).toBeCloseTo(free.sums[k], 12));
+    expect(Math.max(...free.rolls.map(Math.abs))).toBeGreaterThan(bound);
+    expect(free.shots.map((e) => [e.origin, e.dir])).toEqual(held.shots.map((e) => [e.origin, e.dir]));
+    // Its pellets, the cone widened by suppression: many strike the floor ahead, the rest leave the map.
+    expect(held.shots).toHaveLength(7);
+    expect(held.impacts.length).toBeGreaterThan(3 * held.shots.length);
+    expect(free.impacts).toEqual(held.impacts);
+  });
+
   it('the shake is gone 0.06 s after the last shot: the eye back where the view puts it, turned by the aim and suppression alone', () => {
     const s = armed('ak74');
     const still = { offset: [0, 0, 0], pitch: 0, yaw: 0 };

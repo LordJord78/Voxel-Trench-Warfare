@@ -71,7 +71,7 @@ describe('handling', () => {
       pumpAfterS: 0.12, pumpBackM: 0.035, pumpStrokeS: 0.12,
       dryReloadS: 0.25,
       // The shots spec's §3: an aim-in overshoots.
-      aimOvershootDeg: 0.4, aimOvershootS: 0.15,
+      aimOvershootDeg: 0.4, aimOvershootRiseS: 0.05, aimOvershootS: 0.15,
     });
   });
 
@@ -261,38 +261,67 @@ describe('handling', () => {
     for (const r of run(new Handling(t), 10, () => ({ landingImpact: 9 }))) expect(r.delta).toEqual(ZERO_HANDS);
   });
 
-  it('an aim-in overshoots: the muzzle 0.4° past the aim as the sights arrive, eased back to it over 0.15 s', () => {
-    // The shots spec's §3. Held at breathing's zero (time 0), nothing else moves the gun: none of it
-    // while the sights come up (over 0.2 s); all of it, muzzle up, on the tick the aim's blend reaches
-    // 1; then less each tick, never past the aim, and none from 0.15 s on. The gun's pitch alone.
+  it('an aim-in overshoots: the muzzle carried 0.4° past the aim as the sights arrive, from nothing and never a step, and back by 0.15 s', () => {
+    // The shots spec's §3, carried through rather than popped: the sights arrive with no speed (the
+    // aim's blend is smoothed), so the overshoot rises from nothing. Held at breathing's zero (time 0),
+    // nothing else moves the gun: none of it while the sights come up (over 0.2 s); from the tick they
+    // arrive (the aim's blend reaching 1), the gun's pitch alone, muzzle up.
     const up = Math.round(0.2 / TICK);
     const coming = run(new Handling(t), 40, (k) => ({ aimed: Math.min(1, (k + 1) / up) })).map((r) => r.delta);
     const arrived = up - 1;
     for (let k = 0; k < arrived; k++) expect(coming[k], `tick ${k}`).toEqual(ZERO_HANDS);
-    expect(coming[arrived]).toEqual({ offset: [0, 0, 0], pitch: 0.4, yaw: 0, roll: 0 });
-    for (let k = arrived + 1; k < 40; k++) {
-      const d = coming[k];
-      expect([...d.offset, d.yaw, d.roll], `tick ${k}`).toEqual([0, 0, 0, 0, 0]);
-      if ((k - arrived) * TICK < t.aimOvershootS) {
-        expect(d.pitch, `tick ${k}`).toBeGreaterThan(0);
-        expect(d.pitch, `tick ${k}`).toBeLessThan(coming[k - 1].pitch);
-      } else {
-        expect(d, `tick ${k}`).toEqual(ZERO_HANDS);
-      }
+    for (let k = arrived; k < 40; k++) expect([...coming[k].offset, coming[k].yaw, coming[k].roll], `tick ${k}`).toEqual([0, 0, 0, 0, 0]);
+    const pitch = coming.map((d) => d.pitch);
+    // Not one tick moves it more than 0.15°, the sights' own arrival included.
+    for (let k = 1; k < 40; k++) expect(Math.abs(pitch[k] - pitch[k - 1]), `tick ${k}`).toBeLessThanOrEqual(0.15);
+    // Moving from the arrival's own tick, up every tick to its peak of 0.4° ± 0.02 within about
+    // 0.04 s (0.4° at no more than 0.15° a tick takes three ticks: 0.05 s), then down every tick,
+    // never past the aim.
+    const peak = Math.max(...pitch);
+    const top = pitch.indexOf(peak);
+    expect(Math.abs(peak - 0.4)).toBeLessThanOrEqual(0.02);
+    expect(pitch[arrived]).toBeGreaterThan(0);
+    expect(top - arrived + 1).toBeLessThanOrEqual(3);
+    for (let k = arrived + 1; k <= top; k++) expect(pitch[k], `tick ${k}`).toBeGreaterThan(pitch[k - 1]);
+    for (let k = top + 1; pitch[k - 1] > 0; k++) {
+      expect(pitch[k], `tick ${k}`).toBeLessThan(pitch[k - 1]);
+      expect(pitch[k], `tick ${k}`).toBeGreaterThanOrEqual(0);
     }
-    // Eased back, not snapped: most of it a tick on, half of it at about half the time.
-    expect(coming[arrived + 1].pitch).toBeGreaterThan(0.4 * 0.9);
-    expect(coming[arrived + 4].pitch).toBeGreaterThan(0.4 / 2);
-    expect(coming[arrived + 5].pitch).toBeLessThan(0.4 / 2);
+    // Within 0.02° 0.15 s after the last tick the sights were short of the eye, and none at all
+    // 0.15 s after the tick they arrived: the hands at rest again, exactly.
+    for (let k = arrived; k < 40; k++) {
+      if ((k - arrived + 1) * TICK >= t.aimOvershootS - 1e-9) expect(Math.abs(pitch[k]), `tick ${k}`).toBeLessThanOrEqual(0.02);
+      if ((k - arrived) * TICK >= t.aimOvershootS) expect(coming[k], `tick ${k}`).toEqual(ZERO_HANDS);
+    }
     // Only an arrival: the sights brought most of the way up (to 0.9) and down again move nothing.
     for (const r of run(new Handling(t), 61, (k) => ({ aimed: Math.max(0, 0.9 - Math.abs(k - 30) * 0.03) }))) expect(r.delta).toEqual(ZERO_HANDS);
-    // Up (arriving on the first tick), held, down and up again: once each time they arrive, and
-    // not as they leave.
+    // Up (arriving on the first tick), held, down and up again: once each time they arrive, the same
+    // each time, and not as they leave.
+    const once = pitch.slice(arrived, arrived + 10);
+    expect(once[once.length - 1]).toBe(0);
     const script = (k: number) => (k < 30 ? 1 : k < 42 ? 1 - (k - 29) / 12 : Math.min(1, (k - 41) / 12));
     const pitches = run(new Handling(t), 80, (k) => ({ aimed: script(k) })).map((r) => r.delta.pitch);
-    const over = (k: number) => (k >= 0 && k * TICK < t.aimOvershootS) || (k >= 53 && (k - 53) * TICK < t.aimOvershootS);
-    pitches.forEach((p, k) => (over(k) ? expect(p, `tick ${k}`).toBeGreaterThan(0) : expect(p, `tick ${k}`).toBe(0)));
-    expect([pitches[0], pitches[53]]).toEqual([0.4, 0.4]);
+    expect(pitches.slice(0, once.length)).toEqual(once);
+    expect(pitches.slice(53, 53 + once.length)).toEqual(once);
+    pitches.forEach((p, k) => {
+      if (k >= once.length && (k < 53 || k >= 53 + once.length)) expect(p, `tick ${k}`).toBe(0);
+    });
+  });
+
+  it('an arrival while the overshoot is still drawn carries on from where it is: up to its peak again, never a step', () => {
+    // The sights arrive, drop off the eye for a tick past the peak (to 0.95) and arrive again: the
+    // muzzle rises once more from where it was to 0.4°, and settles from there as one arrival's does.
+    const first = run(new Handling(t), 30, () => ({ aimed: 1 })).map((r) => r.delta.pitch);
+    const again = run(new Handling(t), 30, (k) => ({ aimed: k === 3 ? 0.95 : 1 })).map((r) => r.delta.pitch);
+    expect(again.slice(0, 4)).toEqual(first.slice(0, 4));
+    expect(again[3]).toBeLessThan(first[2]);
+    for (let k = 1; k < 30; k++) expect(Math.abs(again[k] - again[k - 1]), `tick ${k}`).toBeLessThanOrEqual(0.15);
+    for (let k = 4; again[k] < 0.4 - 1e-12; k++) expect(again[k], `tick ${k}`).toBeGreaterThan(again[k - 1]);
+    expect(Math.max(...again.slice(4))).toBeCloseTo(0.4, 12);
+    // And from its second peak, the first's settling, tick for tick.
+    const tail = again.slice(again.indexOf(Math.max(...again.slice(4)), 4));
+    expect(tail.length).toBeGreaterThan(10);
+    expect(tail).toEqual(first.slice(first.indexOf(Math.max(...first))).slice(0, tail.length));
   });
 
   it("a long gun's reload passes mag-out at 0.28, mag-in at 0.62 and bolt at 0.82, each once", () => {

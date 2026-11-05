@@ -197,6 +197,8 @@ export class Session {
   prevPosition: Vec3;
   /** The view's offsets before the last tick. */
   private prevView: ViewOffsets;
+  /** The view's roll, from every source, is held within this (degrees; [camera] roll_max_deg). */
+  private readonly rollMaxDeg: number;
   /** Where the rifle is held, and the view kick's channels before the last tick. */
   readonly viewmodel: ViewmodelTunables;
   private prevKick: ViewmodelKick;
@@ -362,6 +364,7 @@ export class Session {
     const front = frontTunables(tun);
     const plan = world.plan;
     this.front = new Front(front, world.front ?? (plan ? planSource(plan, front.reachM) : () => null), this.streams.derive('front'));
+    this.rollMaxDeg = tun.f('camera.roll_max_deg');
     this.prevView = this.view();
     this.viewmodel = viewmodelTunables(tun);
     this.prevKick = this.kick();
@@ -1105,16 +1108,19 @@ export class Session {
   }
 
   /**
-   * The view's offsets as the last tick left them. The view kick's camera adds to the camera's alone:
-   * its roll to the shakes' roll, and a shot's shake to the turn and the eye.
+   * The view's offsets as the last tick left them. The view kick's camera roll and shake add to the
+   * camera's alone: the roll to the shakes' roll, and a shot's shake to the turn and the eye. The
+   * roll, all three together, is held within roll_max_deg (the shots spec's 3°): the camera's, so
+   * no round is moved by it.
    */
   private view(): ViewOffsets {
     const shake = this.suppression.shake;
     const camera = this.viewKick;
+    const roll = shake.roll + this.blastShake.roll + camera.camRoll;
     return {
       yaw: this.recoil.yaw + this.suppression.flinchYaw + camera.shake.yaw,
       pitch: this.recoil.pitch + this.suppression.flinchPitch + shake.pitch + this.blastShake.pitch + camera.shake.pitch,
-      roll: shake.roll + this.blastShake.roll + camera.camRoll,
+      roll: Math.max(-this.rollMaxDeg, Math.min(this.rollMaxDeg, roll)),
       fov: camera.fovOffset,
       shake: [camera.shake.offset[0], camera.shake.offset[1], camera.shake.offset[2]],
     };

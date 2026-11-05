@@ -430,6 +430,14 @@ move                = 1.0
 [attachment.laser]
 hip_spread          = 0.65
 
+# The loadout's bars (src/combat/arsenal.ts gunStats): each gun's numbers against the arsenal's.
+# Recoil control is 1 - (kick_pitch_deg + 2 × climb_per_shot_deg) / control_span, from the gun's
+# [recoil.*] table. The shots spec's §3 made every gun's kick + 2 × climb about 1.24 times the
+# reference's, and the span grew with it (from 4.5): the bars still set the guns against each other
+# as they did (the AK's 0.80, the SVD's 0.24), and the heavier recoil is felt, not shown.
+[loadout]
+control_span        = 5.6
+
 # The hands (src/sim/session.ts): what is in them comes down and the next comes up (a gun from the
 # other, the shovel while F is held, the gun again after); aimed, the recoil is steadier and the feet
 # slower, and the mouse turns by the sight's magnification (times ads_sensitivity).
@@ -1174,9 +1182,11 @@ landing_hard_mps    = 8.0      # landed this fast (m/s), the full dip, as the ey
 landing_settle_s    = 0.25
 landing_damping     = 1.0      # critically damped: back without a bounce
 # An aim-in (the shots spec's §3): as the sights arrive (the aim's blend reaching
-# 1), the muzzle is carried on past the aim, and eased back to it.
+# 1), the muzzle is carried on past the aim at a steady rate from that tick, then
+# eased back to it. Never a step: the sights arrive with no speed.
 aim_overshoot_deg   = 0.4      # pitch past the aim, muzzle up
-aim_overshoot_s     = 0.15     # eased back to the aim over this
+aim_overshoot_rise_s = 0.05    # carried there over this: a third of it a tick at 60 Hz
+aim_overshoot_s     = 0.15     # and back at the aim this long after the sights arrive
 # Reloads: curves keyed over the reload's phase (0 to 1), from rest and back to
 # it, eased between keys as the shovel's stroke is. A cue is heard as its key is
 # passed. The long guns' (rifle, carbine, SMG and marksman):
@@ -1297,6 +1307,8 @@ fov_lerp_per_s      = 7.0      # how fast the periscope's tunnel eases in
 head_bob_amplitude  = 0.035
 head_bob_hz         = 1.9
 landing_dip         = 0.11
+roll_max_deg        = 3.0      # the view's roll, from every source (a shot's, suppression's
+                               # shake, a shell's blast), held within this (the shots spec's §3)
 
 [render]
 tracer_length_m     = 7.0      # streak behind the round, not a dot

@@ -58,7 +58,7 @@ describe('view kick', () => {
     }
   });
 
-  it("every gun's camera: its roll (0.7° the AK, M4 and M249, 0.45° the MP5, 1.4° the SVD, 1.8° the M870, 0.9° the pistols) settles over 0.12 s, undamped past level; its shake is 0.0015 m and 0.12° for 0.06 s", () => {
+  it("the camera's roll and shake, gun by gun: the roll (0.7° the AK, M4 and M249, 0.45° the MP5, 1.4° the SVD, 1.8° the M870, 0.9° the pistols) settles over 0.12 s, critically damped, never past level; the shake is 0.0015 m and 0.12° for 0.06 s", () => {
     const roll: Record<string, number> = { assault_rifle: 0.7, m4: 0.7, m249: 0.7, mp5: 0.45, svd: 1.4, m870: 1.8, m17: 0.9, pm: 0.9 };
     for (const [table, deg] of Object.entries(roll)) {
       expect(viewKickProfile(tun, table), table).toMatchObject({ camRollDeg: deg, camRollSettleS: 0.12, camRollDamping: 1, camShakeM: 0.0015, camShakeDeg: 0.12, camShakeS: 0.06 });
@@ -205,7 +205,7 @@ describe("the camera's roll and shake", () => {
     }
   });
 
-  it("the camera's draws are its own stream's: the viewmodel's channels draw six a shot as before, whatever the camera does", () => {
+  it("the camera's roll and shake draw from their own stream: the viewmodel's channels draw six a shot as before, whatever the roll and shake do", () => {
     // The camera's roll and shake at their values and at 0, and the camera's stream seeded two ways:
     // the six channels and the pulse are the same to the bit, and the viewmodel's stream is left
     // where six draws a shot leave it.

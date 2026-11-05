@@ -78,8 +78,9 @@ export interface HandlingTunables {
   landingHardMps: number;
   landingSettleS: number;
   landingDamping: number;
-  /** An aim-in: the pitch (°) the muzzle is carried past the aim as the sights arrive, and how long it takes to ease back. */
+  /** An aim-in: the pitch (°) the muzzle is carried past the aim as the sights arrive, how long it takes to get there, and how long after they arrive it is back. */
   aimOvershootDeg: number;
+  aimOvershootRiseS: number;
   aimOvershootS: number;
   /** The long guns' reload: its keys' phases and poses. */
   reloadTiltAt: number;
@@ -154,6 +155,7 @@ export function handlingTunables(tun: Tunables): HandlingTunables {
     landingSettleS: f('landing_settle_s'),
     landingDamping: f('landing_damping'),
     aimOvershootDeg: f('aim_overshoot_deg'),
+    aimOvershootRiseS: f('aim_overshoot_rise_s'),
     aimOvershootS: f('aim_overshoot_s'),
     reloadTiltAt: f('reload_tilt_at'),
     reloadTiltM: v('reload_tilt_m'),
@@ -333,9 +335,13 @@ export class Handling {
   private land = 0;
   private landSpeed = 0;
   private wasOnGround = true;
-  /** The aim's blend last tick, and how long since the sights arrived while their overshoot eases back (null when it has). */
+  /**
+   * The aim's blend last tick; the overshoot under way, how long since the sights arrived and the
+   * pitch it carries on from (null once it is back at the aim); and the pitch it drew last tick.
+   */
   private lastAimed = 0;
-  private overshoot: number | null = null;
+  private overshoot: { t: number; from: number } | null = null;
+  private overshot = 0;
   /** The stride's last phase, and whether this is the second of a pair (the swing across runs over two). */
   private lastBob = 0;
   private secondStride = false;
@@ -433,14 +439,24 @@ export class Handling {
     d.pitch += t.landingPitchDeg * this.land;
 
     // An aim-in: as the sights arrive (the aim's blend reaching 1), the muzzle is carried on past the
-    // aim, all of it on that tick, and eased back to it over aim_overshoot_s, as a reload let go is.
-    if (aimed >= 1 && this.lastAimed < 1) this.overshoot = 0;
-    else if (this.overshoot !== null) this.overshoot += i.dt;
+    // aim from that tick, at a steady rate to aim_overshoot_deg over aim_overshoot_rise_s, then eased
+    // back to it, as a reload let go is, until aim_overshoot_s after they arrived. The sights arrive
+    // with no speed, so it starts from nothing rather than all at once, which would pop; arriving
+    // again while it is drawn, it carries on up from where it is.
+    if (aimed >= 1 && this.lastAimed < 1) this.overshoot = { t: 0, from: this.overshot };
     this.lastAimed = aimed;
+    this.overshot = 0;
     if (this.overshoot !== null) {
-      const left = 1 - smooth(Math.min(1, this.overshoot / t.aimOvershootS));
-      if (left > 0) d.pitch += t.aimOvershootDeg * left;
-      else this.overshoot = null;
+      const o = this.overshoot;
+      o.t += i.dt;
+      if (o.t >= t.aimOvershootS) {
+        this.overshoot = null;
+      } else {
+        const peak = t.aimOvershootDeg;
+        const rise = t.aimOvershootRiseS;
+        this.overshot = o.t < rise ? o.from + (peak - o.from) * (o.t / rise) : peak * (1 - smooth((o.t - rise) / (t.aimOvershootS - rise)));
+        d.pitch += this.overshot;
+      }
     }
 
     addScaled(d, this.reloadPose(i, cues), 1);

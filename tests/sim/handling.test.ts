@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Loadout } from '../../src/combat/arsenal';
 import { gunClass, Handling, handlingTunables, ZERO_HANDS, type HandlingCue, type HandsDelta } from '../../src/combat/handling';
 import { heldPose, viewBasis, viewmodelTunables } from '../../src/combat/viewmodel';
-import { loadTunables } from '../../src/core/tunables';
+import { loadTunables, Tunables } from '../../src/core/tunables';
 import type { GunKey } from '../../src/net/gear';
 import { Stance, type MoveIntent } from '../../src/physics/character';
 import { idleIntent, Session, SHOVEL_HELD, type CombatEvents } from '../../src/sim/session';
@@ -28,8 +28,8 @@ function arena(): BrickMap {
 }
 
 /** A player settled at the near end facing `yaw` (+z at 0), carrying `loadout`'s guns if given. */
-function stand(loadout?: Loadout, yaw = 0, seed = 7): Session {
-  const s = Session.create({ map: arena(), plan: null, spawn: { position: [12.8, 0.4, 2] } }, tun, seed, yaw);
+function stand(loadout?: Loadout, yaw = 0, seed = 7, t: Tunables = tun): Session {
+  const s = Session.create({ map: arena(), plan: null, spawn: { position: [12.8, 0.4, 2] } }, t, seed, yaw);
   if (loadout) s.equip(loadout);
   for (let k = 0; k < 40; k++) s.tick();
   s.drainEvents();
@@ -530,29 +530,41 @@ describe('the gun in the hands, in play', () => {
     for (const s of [moving, still]) s.intent = { ...idleIntent(), aim: true };
     const ups: number[] = [];
     let arrived: number | null = null;
+    let overshoot = 0;
     for (let k = 0; k < 240; k++) {
       for (const s of [moving, still]) s.tick();
       if (moving.aimed < 1) continue;
-      // As the sights arrive, the muzzle overshoots the aim (the shots spec's §3), eased back to it
-      // over aim_overshoot_s: the hands' pitch, from the tick the sights are up.
       arrived ??= k;
-      if ((k - arrived) * TICK < ht.aimOvershootS) {
-        expect(moving.handling.delta.pitch, `tick ${k}`).toBeGreaterThan(0);
-        if (k === arrived) expect(moving.handling.delta.pitch).toBe(ht.aimOvershootDeg);
-        continue;
-      }
       // Still and aimed, the hands' delta is breathing alone, at 0.35 of it, carried along the view.
+      // For aim_overshoot_s from the tick the sights are up, the overshoot as well (the shots spec's
+      // §3): the hands' pitch, muzzle up, which turns the gun about its own right and so moves the
+      // drawn muzzle up and forward, never aside. What it cannot move holds all the while.
       const hands = moving.handling.delta;
-      expect([hands.offset[2], hands.pitch, hands.yaw, hands.roll]).toEqual([0, 0, 0, 0]);
-      expect(Math.abs(hands.offset[1])).toBeLessThanOrEqual(0.0025 * 0.35);
-      expect(Math.abs(hands.offset[0])).toBeLessThanOrEqual(0.0015 * 0.35);
+      expect([hands.offset[2], hands.yaw, hands.roll], `tick ${k}`).toEqual([0, 0, 0]);
+      expect(Math.abs(hands.offset[1]), `tick ${k}`).toBeLessThanOrEqual(0.0025 * 0.35);
+      expect(Math.abs(hands.offset[0]), `tick ${k}`).toBeLessThanOrEqual(0.0015 * 0.35);
       const { forward, right, up } = basisOf(moving);
       const d = sub(moving.muzzle(), still.muzzle());
-      expect(dot(d, right)).toBeCloseTo(hands.offset[0], 12);
+      expect(dot(d, right), `tick ${k}`).toBeCloseTo(hands.offset[0], 12);
+      if ((k - arrived) * TICK < ht.aimOvershootS) {
+        expect(hands.pitch, `tick ${k}`).toBeGreaterThanOrEqual(0);
+        expect(hands.pitch, `tick ${k}`).toBeLessThanOrEqual(ht.aimOvershootDeg);
+        overshoot = Math.max(overshoot, hands.pitch);
+        // Turned by a about the gun's own origin, its muzzle (m, model metres) moves beyond breathing
+        // up by m_z sin a + m_y (cos a − 1) and forward by m_z (cos a − 1) − m_y sin a.
+        const a = (hands.pitch * Math.PI) / 180;
+        const [, my, mz] = moving.arm.spec.muzzle;
+        expect(dot(d, up) - hands.offset[1], `tick ${k}`).toBeCloseTo(mz * Math.sin(a) + my * (Math.cos(a) - 1), 9);
+        expect(dot(d, forward), `tick ${k}`).toBeCloseTo(mz * (Math.cos(a) - 1) - my * Math.sin(a), 9);
+        continue;
+      }
+      expect(hands.pitch, `tick ${k}`).toBe(0);
       expect(dot(d, up)).toBeCloseTo(hands.offset[1], 12);
       expect(dot(d, forward)).toBeCloseTo(0, 12);
       ups.push(hands.offset[1]);
     }
+    // The sights' arrival carried the drawn gun its whole overshoot.
+    expect(overshoot).toBeCloseTo(ht.aimOvershootDeg, 12);
     expect(ups.length).toBeGreaterThan(180);
     expect(Math.max(...ups) - Math.min(...ups)).toBeGreaterThan(0.0005);
     // A shot from each: the same round, from the eye, and the same where it lands.
@@ -564,6 +576,52 @@ describe('the gun in the hands, in play', () => {
       expect(moving.rounds.impacts).toEqual(still.rounds.impacts);
     }
     expect(moving.weapon.shotsFired).toBe(1);
+  });
+
+  it('a round fired while the sights overshoot leaves along the aim, exactly as with the hands held still', () => {
+    // The AK on full auto from the tick the sights arrive: its rounds leave as the overshoot carries
+    // the drawn gun up past the aim, as it eases back, and after. Each leaves the eye along the view
+    // plus recoil, to the bit the still hands' round, and lands where it does; and so with no
+    // overshoot at all (aim_overshoot_deg 0), which no hands, still or not, can carry.
+    const raw = tun.raw();
+    (raw.handling as Record<string, unknown>).aim_overshoot_deg = 0;
+    const moving = stand();
+    const still = stand();
+    const flat = stand(undefined, 0, 7, new Tunables(raw));
+    still.handsStill = true;
+    const ads = moving.arm.spec.adsTimeS;
+    let firing = false;
+    let was = 0;
+    const left = { rising: 0, easing: 0, after: 0 };
+    for (let k = 0; k < 60; k++) {
+      // As the session raises the sights: this tick's blend reaches 1, and the trigger is pulled with it.
+      firing ||= Math.min(1, moving.aimed + TICK / ads) >= 1;
+      for (const s of [moving, still, flat]) {
+        s.intent = { ...idleIntent(), aim: true, fire: firing };
+        s.tick();
+      }
+      const pitch = moving.handling.delta.pitch;
+      expect(flat.handling.delta.pitch, `tick ${k}`).toBe(0);
+      for (const other of [still, flat]) {
+        expect(moving.shots, `tick ${k}`).toEqual(other.shots);
+        expect(moving.rounds.impacts, `tick ${k}`).toEqual(other.rounds.impacts);
+      }
+      for (const shot of moving.shots) expect(shot.origin).toEqual(eyeOf(moving));
+      const [a, b, c] = [moving, still, flat].map((s) => s.drainEvents().shots.map((e) => [e.origin, e.dir, e.tracer]));
+      expect(a, `tick ${k}`).toEqual(b);
+      expect(a, `tick ${k}`).toEqual(c);
+      if (a.length > 0) {
+        expect(firing).toBe(true);
+        if (pitch > was) left.rising++;
+        else if (pitch > 0) left.easing++;
+        else left.after++;
+      }
+      was = pitch;
+    }
+    // Rounds left on the overshoot's way up, on its way back, and after it.
+    expect(left.rising).toBeGreaterThan(0);
+    expect(left.easing).toBeGreaterThan(0);
+    expect(left.after).toBeGreaterThan(0);
   });
 
   it('handling is deterministic: two sessions, same intents, same muzzles', () => {
