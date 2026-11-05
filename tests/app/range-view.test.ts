@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { rangeAllowed, RangeView } from '../../src/app/range';
 import { projectileSpec } from '../../src/combat/ballistics';
-import { FIRST_DUMMY, plateVoxels, rangeLayout, rangeTunables, type RangeEvent, type RangeSpot } from '../../src/combat/range';
+import { FIRST_DUMMY, plateCentre, plateVoxels, rangeLayout, rangeTunables, type RangeEvent, type RangeSpot } from '../../src/combat/range';
 import { toWorld } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
 import { idleIntent, Session, type CombatEvents } from '../../src/sim/session';
@@ -114,6 +114,8 @@ describe('the range in the app', () => {
     const view = new RangeView(tun);
     view.raise(s, SPAWN, EYE);
     expect(view.up).toBe(true);
+    // Each plate said to stand at its steel's middle, the point the layout sighted it at (plateCentre).
+    expect(view.state().plates.map((p) => p.at)).toEqual(spots.map((spot) => plateCentre(plateVoxels(spot, VOXEL, t, SPAWN.bay), VOXEL)));
     // Each plate's steel and post, as plateVoxels lays them; and the renderer is told of every brick.
     const dirty = new Set(s.map.takeDirty());
     for (const spot of spots) {
@@ -400,7 +402,7 @@ describe('the range in the app', () => {
     // chest wherever it is tried, 3 m either way.
     const s = field((map) => map.fillBox(95, 4, 175, 132, 25, 176, P.BRICK));
     const is25 = (p: RangeSpot) => p.kind === 'dummy' && p.distanceM === 25;
-    const unsighted = rangeLayout(s.map, VOXEL, SPAWN, t, null);
+    const unsighted = rangeLayout(s.map, VOXEL, SPAWN, t, null, null);
     const sighted = rangeLayout(s.map, VOXEL, SPAWN, t, null, EYE);
     expect(unsighted.some(is25)).toBe(true);
     expect(sighted).toEqual(unsighted.filter((p) => !is25(p)));

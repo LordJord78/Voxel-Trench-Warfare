@@ -232,18 +232,46 @@ test('a round into a plate rings it: the readout says PLATE and the struck voxel
 });
 
 for (const [name, path] of [['ravine', '/'], ['corridor', '/?map=corridor']] as const) {
-  test(`on the ${name}, the range lowered through the app puts its world back: no steel or post left where its plates stood, no targets, no shells kept off, no readout; raised and lowered again, the same`, async ({ page }) => {
+  // On the Ravine the 30 m plate is rung from the step just before the range comes down: its voxel
+  // struck lead-grey and the readout up, so the lowering is seen to put that voxel back and clear the
+  // readout too.
+  const ring = name === 'ravine';
+  test(`on the ${name}, the range lowered through the app puts its world back${ring ? ', a plate rung from the step just before' : ''}: no steel or post left where its plates stood, no targets, no shells kept off, no readout; raised and lowered again, the same`, async ({ page }) => {
     test.setTimeout(240_000);
     const errors = await openGame(page, path);
     const seen = await ranged(
       page,
       async (h, arg) => {
-        const [STEEL, HIT, POST] = arg as number[];
+        const { ids, ring } = arg as { ids: number[]; ring: boolean };
+        const [STEEL, HIT, POST] = ids;
         const v = 0.1;
         const map = h.world.map;
+        // The SVD in the hands for the ring: a round a pull.
+        if (ring) h.setLoadout({ primary: 'svd', secondary: 'm17', fits: {} });
         h.range(true);
         h.play();
-        await h.waitFrames(3);
+        if (ring) h.standAt('step');
+        await h.waitFrames(ring ? 30 : 3);
+        let rung: { shots: number; hits: number } | null = null;
+        if (ring) {
+          // One pull from the eye at the 30 m torso plate's steel, then the frames until it rings: the
+          // range comes down within the frame after, well inside the readout's 1.5 s.
+          const at = h.rangeState().plates[0].at;
+          const s = h.session;
+          const p = s.player;
+          const eye = [p.position.x, p.position.y + s.controller.eyeHeight(p), p.position.z];
+          const d = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+          p.yaw = (Math.atan2(d[0], d[2]) * 180) / Math.PI;
+          p.pitch = (Math.atan2(d[1], Math.hypot(d[0], d[2])) * 180) / Math.PI;
+          await h.waitFrames(5);
+          const before = s.weapon.shotsFired;
+          h.trigger(true);
+          await h.waitFrames(3);
+          h.trigger(false);
+          const t0 = performance.now();
+          while (performance.now() - t0 < 1000 && h.rangeState().plates[0].hits === 0) await h.waitFrames(1);
+          rung = { shots: s.weapon.shotsFired - before, hits: h.rangeState().plates[0].hits };
+        }
         const up = h.rangeState();
         // Each plate's box (voxels): 4 either way of its steel's middle across and along, from 20 under
         // it, past its post's foot, to 3 over it.
@@ -254,15 +282,24 @@ for (const [name, path] of [['ravine', '/'], ['corridor', '/?map=corridor']] as 
           return out;
         };
         const read = () => middles.map((m) => box(m).map(([x, y, z]) => map.get(x, y, z)));
-        // Up: each plate's steel in its box, and its post, down its middle's column from under the steel.
-        const steel = middles.map((m) => box(m).filter(([x, y, z]) => map.get(x, y, z) === STEEL));
+        // Up: each plate's steel in its box, struck or not, and its post, down its middle's column from
+        // under the steel.
+        const isSteel = (p: number) => p === STEEL || p === HIT;
+        const steel = middles.map((m) => box(m).filter(([x, y, z]) => isSteel(map.get(x, y, z))));
         const posts = middles.map(([cx, cy, cz]) => {
           let y = cy;
-          while (map.get(cx, y, cz) === STEEL) y--;
+          while (isSteel(map.get(cx, y, cz))) y--;
           const post: number[][] = [];
           for (; map.get(cx, y, cz) === POST; y--) post.push([cx, y, cz]);
           return post;
         });
+        // Up, as it is lowered: what is read out, each box's struck voxels, the targets and the shells kept off.
+        const raised = {
+          readout: up.readout,
+          struck: middles.map((m) => box(m).filter(([x, y, z]) => map.get(x, y, z) === HIT).length),
+          targets: h.session.targets.length,
+          exclusion: h.session.artillery.exclusion.length,
+        };
         h.range(false);
         const first = read();
         const left = (cells: number[][][], ids: number[]) => cells.map((c) => c.filter(([x, y, z]) => ids.includes(map.get(x, y, z))).length);
@@ -283,13 +320,15 @@ for (const [name, path] of [['ravine', '/'], ['corridor', '/?map=corridor']] as 
           plates: up.plates.map((p) => p.at),
           steel: steel.map((c) => c.length),
           posts: posts.map((c) => c.length),
+          rung,
+          raised,
           lowered,
           again,
           same: JSON.stringify(second) === JSON.stringify(first),
           gpuErrors: h.gpuErrors(),
         };
       },
-      [P.TARGET_STEEL, P.TARGET_STEEL_HIT, P.TIMBER],
+      { ids: [P.TARGET_STEEL, P.TARGET_STEEL_HIT, P.TIMBER], ring },
     );
     const said = JSON.stringify(seen);
     expect(seen.map).toBe(name);
@@ -298,6 +337,18 @@ for (const [name, path] of [['ravine', '/'], ['corridor', '/?map=corridor']] as 
     // Up: each plate's steel (a torso plate's 30 voxels, a head plate's 9) over its timber post.
     for (const n of seen.steel) expect([30, 9], said).toContain(n);
     for (const n of seen.posts) expect(n, said).toBeGreaterThanOrEqual(10);
+    // Up as it was lowered: dummies the session's targets, shells kept off them; and on the Ravine the
+    // 30 m plate rung by one round, its voxel lead-grey in its box and the readout saying so.
+    expect(seen.raised.targets, said).toBeGreaterThan(0);
+    expect(seen.raised.exclusion, said).toBeGreaterThan(0);
+    if (ring) {
+      expect(seen.rung, said).toEqual({ shots: 1, hits: 1 });
+      expect(seen.raised.readout, said).toMatch(/^PLATE · (29|30) m$/);
+      expect(seen.raised.struck, said).toEqual([1, ...none.slice(1)]);
+    } else {
+      expect(seen.raised.readout, said).toBeNull();
+      expect(seen.raised.struck, said).toEqual(none);
+    }
     // Down: no steel left in any plate's box, nor timber where its post stood; no targets, no shells
     // kept off, nothing read out.
     expect(seen.lowered.steelInBoxes, said).toEqual(none);

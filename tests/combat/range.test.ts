@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { standardViews } from '../../src/app/views';
-import { FIRST_DUMMY, plateVoxels, Range, rangeGround, rangeLayout, rangeTunables, type RangeSpot } from '../../src/combat/range';
+import { FIRST_DUMMY, plateCentre, plateVoxels, Range, rangeGround, rangeLayout, rangeTunables, type RangeSpot } from '../../src/combat/range';
 import { loadTunables } from '../../src/core/tunables';
 import { GUNS, type GunKey } from '../../src/net/gear';
 import { MatchRules } from '../../src/net/match-rules';
@@ -89,7 +89,7 @@ describe('the range over the generated worlds', () => {
     }
     // Unsighted, the 110 m dummy, the 90 m mover and the 85 m plate have ground: from the step they
     // are behind the enemy's parapet, some 54 m out, wherever they are tried.
-    expect(distances(rangeLayout(w.map, v, w.spawn, t, w.plan))).toEqual({ dummy: [25, 40, 60, 80, 110], mover: [50, 90], torso: [30, 55, 85], head: [45, 70] });
+    expect(distances(rangeLayout(w.map, v, w.spawn, t, w.plan, null))).toEqual({ dummy: [25, 40, 60, 80, 110], mover: [50, 90], torso: [30, 55, 85], head: [45, 70] });
     // The bay faces +z, and the map ends 149.05 m out from the spawn: there is no ground at 150 m.
     expect([w.spawn.bay.longAxis, w.spawn.bay.facing]).toEqual([0, 1]);
     expect(w.map.dims.z * v - w.spawn.position[2]).toBeLessThan(150);
@@ -105,7 +105,7 @@ describe('the range over the generated worlds', () => {
     expect(kinds.torso.length + kinds.head.length).toBe(5);
     expect(kinds.dummy.length + kinds.mover.length).toBeGreaterThanOrEqual(6);
     expect(kinds).toEqual({ dummy: [25, 40, 60, 80, 110], mover: [50], torso: [30, 55, 85], head: [45, 70] });
-    expect(distances(rangeLayout(w.map, w.plan.params.voxel, w.spawn, t, w.plan))).toEqual({ dummy: [25, 40, 60, 80, 110, 150], mover: [50, 90], torso: [30, 55, 85], head: [45, 70] });
+    expect(distances(rangeLayout(w.map, w.plan.params.voxel, w.spawn, t, w.plan, null))).toEqual({ dummy: [25, 40, 60, 80, 110, 150], mover: [50, 90], torso: [30, 55, 85], head: [45, 70] });
     for (const s of spots) {
       const a = along(w.spawn, s.at);
       expect(Math.abs(a.out - s.distanceM), `${s.kind} ${s.distanceM} m`).toBeLessThanOrEqual(1);
@@ -407,7 +407,7 @@ describe('the range on open ground', () => {
 
   it('each spot has its own place across the frontage: the movers in the middle, the rest 9 m out either side for the nearest, left and right in turn, nearer the middle the farther out', () => {
     const { map, spawn } = field();
-    const spots = rangeLayout(map, 0.1, spawn, t);
+    const spots = rangeLayout(map, 0.1, spawn, t, null, EYE);
     // Listed as [range] lists them: the dummies, the movers, the torso plates, the head plates.
     expect(spots.map((s) => `${s.kind} ${s.distanceM}`)).toEqual([
       'dummy 25', 'dummy 40', 'dummy 60', 'dummy 80', 'dummy 110', 'dummy 150', 'mover 50', 'mover 90',
@@ -435,17 +435,17 @@ describe('the range on open ground', () => {
     {
       const { map, spawn } = field();
       puddle(map, 165, 167, 299, 301);
-      expect(right(rangeLayout(map, 0.1, spawn, t), spawn)).toBeCloseTo(-8.5, 6);
+      expect(right(rangeLayout(map, 0.1, spawn, t, null, EYE), spawn)).toBeCloseTo(-8.5, 6);
     }
     {
       const { map, spawn } = field();
       puddle(map, 163, 172, 299, 301);
-      expect(right(rangeLayout(map, 0.1, spawn, t), spawn)).toBeCloseTo(-9.5, 6);
+      expect(right(rangeLayout(map, 0.1, spawn, t, null, EYE), spawn)).toBeCloseTo(-9.5, 6);
     }
     {
       const { map, spawn } = field();
       puddle(map, 135, 198, 299, 301);
-      const spots = rangeLayout(map, 0.1, spawn, t);
+      const spots = rangeLayout(map, 0.1, spawn, t, null, EYE);
       expect(at25(spots)).toBeUndefined();
       expect(spots).toHaveLength(12);
     }
@@ -456,7 +456,7 @@ describe('the range on open ground', () => {
     // into line with the 70 m head plate's own place, so the head plate moves on 1.5 m right.
     const { map, spawn } = field();
     puddle(map, 166, 221, 597, 603);
-    const spots = rangeLayout(map, 0.1, spawn, t);
+    const spots = rangeLayout(map, 0.1, spawn, t, null, EYE);
     const torso = spots.find((s) => s.kind === 'torso' && s.distanceM === 55)!;
     const head = spots.find((s) => s.kind === 'head' && s.distanceM === 70)!;
     expect(along(spawn, torso.at).right).toBeCloseTo(-3.2, 6);
@@ -469,7 +469,7 @@ describe('the range on open ground', () => {
     // short of it.
     const { map, spawn } = field();
     puddle(map, 279, 281, 549, 552);
-    const mover = rangeLayout(map, 0.1, spawn, t).find((s) => s.kind === 'mover' && s.distanceM === 50)!;
+    const mover = rangeLayout(map, 0.1, spawn, t, null, EYE).find((s) => s.kind === 'mover' && s.distanceM === 50)!;
     expect(along(spawn, mover.at).right).toBeCloseTo(-2, 6);
   });
 
@@ -481,10 +481,10 @@ describe('the range on open ground', () => {
     } as unknown as WorldPlan;
     const { map, spawn } = field();
     const find = (spots: RangeSpot[], kind: RangeSpot['kind'], d: number) => along(spawn, spots.find((s) => s.kind === kind && s.distanceM === d)!.at).right;
-    const without = rangeLayout(map, 0.1, spawn, t);
+    const without = rangeLayout(map, 0.1, spawn, t, null, EYE);
     expect(find(without, 'dummy', 25)).toBeCloseTo(-9, 6);
     expect(find(without, 'mover', 50)).toBeCloseTo(0, 6);
-    const given = rangeLayout(map, 0.1, spawn, t, plan);
+    const given = rangeLayout(map, 0.1, spawn, t, plan, EYE);
     // Tried at -9, -8.5 and -9.5 m, all in the bay; laid at -8. The mover's walk reaches the leg
     // from every try until 2 m left.
     expect(find(given, 'dummy', 25)).toBeCloseTo(-8, 6);
@@ -502,9 +502,21 @@ describe('the range on open ground', () => {
     for (const p of [P.WIRE, P.LEAF]) {
       const { map, spawn } = field();
       map.set(297, 21, 553, p);
-      const mover = rangeLayout(map, 0.1, spawn, t).find((s) => s.kind === 'mover' && s.distanceM === 50)!;
+      const mover = rangeLayout(map, 0.1, spawn, t, null, EYE).find((s) => s.kind === 'mover' && s.distanceM === 50)!;
       expect(along(spawn, mover.at).right, `${p}`).toBeCloseTo(-0.5, 6);
     }
+  });
+
+  it('the layout is always told its eye, or null for none: a call without one is refused, not laid unsighted', () => {
+    const { map, spawn } = field();
+    // @ts-expect-error: the eye left out (null asks for the unsighted layout)
+    expect(() => rangeLayout(map, 0.1, spawn, t, null)).toThrow(TypeError);
+    // @ts-expect-error: the plan and the eye left out
+    expect(() => rangeLayout(map, 0.1, spawn, t)).toThrow(TypeError);
+    // Asked for: open ground hides nothing, so sighted or not it lays all 13.
+    const unsighted = rangeLayout(map, 0.1, spawn, t, null, null);
+    expect(unsighted).toHaveLength(13);
+    expect(rangeLayout(map, 0.1, spawn, t, null, EYE)).toEqual(unsighted);
   });
 
   it('a spot the eye cannot see moves aside to where it can, and where it never can it is left out: a wall before the 25 m dummy', () => {
@@ -513,7 +525,7 @@ describe('the range on open ground', () => {
     // Open ground hides nothing: sighted, the layout is as it is unsighted.
     const open = field();
     const plain = rangeLayout(open.map, 0.1, open.spawn, t, null, EYE);
-    expect(plain).toEqual(rangeLayout(open.map, 0.1, open.spawn, t));
+    expect(plain).toEqual(rangeLayout(open.map, 0.1, open.spawn, t, null, null));
     expect(along(open.spawn, at25(plain)!.at).right).toBeCloseTo(-9, 6);
     // A wall on the line from the eye to the 25 m dummy's chest (9 m left, 1.3 m over its feet), half
     // way out: tried half a metre right, its line runs past the wall's end, and it is laid there.
@@ -549,8 +561,8 @@ describe('the range on open ground', () => {
     const open = field();
     const plain = rangeLayout(open.map, 0.1, open.spawn, t, null, EYE);
     for (const d of [50, 90]) expect(along(open.spawn, mover(plain, d).at).right).toBeCloseTo(0, 6);
-    // A post half way out on the line to the 50 m mover's left end (4 m left of its middle): half a
-    // metre right, its left end turns short of that line.
+    // A post a quarter of the way out (12.45 m of the 50) on the line to the 50 m mover's left end (4 m
+    // left of its middle): half a metre right, its left end turns short of that line.
     {
       const { map, spawn } = field();
       wall(map, 246, 247, P.TIMBER);
@@ -575,7 +587,7 @@ describe('the range on open ground', () => {
     // behind it: from the eye the plate's steel covers the mover's middle.
     const lone = { ...t, dummiesM: [], moversM: [90], torsoPlatesM: [85], headPlatesM: [], frontageM: 3, moverSpanM: 2 };
     const { map, spawn } = field();
-    const unsighted = rangeLayout(map, 0.1, spawn, lone);
+    const unsighted = rangeLayout(map, 0.1, spawn, lone, null, null);
     expect(unsighted.map((s) => s.kind)).toEqual(['mover', 'torso']);
     for (const s of unsighted) expect(along(spawn, s.at).right, s.kind).toBeCloseTo(0, 6);
     const sighted = rangeLayout(map, 0.1, spawn, lone, null, EYE);
@@ -591,7 +603,7 @@ describe('the range on open ground', () => {
     // past it.
     const { map, spawn } = field();
     puddle(map, 218, 219, 550, 550);
-    const mover = rangeLayout(map, 0.1, spawn, t).find((s) => s.kind === 'mover' && s.distanceM === 50)!;
+    const mover = rangeLayout(map, 0.1, spawn, t, null, EYE).find((s) => s.kind === 'mover' && s.distanceM === 50)!;
     expect(along(spawn, mover.at).right).toBeCloseTo(0.5, 6);
   });
 });
@@ -806,5 +818,20 @@ describe('plateVoxels', () => {
     expect(head.post.map((p) => p[1])).toEqual(Array.from({ length: 15 }, (_, k) => 15 + k));
     // A dummy is no plate.
     expect(plateVoxels(dummy(25), 0.1, t, BAY)).toEqual([]);
+  });
+
+  it("plateCentre is the middle of a plate's steel, its post left out: where the layout sights a plate, and where the app says it stands", () => {
+    const spot: RangeSpot = { kind: 'torso', at: [12.35, 1.5, 40.05], distanceM: 30 };
+    const near = (got: readonly number[], want: readonly number[], what: string) => want.forEach((w, k) => expect(got[k], `${what}, axis ${k}`).toBeCloseTo(w, 9));
+    // The torso plate's steel fills columns 121-125 and rows 25-30 at z 400: its middle is 1.3 m over
+    // the ground (1.5 m). Its post (rows 15-24) counted with it, the middle would be half a metre lower.
+    near(plateCentre(plateVoxels(spot, 0.1, t, BAY), 0.1), [12.35, 2.8, 40.05], 'torso');
+    // Turned in a bay along z, its steel fills z 398-402 at column 123: the same middle.
+    near(plateCentre(plateVoxels(spot, 0.1, t, { longAxis: 2, facing: -1 }), 0.1), [12.35, 2.8, 40.05], 'torso, along z');
+    // A head plate: columns 122-124 and rows 30-32, so its middle is its middle row's, 1.65 m up (a
+    // 15-voxel post under it).
+    near(plateCentre(plateVoxels({ ...spot, kind: 'head', distanceM: 45 }, 0.1, t, BAY), 0.1), [12.35, 3.15, 40.05], 'head');
+    // The voxels' order is not its business.
+    near(plateCentre([...plateVoxels(spot, 0.1, t, BAY)].reverse(), 0.1), [12.35, 2.8, 40.05], 'torso, reversed');
   });
 });

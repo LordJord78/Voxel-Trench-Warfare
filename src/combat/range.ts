@@ -272,11 +272,16 @@ function walkOf(map: BrickMap, voxel: number, at: readonly [number, number, numb
 
 type V3 = readonly [number, number, number];
 
-/** The middle of the box `cells` fill (voxels), in metres. */
-function middleOf(cells: readonly (readonly number[])[], voxel: number): [number, number, number] {
+/**
+ * A plate's centre, in metres: the middle of the box its steel fills (the TARGET_STEEL among
+ * `voxels`, a plate's voxels as plateVoxels gives them), the post under it left out. The layout
+ * sights a plate there, and the app says it stands there.
+ */
+export function plateCentre(voxels: readonly (readonly number[])[], voxel: number): [number, number, number] {
   const lo = [Infinity, Infinity, Infinity];
   const hi = [-Infinity, -Infinity, -Infinity];
-  for (const c of cells) {
+  for (const c of voxels) {
+    if (c[3] !== P.TARGET_STEEL) continue;
     for (let a = 0; a < 3; a++) {
       lo[a] = Math.min(lo[a], c[a]);
       hi[a] = Math.max(hi[a], c[a] + 1);
@@ -287,12 +292,12 @@ function middleOf(cells: readonly (readonly number[])[], voxel: number): [number
 
 /**
  * Where a spot is sighted from the step (metres): a dummy's chest, dummy_chest_m over its feet; a
- * mover's at both ends of its walk and at its middle; a plate's centre, its steel's middle (`plate`,
- * its voxels).
+ * mover's at both ends of its walk and at its middle; a plate's centre (plateCentre of `plate`, its
+ * voxels).
  */
 function sightPoints(spot: RangeSpot, plate: readonly (readonly number[])[] | null, right: readonly [number, number], voxel: number, t: RangeTunables): V3[] {
   const chest = t.dummyChestM;
-  if (plate) return [middleOf(plate.filter((q) => q[3] === P.TARGET_STEEL), voxel)];
+  if (plate) return [plateCentre(plate, voxel)];
   if (spot.kind !== 'mover') return [[spot.at[0], spot.at[1] + chest, spot.at[2]]];
   const half = t.moverSpanM / 2;
   const walk = spot.walk ?? [spot.at[1]];
@@ -361,19 +366,23 @@ function sighted(spawn: readonly [number, number, number], f: Frame, at: readonl
  * (0, +0.5, −0.5, +1 … ±shift_m); none if every try is blocked. Listed as [range] lists them: the
  * dummies, the movers, the torso plates, then the head plates, each in its list's order. Given the
  * world's plan, a spot in a bay's or a leg's footprint is blocked whatever its ground looks like.
- * Given the eye it is sighted from (metres: a player's standing on the spawn bay's firing step), a
+ * Sighted from `eye` (metres: a player's standing on the spawn bay's firing step, as the app's is), a
  * spot is laid only where the eye sees it (sightPoints, inSight): the line from the eye meets nothing
  * that hides it, solid or leaves, nor a plate laid nearer; one it does not see is blocked, and moves
- * on as one is.
+ * on as one is. The plan and the eye are asked for every time, null for none: an eye of null lays
+ * the unsighted layout, which only a test comparing the two wants; an eye left out is refused, never
+ * taken for null.
  */
 export function rangeLayout(
   map: BrickMap,
   voxel: number,
   spawn: { position: readonly [number, number, number]; bay: RangeBay },
   t: RangeTunables,
-  plan?: WorldPlan | null,
-  eye?: V3 | null,
+  plan: WorldPlan | null,
+  eye: V3 | null,
 ): RangeSpot[] {
+  // A JavaScript caller (a capture tool's page) has no types to hold it to the eye.
+  if (eye === undefined) throw new TypeError('rangeLayout: no eye given (null for the unsighted layout)');
   const f = frame(spawn.bay);
   const trenches = plan ? bayIndex(plan) : null;
   const dug: Dug | null = trenches ? (x, z) => trenches.at(x, z) !== null : null;

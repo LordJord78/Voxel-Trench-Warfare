@@ -28,7 +28,7 @@
  *   spark off the steel. A frame with none gives one shared empty list.
  */
 
-import { FIRST_DUMMY, plateVoxels, Range, rangeLayout, rangeTunables, type RangeBay, type RangeEvent, type RangeTunables } from '../combat/range';
+import { FIRST_DUMMY, plateCentre, plateVoxels, Range, rangeLayout, rangeTunables, type RangeBay, type RangeEvent, type RangeTunables } from '../combat/range';
 import type { Tunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
@@ -115,21 +115,15 @@ export class RangeView {
       const voxels = plateVoxels(spot, v, this.t, spawn.bay);
       if (voxels.length === 0) continue;
       const index = plates.length;
-      const lo = [Infinity, Infinity, Infinity];
-      const hi = [-Infinity, -Infinity, -Infinity];
       for (const [x, y, z, p] of voxels) {
         if (!map.inBounds(x, y, z)) continue;
         const k = keyOf(map, x, y, z);
         if (!written.has(k)) written.set(k, [x, y, z, map.get(x, y, z)]);
         map.set(x, y, z, p);
-        if (p !== P.TARGET_STEEL) continue;
-        steel.set(k, index);
-        [x, y, z].forEach((c, a) => {
-          lo[a] = Math.min(lo[a], c);
-          hi[a] = Math.max(hi[a], c + 1);
-        });
+        if (p === P.TARGET_STEEL) steel.set(k, index);
       }
-      plates.push({ at: [((lo[0] + hi[0]) / 2) * v, ((lo[1] + hi[1]) / 2) * v, ((lo[2] + hi[2]) / 2) * v], hits: 0 });
+      // Its steel's middle: where the layout sighted it.
+      plates.push({ at: plateCentre(voxels, v), hits: 0 });
     }
     this.now = Math.max(this.now, session.ticks * session.clock.dt);
     const range = new Range(spots, this.t, spawn.bay);
