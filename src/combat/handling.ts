@@ -370,6 +370,33 @@ export class Handling {
     return this.blend;
   }
 
+  /**
+   * The hands as a fresh pair's, for a deploy (the session's equip and respawn): no sprint, the sway
+   * and the landing at rest, no reload drawn or easing back, no overshoot, the stride's pair and the
+   * last gun's shot forgotten (so no pump is to come), and both ticks' deltas none.
+   */
+  reset(): void {
+    this.blend = 0;
+    this.swaySide = [0, 0];
+    this.swayUp = [0, 0];
+    this.swayRoll = [0, 0];
+    this.land = 0;
+    this.landSpeed = 0;
+    this.wasOnGround = true;
+    this.lastAimed = 0;
+    this.overshoot = null;
+    this.overshot = 0;
+    this.lastBob = 0;
+    this.secondStride = false;
+    this.lastReload = null;
+    this.lastCurve = zero();
+    this.release = null;
+    this.lastSinceShot = Number.POSITIVE_INFINITY;
+    this.lastGun = null;
+    this.prev = zero();
+    this.cur = zero();
+  }
+
   /** The delta as the last tick left it. */
   get delta(): HandsDelta {
     return copy(this.cur);

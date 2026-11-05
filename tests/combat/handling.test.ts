@@ -565,4 +565,29 @@ describe('handling', () => {
     expect(h.delta.offset[0]).not.toBe(1);
     expect(ZERO_HANDS).toEqual({ offset: [0, 0, 0], pitch: 0, yaw: 0, roll: 0 });
   });
+
+  it('reset() leaves the hands as a fresh pair: no sprint, the springs and the landing at rest, no reload, and no pump to come', () => {
+    // A deploy starts the hands clean (the session's equip and respawn). Worked first, sprinting and
+    // turning fast the whole while: strides, a hard landing as the sights arrive, a reload part-way,
+    // and the shotgun just fired, its pump still to come.
+    const h = new Handling(t);
+    const hard: Partial<HandlingInput> = { sprinting: true, yawRate: 300, pitchRate: -200 };
+    run(h, 30, (k) => ({ ...hard, speedRatio: 1, bobPhase: (k * 0.3) % TAU }));
+    run(h, 5, () => ({ ...hard, onGround: false }));
+    run(h, 1, () => ({ ...hard, landingImpact: 9, aimed: 1 }));
+    run(h, 20, (k) => ({ ...hard, aimed: 1, reload: { phase: k / 40, shells: 0 } }));
+    run(h, 2, (k) => ({ ...hard, gun: 'pump', sinceShot: (k + 1) * TICK }));
+    expect(h.sprint).toBe(1);
+    expect(h.at(0)).not.toEqual(ZERO_HANDS);
+    h.reset();
+    // Every field as a fresh pair's, and drawn at rest between ticks.
+    expect(h).toEqual(new Handling(t));
+    expect(h.sprint).toBe(0);
+    for (const alpha of [0, 0.5, 1]) expect(h.at(alpha)).toEqual(ZERO_HANDS);
+    // From there it moves as a fresh pair does, tick for tick. A fresh gun's shot clock (long since a
+    // shot) is no pump: the last gun's shot is forgotten.
+    const fresh = new Handling(t);
+    const script = (k: number): Partial<HandlingInput> => ({ gun: 'pump', sinceShot: 1 + k * TICK, time: k * TICK, yawRate: k < 10 ? 120 : 0, onGround: k !== 20, landingImpact: k === 21 ? 4 : 0 });
+    for (let k = 0; k < 60; k++) expect(h.tick({ ...REST, ...script(k) }), `tick ${k}`).toEqual(fresh.tick({ ...REST, ...script(k) }));
+  });
 });

@@ -1148,7 +1148,10 @@ ember_max_px        = 12.0     # and drawn no wider than this, in pixels of the 
 rest_right_m        = 0.175    # where the rifle sits when nothing is happening
 rest_up_m           = -0.205
 rest_forward_m      = 0.440
-sway_follow         = 0.5      # the walk's sideways sway the rifle carries
+sway_follow         = 0.5      # the share of a sideways sway the rifle carries; the
+                               # rig passes none in play (the hands' figure eight,
+                               # [handling], is the gun's only stride motion), and
+                               # it is kept for the pinned poses
 run_dip_m           = 0.012    # how far it drops at a run (the reference's)
 step_raise_m        = 0.14     # raised to the shoulder on the firing step, so it
                                # clears a crest 0.12 m under a standing eye (at

@@ -243,6 +243,49 @@ describe('the gun in the hands, in play', () => {
     }
   });
 
+  it("a deploy starts the hands clean: the last gun's pump is not heard after it, and the gun comes up out of no sprint", () => {
+    // With no tick between it and the last life's ticks (main.ts runs none in 'ready'): the next
+    // match's deploy (equip, then respawn), a loadout taken in a pause (equip), or a life begun
+    // afresh (respawn). Each starts the hands as a fresh pair's.
+    const takes: [string, (s: Session, loadout: Loadout) => void][] = [
+      [
+        'equip, then respawn',
+        (s, loadout) => {
+          s.equip(loadout);
+          s.respawn([12.8, 0.4, 2], 0);
+        },
+      ],
+      ['equip', (s, loadout) => s.equip(loadout)],
+      ['respawn', (s) => s.respawn([12.8, 0.4, 2], 0)],
+    ];
+    for (const [label, take] of takes) {
+      // The shotgun fired three ticks before the deploy, its pump (0.12 s on) still to come: none is
+      // heard after it, at the new spawn or anywhere.
+      const g = stand(bare('m870'));
+      g.intent = { ...idleIntent(), fire: true };
+      g.tick();
+      expect(g.shots, label).toHaveLength(1);
+      g.intent = idleIntent();
+      for (let k = 0; k < 2; k++) g.tick();
+      expect(g.drainEvents().handling, label).toEqual([]);
+      take(g, bare('m870'));
+      for (let k = 0; k < 60; k++) {
+        g.tick();
+        expect(g.drainEvents().handling, `${label}, tick ${k}`).toEqual([]);
+      }
+      // A full sprint, then the deploy: drawn at rest before any tick runs, and the first tick's delta
+      // has none of the sprint's pose (the yaw is the sprint's alone; the pitch the sprint's or a landing's).
+      const s = sprinting();
+      expect(s.handling.delta.yaw, label).toBe(ht.sprintYawDeg);
+      take(s, bare('ak74'));
+      for (const alpha of [0, 0.5, 1]) expect(s.handling.at(alpha), `${label}, alpha ${alpha}`).toEqual(ZERO_HANDS);
+      s.intent = idleIntent();
+      s.tick();
+      expect(s.handling.sprint, label).toBe(0);
+      expect([s.handling.delta.yaw, s.handling.delta.pitch], label).toEqual([0, 0]);
+    }
+  });
+
   it("killed, the hands are quiet: a reload under way and the shotgun's pump to come are not heard, and the gun eases to rest", () => {
     // Each gun killed part-way through its reload, its first mark heard and more to come: the AK, the
     // M249, the M870 (three shells) and the pistol. The reload runs out while the player is dead.
@@ -263,8 +306,9 @@ describe('the gun in the hands, in play', () => {
       s.tick();
       s.intent = idleIntent();
       s.drainEvents();
+      // Bounded, so a mark never heard fails the expect below rather than hanging the worker.
       let first: HandlingCue[] = [];
-      while (first.length === 0) {
+      for (let k = 0; k < 8 * 60 && first.length === 0; k++) {
         s.tick();
         first = s.drainEvents().handling.map((c) => c.cue);
       }
@@ -371,6 +415,42 @@ describe('the gun in the hands, in play', () => {
       }
       s.tick();
       expect(s.handling.sprint, button).toBeCloseTo(1 - TICK / ht.sprintOutS, 12);
+    }
+  });
+
+  it('mid-climb the sights stay down, but the trigger is taken: it alone has never waited out a climb', () => {
+    // The gun-up rule lives once (session.ts gunInHand, and gunUp, which adds the climb): the sights,
+    // and either button's drop of the sprint, wait out a climb; the trigger, as before the rule was
+    // gathered up, does not. A timber tread, a bench 1 m over it at z 3.0–3.5 m and a clay parapet
+    // behind: walked into, the bench is climbed.
+    const map = new BrickMap({ x: 64, y: 64, z: 64 });
+    map.fillBox(0, 0, 0, 64, 4, 64, P.TIMBER);
+    map.fillBox(0, 4, 30, 64, 14, 35, P.TIMBER);
+    map.fillBox(0, 13, 30, 64, 14, 35, P.BENCH);
+    map.fillBox(0, 4, 35, 64, 28, 64, P.CLAY);
+    for (const button of ['fire', 'aim'] as const) {
+      const s = Session.create({ map, plan: null, spawn: { position: [3.2, 0.4, 1.5] } }, tun, 7, 0);
+      for (let k = 0; k < 40; k++) s.tick();
+      s.intent = { ...idleIntent(), forward: 1 };
+      for (let k = 0; k < 240 && s.player.climbTo === null; k++) s.tick();
+      expect(s.player.climbTo, button).not.toBeNull();
+      // The button held from the climb's first tick: shots leave, the sights do not rise.
+      s.intent = { ...idleIntent(), forward: 1, [button]: true };
+      let climbing = 0;
+      let shots = 0;
+      for (let k = 0; k < 240; k++) {
+        s.tick();
+        if (s.player.climbTo === null) break;
+        climbing++;
+        shots += s.shots.length;
+        expect(s.aimed, `${button}, ${climbing} ticks into the climb`).toBe(0);
+      }
+      expect(s.player.climbTo, button).toBeNull();
+      expect(s.player.position.y, button).toBeCloseTo(1.4, 6);
+      expect(climbing, button).toBeGreaterThan(10);
+      if (button === 'fire') expect(shots).toBeGreaterThan(0);
+      // On the bench, the climb over (its last tick), the sights begin to come up.
+      else expect([shots, s.aimed > 0]).toEqual([0, true]);
     }
   });
 
@@ -842,11 +922,34 @@ describe('the gun in the hands, in play', () => {
     expect(peak).toBeGreaterThan(0.99 * ht.bobUpM * ratio);
   });
 
+  it("the hands' share of a run is the body's speed over [handling] run_mps: at a run_mps of 8, a walk bobs 0.008 m × (speed / 8)", () => {
+    // Every other test runs at 5, the literal the share was once divided by: this one is not.
+    const raw = tun.raw();
+    (raw.handling as Record<string, unknown>).run_mps = 8;
+    const t8 = new Tunables(raw);
+    const h8 = handlingTunables(t8);
+    expect(h8.runMps).toBe(8);
+    const s = stand(undefined, 0, 7, t8);
+    const walk = s.controller.t.stances[Stance.STANDING].speed * s.arm.spec.move;
+    s.intent = { ...idleIntent(), forward: 1 };
+    let peak = -1;
+    for (let k = 0; k < 200; k++) {
+      s.tick();
+      if (k < 80) continue;
+      // At a steady walk, breathing (what is left of it) taken out: the up-down bob alone.
+      expect(s.player.velocity.horizontalLength, `tick ${k}`).toBeCloseTo(walk, 9);
+      const breath = (1 - walk / 8) * h8.breathUpM * Math.sin(2 * Math.PI * h8.breathUpHz * s.ticks * TICK);
+      peak = Math.max(peak, s.handling.delta.offset[1] - breath);
+    }
+    // At the stride's top: 0.008 m by the walk's share of a run of 8 (4.1 / 8).
+    expect(peak).toBeLessThanOrEqual(h8.bobUpM * (walk / 8) + 1e-9);
+    expect(peak).toBeGreaterThan(0.99 * h8.bobUpM * (walk / 8));
+  });
+
   it('a landing dips the gun on the tick it lands, by its share of a hard one: 0.03 m and 4° × min(1, landingImpact / 8)', () => {
     // A jump, and falls of 1 m (most of a hard landing) and 3 m (more than one: the full dip). A jump
-    // on flat ground ends its last tick in the air inside the ground probe's 0.06 m (character.ts),
-    // which sets the body down without its landing speed, so its share is only what standing left:
-    // it lands by the same rule all the same.
+    // on flat ground comes down at about its jump speed (5 m/s), set down by the ground probe as its
+    // last tick in the air ends within 0.06 m of the ground (character.ts): about half a hard one.
     for (const [how, drop] of [['a jump', 0], ['a fall of 1 m', 1], ['a fall of 3 m', 3]] as const) {
       const s = stand();
       if (drop > 0) s.teleport([12.8, 0.4 + drop, 2], 0, 0);
@@ -865,6 +968,10 @@ describe('the gun in the hands, in play', () => {
         expect(d.offset[1] - breath, how).toBeCloseTo(-ht.landingDropM * share, 9);
       }
       expect(share, how).toBeGreaterThanOrEqual(0);
+      if (drop === 0) {
+        expect(share, how).toBeGreaterThan(0.4);
+        expect(share, how).toBeLessThan(1);
+      }
       if (drop === 1) {
         expect(share, how).toBeGreaterThan(0.5);
         expect(share, how).toBeLessThan(1);

@@ -528,8 +528,10 @@ export class Session {
     this.stroke = this.prevStroke = null;
     this.lightOn = false;
     this.prevKick = this.kick();
-    // A press waiting out a sprint was made for the last gun: none fires the new one.
+    // A press waiting out a sprint was made for the last gun: none fires the new one. And the hands
+    // start clean: no sprint, sway, landing or reload, and no pump to come from the last gun's shot.
     this.pressWaiting = false;
+    this.handling.reset();
   }
 
   /** What the player shows the others (net/gear.ts): what is in their hands and its fit, their light. */
@@ -575,7 +577,9 @@ export class Session {
     this.suppression.calm();
     this.digging = false;
     // Nor does one from the last life: a match's end and the next one's deploy run no tick between.
+    // Nor do the last life's hands.
     this.pressWaiting = false;
+    this.handling.reset();
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -591,10 +595,9 @@ export class Session {
     const p = this.player;
     // Firing (a press waiting for the gun to come up out of a sprint as well), aiming or aimed down
     // the sights the player does not sprint. The trigger and the sights are a gun's: a button drops
-    // the sprint only while a gun is up to take it, as handle()'s canAim has it (the shovel out,
+    // the sprint only while a gun is up to take it (gunUp, as the sights have it: the shovel out,
     // digging, the periscope up or a climb under way, it does not), the hands as the last tick left them.
-    const gunUp = this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && p.climbTo === null;
-    if ((((this.acting.fire || this.acting.aim === true) && gunUp) || this.pressWaiting || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
+    if ((((this.acting.fire || this.acting.aim === true) && this.gunUp(p)) || this.pressWaiting || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
     // Suppression as the last tick left it slows the feet and pins the player off the step; what
     // is in the hands, and the sights up, slow them too.
     const carried = this.held === SHOVEL_HELD ? 1 : this.arm.spec.move;
@@ -668,12 +671,30 @@ export class Session {
       this.ready = Math.min(1, this.ready + dt / raise);
     }
     const spec = this.arm.spec;
-    const canAim = a.aim === true && this.alive && this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && p.climbTo === null;
+    const canAim = a.aim === true && this.alive && this.gunUp(p);
     if (canAim) this.aimed = Math.min(1, this.aimed + dt / spec.adsTimeS);
     else if (this.aimed > 0) this.aimed = Math.max(0, this.aimed - dt / (spec.adsTimeS * 0.8));
     if (a.light && spec.fit.side !== 'none') this.lightOn = !this.lightOn;
     if (a.mode && this.held !== SHOVEL_HELD) this.arm.weapon.toggleMode();
     this.stroke = this.digging && this.held === SHOVEL_HELD && this.ready >= 1 && this.entrenching.inReach ? ((this.stroke ?? 0) + dt / h.strokeS) % 1 : null;
+  }
+
+  /**
+   * A gun up to take the trigger: one in the hands (not the shovel), raised, not put down to dig,
+   * and not at the periscope, whose holder holds that rather than the gun. The gun-up rule's terms,
+   * read as the hands stand when it is asked.
+   */
+  private gunInHand(p: CharacterState): boolean {
+    return this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE;
+  }
+
+  /**
+   * A gun up to take the sights, and either button to drop the sprint: in hand, with no climb under
+   * way. The trigger alone has never waited out a climb (combat() reads gunInHand): a shot leaves
+   * mid-climb.
+   */
+  private gunUp(p: CharacterState): boolean {
+    return this.gunInHand(p) && p.climbTo === null;
   }
 
   /**
@@ -766,7 +787,6 @@ export class Session {
     }
     this.suppression.tick(dt);
     this.blastShake.tick(dt);
-    const inHand = this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging;
     if (this.acting.reload && this.held !== SHOVEL_HELD) w.beginReload();
     const eye: [number, number, number] = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
     // No shot with the shovel in the hands, a gun not yet up, through the periscope, or the gun still
@@ -775,7 +795,7 @@ export class Session {
     // meanwhile (tick()), so the blend falls a tick's share each tick and the press pulls the trigger
     // as it passes under, a tap out of a sprint as a held press would. Killed, nothing waits.
     const low = this.handling.sprint >= this.handling.t.sprintBlocksFire;
-    const pulled = (this.acting.fire || (this.pressWaiting && this.alive)) && p.stance !== Stance.PERISCOPE && inHand;
+    const pulled = (this.acting.fire || (this.pressWaiting && this.alive)) && this.gunInHand(p);
     const trigger = pulled && !low;
     this.pressWaiting = pulled && low;
     this.dryTrigger(w, trigger);
@@ -1050,9 +1070,10 @@ export class Session {
   }
 
   /**
-   * The rifle's pose between the last two ticks, `alpha` of the way to the latest, with the
-   * walk's sway (metres, as the camera's) and a run's share of full speed, which the camera has,
-   * moved by the hands between the same two ticks (none while they are held still).
+   * The rifle's pose between the last two ticks, `alpha` of the way to the latest, with a sideways
+   * sway (metres) and a run's share of full speed, which the camera has, moved by the hands between
+   * the same two ticks (none while they are held still). The rig passes no sway in play: the hands'
+   * figure eight is the gun's only stride motion, and the sway's term is kept for the pinned poses.
    */
   viewmodelAt(alpha = this.clock.alpha, sway = 0, speedRatio = 0): ViewmodelPose {
     const a = this.prevKick;

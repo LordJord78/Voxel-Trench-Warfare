@@ -16,8 +16,10 @@
  * trapped in a trench): a step-up needs room only for the rise it makes; a jump
  * catches a ledge's lip; the mantle climbs onto the bench by walking into it,
  * and onto anything in reach with jump held; and a body left inside the world
- * is moved to the nearest free space. Each is off without its tunable, as in
- * Python's fixtures, which keeps the parity scenarios Python's.
+ * is moved to the nearest free space. And G4's: a landing is recorded once, as
+ * the body comes down, so the eye and the gun dip after a jump and not at rest.
+ * Each is off without its tunable, as in Python's fixtures, which keeps the
+ * parity scenarios Python's.
  */
 
 import { copysign, TAU } from '../core/dmath';
@@ -63,6 +65,13 @@ export interface ControllerTunables {
   /** Ticks a body may stay inside the world before it is moved to the nearest free space, and how far that may be (absent, as in Python's: never). */
   unstickTicks?: number;
   unstickM?: number;
+  /**
+   * A landing's speed is recorded once, on the tick the body comes down from the air, whether a
+   * vertical move meets the ground or the ground probe sets it down (as every jump on flat ground is);
+   * never a walk, a step down, or standing (absent, as in Python's: every tick a vertical move meets
+   * the ground, standing as well, and never by the probe).
+   */
+  landsOnce?: boolean;
   /** By Stance. */
   stances: StanceProfile[];
 }
@@ -85,6 +94,8 @@ export function controllerTunables(tun: Tunables): ControllerTunables {
     airStepUp: tun.f('player.air_step_up'),
     unstickTicks: tun.i('player.unstick_ticks'),
     unstickM: tun.f('player.unstick_m'),
+    // A rule, not a number: the game's is always on.
+    landsOnce: true,
     stances: STANCE_KEYS.map((key, i) => {
       const s = `stance.${key}`;
       return {
@@ -438,7 +449,9 @@ export class CharacterController {
       if (vy <= 0) {
         const ground = groundHeightUnder(this.grid, pos, this.t.radius, Math.abs(vy * dt) + 0.7);
         if (ground !== null) pos = pos.withY(ground);
-        state.landingImpact = Math.max(state.landingImpact, -vy);
+        // A landing only if it came down from the air: a body standing meets the ground every tick
+        // (at a tick's gravity) and lands on none.
+        if (!this.t.landsOnce || !wasGrounded) state.landingImpact = Math.max(state.landingImpact, -vy);
         state.onGround = true;
       }
       vy = 0;
@@ -454,6 +467,9 @@ export class CharacterController {
       if (boxHitsSolid(this.grid, new Vec3(pos.x, pos.y - 0.06, pos.z), this.t.radius, 0.05)) {
         const ground = groundHeightUnder(this.grid, pos, this.t.radius, 0.3);
         if (ground !== null) state.position = pos.withY(ground);
+        // A fall ending its tick this near the ground (every jump on flat ground does) lands at the
+        // speed it had; one on the ground last tick is walking, and the step-down below is no landing.
+        if (this.t.landsOnce && !wasGrounded) state.landingImpact = Math.max(state.landingImpact, -state.velocity.y);
         state.onGround = true;
         state.velocity = state.velocity.withY(0);
       } else if (wasGrounded && state.velocity.y > -1) {

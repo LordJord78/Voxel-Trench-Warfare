@@ -17,7 +17,7 @@ function standing(t = tun): Session {
   const map = new BrickMap({ x: 64, y: 64, z: 64 });
   map.fillBox(0, 0, 0, 64, 20, 64, P.SOD);
   const s = Session.create({ map, plan: null, spawn: { position: [3.2, 2.0, 3.2] } }, t, 7);
-  for (let t = 0; t < 10; t++) s.tick();
+  for (let k = 0; k < 10; k++) s.tick();
   // Settling from the spawn is itself a small landing; these tests want none.
   s.player.landingImpact = 0;
   return s;
@@ -48,8 +48,6 @@ describe('the camera rig', () => {
     const before = offsets();
     s.tick();
     const after = offsets();
-    // A body standing on the ground records a little landing each tick (0.29 m/s): as standing() does, none.
-    s.player.landingImpact = 0;
     expect(Math.abs(s.recoil.pitch)).toBeGreaterThan(0);
     expect(Math.abs(s.suppression.flinchPitch)).toBeGreaterThan(0);
     expect(Math.abs(after.roll)).toBeGreaterThan(0);
@@ -112,6 +110,19 @@ describe('the camera rig', () => {
     expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(3.62 - 0.11, 9);
     s.player.landingImpact = 20;
     expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(3.62 - 0.11, 9);
+  });
+
+  it('standing still for 2 s, no landing is recorded and the eye is not dipped at all', () => {
+    // A body standing on the ground lands on no tick (character.ts records a landing as the body
+    // comes down), so nothing holds the eye low at rest. standing() has let the spawn's own go.
+    const s = standing();
+    const rig = new CameraRig(rigTunables(tun));
+    for (let k = 0; k < 120; k++) {
+      s.tick();
+      expect(s.player.landingImpact, `tick ${k}`).toBe(0);
+      const foot = s.footAt();
+      expect(rig.pose(s, 1 / 60).position[1] - (foot.y + s.controller.eyeHeight(s.player)), `tick ${k}`).toBeCloseTo(0, 12);
+    }
   });
 
   it('eases the field of view into the periscope', () => {
@@ -237,8 +248,6 @@ describe('the rifle as the rig draws it', () => {
     s.tick();
     expect(Math.abs(s.viewKick.camRoll)).toBeGreaterThan(0);
     expect(Math.hypot(...s.viewKick.shake.offset)).toBeGreaterThan(0);
-    // No landing's dip of the eye (the camera's alone), as standing() has it.
-    s.player.landingImpact = 0;
     // A frame a whisker short of the next tick: drawn as the last tick left the view.
     expect(s.clock.advance(s.clock.dt * (1 - 1e-9))).toBe(0);
     const rig = new CameraRig(rigTunables(tun));
