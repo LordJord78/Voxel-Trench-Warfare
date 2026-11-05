@@ -15,19 +15,20 @@
 //     line's own band, not the bloom's halo nor the parapet its shot's flash lights (the looser width,
 //     every pixel LIT over them, is reported beside it).
 //   - (b) far colour: the mean HSV saturation and hue of the player's tracers' lit pixels past FAR_M
-//     of flight, against their team colour's own hue as shown (TEAM), gated after dark and reported by
-//     day; and the battle's streams', gated at night away from the eye (far-night, side-night,
-//     graze-night: from the eye at night they are hundreds of metres off over the sky, reported).
+//     of flight, against their team colour's own hue as shown (TEAM) and their kind's saturation
+//     (TARGET.farSaturation), gated after dark and reported by day; and the battle's streams', gated at
+//     night away from the eye (far-night, side-night, graze-night: from the eye at night they are
+//     hundreds of metres off over the sky, reported).
 //   - (c) path cover: in the persistence composite, the share of a round's drawn line (PATH_M of
-//     flight) whose pixels are lit, over those the world does not hide (a tree in front, by the
+//     flight) whose pixels are shown, over those the world does not hide (a tree in front, by the
 //     G-buffer's depth); aimed, over those the gun does not cover either. From the shooter's eye a
 //     line that has joined its round's path projects to a point: reported, not gated. Aimed captures
 //     are pictures, ungated.
 //   - (d) noon contrast: the brightest pixel of the player's tracer at NOON_AT_M of flight over its
 //     NOON_RING_PX ring, gated at noon and reported at 17:35.
 //   - (e) the stream from the hip: the followed round's drawn ribbons from STREAM_FROM_M past the muzzle
-//     to within STREAM_AIM_PX of the point of aim, the share lit, and how far out the lit stream reaches
-//     over the muzzle's distance from the point of aim.
+//     to within STREAM_AIM_PX of the point of aim, the share shown, and how far out the shown stream
+//     reaches over the muzzle's distance from the point of aim.
 //   - the graze: a ricochet of the player's kind drawn in the burst (not the front's amber beside it).
 //   - the wall (10 m out, at night): its rounds strike within their first tick, each drawn once, to the
 //     wall: gated on (a) and (e) as a near burst is, its stream the struck rounds'; its head, drawn only
@@ -36,11 +37,12 @@
 // the 8 frames in which no tracer is drawn near it (a round lights a pixel of its path in 2 of them;
 // by day a tracer's light covers what is behind it, effects.wgsl tracerLight, so a frame it is drawn in
 // can be darker than its background). The composite shows each pixel as its frame most unlike its
-// background (image.mjs composite). "Tinted" (reported, not gated: luminance cannot see it): a pixel
-// showing its team's colour over its background (TINT), as a red glow covering the low sun's bright haze
-// does while darker than it; (c) and (b) report it beside "lit", and the front's amber is read so. A
-// round's last streak, ending where it struck, is drawn and measured as any other. Every gate fails on
-// a measure that is missing where it is gated.
+// background (image.mjs composite). "Tinted": a pixel showing its team's colour over its background
+// (TINT), as a red glow covering the low sun's bright haze does while darker than it (luminance cannot
+// see it). "Shown", (c)'s and (e)'s: by day (byDay) lit or tinted, after dark lit only (over the violet
+// night the rule under-reads Blue); the share lit alone is reported beside it. (b) reports tinted
+// beside "lit", and the front's amber is read so. A round's last streak, ending where it struck, is
+// drawn and measured as any other. Every gate fails on a measure that is missing where it is gated.
 import { readFileSync } from 'node:fs';
 import { parse } from 'smol-toml';
 import { basis, dist, dot, lerp, project, RAD, sub, unit } from './camera.mjs';
@@ -125,8 +127,17 @@ export function tinted(rgb, bg, team) {
   return KIND_HUES.every((h) => h === team.hue || TINT.apart * off <= hueOff(c.hue, h));
 }
 
-/** Task 5's targets, as fix round 1 ruled them: (a) to 14 page pixels at half height; (b) a far tracer at its team's colour (its displayed hue within farHueDeg); the battle's amber at night; (e) the stream from the hip. */
-export const TARGET = { nearWidthPx: 14, farSaturation: 0.5, farHueDeg: 20, battleSaturation: 0.4, pathCover: 0.85, noonContrast: 1.4, streamCover: 0.7, streamSpan: 0.6 };
+/**
+ * Task 5's targets, as fix round 1 ruled them: (a) to 14 page pixels at half height; (b) a far tracer at
+ * its team's colour (its displayed hue within farHueDeg, its saturation at least its kind's); the
+ * battle's amber at night; (c) the path shown; (d) noon's contrast; (e) the stream from the hip.
+ *
+ * (b)'s saturation is its kind's (the G1 final ruling): red's 0.45; Blue's 0.40, red's scaled by how
+ * saturated each team's colour is as shown (TEAM): 0.45 × Blue's 0.745 / red's 0.84 = 0.399, 0.40. One
+ * 0.5 for both flaked by construction (far-night read 0.498-0.504 over seven runs, side-night-blue
+ * 0.485-0.528); pastel heads, the failure it is there for, read 0.35 and under.
+ */
+export const TARGET = { nearWidthPx: 14, farSaturation: { red: 0.45, blue: 0.4 }, farHueDeg: 20, battleSaturation: 0.4, pathCover: 0.85, noonContrast: 1.4, streamCover: 0.7, streamSpan: 0.6 };
 
 /** The tunables: the tracers' colours, and the battle's streak law. */
 const TUN = parse(readFileSync(new URL('../../data/tunables.toml', import.meta.url), 'utf8'));
@@ -439,10 +450,11 @@ export function battleColour(imgs, comp, frames) {
 /**
  * (e): the stream from the hip. The followed round's drawn ribbons, from STREAM_FROM_M past the drawn
  * muzzle to within STREAM_AIM_PX of the point of aim (the view's middle), sampled a pixel apart on each
- * frame's image: the share of them lit in the composite ((c)'s rule); and how far out from the point of
- * aim the lit stream reaches, over the muzzle's distance from it.
+ * frame's image: the share of them shown in the composite ((c)'s rule: lit, or by day (`day`) lit or
+ * tinted by `team`'s colour); and how far out from the point of aim the shown stream reaches, over the
+ * muzzle's distance from it. Beside them (`lit`), the share lit and its reach alone.
  */
-export function streamCover(comp, frames, track) {
+export function streamCover(comp, frames, track, team = null, day = false) {
   if (!track) return { share: null, why: 'no round followed' };
   const samples = [];
   let muzzlePx = null;
@@ -466,7 +478,9 @@ export function streamCover(comp, frames, track) {
       last = q;
       const k = at(comp, q);
       if (k < 0) continue;
-      samples.push({ at: q, off, covered: lit(comp.lum[k], comp.least[k]) });
+      const covered = lit(comp.lum[k], comp.least[k]);
+      const tint = !!team && tinted([comp.data[k * 4], comp.data[k * 4 + 1], comp.data[k * 4 + 2]], [comp.back[k * 3], comp.back[k * 3 + 1], comp.back[k * 3 + 2]], team);
+      samples.push({ at: q, off, covered, tint, shown: covered || (day && tint) });
     }
   }
   // Where the stream is on the image STREAM_FROM_M, a metre and three metres past the muzzle (from the first frame it is drawn in): how far from the point of aim.
@@ -484,12 +498,23 @@ export function streamCover(comp, frames, track) {
     return null;
   };
   const geometry = { atFromPx: where(STREAM_FROM_M), at1mPx: where(1), at3mPx: where(3) };
-  if (samples.length === 0) return { share: null, muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), ...geometry, why: `nothing of the stream ${STREAM_FROM_M} m past the muzzle lies ${STREAM_AIM_PX} px or more from the point of aim` };
-  const litOnes = samples.filter((x) => x.covered);
-  const reach = litOnes.length ? Math.max(...litOnes.map((x) => x.off)) : 0;
-  // Beside the span, the lit stream's own extent: its outermost lit pixel to its innermost, over the muzzle's distance.
-  const inner = litOnes.length ? Math.min(...litOnes.map((x) => x.off)) : 0;
-  return { share: litOnes.length / samples.length, samples: samples.length, reachPx: Math.round(reach), innerPx: Math.round(inner), muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), span: muzzlePx ? reach / muzzlePx : null, extent: muzzlePx && litOnes.length ? (reach - inner) / muzzlePx : null, ...geometry, marks: samples };
+  const counts = day ? 'lit or tinted' : 'lit';
+  if (samples.length === 0) return { share: null, counts, lit: { share: null, span: null }, muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), ...geometry, why: `nothing of the stream ${STREAM_FROM_M} m past the muzzle lies ${STREAM_AIM_PX} px or more from the point of aim` };
+  /** The share of the samples `ones` are, how far out from the point of aim they reach, and its share of the muzzle's distance. */
+  const over = (ones) => {
+    const reach = ones.length ? Math.max(...ones.map((x) => x.off)) : 0;
+    return { share: ones.length / samples.length, reach, span: muzzlePx ? reach / muzzlePx : null };
+  };
+  const shownOnes = samples.filter((x) => x.shown);
+  const shown = over(shownOnes);
+  const litAlone = over(samples.filter((x) => x.covered));
+  // Beside the span, the shown stream's own extent: its outermost shown pixel to its innermost, over the muzzle's distance.
+  const inner = shownOnes.length ? Math.min(...shownOnes.map((x) => x.off)) : 0;
+  return {
+    share: shown.share, counts, samples: samples.length, reachPx: Math.round(shown.reach), innerPx: Math.round(inner), muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), span: shown.span, extent: muzzlePx && shownOnes.length ? (shown.reach - inner) / muzzlePx : null,
+    lit: { share: litAlone.share, reachPx: Math.round(litAlone.reach), span: litAlone.span },
+    ...geometry, marks: samples,
+  };
 }
 
 /**
@@ -564,12 +589,13 @@ export function pathSamples(frames, track) {
 }
 
 /**
- * (c): the share of the round's path (PATH_M of flight) lit in the composite, sampled a pixel apart on the
- * image (by the window's middle frame's camera), over the samples the world does not hide (by
- * `pathDepth`, the G-buffer's depth along them) and, aimed, the gun covers in no frame; and, reported
- * beside it, the share tinted by its team's colour (`team`), and the tinted samples' colour.
+ * (c): the share of the round's path (PATH_M of flight) shown in the composite, sampled a pixel apart on
+ * the image (by the window's middle frame's camera), over the samples the world does not hide (by
+ * `pathDepth`, the G-buffer's depth along them) and, aimed, the gun covers in no frame. Shown: lit, or by
+ * day (`day`) lit or tinted by its team's colour (`team`). Reported beside it, the share lit alone
+ * (`litShare`), and the share tinted and the tinted samples' colour (`tint`).
  */
-export function pathCover(comp, frames, track, aimed, pathDepth, team) {
+export function pathCover(comp, frames, track, aimed, pathDepth, team, day = false) {
   if (!track?.path) return { share: null, why: `no round followed ${PATH_M[0]} m out` };
   const ps = pathSamples(frames, track);
   if (!ps) return { share: null, why: 'the path is behind the camera or off the image' };
@@ -597,15 +623,18 @@ export function pathCover(comp, frames, track, aimed, pathDepth, team) {
       if (!tint && team && tinted(rgb, [comp.back[k * 3], comp.back[k * 3 + 1], comp.back[k * 3 + 2]], team)) tint = rgb;
     }
     const bg = median(bgs);
-    samples.push({ at: q, gun, hidden, covered: bg !== null && lit(best, bg), tint, lum: best, bg });
+    const covered = bg !== null && lit(best, bg);
+    samples.push({ at: q, gun, hidden, covered, tint, shown: covered || (day && tint !== null), lum: best, bg });
   }
   const counted = samples.filter((s) => !s.gun && !s.hidden);
-  const share = counted.length ? counted.filter((s) => s.covered).length / counted.length : null;
+  const shareOf = (keep) => (counted.length ? counted.filter(keep).length / counted.length : null);
   const tints = counted.filter((s) => s.tint);
   const behindGun = samples.filter((s) => s.gun).length;
   return {
-    share,
-    tint: { share: counted.length ? tints.length / counted.length : null, ...colourOf(tints.map((s) => ({ rgb: s.tint }))) },
+    share: shareOf((s) => s.shown),
+    counts: day ? 'lit or tinted' : 'lit',
+    litShare: shareOf((s) => s.covered),
+    tint: { share: shareOf((s) => s.tint), ...colourOf(tints.map((s) => ({ rgb: s.tint }))) },
     fit: track.path.fit, spanM: [PATH_M[0], Math.round(end * 10) / 10], lengthPx: Math.round(lengthPx * 10) / 10, endOn: lengthPx < DEGENERATE_PX, samples: samples.length, behindGun, hiddenByWorld: samples.filter((s) => s.hidden).length, depthRead: !!pathDepth, counted: counted.length, why: counted.length ? undefined : behindGun ? 'every sample is behind the gun' : 'every sample is hidden', marks: samples,
   };
 }
@@ -666,7 +695,7 @@ export function marked(img, m) {
   return encode(data, img.w, img.h);
 }
 
-/** The composite marked: (c)'s path a few pixels aside (green lit, blue tinted by its team's colour and not lit, red neither, grey behind the gun or hidden), (a)'s run (cyan), (b)'s pixels (yellow), (d)'s point and ring (magenta). */
+/** The composite marked: (c)'s path a few pixels aside (green lit, blue tinted by its team's colour and not lit, red neither, grey behind the gun or hidden), (a)'s run (cyan), (b)'s pixels (yellow), (e)'s stream (cyan lit, blue tinted and not lit, orange neither), (d)'s point and ring (magenta). By day (c) and (e) count the blue as shown; after dark they do not. */
 export function markedComposite(comp, m) {
   const data = Buffer.from(comp.data);
   const put = (x, y, c) => {
@@ -688,7 +717,7 @@ export function markedComposite(comp, m) {
       put(p.at[0] + 3, p.at[1], [255, 255, 0]);
     }
   }
-  if (m.stream?.marks) for (const x of m.stream.marks) for (const o of [5, 6]) put(x.at[0], x.at[1] + o, x.covered ? [0, 255, 255] : [255, 128, 0]);
+  if (m.stream?.marks) for (const x of m.stream.marks) for (const o of [5, 6]) put(x.at[0], x.at[1] + o, x.covered ? [0, 255, 255] : x.tint ? [0, 96, 255] : [255, 128, 0]);
   const d = m.noonContrast;
   if (d?.at) for (let t = 0; t < 360; t += 2) for (const r of NOON_RING_PX) put(d.at[0] + r * Math.cos(t * RAD), d.at[1] + r * Math.sin(t * RAD), [255, 0, 255]);
   return encode(data, comp.w, comp.h);
@@ -710,17 +739,19 @@ export function measureCapture(c, cap) {
   const every = headRing(imgs[shot], cap.frames[shot].info, kind, true).heads.filter((x) => x.ringPixels >= RING_MIN_PIXELS && x.ratio !== null).sort((a, b) => b.ratio - a.ratio)[0] ?? null;
   const track = trackRound(cap.frames, kind);
   const hip = !c.aimed && !c.side;
+  // By day (c) and (e) count a sample shown lit or tinted by the team's colour; after dark, lit.
+  const day = byDay(c);
   const m = {
     shotFrame: cap.frames[shot].k,
     ...hr,
     bestOfAnyKind: every,
     nearWidth: hip && c.burst !== 'graze' ? nearWidth(imgs, cap.frames, kind) : null,
     farColour: c.burst === 'far' && !c.aimed ? farColour(imgs, comp, cap.frames, kind, team) : null,
-    battleColour: byDay(c) ? null : battleColour(imgs, comp, cap.frames),
+    battleColour: day ? null : battleColour(imgs, comp, cap.frames),
     frontColour: frontColour(imgs, comp, cap.frames),
-    stream: hip && nearLike(c) ? streamCover(comp, cap.frames, track) : null,
-    pathCover: c.burst === 'far' ? pathCover(comp, cap.frames, track, !!c.aimed, cap.pathDepth, team) : null,
-    noonContrast: c.burst === 'far' && byDay(c) ? noonContrast(imgs, cap.frames, track, kind) : null,
+    stream: hip && nearLike(c) ? streamCover(comp, cap.frames, track, team, day) : null,
+    pathCover: c.burst === 'far' ? pathCover(comp, cap.frames, track, !!c.aimed, cap.pathDepth, team, day) : null,
+    noonContrast: c.burst === 'far' && day ? noonContrast(imgs, cap.frames, track, kind) : null,
     followed: track ? track.seen.map((s) => Math.round(s.t.flown * 10) / 10) : null,
     // Each frame's exposure, effects and the shooter's suppression (the front fires on in the far captures; a suppressed frame greys the world, not the tracers).
     window: cap.frames.map((f) => ({ k: f.k, exposure: round3(f.exposure), suppression: round3(f.suppression), embers: f.fx.embers, ricochets: f.fx.ricochets, battleTracers: f.fx.battleTracers })),
@@ -739,8 +770,9 @@ const num = (x) => typeof x === 'number' && Number.isFinite(x);
  *   - Every hip capture but the graze: (a). Near ones: a head drawn and measured, by day at the
  *     display's top in its own channel, after dark MIN_RATIO over its ring in it; near ones and the
  *     wall: (e) (the wall's head, beside its own shot's flash in every frame it is drawn, reported).
- *   - Far (from the eye or the side, not aimed): (b) after dark, against the shooter's team's hue (by
- *     day reported); (d) at noon (at 17:35 reported). Side on: (c).
+ *   - Far (from the eye or the side, not aimed): (b) after dark, against the shooter's team's hue and
+ *     its kind's saturation (by day reported); (d) at noon (at 17:35 reported). Side on: (c).
+ *   - (c) and (e) read the share shown: by day lit or tinted, after dark lit (the measures', `counts`).
  *   - `battle`: the battle's amber. The graze: a ricochet of the player's kind. `front` (heavy): the
  *     enemy line's amber in the frame (the window is chosen at a frame it is drawn in), tinted amber.
  *     Every capture: enough GPU samples.
@@ -762,7 +794,7 @@ export function gateCapture(c, m, burst) {
   }
   if (hip && nearLike(c)) {
     const e = m.stream;
-    if (!(num(e?.share) && e.share >= TARGET.streamCover && num(e.span) && e.span >= TARGET.streamSpan)) failures.push(`(e) the stream from the hip: lit ${round3(e?.share)} (>= ${TARGET.streamCover}) of ${e?.samples ?? 0} samples, reaching ${e?.reachPx ?? '-'} of ${e?.muzzlePx ?? '-'} px to the muzzle: ${round3(e?.span)} (>= ${TARGET.streamSpan})${e?.why ? ` (${e.why})` : ''}`);
+    if (!(num(e?.share) && e.share >= TARGET.streamCover && num(e.span) && e.span >= TARGET.streamSpan)) failures.push(`(e) the stream from the hip: ${e?.counts ?? 'shown'} ${round3(e?.share)} (>= ${TARGET.streamCover}) of ${e?.samples ?? 0} samples, reaching ${e?.reachPx ?? '-'} of ${e?.muzzlePx ?? '-'} px to the muzzle: ${round3(e?.span)} (>= ${TARGET.streamSpan}); lit alone ${round3(e?.lit?.share)}, span ${round3(e?.lit?.span)}${e?.why ? ` (${e.why})` : ''}`);
   }
   if (hip && c.burst !== 'graze') {
     const a = m.nearWidth;
@@ -770,8 +802,9 @@ export function gateCapture(c, m, burst) {
   }
   if (far && !day) {
     const b = m.farColour;
+    const saturation = TARGET.farSaturation[c.team === 'blue' ? 'blue' : 'red'];
     if (!(b?.measured === true)) failures.push(`(b) ${b?.n ?? 0} lit pixels past ${FAR_M} m`);
-    else if (!(num(b.saturation) && b.saturation >= TARGET.farSaturation && num(b.hueDeg) && hueOff(b.hueDeg, team.hue) <= TARGET.farHueDeg)) failures.push(`(b) far colour: saturation ${round3(b.saturation)} (>= ${TARGET.farSaturation}), hue ${num(b.hueDeg) ? b.hueDeg.toFixed(1) : b.hueDeg} (${c.team ?? 'red'} ${team.hue.toFixed(1)} +/- ${TARGET.farHueDeg})`);
+    else if (!(num(b.saturation) && b.saturation >= saturation && num(b.hueDeg) && hueOff(b.hueDeg, team.hue) <= TARGET.farHueDeg)) failures.push(`(b) far colour: saturation ${round3(b.saturation)} (>= ${saturation}, ${c.team ?? 'red'}'s), hue ${num(b.hueDeg) ? b.hueDeg.toFixed(1) : b.hueDeg} (${c.team ?? 'red'} ${team.hue.toFixed(1)} +/- ${TARGET.farHueDeg})`);
   }
   if (far && c.hours === 12) {
     const d = m.noonContrast;
@@ -779,7 +812,7 @@ export function gateCapture(c, m, burst) {
   }
   if (c.side) {
     const p = m.pathCover;
-    if (!(num(p?.share) && p.share >= TARGET.pathCover)) failures.push(`(c) path cover ${round3(p?.share)} < ${TARGET.pathCover}${p?.why ? ` (${p.why})` : ''}`);
+    if (!(num(p?.share) && p.share >= TARGET.pathCover)) failures.push(`(c) path cover, ${p?.counts ?? 'shown'}, ${round3(p?.share)} < ${TARGET.pathCover} (lit alone ${round3(p?.litShare)})${p?.why ? ` (${p.why})` : ''}`);
   }
   if (c.battle) {
     const bc = m.battleColour;

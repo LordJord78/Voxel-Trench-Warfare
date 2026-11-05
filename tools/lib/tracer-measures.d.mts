@@ -69,7 +69,8 @@ export const STREAM_FROM_M: number;
 export const STREAM_AIM_PX: number;
 export const PATH_M: readonly number[];
 export const NOON_RING_PX: readonly number[];
-export const TARGET: { nearWidthPx: number; farSaturation: number; farHueDeg: number; battleSaturation: number; pathCover: number; noonContrast: number; streamCover: number; streamSpan: number };
+/** (b)'s saturation is its kind's: red's, and Blue's derived from it (tracer-measures.mjs). */
+export const TARGET: { nearWidthPx: number; farSaturation: { red: number; blue: number }; farHueDeg: number; battleSaturation: number; pathCover: number; noonContrast: number; streamCover: number; streamSpan: number };
 export const TEAM: { red: Hsv; blue: Hsv; amber: Hsv };
 export const TINT: { saturation: number; chroma: number; apart: number };
 export const WALL: { outM: number; halfWidthM: number; belowM: number; aboveM: number; thickM: number; material: number };
@@ -85,10 +86,12 @@ export function nearWidth(imgs: readonly Image[], frames: readonly Frame[], kind
 export function farColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[], kind: number, team: Hsv): Measures;
 export function frontColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[]): Measures;
 export function battleColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[]): Measures;
-export function streamCover(comp: Composite, frames: readonly Frame[], track: Track | null): Measures;
+/** (e): by day (`day`) a sample lit or tinted by `team`'s colour is shown, after dark a lit one; `lit` beside it, the share and span lit alone. */
+export function streamCover(comp: Composite, frames: readonly Frame[], track: Track | null, team?: Hsv | null, day?: boolean): Measures;
 export function trackRound(frames: readonly Frame[], kind: number): Track | null;
 export function pathSamples(frames: readonly Frame[], track: Track | null): { points: [number, number][]; metres: number[]; n: number[]; lengthPx: number; end: number } | null;
-export function pathCover(comp: Composite, frames: readonly Frame[], track: Track | null, aimed: boolean, pathDepth: ArrayLike<number> | null, team?: Hsv): Measures;
+/** (c): by day (`day`) a sample lit or tinted by `team`'s colour is shown, after dark a lit one; `litShare` beside it. */
+export function pathCover(comp: Composite, frames: readonly Frame[], track: Track | null, aimed: boolean, pathDepth: ArrayLike<number> | null, team?: Hsv, day?: boolean): Measures;
 export function noonContrast(imgs: readonly Image[], frames: readonly Frame[], track: Track | null, kind: number): Measures;
 export function marked(img: Image, m: Measures): Buffer;
 export function markedComposite(comp: Composite, m: Measures): Buffer;

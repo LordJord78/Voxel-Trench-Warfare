@@ -5,9 +5,9 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { projectToPixel } from '../../src/render/camera';
 import { Rng } from '../../src/core/rng';
 import { project } from '../../tools/lib/camera.mjs';
-import { at, brightest, colourOf, composite, decode, encode, hsv, hueOff, lit, luminance, median, p95, percentile, ringMean, topChannel, type Image } from '../../tools/lib/image.mjs';
+import { at, brightest, colourOf, composite, decode, encode, hsv, hueOff, lit, luminance, median, p95, percentile, ringMean, topChannel, type Composite, type Image } from '../../tools/lib/image.mjs';
 import { failedEntry, removePictures, stamp } from '../../tools/lib/report.mjs';
-import { CAPTURES, FAR_LIT_MIN, gateCapture, headRing, kindOf, MIN_GPU_SAMPLES, nearLike, TARGET, TEAM, teamChannel, tinted, trackRound, WALL, type Burst, type Capture, type Frame, type Measures } from '../../tools/lib/tracer-measures.mjs';
+import { byDay, CAPTURES, FAR_LIT_MIN, gateCapture, headRing, kindOf, MIN_GPU_SAMPLES, nearLike, pathCover, streamCover, TARGET, TEAM, teamChannel, tinted, trackRound, WALL, type Burst, type Capture, type Frame, type Measures, type Track } from '../../tools/lib/tracer-measures.mjs';
 import { P } from '../../src/world/materials';
 
 // The capture tools' measures (tools/lib: the pixels of a screenshot as displayed, the game's camera, a
@@ -417,6 +417,26 @@ describe("G1's proof: its gates", () => {
     expect(gateCapture(red, { ...passing(red), farColour: { ...m.farColour, hueDeg: TEAM.blue.hue } }, burstOf()).length).toBe(1);
   });
 
+  it("after dark a far tracer's saturation is gated at its kind's: red's 0.45, Blue's 0.40", () => {
+    const at = (c: Capture, saturation: number) => {
+      const m = passing(c);
+      return gateCapture(c, { ...m, farColour: { ...m.farColour, saturation } }, burstOf());
+    };
+    for (const name of ['far-night-blue', 'side-night-blue']) {
+      const c = CAPTURES.find((x) => x.name === name)!;
+      expect(at(c, 0.42), name).toEqual([]);
+      expect(at(c, 0.38), name).toHaveLength(1);
+    }
+    for (const name of ['far-night', 'side-night', 'far-dusk', 'side-dusk']) {
+      const c = CAPTURES.find((x) => x.name === name)!;
+      expect(at(c, 0.46), name).toEqual([]);
+      expect(at(c, 0.44), name).toHaveLength(1);
+    }
+    // Blue's is red's scaled by how saturated each team's colour is as shown (0.45 × 0.745 / 0.84): a
+    // change to either colour asks for it to be derived again.
+    expect((TARGET.farSaturation.red * TEAM.blue.saturation) / TEAM.red.saturation).toBeCloseTo(TARGET.farSaturation.blue, 2);
+  });
+
   it("the graze is gated on ricochets of the player's kind, not the front's amber beside them", () => {
     const c = CAPTURES.find((x) => x.name === 'graze-night')!;
     expect(gateCapture(c, passing(c), burstOf([0, 0, 1, 0]))).toEqual([]);
@@ -428,5 +448,97 @@ describe("G1's proof: its gates", () => {
     const c = CAPTURES.find((x) => x.name === 'far-night')!;
     const m = passing(c);
     expect(gateCapture(c, { ...m, farColour: { ...m.farColour, n: FAR_LIT_MIN - 1, measured: false } }, burstOf()).length).toBe(1);
+  });
+});
+
+describe("G1's proof: by day (c) and (e) count a sample shown lit or tinted, after dark lit only", () => {
+  // By day a tracer's light covers the bright haze behind it (effects.wgsl tracerLight): a red line over
+  // the low sun's haze is darker than the haze, so no sample of it can be lit, and luminance alone could
+  // never pass it. Tinted by its team's colour (TINT) it shows what the gate asks: the line is there, in
+  // its colour. After dark nothing changes: over the dark sky a tracer's light only adds, and lit it is.
+  const haze = [220, 190, 150];
+  const violet = [60, 50, 104];
+  /** Red's glow covering the haze (tinted, darker than it); a dull line all but the haze's own (neither); red over the night's violet, too faint to be lit there (tinted only). */
+  const covering = [250, 80, 55];
+  const dull = [205, 180, 150];
+  const faint = [150, 40, 40];
+
+  /** A composite as composite() gives one: every pixel's background `back` (its colour, and its luminance as the least), shown as it but where `paint` sets another colour. */
+  function compositeOf(back: readonly number[], paint: (set: (x: number, y: number, c: readonly number[]) => void) => void): Composite {
+    const shown = image(200, 200, back, paint);
+    const n = shown.w * shown.h;
+    const backs = new Uint8Array(n * 3);
+    for (let p = 0; p < n; p++) backs.set(back, p * 3);
+    return { ...shown, least: new Float32Array(n).fill(luminance(back[0], back[1], back[2])), back: backs };
+  }
+
+  // (c): a round's path seen side on by frameOf's camera, 20 to 60 m of its flight along +x, 40 m out:
+  // on the image's row 100 from x 50 to 150, read 1.5 px either side of it.
+  const origin = [-40, 0, 40];
+  const side: Track = { seen: [], path: { fit: 'drawn', origin, dir: [1, 0, 0], lastFlownM: 60, point: (s) => [origin[0] + s, origin[1], origin[2]] } };
+  const alongPath = (c: readonly number[]) => (set: (x: number, y: number, c: readonly number[]) => void) => {
+    for (let y = 98; y <= 102; y++) for (let x = 45; x <= 155; x++) set(x, y, c);
+  };
+  const cover = (comp: Composite, team: typeof TEAM.red, day: boolean) => pathCover(comp, [frameOf(0, [])], side, false, null, team, day);
+
+  // (e): the stream from the hip, from a muzzle at the view's bottom right (on the image 94 px from the
+  // point of aim) to the point of aim 30 m out: on the image's diagonal, from 79 px out to the middle.
+  const muzzle: [number, number, number] = [2, -2, 3];
+  const hip: Frame[] = [{ ...frameOf(0, []), muzzle }];
+  const stream: Track = { seen: [{ frame: 0, t: { kind: 2, flown: 30, headDrawn: true, head: null, tail: null, headM: [0, 0, 30], tailM: muzzle, joinsM: 30 } }], path: null };
+  const alongStream = (c: readonly number[]) => (set: (x: number, y: number, c: readonly number[]) => void) => {
+    for (let x = 95; x <= 175; x++) for (let d = -1; d <= 1; d++) if (x + d >= 0 && x + d < 200) set(x, x + d, c);
+  };
+  const capture = (name: string) => CAPTURES.find((x) => x.name === name)!;
+
+  it('(c) by day: a path tinted by its team covering the haze is shown, none of it lit; one neither lit nor tinted is not', () => {
+    for (const [name, team, colour] of [['side-1735', TEAM.red, covering], ['side-1735-heavy', TEAM.red, covering], ['side-1735-blue', TEAM.blue, [121, 164, 252]], ['side-noon', TEAM.red, covering]] as const) {
+      const c = capture(name);
+      expect(byDay(c), name).toBe(true);
+      const tintedPath = cover(compositeOf(haze, alongPath(colour)), team, true);
+      expect(tintedPath.share, name).toBe(1);
+      // The lit-only share reported beside it: none.
+      expect(tintedPath.litShare, name).toBe(0);
+      expect(gateCapture(c, { ...passing(c), pathCover: tintedPath }, burstOf()), name).toEqual([]);
+      const neither = cover(compositeOf(haze, alongPath(dull)), team, true);
+      expect(neither.share, name).toBe(0);
+      expect(gateCapture(c, { ...passing(c), pathCover: neither }, burstOf()), name).toHaveLength(1);
+    }
+  });
+
+  it('(e) by day: a stream from the hip tinted by its team covering the haze is shown, as far out as it is drawn; one neither lit nor tinted is not', () => {
+    for (const name of ['noon', '1735']) {
+      const c = capture(name);
+      const e = streamCover(compositeOf(haze, alongStream(covering)), hip, stream, TEAM.red, true);
+      expect(e.share, name).toBe(1);
+      // From 79 px out, the muzzle 94 px out.
+      expect(e.span, name).toBeCloseTo(79.3 / 94.3, 2);
+      // The lit-only share and span reported beside them: none.
+      expect(e.lit.share, name).toBe(0);
+      expect(e.lit.span, name).toBe(0);
+      expect(gateCapture(c, { ...passing(c), stream: e }, burstOf()), name).toEqual([]);
+      const neither = streamCover(compositeOf(haze, alongStream(dull)), hip, stream, TEAM.red, true);
+      expect(neither.share, name).toBe(0);
+      expect(gateCapture(c, { ...passing(c), stream: neither }, burstOf()), name).toHaveLength(1);
+    }
+  });
+
+  it('(c) and (e) after dark: a sample tinted and not lit is not shown, and a lit one is, as before', () => {
+    const sideNight = capture('side-night');
+    const night = capture('night');
+    expect(byDay(sideNight) || byDay(night)).toBe(false);
+    const tintedPath = cover(compositeOf(violet, alongPath(faint)), TEAM.red, false);
+    expect(tintedPath.share).toBe(0);
+    expect(gateCapture(sideNight, { ...passing(sideNight), pathCover: tintedPath }, burstOf())).toHaveLength(1);
+    const tintedStream = streamCover(compositeOf(violet, alongStream(faint)), hip, stream, TEAM.red, false);
+    expect(tintedStream.share).toBe(0);
+    expect(gateCapture(night, { ...passing(night), stream: tintedStream }, burstOf())).toHaveLength(1);
+    // Lit over the dark sky: shown, by day or not.
+    const bright = [255, 120, 110];
+    for (const day of [false, true]) {
+      expect(cover(compositeOf(violet, alongPath(bright)), TEAM.red, day).share).toBe(1);
+      expect(streamCover(compositeOf(violet, alongStream(bright)), hip, stream, TEAM.red, day).share).toBe(1);
+    }
+    expect(gateCapture(sideNight, { ...passing(sideNight), pathCover: cover(compositeOf(violet, alongPath(bright)), TEAM.red, false) }, burstOf())).toEqual([]);
   });
 });
