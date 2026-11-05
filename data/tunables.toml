@@ -672,6 +672,34 @@ spatter_fall_rays   = 10       # and rays falling from it, so a body standing in
 spatter_fall_cone_deg = 30     # their cone's half-angle about an axis tilted
 spatter_fall_tilt_deg = 30     # this far from straight down toward the round
 spatter_fall_reach_m  = 2.5    # nothing further along them is marked
+# What the player sees and hears of it (app/hit-feedback.ts, ui/hit-marker.ts).
+# The marker at the crosshair: a hit's white, a headshot's gold and 1.25× as
+# large, a kill's red, 1.5× and ringed (their looks are index.html's). Each pops
+# in from marker_pop_scale to 1× over marker_pop_s, is held, and fades over
+# marker_fade_s; a kill's shows over a headshot's over a hit's.
+marker_hit_s        = 0.22
+marker_head_s       = 0.32
+marker_kill_s       = 0.60
+marker_pop_s        = 0.09
+marker_pop_scale    = 1.6
+marker_fade_s       = 0.12
+pop_s               = 0.9      # HEADSHOT, or KILL, under the crosshair: all told,
+pop_scale           = 1.3      # popping in from this over marker_pop_s, fading
+                               # over marker_fade_s at its end
+kill_window_s       = 0.3      # a kill bursts and falls from the victim's last hit
+                               # seen this recently; failing one, at their chest
+hit_gain            = 0.75     # the voices (audio/voices.ts): a body hit's thwack,
+head_gain           = 0.9      # a headshot's crack, its wet gush, a kill's thud and
+gush_gain           = 0.8      # chime (the shooter's, at the ear), a steel plate's
+kill_gain           = 0.9      # ring (at the plate, heard from the firing step), and
+ding_gain           = 1.5      # being hit
+hurt_gain           = 0.7
+hit_heard_m         = 30.0     # another's round into a body is heard where it struck
+gush_heard_m        = 25.0     # this near; a headshot's gush this near
+hurt_flash_min      = 0.25     # being hit: a red flash at the damage's share of 100,
+hurt_flash_s        = 0.35     # at least this, fading over this
+hurt_jolt_deg       = [1.5, 1.5]  # and the aim jolted away from the round: the first,
+                               # plus the second × the damage's share
 
 # ---------------------------------------------------------------------------
 # DESTRUCTION

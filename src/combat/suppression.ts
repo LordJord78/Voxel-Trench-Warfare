@@ -119,6 +119,16 @@ export class Suppression {
     this.impacts++;
   }
 
+  /**
+   * The aim jolted by `yawDeg` and `pitchDeg` (a round into the player: the shots spec's §4), on top
+   * of the flinch as it stands, and let go as a near miss's is (flinch_recovery_s). It raises nothing:
+   * being hit is not being shot at.
+   */
+  jolt(yawDeg: number, pitchDeg: number): void {
+    this.flinchYaw += yawDeg;
+    this.flinchPitch += pitchDeg;
+  }
+
   /** A shell landed `distanceM` metres from the head. */
   blast(distanceM: number): void {
     if (distanceM > this.t.blastRadiusM) return;

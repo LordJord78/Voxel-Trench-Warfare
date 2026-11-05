@@ -100,6 +100,22 @@ describe('suppression', () => {
       expect(s.flinchPitch).toBeLessThan(0.1 * flinch);
     });
 
+    it("a round's jolt (being hit) adds to the flinch as it stands, and lets go as a near miss's does, raising nothing", () => {
+      const { s, rng } = fresh();
+      s.crack(0.3, rng);
+      const was = [s.flinchYaw, s.flinchPitch];
+      s.jolt(2.2, -0.5);
+      expect(s.flinchYaw).toBeCloseTo(was[0] + 2.2, 12);
+      expect(s.flinchPitch).toBeCloseTo(was[1] - 0.5, 12);
+      // It settles with the flinch's own recovery: e^(−1 s / flinch_recovery_s) of it left a second on.
+      const alone = new Suppression(T);
+      alone.jolt(2, 1);
+      expect([alone.level, alone.cracks, alone.impacts, alone.blasts]).toEqual([0, 0, 0, 0]);
+      for (let t = 0; t < 60; t++) alone.tick(TICK);
+      expect(alone.flinchYaw).toBeCloseTo(2 * Math.exp(-1 / T.flinchRecoveryS), 6);
+      expect(alone.flinchPitch).toBeCloseTo(Math.exp(-1 / T.flinchRecoveryS), 6);
+    });
+
     it('enough fire takes the parapet away from you', () => {
       const { s, rng } = fresh();
       expect(s.pinned).toBe(false);

@@ -13,9 +13,10 @@
  * - **Down** (lower): every voxel the plates wrote put back as it was, whatever has struck them since.
  *   What the world did round them, blood on the ground or a crater, is the world's, and stays.
  * - **Each frame, before its ticks** (frame): the dummies posed as soldiers by the range's own gaits,
- *   in Blue's uniform with hunter-orange tape and the bare AK at rest, for the app to draw after any
- *   others in the renderer's eight slots. Their strides go on by the range's own time, the session's
- *   since the last frame, so a range whose session does not tick (paused, or flying) stands still.
+ *   in Blue's uniform with hunter-orange tape and the bare AK at rest, flinching and falling as the
+ *   hit feedback says, for the app to draw after any others in the renderer's eight slots. Their
+ *   strides go on by the range's own time, the session's since the last frame, so a range whose
+ *   session does not tick (paused, or flying) stands still.
  *   The standing ones are the session's targets: bodies only the player's rounds strike. A dummy
  *   down is drawn lying and is no target, as a dead body is not hit. They never go to
  *   together.prepare, whose bodies everyone's rounds strike. The figures, the bodies and the list of
@@ -35,6 +36,7 @@ import type { SoldierDraw } from '../render/soldiers';
 import type { Body, CombatEvents, Session } from '../sim/session';
 import type { BrickMap } from '../world/bricks';
 import { P } from '../world/materials';
+import type { FigureOverlay } from './hit-feedback';
 import { Gaits, type Figure } from './together';
 
 /** What a frame of a range that is down gives, and one whose ticks did nothing on it: one list each, never written. */
@@ -166,17 +168,24 @@ export class RangeView {
 
   /**
    * Before the frame's ticks, at `nowS` (the session's seconds): the dummies posed as soldiers, for
-   * the app to draw after any others; the standing ones given to the session as its targets. Their
-   * strides go on by the range's time since the last frame, none while the session does not tick.
-   * None while down.
+   * the app to draw after any others, each flinching and falling as `overlay` says of its body id
+   * (the hit feedback's, app/hit-feedback.ts; none, neither); the standing ones given to the session
+   * as its targets. Their strides go on by the range's time since the last frame, none while the
+   * session does not tick. None while down.
    */
-  frame(session: Session, nowS: number): readonly SoldierDraw[] {
+  frame(session: Session, nowS: number, overlay?: (id: number) => FigureOverlay): readonly SoldierDraw[] {
     const on = this.on;
     if (!on) return NO_DRAWS;
     const now = this.clock(nowS);
     const step = on.posedAt === null ? 0 : now - on.posedAt;
     on.posedAt = now;
     const figures = this.figures(now);
+    for (const f of figures) {
+      const o = overlay?.(f.seat);
+      f.flinch = o?.flinch;
+      f.fallYaw = o?.fallYaw;
+      f.fallS = o?.fallS;
+    }
     const draws = this.gaits.pose(figures, step);
     const targets = on.targets;
     targets.length = 0;

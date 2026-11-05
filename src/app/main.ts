@@ -19,7 +19,7 @@ import { CLOCK_KEYS } from '../core/sky-clock';
 import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import { AudioEngine } from '../audio/engine';
-import { audioTunables, planVoices } from '../audio/plan';
+import { audioTunables, planFeedback, planVoices } from '../audio/plan';
 import { cleanLoadout, type Loadout } from '../combat/arsenal';
 import { gunModel, shovelModel } from '../combat/gun-models';
 import { traceRifle } from '../combat/rifle-model';
@@ -41,6 +41,8 @@ import { MAP_SEEDS, isMapId, type MapId } from '../world/generation/params';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
 import { relayUrl, Together, type Figure } from './together';
 import { rangeAllowed, RangeView } from './range';
+import { HitFeedback, hitFeedbackTunables } from './hit-feedback';
+import { HitMarker, markerTunables } from '../ui/hit-marker';
 import { Fullscreen, fullscreenButtons } from '../ui/fullscreen';
 import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
@@ -604,6 +606,11 @@ async function start(): Promise<void> {
     const spawns = pickSpawns(session.map, world.plan, team === 'red' ? 'front' : 'enemy_front', 4);
     return spawns[k % spawns.length];
   };
+  // Hit feedback (hit-feedback.ts): the marker at the crosshair, HEADSHOT and KILL under it, the red
+  // flash of being hit (hit-marker.ts), the voices of a hit, and bodies flinching and falling as they
+  // were shot; on the range and in a room alike.
+  const hitMarker = new HitMarker(document, markerTunables(tun));
+  const hits = new HitFeedback(hitFeedbackTunables(tun), hitMarker);
   // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
   const searchParams = new URLSearchParams(location.search);
   const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
@@ -648,7 +655,7 @@ async function start(): Promise<void> {
       session.respawn(at.position, facingYaw(at.bay));
       renderer.resetHistory();
     },
-  });
+  }, hits);
 
   // The range (range.ts): solo play's dummies and steel plates in front of the spawn bay, from the
   // click that starts play. Never in a room or a check run, nor with ?range=0; and a test's world has
@@ -910,9 +917,10 @@ async function start(): Promise<void> {
     // A room joined takes the range down: there is none in a room.
     if (range.up && together.net !== null) lowerRange();
     // The others posed, given to the session to strike, and their shots fired, before its ticks run;
-    // the range's dummies posed, the standing ones given to it as targets (the player's rounds alone).
-    const draws = together.prepare(session, dt, puppets);
-    const dummies = range.frame(session, session.ticks * session.clock.dt);
+    // the range's dummies posed, the standing ones given to it as targets (the player's rounds alone);
+    // each flinching and falling as its hits say.
+    const draws = together.prepare(session, dt, puppets, now);
+    const dummies = range.frame(session, session.ticks * session.clock.dt, (id) => hits.figureOverlay(id, now));
     let pose: CameraPose;
     if (mode === 'fly') {
       fly.sensitivity = settings.sensitivity;
@@ -985,16 +993,29 @@ async function start(): Promise<void> {
       renderer.setSoldiers(soldiers);
     } else renderer.setSoldiers(draws);
     together.after(session, events, draws, performance.now());
-    // The player's rounds on the range, read out under the marker.
-    readout.show(range.after(events, session.ticks * session.clock.dt), now / 1000);
+    // What the frame's hits show and sound (hit-feedback.ts), with what a kill or a plate made since
+    // the last frame; the bodies drawn say where each chest is, for a kill.
+    const feedback = hits.frame(session, events, now, dummies.length > 0 ? soldiers : draws);
+    // The player's rounds on the range, read out under the marker; its kills and plates are fed back
+    // at once, their voices with the next frame's.
+    const ranged = range.after(events, session.ticks * session.clock.dt);
+    readout.show(ranged, now / 1000);
     readout.tick(now / 1000);
+    for (const e of ranged) {
+      if (e.kind === 'kill') hits.kill(e.id, true, null, now, session, e.zone);
+      else if (e.kind === 'plate') {
+        const plate = range.state().plates[e.index];
+        if (plate) hits.plate(e, plate.at, now);
+      }
+    }
+    hitMarker.tick(now);
     // The tracers burn brighter by day, by the sun the frame is lit with, and while it is up their light
     // covers the haze behind them.
     const sun = skyNow().sunElevationDeg;
     const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares, draws, daylightAt(sun, effects.t), coverAt(sun, effects.t));
     audio.listen(pose);
-    // The battle's events from the last frame's lights (light() below runs the battle's clock).
-    audio.play(planVoices(hearing, events, pose.position, battleEvents));
+    // The battle's events from the last frame's lights (light() below runs the battle's clock); the hits' feedback.
+    audio.play([...planVoices(hearing, events, pose.position, battleEvents), ...planFeedback(hearing, feedback, pose.position)]);
     renderer.setEffects(frameEffects.frame);
     renderer.setTransientLights(frameEffects.lights);
     renderer.setBlasts(frameEffects.blasts);
@@ -1322,6 +1343,11 @@ async function start(): Promise<void> {
     },
     /** The range as it stands: its dummies (body ids 200 on), its plates, and the readout's words (null when none shows). */
     rangeState: () => ({ ...range.state(), readout: readout.text }),
+    /**
+     * The hit feedback (hit-feedback.ts): the marker showing and the words under it (null, none);
+     * the voices it has made by kind, the red flashes, and the markers it has shown by kind.
+     */
+    hitFeedback: () => ({ ...hitMarker.state(), ...hits.state() }),
     /** The camera held at `pose` while the session runs (null: play again); peak-combat.ts's. */
     spectate(pose: CameraPose | null) {
       peakGame.spectate(pose);

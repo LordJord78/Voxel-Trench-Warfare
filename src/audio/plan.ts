@@ -11,6 +11,10 @@
  * scoop dug scrapes where it was dug, and each flare the battle fires pops and
  * hisses at its post. A fire crackles, each pop heard within `crackle_within_m`. A round into
  * water plips, as near as an impact is heard; a shell landing on it rushes, at any distance.
+ *
+ * A hit's feedback (app/hit-feedback.ts says which; planFeedback places them): the shooter's thwack,
+ * crack, gush and kill at the ear, at once and whole; another's hit on a body where it struck, and a
+ * steel plate's ring at the plate, each as any voice afar is.
  */
 
 import type { BattleEvents } from '../battle/director';
@@ -18,7 +22,17 @@ import type { Tunables } from '../core/tunables';
 import type { CombatEvents } from '../sim/session';
 import { K, kindOf } from '../world/materials';
 
-export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare' | 'rumble' | 'thump' | 'chatter' | 'crackle' | 'splash';
+/** A hit's feedback (the shots spec's §4): a body hit's thwack, a headshot's crack and its gush, a kill's thud and chime, a steel plate's ring, being hit. */
+export type FeedbackKind = 'hit' | 'head' | 'gush' | 'kill' | 'ding' | 'hurt';
+
+export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare' | 'rumble' | 'thump' | 'chatter' | 'crackle' | 'splash' | FeedbackKind;
+
+/** A hit's feedback to sound (app/hit-feedback.ts): where (metres; null, at the ear) and how loud there. */
+export interface FeedbackVoice {
+  kind: FeedbackKind;
+  at: [number, number, number] | null;
+  gain: number;
+}
 
 export interface VoicePlan {
   kind: VoiceKind;
@@ -127,22 +141,37 @@ function struck(material: number): VoiceKind {
   return 'impact-soil';
 }
 
+/**
+ * A voice of `kind` at `at` heard from `listener`: late by the distance, quieter as
+ * (reference / distance)^rolloff past the reference, and duller toward far_lowpass_hz by far_m.
+ */
+function heardAfar(t: AudioTunables, listener: readonly number[], at: [number, number, number], gain: number, kind: VoiceKind): VoicePlan {
+  const d = Math.hypot(at[0] - listener[0], at[1] - listener[1], at[2] - listener[2]);
+  const share = Math.min(1, Math.max(0, (d - t.referenceM) / (t.farM - t.referenceM)));
+  return {
+    kind,
+    at,
+    delayS: d / t.speedOfSound,
+    gain: gain * Math.min(1, Math.pow(t.referenceM / Math.max(t.referenceM, d), t.rolloff)),
+    lowpassHz: t.openLowpassHz * Math.pow(t.farLowpassHz / t.openLowpassHz, share),
+  };
+}
+
+/**
+ * A hit's feedback placed (the shots spec's §4): a voice at the ear (`at` null) where the listener
+ * is, at once, whole and undulled, as the player's own report is; one where something was struck, or
+ * a plate that rings, heard from afar as any voice there is.
+ */
+export function planFeedback(t: AudioTunables, voices: readonly FeedbackVoice[], listener: readonly number[]): VoicePlan[] {
+  return voices.map((v) =>
+    v.at === null ? { kind: v.kind, at: [listener[0], listener[1], listener[2]], delayS: 0, gain: v.gain, lowpassHz: t.openLowpassHz } : heardAfar(t, listener, v.at, v.gain, v.kind),
+  );
+}
+
 export function planVoices(t: AudioTunables, events: CombatEvents, listener: readonly number[], battle?: BattleEvents): VoicePlan[] {
   const out: VoicePlan[] = [];
   const distance = (at: readonly number[]) => Math.hypot(at[0] - listener[0], at[1] - listener[1], at[2] - listener[2]);
-  // Late by the distance, quieter as (reference / distance)^rolloff past the reference, and duller
-  // toward far_lowpass_hz by far_m.
-  const afar = (at: [number, number, number], gain: number, kind: VoiceKind): VoicePlan => {
-    const d = distance(at);
-    const share = Math.min(1, Math.max(0, (d - t.referenceM) / (t.farM - t.referenceM)));
-    return {
-      kind,
-      at,
-      delayS: d / t.speedOfSound,
-      gain: gain * Math.min(1, Math.pow(t.referenceM / Math.max(t.referenceM, d), t.rolloff)),
-      lowpassHz: t.openLowpassHz * Math.pow(t.farLowpassHz / t.openLowpassHz, share),
-    };
-  };
+  const afar = (at: [number, number, number], gain: number, kind: VoiceKind): VoicePlan => heardAfar(t, listener, at, gain, kind);
   // A suppressed gun's report (its `report` share, under half a bare gun's) is quieter and duller: a crack, not a bang.
   const muffled = (share: number | undefined, hz: number) => (share !== undefined && share < 0.5 ? hz * 0.3 : hz);
   for (const s of events.shots) out.push({ kind: 'report', at: s.muzzle, delayS: 0, gain: s.report ?? 1, lowpassHz: muffled(s.report, t.openLowpassHz) });
@@ -152,8 +181,7 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
     const v = afar(s.muzzle, t.frontReportGain * (s.report ?? 1), 'report');
     out.push({ ...v, lowpassHz: muffled(s.report, v.lowpassHz) });
   }
-  // A round of the player's into another player: a dull knock at the ear, so a hit is heard as well as seen.
-  for (const h of events.hits) if (h.owner === 0 && h.body >= 0) out.push({ kind: 'impact-timber', at: [listener[0], listener[1], listener[2]], delayS: 0, gain: 0.4, lowpassHz: t.openLowpassHz });
+  // A round into a body is heard by its feedback (planFeedback), not here.
   for (const c of events.cracks) {
     out.push({ kind: 'crack', at: c.at, delayS: 0, gain: t.crackGain * Math.max(0, 1 - c.missM / t.crackRadiusM), lowpassHz: t.openLowpassHz });
   }

@@ -452,12 +452,15 @@ export class Session {
     this.particles.emit(muzzle, [dir[0] * flash.speed, dir[1] * flash.speed + flash.lift, dir[2] * flash.speed], flash, Math.round(flash.count * flashShare), this.particleRng);
   }
 
-  /** Another's gun as their shots need it: its round, its pellets and their cone (degrees). */
+  /**
+   * Another's gun as their shots need it: its round, its pellets and their cone (degrees). Its rounds
+   * say which gun they left (BodyHit.gun), so a round of theirs into the player is felt by its damage.
+   */
   private remoteGun(key: GunKey): { spec: ProjectileSpec; pellets: number; coneDeg: number } {
     let g = this.remoteGuns.get(key);
     if (!g) {
       const w = weaponSpec(this.tun, GUN_DEFS[key].table);
-      g = { spec: w.projectile, pellets: w.pellets, coneDeg: w.dispersionMoa / 60 };
+      g = { spec: { ...w.projectile, gun: GUNS.indexOf(key) }, pellets: w.pellets, coneDeg: w.dispersionMoa / 60 };
       this.remoteGuns.set(key, g);
     }
     return g;
@@ -1013,6 +1016,14 @@ export class Session {
       const [x, y, z] = hit.position;
       this.spatterAt(hit.position, hit.dir, hash32(this.ticks, Math.round(x * 1e4), Math.round(y * 1e4), Math.round(z * 1e4)));
     }
+  }
+
+  /**
+   * The aim jolted, `yawDeg` right and `pitchDeg` up (the player hit: the shots spec's §4): added to
+   * suppression's flinch, which the view and the next shot's aim take, and let go as it is.
+   */
+  jolt(yawDeg: number, pitchDeg: number): void {
+    this.suppression.jolt(yawDeg, pitchDeg);
   }
 
   /** What combat did since the last drain, oldest first; the session's own start afresh. */

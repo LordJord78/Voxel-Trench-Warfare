@@ -148,6 +148,11 @@ export interface Hooks {
     plates: { index: number; at: [number, number, number]; hits: number }[];
     readout: string | null;
   };
+  /**
+   * The hit feedback (src/app/hit-feedback.ts): the marker showing and the words under it (null when
+   * none show); the voices it has made, by kind; the red flashes; and the markers shown, by kind.
+   */
+  hitFeedback(): { marker: 'hit' | 'head' | 'kill' | null; pop: string | null; voices: Record<string, number>; flashes: number; markers: Record<'hit' | 'head' | 'kill', number> };
   /** What the last frame's effects held: particles' billboards, tracers, flash stars, transient lights; the battle's tracers, fires' flames, and every tracer's head; the ricochets and embers, and them by their tracer's kind (TRACER_KIND: none, amber, red, blue). */
   effects(): { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number; ricochetsByKind: number[]; embersByKind: number[] };
   /** Test quads (metres, metres across, linear colour) drawn with the effects from the next frame, emissive or `lit` as dust is; [] for none. */
