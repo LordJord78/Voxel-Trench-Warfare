@@ -256,7 +256,7 @@ git commit -m "Room time: the battle, the lights and the time of day on the matc
   - `tests/net/shelling.test.ts` (new);
   - `tests/net/protocol.test.ts` and `tests/net/room-core.test.ts` (add);
   - `tests/world/generation/world.test.ts` and `tests/world/generation/corridor.test.ts` (add one pin each);
-  - `tests/app/net-client.test.ts` (change, only if `parseRoom` refuses a welcome without a log: see Interfaces).
+  - `tests/app/net-client.test.ts` (change, only if `parseRoom` refuses a welcome without a log, or tsc rejects a typed welcome there that lacks one: see Interfaces).
 
 **Interfaces:**
 - Produces:
@@ -290,7 +290,7 @@ export const LOG_CHARS_MAX = 900_000;
 ```
 - **The relay's imports.** Every `src/net` file imports only from `src/net`, `core/rng`, `core/hash` and `core/dmath`. `Intensity` comes from `./protocol`, never `combat/front`, which reaches `core/tunables` and the TOML (TS2307 in the server typecheck).
 - **`HURT_MAX`.** `parseClient` takes a hurt's `a` in (0, `HURT_MAX`], where it has a literal 200 today.
-- **Task 1's welcomes.** `tests/app/net-client.test.ts` (Task 1) sends welcomes with no `log`. If `parseRoom` refuses a welcome without one, those welcomes gain `log: { shells: [], digs: [] }`. Step 4 runs the whole suite, so a refused welcome fails in this task, not in Task 3. Step 5 stages the file; `git add` leaves it alone if it is unchanged.
+- **Task 1's welcomes.** `tests/app/net-client.test.ts` (Task 1) sends welcomes with no `log`. If `parseRoom` refuses a welcome without one, or `npx tsc --noEmit` rejects one there for lacking it (the welcome's `log` is required, and `tsconfig.json` includes `tests`), those welcomes gain `log: { shells: [], digs: [] }`. `log` stays required in `RoomMsg`. Step 4 runs the whole suite and tsc, so either failure shows in this task, not in Task 3. Step 5 stages the file; `git add` leaves it alone if it is unchanged.
 - **The `Shelling` algorithm.** The tests don't fix the draws, but the room must make the same shells however its time is asked for, so the draw order is fixed here:
   - One stream: `Rng.root(seed).derive('shelling')`.
   - For each slot:
@@ -699,8 +699,10 @@ NetClient.state(s: PlayerState, shots: readonly number[][]): void;  // shots as 
 it("a shot's pellets come from its seed: the same seed the same, another others, each within the gun's cone of the first", ...)
 // tests/net/protocol.test.ts
 it('a shot flown as sent is what its words say', ...)
-  // for 50 random shots: sent(sent(s).shot).wire toEqual sent(s).wire, and decodeShot of the relayed 'f' entry's .slice(1)
-  // ([seat, ...words], as the room relays it) toEqual sent(s).shot
+  // for 50 random shots: sent(s).wire toEqual encodeShot(s), and decodeShot of the relayed 'f' entry's .slice(1)
+  // ([seat, ...words], as the room relays it) toEqual sent(s).shot, which a sent() that flies s itself, unrounded, fails.
+  // Not sent(sent(s).shot).wire: decodeShot renormalises the direction, so about one shot in fifty encodes again a unit
+  // apart ([5371, 704, -8405] → [5371, 704, -8406]).
 // tests/sim/shared-shots.test.ts: two identical arenas with a SOD wall about 5 m ahead of the player (as tests/sim/events.test.ts
 // builds arena(P.SOD)). Not clay: an m870 pellet carries at most 280 J, and clay needs 286 J (260 × 1.1). A (room, seat 2) and B (room)
 it("another's shotgun shot chips the same voxels on the shooter's world and a receiver's", ...)
@@ -739,9 +741,11 @@ git commit -m "One shot, one set of chips: a shot's pellets from its own seed, a
 
 **Interfaces:**
 - Consumes:
+  - from Task 1: `SILENT_STEP_S` (`net/clock.ts`);
   - from Task 2: `Dig`, `decodeDig`, the `dig` messages;
   - from Task 3:
     - `RoomBattle` and its `finish`, `Destruction.overlapsPending`, `Session.room`;
+    - `Session.land(…, quiet)`, and `tick`'s rule that a shell more than `SILENT_STEP_S` overdue lands quietly;
     - `NetClient.takeEdits` and `RoomEdit`, whose dig variant this task fills;
     - Together's edits loop in `prepare` (and at `ended`), and `after`'s send of `outgoing`;
     - `tests/support/worlds.ts`'s `lateRunner` and `roomClient`.
@@ -755,7 +759,7 @@ Session.reserved: (box: Box) => boolean;          // () => false
 Session.applyDig(cells: readonly number[]): boolean; // false (held) while a pending region overlaps its scoopBox; else applied, and the body lifted out.
   // It pushes no event: events.scoops stays the player's own, because outgoing sends every one of them (as fireRemote pushes to
   // remoteShots, never to shots). Others' scoops make no scrape in M6-lite.
-RoomBattle.dug(dig: Dig): void;
+RoomBattle.dug(dig: Dig, nowMs: number): void; // nowMs: this client's room clock, as tick's
 RoomBattle.reserves(box: Box): boolean;
 get held(): readonly Dig[];       // RoomBattle: digs given to dug() and not yet applied, in order
 RoomBattle.finish(): Dig[];       // as Task 3's, and it returns the digs it still holds
@@ -767,12 +771,12 @@ NetClient.digsHeard: number;      // the room's { t: 'dig' } messages received t
   - `Entrenching.work` calls `applyScoop` and returns `cells`.
   - In a room, `Session.dig` asks that `!destruction.overlapsPending(box) && !reserved(box)` hold; solo is unchanged.
   - `RoomBattle` sets `session.reserved = (b) => this.reserves(b)`. A box is reserved when any heard shell not yet landed has a `detonationRegion(dims, [x/v, 0, z/v], radius/v, loosen)` that overlaps it in x and z. `v` is `session.voxel`, `dims` is `session.map.dims`, and `loosen` is `session.destruction.t.options.loosen`, the same as `Destruction.shell` uses to size its box.
-  - `dug` first lands every heard shell with `landAt ≤ dig.at`, in id order, then queues the dig.
+  - `dug(dig, nowMs)` first lands every heard shell with `landAt ≤ dig.at`, in id order, as `tick` does and through the same code: each crater's seed is remembered, and each shell joins `landed`. A shell more than `SILENT_STEP_S` overdue at `nowMs` (`nowMs − landAt > 1000 × SILENT_STEP_S`) lands quietly (Task 3's rule): its crater is cut, with no blast and no harm. A tab back from hidden drains its queued digs before its tick, and would otherwise take those shells' blasts, and send their harms as hurts, at once. Then `dug` queues the dig.
   - `tick`, after its landings, applies held digs in the order they came. A dig is held while `applyDig` refuses it, or while an earlier held dig overlaps its box.
   - `outgoing` adds `{ t: 'dig', c: scoop.cells }` for each of the frame's scoops when in play. These are only the player's own; a dig applied through `dug` or `tick` is never sent back.
   - `NetClient`: the room's `{ t: 'dig', d }` is decoded with `decodeDig` and pushed onto Task 3's edits queue as `{ t: 'dig', dig }`, in arrival order with the shells. A malformed one is dropped. `dig(cells)` sends `{ t: 'dig', c: [...cells] }`. `NetClient` counts each dig it sends and each it hears, for the tests.
-  - `Together.prepare` passes each edit from `net.takeEdits()`, in the order given, in the one loop Task 3 made: a shell to `hear`, a dig to `dug`; then `battle.tick` as before. `ended` drains the queue through the same loop. `Together.after` sends each `outgoing` message by its `t`: a `hurt` with `net.hurt(a, c)`, a `dig` with `net.dig(c)`.
-  - `finish()` returns the digs it still holds. `Together` keeps them and passes them to the next match's battle (`dug`) before its first tick. The lobby doesn't tick the session, so the craters `finish` landed are still pending until then.
+  - `Together.prepare` passes each edit from `net.takeEdits()`, in the order given, in the one loop Task 3 made: a shell to `hear`, a dig to `dug(dig, net.serverNow())`; then `battle.tick` as before. `ended` drains the queue through the same loop. `Together.after` sends each `outgoing` message by its `t`: a `hurt` with `net.hurt(a, c)`, a `dig` with `net.dig(c)`.
+  - `finish()` returns the digs it still holds. `Together` keeps them and passes them to the next match's battle (`dug(dig, net.serverNow())`) before its first tick. The lobby doesn't tick the session, so the craters `finish` landed are still pending until then.
 
 **Notes:**
 - Two players digging the same ground within a round trip apply their scoops in opposite orders on their clients. That is accepted drift (note 12); no test asks otherwise.
@@ -784,12 +788,15 @@ it('a scoop records the cells it cleared, and those applied to a copy of the wor
 // tests/sim/digging.test.ts
 it("in a room a scoop waits while a heard shell's ground would take it, and goes once its crater is in", ...)   // Review Focus: a dig and a crater
   // yard(), digging; hear a shell landing 2 m ahead in 1.5 s: no scoop until its crater has settled, then scoops again
-// tests/sim/room-battle.test.ts
+// tests/sim/room-battle.test.ts: every call of dug passes, as nowMs, the client's own clock (room time + offsetMs)
 it("a dig stamped after a shell landed waits for its crater, then goes in: the digger's world and a receiver's agree", ...)   // Review Focus
   // A lands S, settles, digs in its rim → cells; B (roomClient, clock 200 ms behind, a lateRunner) hears S, then the dig stamped S.landAt + 300:
   // B lands S at once, holds the dig while S is pending, then applies it → sameWorld(A.map, B.map)
 it('a dig stamped before a shell lands goes in first, on a client whose clock has not reached it too', ...)
 it('held digs go in in the order they came', ...)
+it('a dig that lands a shell more than SILENT_STEP_S overdue lands it quietly', ...)   // a hidden tab back: its digs drain before its tick
+  // the player 2 m from it: hear(landAt 10_000) at 9_000, then dug(a dig stamped 10_200, 13_000) → its crater is cut, no blast, no harm;
+  // dug at 10_500 instead (within SILENT_STEP_S) → its blast and its harm
 it('sends each scoop it dug, and nothing while not in play', ...)
   // A (roomClient) digs: in each frame's events, as step hands them to `each`, A.battle.outgoing(events, true) holds one { t: 'dig', c }
   // per scoop, c its cells, and A.battle.outgoing(events, false) holds none. B (roomClient, not digging), given A's dig through
@@ -840,7 +847,7 @@ git commit -m "Scoops for everyone: each one's cells sent, relayed and logged, a
     - `Session.room`: a landing's crater is onGround, with `Crater.material`, only while room is true;
     - `TogetherHooks.battle`; `Together.battle`; `NetClient.takeEdits` and `RoomEdit`;
     - `tests/support/worlds.ts`'s `lateRunner` and `roomClient`;
-  - from Task 6: `RoomBattle.dug` and `held`, `Session.applyDig`.
+  - from Task 6: `RoomBattle.dug(dig, nowMs)` and `held`, `Session.applyDig`.
 - Produces:
 ```ts
 export interface BattleCatchUp { runTo(s: number, strikes: readonly Strike[]): void } // see "BattleCatchUp.runTo" below
@@ -987,7 +994,7 @@ git commit -m "A reload or a late join catches up from the room's log: its crate
   - a Director over the plan, with darkness 0, and a `CharQueue`, fed `strikes(events)` each frame;
   - its own clock offset and line delay.
 - Once welcomed, each client sets, each frame, as `Together` does: `session.room = true` and `session.seat = welcome.you`. `session.together` stays false. The harness draws no bodies, so `together` would only let a client's own body stop another's pellets on its own world (note 12).
-- Before each step: the room's shells and digs, in arrival order, go to `battle.hear(shell, serverNow())` and `battle.dug(dig)`; then `battle.tick(serverNow())`; then the room's shots go to `fireRemote(2 + seat, origin, dir, tracer, muzzle, mark, kind, tick)`.
+- Before each step: the room's shells and digs, in arrival order, go to `battle.hear(shell, serverNow())` and `battle.dug(dig, serverNow())`; then `battle.tick(serverNow())`; then the room's shots go to `fireRemote(2 + seat, origin, dir, tracer, muzzle, mark, kind, tick)`.
 - After the step: `strikes(events)` go to the Director, and `outgoing(events, inPlay)` goes to the room.
 - C does none of this while catching up. C's session is not set to room before its welcome; its catch-up sets it. If C is made with `roomClient`, its `session.room` is set back to false until then. C's `BattleCatchUp` follows the same contract as main.ts's (Task 7): its strikes go to the Director first, with `tick(0, …)`, even with no time to run.
 - A carries out the scripted actions. Before the match, every map gets the same spoil heap, 1.6 × 0.8 × 1.4 m, 8 m along Red's first start's bay, and a SOD block 1 m on a side, 4 m from the heap toward that start, in A's sight. Shells keep 15 m from every start, so the block is at least 11 m from any landing. That is beyond any crater's work (about 7.5 m for a 3.4 m shell).
