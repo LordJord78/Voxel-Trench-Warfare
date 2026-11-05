@@ -47,7 +47,7 @@
  * unless told otherwise, and its textures can be read back by name.
  */
 
-import { loadTunables } from '../core/tunables';
+import { loadTunables, type Tunables } from '../core/tunables';
 import type { WorldPlan } from '../world/generation/plan';
 import { Atmosphere, atmosphereModel, type AtmospherePipelines } from './atmosphere';
 import { AutoExposure, type AutoExposurePipelines, type ExposureState } from './auto-exposure';
@@ -144,6 +144,19 @@ export function internalSize(width: number, height: number, megapixels: number):
   const aspect = width / height;
   const w = Math.round(Math.sqrt(megapixels * 1e6 * aspect));
   return [w, Math.round(w / aspect)];
+}
+
+/** The least a knee's top lies over its foot: WGSL's smoothstep is undefined where its ends meet. */
+const KNEE_MIN_WIDTH = 1e-3;
+
+/**
+ * Where suppression's grey spares light ([suppression] desaturate_knee): a pixel's brightest channel as
+ * presented, greyed all the way under the first, not at all from the second; the second held at least
+ * KNEE_MIN_WIDTH over the first, so an equal-ended knee greys as a step would rather than undefined.
+ */
+export function desaturateKneeOf(tun: Tunables): [number, number] {
+  const [lo, hi] = tun.pair('suppression.desaturate_knee');
+  return [lo, Math.max(hi, lo + KNEE_MIN_WIDTH)];
 }
 
 async function compute(device: GPUDevice, label: string, source: string, layouts: GPUBindGroupLayout[], entryPoint = 'main'): Promise<GPUComputePipeline> {
@@ -396,7 +409,7 @@ export class Renderer {
   /** Suppression's look, as the present pass draws it: desaturation and vignette, 0 to 1. */
   private suppressionLook: [number, number] = [0, 0];
   /** Where its grey spares light ([suppression] desaturate_knee): a pixel's brightest channel as presented, greyed all the way under the first, not at all from the second. */
-  private readonly desaturateKnee = loadTunables().pair('suppression.desaturate_knee');
+  private readonly desaturateKnee = desaturateKneeOf(loadTunables());
   /** A large edit waits for its bricks to be up before the key's map is traced outright. */
   private largeEditPending = false;
 
