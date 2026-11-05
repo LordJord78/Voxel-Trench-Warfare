@@ -115,6 +115,34 @@ test('the page loads to a click-to-play prompt over the world, and a teleport st
   expect(errors).toEqual([]);
 });
 
+test('the start screen stands at its foot from 1280 × 720 up, as it did, and under 720 px tall scrolls with its head in reach', async ({ page }) => {
+  // Its ready block (the map, the loadout, Play, Fullscreen, the way in with friends, the keys) is some
+  // 940 px tall. From 1280 × 720 up the sheet stands as it always has: the block at its foot, nothing
+  // to scroll (so no scroll bar at 1920 × 1080). Under 720 px tall it scrolls as the pause menu and the
+  // lobby do, its head in reach: at 800 × 500 Host was above the window's top.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const errors = await openGame(page);
+  await expect(page.locator('#host')).toBeVisible();
+  const sheet = () =>
+    page.evaluate(() => {
+      const root = document.getElementById('loading')!;
+      const block = root.querySelector('.block')!.getBoundingClientRect();
+      return { bottom: block.bottom, foot: root.clientHeight - parseFloat(getComputedStyle(root).paddingBottom), range: root.scrollHeight - root.clientHeight };
+    });
+  for (const [w, h] of [[1280, 720], [1600, 1000], [1920, 1080]] as const) {
+    await page.setViewportSize({ width: w, height: h });
+    const s = await sheet();
+    expect(s.range, `nothing to scroll at ${w} × ${h}`).toBe(0);
+    expect(Math.abs(s.bottom - s.foot), `the block at the sheet's foot at ${w} × ${h}: ${JSON.stringify(s)}`).toBeLessThanOrEqual(1);
+  }
+  for (const [w, h] of [[1280, 719], [800, 500]] as const) {
+    await page.setViewportSize({ width: w, height: h });
+    await expect(page.locator('#loading h1'), `the title at ${w} × ${h}`).toBeInViewport({ ratio: 1 });
+    await expect(page.locator('#host'), `Host at ${w} × ${h}`).toBeInViewport({ ratio: 1 });
+  }
+  expect(errors).toEqual([]);
+});
+
 test('the lights move with their own clock, frame by frame, and stop for the pause menu', async ({ page }) => {
   const errors = await openGame(page);
   // Held, as every other test has them: as planned, frame after frame.

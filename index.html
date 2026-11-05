@@ -85,11 +85,18 @@
 
       /* The pause menu: the same title block, holding the four settings. */
       #pause .block { max-width: 24rem; }
-      /* The start screen, the pause menu and the lobby, taller than a short window, scroll with their
-         heads in reach rather than rise off the top: the sheet sets its block at the foot, and an auto
-         margin gives way. */
-      #loading, #pause, #lobby { overflow-y: auto; }
-      #loading .block, #pause .block, #lobby .block { margin-top: auto; }
+      /* The pause menu and the lobby, taller than a short window, scroll with their heads in reach rather
+         than rise off the top: the sheet sets its block at the foot, and an auto margin gives way. */
+      #pause, #lobby { overflow-y: auto; }
+      #pause .block, #lobby .block { margin-top: auto; }
+      /* The start screen does so under 720 px tall, where Host rose off the top (an 800 × 500 window). From
+         1280 × 720 up it stands as it did, at the foot with nothing to scroll: its ready block is some 940 px,
+         so until about 1080 px tall its head rises off the top (at 720, the title down to the map picker's
+         foot), its controls still in reach. */
+      @media (max-height: 719px) {
+        #loading { overflow-y: auto; }
+        #loading .block { margin-top: auto; }
+      }
       .setting { display: grid; grid-template-columns: 1fr auto; align-items: baseline; margin: 0 0 1.1rem; }
       .setting label, .setting .name { color: var(--haze); }
       .setting output { color: var(--duckboard); font-variant-numeric: tabular-nums; }
