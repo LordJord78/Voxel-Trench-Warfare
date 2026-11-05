@@ -15,7 +15,11 @@
  * over a few frames; motion the velocity explains (a fall, a jump) over the
  * time the simulation actually ran it follows exactly — none while paused,
  * and only what the clock let through after a hitch — and a teleport it
- * does not ease at all.
+ * does not ease at all. A landing is not a step: it ends the fall at a
+ * standstill, which leaves the velocity nothing to explain the drop the
+ * frames still show by, so over those frames the session's own account of
+ * the body's rise explains it (Session.risen), and a landing's feel is the
+ * dip alone.
  */
 
 import { modelToView } from '../combat/viewmodel';
@@ -59,6 +63,10 @@ export class CameraRig {
   private lastEye: number | null = null;
   /** The simulation time the last frame showed, interpolated between ticks as the foot is. */
   private lastSimTime = 0;
+  /** How far the body had risen at its own speed (Session.risenAt) as the last frame showed it. */
+  private lastRisen = 0;
+  /** The session's ticks run when the last frame was drawn: a landing on that tick or any since is still being shown. */
+  private lastTicks = 0;
   /** Where the rifle was drawn the last frame it was. */
   private lastRifle: Float32Array | null = null;
 
@@ -88,13 +96,26 @@ export class CameraRig {
     const body = foot.y + eye;
     const clock = session.clock;
     const simTime = clock.simTime + clock.alpha * clock.dt;
+    const risen = session.risenAt();
     if (this.lastEye !== null) {
-      const jump = body - this.lastEye - player.velocity.y * (simTime - this.lastSimTime);
+      // The motion the body made at its own speed, which the eye follows exactly: its velocity's over
+      // the time the simulation ran. A frame between ticks shows the last tick's motion, which the
+      // velocity after it explains; but a landing ends the fall at a standstill, so the velocity
+      // explains none of what the frames still show of it: the fall's last before the landing tick,
+      // and that tick's drop (the fall, and the ground's catch that ends it). A landing is not a step:
+      // the frames that show any of it, from the first drawn after the landing tick to the first drawn
+      // after the tick that follows it, take the session's own account of the body's rise, the drop at
+      // the speed it came down at. A step or a teleport among them is still the eye's to ease or snap.
+      const landing = session.landedTick >= this.lastTicks;
+      const moved = landing ? risen - this.lastRisen : player.velocity.y * (simTime - this.lastSimTime);
+      const jump = body - this.lastEye - moved;
       if (Math.abs(jump) > TELEPORT_M) this.trail = 0;
       else if (Math.abs(jump) > JUMP_M) this.trail -= jump;
     }
     this.lastEye = body;
     this.lastSimTime = simTime;
+    this.lastRisen = risen;
+    this.lastTicks = session.ticks;
     this.trail = Math.min(TRAIL_M, Math.max(-TRAIL_M, this.trail * Math.exp(-Math.max(0, frameDt) / EASE_S)));
     const target = session.controller.fovScale(player);
     this.fovScale += (target - this.fovScale) * Math.min(1, this.t.fovLerpPerS * Math.max(1e-4, frameDt));

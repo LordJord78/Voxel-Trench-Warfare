@@ -113,6 +113,29 @@ describe('the camera rig', () => {
     expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(3.62 - 0.11, 9);
     s.prevLandingImpact = s.player.landingImpact = 20;
     expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(3.62 - 0.11, 9);
+    // Midway between a tick with no landing and one over the hard landing's speed: midway between
+    // their dips, not the dip of midway between their speeds (10 m/s, over it: the full dip).
+    s.clock.advance(s.clock.dt * 0.5);
+    s.prevLandingImpact = 0;
+    s.player.landingImpact = 20;
+    expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(3.62 - 0.055, 9);
+  });
+
+  it("dips the eye all of [camera] landing_dip at [handling] landing_hard_mps, the gun's full dip: at 4, a landing at 4 m/s", () => {
+    // One full-dip speed for the eye and the gun, read from one key; the muzzle the session places
+    // (rifleToWorld) carries the eye's dip, so it reads the key too.
+    const raw = tun.raw();
+    (raw.handling as Record<string, unknown>).landing_hard_mps = 4;
+    const t = new Tunables(raw);
+    const s = standing(t);
+    const rig = new CameraRig(rigTunables(t));
+    const undipped = s.muzzle()[1];
+    s.prevLandingImpact = s.player.landingImpact = 4;
+    expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(3.62 - t.f('camera.landing_dip'), 9);
+    expect(s.muzzle()[1] - undipped).toBeCloseTo(-t.f('camera.landing_dip'), 12);
+    // Half as hard, half the dip.
+    s.prevLandingImpact = s.player.landingImpact = 2;
+    expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(3.62 - t.f('camera.landing_dip') / 2, 9);
   });
 
   it("eases the eye's landing dip between ticks, as the foot is: at alpha 0.5, midway between the two ticks' dips", () => {
@@ -122,7 +145,8 @@ describe('the camera rig', () => {
     const s = standing();
     expect(s.clock.advance(s.clock.dt * 0.5)).toBe(0);
     expect(s.clock.alpha).toBe(0.5);
-    const dipOf = (impact: number) => (-Math.min(impact, 8) / 8) * tun.f('camera.landing_dip');
+    const hard = tun.f('handling.landing_hard_mps');
+    const dipOf = (impact: number) => (-Math.min(impact, hard) / hard) * tun.f('camera.landing_dip');
     s.intent = { ...idleIntent(), jump: true };
     s.tick();
     s.intent = idleIntent();
@@ -267,6 +291,30 @@ describe('the eye over steps', () => {
     snapTo(s, rig, 2.0);
     expect(Math.abs(snapTo(s, rig, 9.0) - (9.0 + 1.62))).toBeLessThan(0.01);
   });
+
+  it('a landing lets nothing else go uneased: put half a metre up, its settle a landing in the same frame (as every respawn is), the eye eases there', () => {
+    // A respawn's first frame runs its first tick, on which the body put down settles: a landing,
+    // whose own motion (none here) the eye follows. The height it was put at is the teleport's, which
+    // the eye eases under a metre and snaps over one, as it always has. The game's frames, 60 a second.
+    const map = new BrickMap({ x: 64, y: 64, z: 64 });
+    map.fillBox(0, 0, 0, 64, 20, 64, P.SOD);
+    map.fillBox(40, 20, 0, 64, 25, 64, P.SOD);
+    const s = Session.create({ map, plan: null, spawn: { position: [3.2, 2.0, 3.2] } }, tun, 7);
+    const rig = new CameraRig(rigTunables(tun));
+    const frame = () => {
+      expect(s.advance(FRAME)).toBe(1);
+      return rig.pose(s, FRAME).position[1];
+    };
+    for (let f = 0; f < 30; f++) frame();
+    s.teleport([5.2, 2.5, 3.2], 0, 0);
+    let eye = frame();
+    expect(s.landedTick).toBe(s.ticks);
+    expect(s.player.position.y).toBeCloseTo(2.5, 9);
+    // Still most of the way down, as a step half a metre up is, and there in half a second.
+    expect(2.5 + 1.62 - eye).toBeGreaterThan(0.3);
+    for (let f = 1; f < 30; f++) eye = frame();
+    expect(Math.abs(eye - (2.5 + 1.62))).toBeLessThan(0.005);
+  });
 });
 
 describe('the rifle as the rig draws it', () => {
@@ -316,7 +364,8 @@ describe('the rifle as the rig draws it', () => {
     s.intent = idleIntent();
     for (let k = 0; k < 60 && !s.player.onGround; k++) s.tick();
     expect(s.player.onGround).toBe(true);
-    expect((Math.min(s.player.landingImpact, 8) / 8) * tun.f('camera.landing_dip')).toBeGreaterThan(0.04);
+    const hard = tun.f('handling.landing_hard_mps');
+    expect((Math.min(s.player.landingImpact, hard) / hard) * tun.f('camera.landing_dip')).toBeGreaterThan(0.04);
     for (let k = 0; k <= 30; k++) {
       if (k > 0) s.tick();
       const rig = new CameraRig(rigTunables(tun));
@@ -324,6 +373,60 @@ describe('the rifle as the rig draws it', () => {
       const fired = s.muzzle();
       for (let c = 0; c < 3; c++) expect(Math.abs(drawn[c] - fired[c]), `${k} ticks after landing, axis ${c}`).toBeLessThan(1e-6);
     }
+  });
+
+  it("a landing is not a step: one rig, drawing every frame, keeps the muzzle on the session's through a jump's landing and a 1.5 m fall's, at 120 Hz and at 30 to 240", () => {
+    // The landing tick ends the fall at a standstill, the ground's catch with it (the probe sets a body
+    // down that ends its tick within 6 cm of the ground), so the velocity explains none of the drop the
+    // frames between it and the tick before show, nor the fall's last before it. Eased as a step, that
+    // held the drawn eye, and the gun with it, up to 14 cm over the session's muzzle (the tracer's
+    // start, the flash, the brass, the cues) for a tenth of a second after every jump. One rig, kept as
+    // the game keeps it, draws each frame at the clock's alpha, the ticks run as Session.advance runs
+    // them; the session's muzzle for a frame is between the last two ticks' as the foot is. From the
+    // first frame after the landing tick through 0.5 s, the gun is drawn there, to a millimetre (a
+    // tick's turn of the gun on landing, interpolated, bows a few tenths of one off the straight line).
+    const fall = (h: number) => {
+      const s = standing();
+      s.teleport([3.2, 2.0 + h, 3.2], 0, 0);
+      return s;
+    };
+    const cases: string[] = [];
+    let most = 0;
+    for (const hz of [120, 60, 144, 240, 30]) {
+      for (const [how, jump] of [['a jump', true], ['a fall of 1.5 m', false]] as const) {
+        const s = jump ? standing() : fall(1.5);
+        const rig = new CameraRig(rigTunables(tun));
+        let [was, now] = [s.muzzle(), s.muzzle()];
+        let leapt = !jump;
+        let landed = -1;
+        let impact = 0;
+        let gap = 0;
+        let at = -1;
+        for (let f = 0; landed < 0 ? f < 2 * hz : f - landed <= 0.5 * hz; f++) {
+          const ticks = s.clock.advance(1 / hz);
+          for (let i = 0; i < ticks; i++) {
+            // Standing a few frames, then the jump.
+            s.intent = { ...idleIntent(), jump: !leapt && f >= 4 };
+            leapt ||= s.intent.jump === true;
+            const inAir = !s.player.onGround;
+            s.tick();
+            [was, now] = [now, s.muzzle()];
+            if (landed < 0 && inAir && s.player.onGround) [landed, impact] = [f, s.player.landingImpact];
+          }
+          const drawn = through(rig.rifle(s, rig.pose(s, 1 / hz)).toWorld, s.arm.spec.muzzle);
+          const a = s.clock.alpha;
+          const off = Math.hypot(...[0, 1, 2].map((k) => drawn[k] - (was[k] + (now[k] - was[k]) * a)));
+          if (landed >= 0 && off > gap) [gap, at] = [off, f - landed];
+        }
+        const label = `${how} at ${hz} Hz`;
+        // It came down, hard enough to matter: the jump at about 4.3 m/s, the fall at about 6.8.
+        expect(landed, label).toBeGreaterThan(0);
+        expect(impact, label).toBeGreaterThan(jump ? 4 : 6);
+        cases.push(`${label}: ${(gap * 1000).toFixed(3)} mm (frame +${at})`);
+        most = Math.max(most, gap);
+      }
+    }
+    expect(most, cases.join('; ')).toBeLessThan(1e-3);
   });
 
   it('turns with the view, its axes square', () => {

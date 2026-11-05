@@ -48,8 +48,6 @@ const P_KHAKI = P.SOLDIER_KHAKI;
 const METAL = new Set<number>([K.PICKET, K.HULL, K.CORRUGATE, K.WIRE]);
 /** Voxels a body buried by the world's edits is lifted, at most, to stand on what came down (4 m at 10 cm). */
 const LIFT_VOXELS = 40;
-/** A landing this fast (m/s) or faster dips the eye by all of [camera] landing_dip (the gun's [handling] landing_hard_mps is as the eye's). */
-const HARD_LANDING_MPS = 8;
 /** The shot's particles are anchored to the rifle's muzzle and port, which the renderer draws elsewhere (Particles.billboards). */
 export const MUZZLE_ANCHOR = 1;
 export const PORT_ANCHOR = 2;
@@ -199,6 +197,19 @@ export class Session {
   prevPosition: Vec3;
   /** The player's landing speed (m/s) before the last tick: the eye's dip is drawn between it and the latest (landingDipAt). */
   prevLandingImpact = 0;
+  /**
+   * How far the player's foot has risen (metres; a fall's negative) at its own speed over the ticks
+   * run, now and as the tick before the last left it: each tick its velocity by the tick's time, but a
+   * landing tick its whole drop, the fall and the ground's catch that ends it (the landing leaves the
+   * body at a standstill, so its velocity explains none of it: the drop is at the speed it came down
+   * at). A step's snap, a climb, a lift out of the ground and a teleport are not in it (a teleport
+   * holds it where the frames between ticks showed it). The camera explains the frames that show a
+   * landing by it, not as a step (camera-rig.ts).
+   */
+  risen = 0;
+  prevRisen = 0;
+  /** The tick the player last came down on (its landing speed rising: a fall's end), or -1 (none since a teleport). */
+  landedTick = -1;
   /** The view's offsets before the last tick. */
   private prevView: ViewOffsets;
   /** The view's roll, from every source, is held within this (degrees; [camera] roll_max_deg). */
@@ -246,9 +257,9 @@ export class Session {
   private triggerWas = false;
   private dryReload: { tick: number; weapon: Weapon } | null = null;
   /**
-   * A press the gun could not take yet: one the sprint alone held back, the gun still swung low, or
-   * one a climb holds (the hands on the parapet). It stands until the gun takes it, dropping the
-   * sprint while the gun is up; a gun put down lets it go.
+   * A press the gun could not take yet: one the sprint alone held back, the gun still swung low. It
+   * stands until the gun takes it, dropping the sprint while the gun is up; a climb (the hands on the
+   * parapet, which wait out only a press held through it) or a gun put down lets it go.
    */
   private pressWaiting = false;
   /** The hands' cues heard this tick: each is placed at the muzzle as the tick leaves it. */
@@ -607,7 +618,7 @@ export class Session {
     // Firing (a press waiting to be taken as well), aiming or aimed down the sights the player does
     // not sprint. The trigger and the sights are a gun's: a button, or a press waiting, drops the
     // sprint only while a gun is up to take it (gunUp, as the trigger and the sights have it: the
-    // shovel out, digging, the periscope up or a climb under way, it does not, so a press waiting out
+    // shovel out, digging, the periscope up or a climb under way, it does not, so a press held through
     // a climb holds the sprint off only once the climb is over), the hands as the last tick left them.
     if ((((this.acting.fire || this.acting.aim === true || this.pressWaiting) && this.gunUp(p)) || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
     // Suppression as the last tick left it slows the feet and pins the player off the step; what
@@ -618,6 +629,7 @@ export class Session {
     const wasOnStep = p.stance === Stance.FIRING_STEP;
     this.prevPosition = p.position;
     this.prevLandingImpact = p.landingImpact;
+    this.prevRisen = this.risen;
     this.prevView = this.view();
     this.prevKick = this.kick();
     this.prevRaised = this.raised;
@@ -625,6 +637,10 @@ export class Session {
     this.prevReady = this.ready;
     this.prevStroke = this.stroke;
     this.controller.tick(p, this.acting, this.clock.dt);
+    // The foot's rise at its own speed, the controller's alone (a lift out of the ground comes after).
+    const landed = p.landingImpact > this.prevLandingImpact;
+    this.risen += landed ? p.position.y - this.prevPosition.y : p.velocity.y * this.clock.dt;
+    if (landed) this.landedTick = this.ticks;
     if (wasOnStep && p.pinned && p.stance !== Stance.FIRING_STEP) this.ejected++;
     // To the shoulder on the firing step, over the parapet; down off it.
     const raise = p.stance === Stance.FIRING_STEP ? 1 : 0;
@@ -697,7 +713,8 @@ export class Session {
    * hands (not the shovel), raised, not put down to dig, not at the periscope (whose holder holds that
    * rather than the gun), and no climb under way (the hands are on the parapet). The gun-up rule, in
    * one place, read as the hands stand when it is asked. `climbing` false asks it with the climb set
-   * aside: a gun up but for a climb is not put down, so the trigger waits the climb out (combat()).
+   * aside: a gun up but for a climb is not put down, so a press held through the climb waits it out
+   * (combat()).
    */
   private gunUp(p: CharacterState, climbing = p.climbTo !== null): boolean {
     return this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && !climbing;
@@ -800,17 +817,19 @@ export class Session {
     // The sprint delays a press and does not lose it: one it alone holds back waits, the sprint
     // dropped meanwhile (tick()), so the blend falls a tick's share each tick and the press pulls the
     // trigger as it passes under, a tap out of a sprint as a held press would. A climb, the gun up but
-    // for it (the hands on the parapet), delays the trigger and lets nothing go: a press taken before
-    // it stays taken while held, so the climb's end is no new press (a gun that fires once a press
-    // fires no more, and an empty one clicks no more); one not yet taken (waiting out a sprint, or
-    // made mid-climb) waits, and pulls the trigger as the climb ends. A gun put down lets a press go,
-    // mid-climb too; killed, nothing waits.
+    // for it (the hands on the parapet), waits out a press held through it and lets a tap go, as the
+    // sights do: a press taken before it stays taken while held, so the climb's end is no new press (a
+    // gun that fires once a press fires no more, and an empty one clicks no more); one made mid-climb
+    // and still held as it ends pulls the trigger then; and no press waits it out (one waiting out a
+    // sprint as it begins, or made mid-climb and let go, is gone: fired as the climb ended, up to a
+    // second later, it would leave along wherever the view had turned). A gun put down lets a press
+    // go, mid-climb too; killed, nothing waits.
     const low = this.handling.sprint >= this.handling.t.sprintBlocksFire;
     const wanted = this.acting.fire || (this.pressWaiting && this.alive);
     let fires = false;
     if (p.climbTo !== null && this.gunUp(p, false)) {
       const kept = this.triggerWas && this.acting.fire;
-      this.pressWaiting = wanted && !kept;
+      this.pressWaiting = false;
       this.dryTrigger(w, kept);
       w.holdFire(this.acting.fire);
     } else {
@@ -1076,6 +1095,11 @@ export class Session {
     return this.prevPosition.lerp(this.player.position, alpha);
   }
 
+  /** How far the foot has risen at its own speed (`risen`) between the last two ticks, `alpha` of the way to the latest, as the foot is. */
+  risenAt(alpha = this.clock.alpha): number {
+    return this.prevRisen + (this.risen - this.prevRisen) * alpha;
+  }
+
   /**
    * The eye's dip on a landing (metres, down negative) between the last two ticks' dips, `alpha` of
    * the way to the latest, as the foot is: the camera's (camera-rig.ts), which the drawn gun is held in.
@@ -1086,9 +1110,14 @@ export class Session {
     return from + (this.landingDipOf(this.player.landingImpact) - from) * alpha;
   }
 
-  /** The eye's dip (metres, down negative) for a landing at `impact` m/s: [camera] landing_dip by its share of a hard one. */
+  /**
+   * The eye's dip (metres, down negative) for a landing at `impact` m/s: [camera] landing_dip by its
+   * share of a hard one, at [handling] landing_hard_mps or faster. That is the gun's full-dip speed
+   * too: a landing is as hard for the eye as for the gun.
+   */
   private landingDipOf(impact: number): number {
-    return (-Math.min(impact, HARD_LANDING_MPS) / HARD_LANDING_MPS) * this.landingDip;
+    const hard = this.handling.t.landingHardMps;
+    return (-Math.min(impact, hard) / hard) * this.landingDip;
   }
 
   /** The view's offsets between the last two ticks, `alpha` of the way to the latest. */
@@ -1207,8 +1236,11 @@ export class Session {
     p.embedded = 0;
     p.bobPhase = 0;
     this.prevPosition = p.position;
-    // Nor a landing where it was for the eye to dip by between ticks.
+    // Nor a landing where it was for the eye to dip by between ticks, or to follow down: the move
+    // here is no rise of the body's own, and the body's own stops where the frames showed it.
     this.prevLandingImpact = 0;
+    this.risen = this.prevRisen = this.risenAt();
+    this.landedTick = -1;
     // Put there facing the way given: no turn of the view for the hands to trail.
     this.look = [yaw, pitch];
   }
