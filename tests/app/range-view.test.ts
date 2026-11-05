@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { rangeAllowed, RangeView } from '../../src/app/range';
 import { projectileSpec } from '../../src/combat/ballistics';
 import { FIRST_DUMMY, plateVoxels, rangeLayout, rangeTunables, type RangeEvent, type RangeSpot } from '../../src/combat/range';
+import { toWorld } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
 import { idleIntent, Session, type CombatEvents } from '../../src/sim/session';
 import { Readout, readoutLines, readoutText } from '../../src/ui/readout';
@@ -14,11 +15,12 @@ import { P } from '../../src/world/materials';
 const tun = loadTunables();
 const t = rangeTunables(tun);
 const AK = projectileSpec(tun, 'assault_rifle');
-const DT = 1 / 60;
 const VOXEL = 0.1;
 
 /** The spawn: in a bay along x, facing +z. */
 const SPAWN = { position: [16, 0.4, 5] as [number, number, number], bay: { longAxis: 0 as const, facing: 1 as const } };
+/** The eye the range is sighted from: a standing player's over the spawn (the field has no step). */
+const EYE: [number, number, number] = [16, 0.4 + 1.62, 5];
 
 /**
  * 32 × 6.4 × 166.4 m of sod 0.4 m deep, the spawn at (16, 0.4, 5) facing +z: every spot of the range
@@ -40,7 +42,7 @@ const now = (s: Session) => s.ticks * s.clock.dt;
 
 /** The plates as the range lays them on `s`'s world: their spots, in its order. */
 function platesOf(s: Session): RangeSpot[] {
-  return rangeLayout(s.map, VOXEL, SPAWN, t, null).filter((p) => p.kind === 'torso' || p.kind === 'head');
+  return rangeLayout(s.map, VOXEL, SPAWN, t, null, EYE).filter((p) => p.kind === 'torso' || p.kind === 'head');
 }
 
 /** Every voxel in a plate's box, a voxel round it, as [x, y, z]. */
@@ -110,7 +112,7 @@ describe('the range in the app', () => {
     expect(before).toContain(P.SANDBAG);
 
     const view = new RangeView(tun);
-    view.raise(s, SPAWN);
+    view.raise(s, SPAWN, EYE);
     expect(view.up).toBe(true);
     // Each plate's steel and post, as plateVoxels lays them; and the renderer is told of every brick.
     const dirty = new Set(s.map.takeDirty());
@@ -122,7 +124,7 @@ describe('the range in the app', () => {
     }
     expect(s.map.get(corner[0], corner[1], corner[2])).toBe(P.TARGET_STEEL);
     // Raised again while it stands, nothing is written over what it keeps.
-    view.raise(s, SPAWN);
+    view.raise(s, SPAWN, EYE);
 
     // While it stands: a plate struck (its voxel lead-grey), a post spattered, and blood on the
     // ground at a post's foot, which is the world's (the range never wrote it).
@@ -153,7 +155,7 @@ describe('the range in the app', () => {
     // As the range lays them, before its plates stand on the ground.
     const spots = platesOf(s);
     const view = new RangeView(tun);
-    view.raise(s, SPAWN);
+    view.raise(s, SPAWN, EYE);
     const plates = view.state().plates;
     expect(plates.map((p) => [p.index, p.hits])).toEqual([[0, 0], [1, 0], [2, 0], [3, 0], [4, 0]]);
     // The 30 m torso plate, at its steel's middle, from the spawn.
@@ -226,14 +228,14 @@ describe('the range in the app', () => {
     const s = field();
     s.equip({ primary: 'svd', secondary: 'm17', fits: {} });
     const view = new RangeView(tun);
-    view.raise(s, SPAWN);
-    const draws = view.frame(s, DT, now(s));
+    view.raise(s, SPAWN, EYE);
+    const draws = view.frame(s, now(s));
     // Six standing and two walking, as Blue's soldiers in TAPE_RANGE with the bare AK at rest.
     const ids = Array.from({ length: 8 }, (_, i) => FIRST_DUMMY + i);
     expect(draws.map((d) => d.seat)).toEqual(ids);
     for (const d of draws) expect([d.team, d.tape, d.gear]).toEqual(['blue', P.TAPE_RANGE, 0]);
     expect(s.targets.map((b) => b.id)).toEqual(ids);
-    expect(view.figures(s, now(s)).every((f) => f.team === 'blue' && f.tape === P.TAPE_RANGE && f.gear === 0 && f.height === 1.8)).toBe(true);
+    expect(view.figures(now(s)).every((f) => f.team === 'blue' && f.tape === P.TAPE_RANGE && f.gear === 0 && f.height === 1.8)).toBe(true);
 
     // The 25 m dummy, standing first: an SVD round at its head (its feet + 1.62 m) kills it.
     const dummy = view.state().dummies[0];
@@ -246,22 +248,39 @@ describe('the range in the app', () => {
     expect(events).toEqual([{ kind: 'kill', id: FIRST_DUMMY, zone: 'head', damage: 190, distanceM: fired.hits[0].distance, shots: 1 }]);
     expect(view.state().dummies[0]).toMatchObject({ id: FIRST_DUMMY, hp: 0, down: true });
 
-    // Down, it is drawn lying, but it is no target: the same round flies past it.
-    const lying = view.frame(s, DT, now(s));
+    // Down, it is drawn lying, but it is no target.
+    const lying = view.frame(s, now(s));
     expect(lying.map((d) => d.seat)).toEqual(ids);
     expect(s.targets.map((b) => b.id)).toEqual(ids.slice(1));
+    // A second on it lies on the ground where it stood: a round at its torso's middle, where it lies.
     run(s, 60);
-    const through = shoot(s, head, 30);
+    const lain = view.frame(s, now(s)).find((d) => d.seat === FIRST_DUMMY)!;
+    const torso = toWorld(lain.frames.torso, [0, 0.28, 0]);
+    expect(torso[1] - dummy.position[1]).toBeLessThan(0.5);
+    expect(Math.hypot(torso[0] - dummy.position[0], torso[2] - dummy.position[2])).toBeLessThan(1.5);
+    // Were it a target, that round would strike it ...
+    const standing = s.targets;
+    s.targets = [...standing, { id: FIRST_DUMMY, frames: lain.frames, feet: lain.feet }];
+    const would = shoot(s, torso, 30);
+    s.targets = standing;
+    expect(would.shots).toHaveLength(1);
+    expect(would.hits.map((h) => h.body)).toEqual([FIRST_DUMMY]);
+    // ... but it is none: the round meets nothing, and the range has nothing to say of it.
+    run(s, 60);
+    view.frame(s, now(s));
+    expect(s.targets.map((b) => b.id)).toEqual(ids.slice(1));
+    const through = shoot(s, torso, 30);
+    expect(through.shots).toHaveLength(1);
     expect(through.hits).toEqual([]);
     expect(view.after(through, now(s))).toEqual([]);
 
     // Still down just short of down_s; after it, it stands again at full health, a target again.
     while (now(s) < fell + t.downS - 0.1) run(s, 1);
-    view.frame(s, DT, now(s));
+    view.frame(s, now(s));
     expect(s.targets.map((b) => b.id)).toEqual(ids.slice(1));
     expect(view.state().dummies[0]).toMatchObject({ id: FIRST_DUMMY, hp: 0, down: true });
     run(s, 12);
-    view.frame(s, DT, now(s));
+    view.frame(s, now(s));
     expect(s.targets.map((b) => b.id)).toEqual(ids);
     expect(view.state().dummies[0]).toMatchObject({ id: FIRST_DUMMY, hp: 100, down: false });
   });
@@ -271,8 +290,8 @@ describe('the range in the app', () => {
       const s = field();
       s.equip({ primary, secondary: 'm17', fits: {} });
       const view = new RangeView(tun);
-      view.raise(s, SPAWN);
-      view.frame(s, DT, now(s));
+      view.raise(s, SPAWN, EYE);
+      view.frame(s, now(s));
       // 4 m in front of the 25 m dummy, at its chest: every pellet of a shotgun's into it.
       const dummy = view.state().dummies[0];
       s.teleport([dummy.position[0], dummy.position[1], dummy.position[2] - 4], 0, 0);
@@ -282,7 +301,7 @@ describe('the range in the app', () => {
       /** Each pull's rounds that struck the dummy. */
       const struck: number[] = [];
       for (let k = 0; k < 6 && !events.some((e) => e.kind === 'kill'); k++) {
-        view.frame(s, DT, now(s));
+        view.frame(s, now(s));
         const fired = shoot(s, chest);
         struck.push(fired.hits.filter((h) => h.body === FIRST_DUMMY).length);
         events.push(...view.after(fired, now(s)));
@@ -312,8 +331,8 @@ describe('the range in the app', () => {
       const s = field();
       s.equip({ primary: c.primary, secondary: 'm17', fits: {} });
       const view = new RangeView(tun);
-      view.raise(s, SPAWN);
-      view.frame(s, DT, now(s));
+      view.raise(s, SPAWN, EYE);
+      view.frame(s, now(s));
       const id = FIRST_DUMMY + t.dummiesM.indexOf(c.m);
       const feet = view.state().dummies.find((d) => d.id === id)!.position;
       const chest = [feet[0], feet[1] + 1.2, feet[2]];
@@ -322,7 +341,7 @@ describe('the range in the app', () => {
       const struck: number[] = [];
       const events: RangeEvent[] = [];
       for (let k = 0; k < 40; k++) {
-        view.frame(s, DT, now(s));
+        view.frame(s, now(s));
         holdOn(s, chest);
         // The trigger held for the burst's pulls, or until the dummy drops.
         s.intent = { ...idleIntent(), fire: pulls.length < c.pulls && !events.some((e) => e.kind === 'kill') };
@@ -347,8 +366,8 @@ describe('the range in the app', () => {
   it("a kill's shots are the pulls its rounds left on, whatever ticks they struck on", () => {
     const s = field();
     const view = new RangeView(tun);
-    view.raise(s, SPAWN);
-    view.frame(s, DT, now(s));
+    view.raise(s, SPAWN, EYE);
+    view.frame(s, now(s));
     const [a, b] = view.state().dummies;
     /** A round of the player's into dummy `body` (no gun's: 55 to the torso), struck on `tick`, from the pull on tick `shot`. */
     const round = (body: number, tick: number, shot: number): CombatEvents['hits'][number] => ({ owner: 0, body, zone: 'torso', position: [0, 0, 0], dir: [0, 0, 1], distance: 25, shot, tick });
@@ -364,15 +383,112 @@ describe('the range in the app', () => {
     const view = new RangeView(tun);
     expect(s.artillery.exclusion).toEqual([]);
     // As the range lays them, before its plates stand on the ground.
-    const spots = rangeLayout(s.map, VOXEL, SPAWN, t, null);
-    view.raise(s, SPAWN);
+    const spots = rangeLayout(s.map, VOXEL, SPAWN, t, null, EYE);
+    view.raise(s, SPAWN, EYE);
     const clearM = tun.f('range.range_shell_clear_m');
     expect(clearM).toBe(6);
     expect(s.artillery.exclusion).toEqual(spots.map((p) => ({ x: p.at[0], z: p.at[2], r: clearM + (p.kind === 'mover' ? t.moverSpanM / 2 : 0) })));
     view.lower(s);
     expect(s.artillery.exclusion).toEqual([]);
     expect(s.targets).toEqual([]);
-    expect(view.frame(s, DT, now(s))).toEqual([]);
+    expect(view.frame(s, now(s))).toEqual([]);
     expect(view.state()).toEqual({ up: false, dummies: [], plates: [] });
+  });
+
+  it('raises only what its eye sees: a wall across every place the 25 m dummy might stand leaves it out, the rest as laid', () => {
+    // Half way out to the 25 m dummy (9 m left), 2.1 m high, across the lines from the eye to its
+    // chest wherever it is tried, 3 m either way.
+    const s = field((map) => map.fillBox(95, 4, 175, 132, 25, 176, P.BRICK));
+    const is25 = (p: RangeSpot) => p.kind === 'dummy' && p.distanceM === 25;
+    const unsighted = rangeLayout(s.map, VOXEL, SPAWN, t, null);
+    const sighted = rangeLayout(s.map, VOXEL, SPAWN, t, null, EYE);
+    expect(unsighted.some(is25)).toBe(true);
+    expect(sighted).toEqual(unsighted.filter((p) => !is25(p)));
+    const view = new RangeView(tun);
+    view.raise(s, SPAWN, EYE);
+    // Seven dummies and the five plates: every spot as sighted, each one's circle kept from the shells.
+    expect(view.state().dummies.map((d) => d.id)).toEqual([200, 201, 202, 203, 204, 205, 206]);
+    expect(view.state().plates).toHaveLength(5);
+    expect(s.artillery.exclusion.map((c) => [c.x, c.z])).toEqual(sighted.map((p) => [p.at[0], p.at[2]]));
+  });
+
+  it("a range whose session does not tick stands still: frame after frame with no tick between (paused, or flying without the session), every dummy's pose is as it was, the movers' strides too", () => {
+    const s = field();
+    const view = new RangeView(tun);
+    view.raise(s, SPAWN, EYE);
+    // The movers a second into their walks, mid-stride.
+    for (let k = 0; k < 60; k++) {
+      view.frame(s, now(s));
+      run(s, 1);
+    }
+    const pose = () => view.frame(s, now(s)).map((d) => d.frames);
+    const still = pose();
+    for (let k = 0; k < 5; k++) expect(pose()).toEqual(still);
+    // A tick, and they walk on.
+    run(s, 1);
+    expect(pose()).not.toEqual(still);
+  });
+
+  it("a frame's events come oldest first, a tick's dummies before its plates", () => {
+    const s = field();
+    const spots = platesOf(s);
+    const view = new RangeView(tun);
+    view.raise(s, SPAWN, EYE);
+    view.frame(s, now(s));
+    const [a, b] = view.state().dummies;
+    /** A round of the player's into dummy `body` on `tick` (no gun's, into a limb: 30, a hit). */
+    const round = (body: number, tick: number): CombatEvents['hits'][number] => ({ owner: 0, body, zone: 'limb', position: [0, 0, 0], dir: [0, 0, 1], distance: 25, shot: tick, tick });
+    /** A round of the player's into plate `index`'s first steel voxel on `tick`. */
+    const ring = (index: number, tick: number): CombatEvents['impacts'][number] => {
+      const [x, y, z] = plateVoxels(spots[index], VOXEL, t, SPAWN.bay).find((q) => q[3] === P.TARGET_STEEL)!;
+      return { position: [0, 0, 0], normal: [0, 0, -1], cell: [x, y, z], material: P.TARGET_STEEL, speed: 800, distance: 30, energyJ: 1000, owner: 0, spec: 'assault_rifle', dir: [0, 0, 1], kind: 0, tick };
+    };
+    // The dummies struck on ticks 11 and 12, the plates on ticks 10 and 11.
+    const events = view.after({ ...s.drainEvents(), hits: [round(a.id, 11), round(b.id, 12)], impacts: [ring(0, 10), ring(1, 11)] }, now(s));
+    expect(events.map((e) => (e.kind === 'plate' ? `plate ${e.index}` : `${e.kind} ${e.id}`))).toEqual(['plate 0', `hit ${a.id}`, 'plate 1', `hit ${b.id}`]);
+  });
+
+  it("a frame's ticks that did nothing on the range give one shared empty list of events, the range up or down", () => {
+    const s = field();
+    const view = new RangeView(tun);
+    const down = view.after(run(s, 3), now(s));
+    expect(down).toEqual([]);
+    expect(view.after(run(s, 3), now(s))).toBe(down);
+    view.raise(s, SPAWN, EYE);
+    view.frame(s, now(s));
+    // Ticks with no round of the player's into a dummy or a plate (the front's, if any, are not the range's).
+    const quiet = view.after(run(s, 3), now(s));
+    expect(quiet).toEqual([]);
+    expect(view.after(run(s, 3), now(s))).toBe(quiet);
+  });
+
+  it('the frame keeps its lists: down, one frozen empty list of draws; up, one figure a dummy and one list of targets, one body a dummy, updated in place', () => {
+    const s = field();
+    const view = new RangeView(tun);
+    const none = view.frame(s, now(s));
+    expect(none).toEqual([]);
+    expect(Object.isFrozen(none)).toBe(true);
+    expect(view.frame(s, now(s))).toBe(none);
+    view.raise(s, SPAWN, EYE);
+    view.frame(s, now(s));
+    const targets = s.targets;
+    const bodies = [...targets];
+    const figures = view.figures(now(s));
+    const each = [...figures];
+    // The first mover's feet, as its figure and its body had them.
+    const mover = figures.findIndex((f) => f.velocity[0] !== 0 || f.velocity[2] !== 0);
+    expect(mover).toBeGreaterThanOrEqual(0);
+    const walked = [...figures[mover].position];
+    run(s, 30);
+    view.frame(s, now(s));
+    expect(s.targets).toBe(targets);
+    expect(s.targets.length).toBe(bodies.length);
+    s.targets.forEach((b, i) => expect(b).toBe(bodies[i]));
+    const again = view.figures(now(s));
+    expect(again).toBe(figures);
+    again.forEach((f, i) => expect(f).toBe(each[i]));
+    // Updated: the mover has walked on, its figure and its body with it.
+    expect(figures[mover].position).not.toEqual(walked);
+    expect(bodies[mover].feet).toEqual(figures[mover].position);
   });
 });

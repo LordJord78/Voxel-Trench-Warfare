@@ -355,6 +355,9 @@ try {
     const h = window.__trenchline;
     h.setQuality({ preset: 'high', dynres: false });
     document.getElementById('loading').hidden = true;
+    // No range: G1's proof is of the world as it was approved, without dummies in frame or movers in
+    // the far bursts (the range goes up at the first play, as a visitor's does).
+    h.range(false);
     h.play();
     // No shells: a crater in the step would move the shooter between captures (the front's rifle fire goes on).
     h.setShelling('off');

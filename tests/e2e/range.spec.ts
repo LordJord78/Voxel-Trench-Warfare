@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { P } from '../../src/world/materials';
 import { hooks, openGame, type Hooks } from './support/app';
 
 // The range (the shots spec's §5): in solo play, dummies and steel plates out in front of the spawn
@@ -61,7 +62,7 @@ async function shootAt(page: Page, at: readonly number[]): Promise<number> {
   );
 }
 
-test('with the range asked for, solo play raises its dummies and 5 plates in front of the spawn bay: on the Ravine 7, its 150 m spot past the map', async ({ page }) => {
+test('with the range asked for, solo play raises every dummy and plate it lays in front of the spawn bay: on the Ravine the 5 dummies and 4 plates its firing step sees', async ({ page }) => {
   const errors = await openGame(page);
   const seen = await ranged(page, async (h) => {
     h.range(true);
@@ -105,32 +106,34 @@ test('with the range asked for, solo play raises its dummies and 5 plates in fro
   const said = JSON.stringify(seen);
   expect(seen.before, said).toBe(false);
   expect(seen.up, said).toBe(true);
-  // The Ravine's map ends 149 m out from its spawn: its 150 m dummy has no ground (G2's ledger).
+  // What rangeLayout lays on the Ravine (tests/combat/range.test.ts), sighted from the firing step:
+  // its map ends 149 m out from its spawn, so its 150 m dummy has no ground, and the enemy's parapet
+  // some 54 m out hides the 110 m dummy, the 90 m mover and the 85 m plate (G2's ledger).
   expect(seen.map).toBe('ravine');
-  const ids = [200, 201, 202, 203, 204, 205, 206];
+  const ids = [200, 201, 202, 203, 204];
   expect(seen.dummies.map((d) => d.id), said).toEqual(ids);
-  // Five standing at their distances, then the two walking; each within 1 m of its distance out,
+  // Four standing at their distances, then the one walking; each within 1 m of its distance out,
   // within the bay's frontage across, at full health, standing on the ground.
-  const out = [25, 40, 60, 80, 110, 50, 90];
+  const out = [25, 40, 60, 80, 50];
   seen.dummies.forEach((d, i) => {
     expect(Math.abs(d.out - out[i]), said).toBeLessThanOrEqual(1);
     expect(Math.abs(d.right), said).toBeLessThanOrEqual(12);
     expect([d.hp, d.down], said).toEqual([100, false]);
-    if (i < 5) expect([d.under !== 0, d.at], said).toEqual([true, 0]);
+    if (i < 4) expect([d.under !== 0, d.at], said).toEqual([true, 0]);
   });
-  // Torso plates at 30, 55 and 85 m, head plates at 45 and 70 m: white steel at each one's middle.
-  const plates = [30, 55, 85, 45, 70];
-  expect(seen.plates.map((p) => p.index)).toEqual([0, 1, 2, 3, 4]);
+  // Torso plates at 30 and 55 m, head plates at 45 and 70 m: white steel at each one's middle.
+  const plates = [30, 55, 45, 70];
+  expect(seen.plates.map((p) => p.index)).toEqual([0, 1, 2, 3]);
   seen.plates.forEach((p, i) => {
     expect(Math.abs(p.out - plates[i]), said).toBeLessThanOrEqual(1);
     expect(Math.abs(p.right), said).toBeLessThanOrEqual(12);
     expect([p.steel, p.hits], said).toEqual([80, 0]);
   });
-  // The standing ones are the session's targets, the renderer draws all seven (all in view from the
-  // step), and no shell lands near any of the twelve spots.
+  // The standing ones are the session's targets, the renderer draws all five (all in view from the
+  // step), and no shell lands near any of the nine spots.
   expect(seen.targets, said).toEqual(ids);
-  expect(seen.drawn, said).toBe(7);
-  expect(seen.shellsKept, said).toBe(12);
+  expect(seen.drawn, said).toBe(5);
+  expect(seen.shellsKept, said).toBe(9);
   expect(seen.gpuErrors).toEqual([]);
   expect(errors).toEqual([]);
 });
@@ -228,6 +231,88 @@ test('a round into a plate rings it: the readout says PLATE and the struck voxel
   expect(errors).toEqual([]);
 });
 
+for (const [name, path] of [['ravine', '/'], ['corridor', '/?map=corridor']] as const) {
+  test(`on the ${name}, the range lowered through the app puts its world back: no steel or post left where its plates stood, no targets, no shells kept off, no readout; raised and lowered again, the same`, async ({ page }) => {
+    test.setTimeout(240_000);
+    const errors = await openGame(page, path);
+    const seen = await ranged(
+      page,
+      async (h, arg) => {
+        const [STEEL, HIT, POST] = arg as number[];
+        const v = 0.1;
+        const map = h.world.map;
+        h.range(true);
+        h.play();
+        await h.waitFrames(3);
+        const up = h.rangeState();
+        // Each plate's box (voxels): 4 either way of its steel's middle across and along, from 20 under
+        // it, past its post's foot, to 3 over it.
+        const middles = up.plates.map((p) => p.at.map((c) => Math.floor(c / v)));
+        const box = ([cx, cy, cz]: number[]) => {
+          const out: number[][] = [];
+          for (let x = cx - 4; x <= cx + 4; x++) for (let y = cy - 20; y <= cy + 3; y++) for (let z = cz - 4; z <= cz + 4; z++) out.push([x, y, z]);
+          return out;
+        };
+        const read = () => middles.map((m) => box(m).map(([x, y, z]) => map.get(x, y, z)));
+        // Up: each plate's steel in its box, and its post, down its middle's column from under the steel.
+        const steel = middles.map((m) => box(m).filter(([x, y, z]) => map.get(x, y, z) === STEEL));
+        const posts = middles.map(([cx, cy, cz]) => {
+          let y = cy;
+          while (map.get(cx, y, cz) === STEEL) y--;
+          const post: number[][] = [];
+          for (; map.get(cx, y, cz) === POST; y--) post.push([cx, y, cz]);
+          return post;
+        });
+        h.range(false);
+        const first = read();
+        const left = (cells: number[][][], ids: number[]) => cells.map((c) => c.filter(([x, y, z]) => ids.includes(map.get(x, y, z))).length);
+        const lowered = {
+          state: h.rangeState(),
+          targets: h.session.targets.length,
+          exclusion: h.session.artillery.exclusion.length,
+          steelInBoxes: first.map((b) => b.filter((p) => p === STEEL || p === HIT).length),
+          steelLeft: left(steel, [STEEL, HIT]),
+          postLeft: left(posts, [POST]),
+        };
+        h.range(true);
+        const again = h.rangeState().plates.map((p) => p.at);
+        h.range(false);
+        const second = read();
+        return {
+          map: h.map,
+          plates: up.plates.map((p) => p.at),
+          steel: steel.map((c) => c.length),
+          posts: posts.map((c) => c.length),
+          lowered,
+          again,
+          same: JSON.stringify(second) === JSON.stringify(first),
+          gpuErrors: h.gpuErrors(),
+        };
+      },
+      [P.TARGET_STEEL, P.TARGET_STEEL_HIT, P.TIMBER],
+    );
+    const said = JSON.stringify(seen);
+    expect(seen.map).toBe(name);
+    const none = seen.plates.map(() => 0);
+    expect(seen.plates.length, said).toBeGreaterThanOrEqual(4);
+    // Up: each plate's steel (a torso plate's 30 voxels, a head plate's 9) over its timber post.
+    for (const n of seen.steel) expect([30, 9], said).toContain(n);
+    for (const n of seen.posts) expect(n, said).toBeGreaterThanOrEqual(10);
+    // Down: no steel left in any plate's box, nor timber where its post stood; no targets, no shells
+    // kept off, nothing read out.
+    expect(seen.lowered.steelInBoxes, said).toEqual(none);
+    expect(seen.lowered.steelLeft, said).toEqual(none);
+    expect(seen.lowered.postLeft, said).toEqual(none);
+    expect(seen.lowered.state, said).toEqual({ up: false, dummies: [], plates: [], readout: null });
+    expect([seen.lowered.targets, seen.lowered.exclusion], said).toEqual([0, 0]);
+    // Raised again where it stood, and lowered again: every box as the first lowering left it.
+    expect(seen.again, said).toEqual(seen.plates);
+    expect(seen.same, said).toBe(true);
+    expect(seen.gpuErrors).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}
+
 test("without asking, a test's world has no range", async ({ page }) => {
   const errors = await openGame(page);
   const seen = await ranged(page, async (h) => {
@@ -256,6 +341,6 @@ test("a visitor's click into solo play raises the range; with ?range=0 it raises
     });
     return { before, after };
   };
-  expect(await clickIn('/')).toEqual({ before: false, after: { up: true, dummies: 7, plates: 5 } });
+  expect(await clickIn('/')).toEqual({ before: false, after: { up: true, dummies: 5, plates: 4 } });
   expect(await clickIn('/?range=0')).toEqual({ before: false, after: { up: false, dummies: 0, plates: 0 } });
 });

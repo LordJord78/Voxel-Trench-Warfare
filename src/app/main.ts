@@ -659,8 +659,11 @@ async function start(): Promise<void> {
   /** Whether play has started: the range goes up with the first start. */
   let played = false;
   const raiseRange = () => {
-    if (rangeOn && together.net === null) range.raise(session, world.spawn);
+    // Sighted from the step view: the eye of a player standing on the spawn bay's firing step.
+    if (rangeOn && together.net === null) range.raise(session, world.spawn, views.step.position);
   };
+  /** The soldiers given the renderer each frame: the others, then the range's dummies (one list, kept). */
+  const soldiers: SoldierDraw[] = [];
   const lowerRange = () => {
     range.lower(session);
     readout.clear();
@@ -909,7 +912,7 @@ async function start(): Promise<void> {
     // The others posed, given to the session to strike, and their shots fired, before its ticks run;
     // the range's dummies posed, the standing ones given to it as targets (the player's rounds alone).
     const draws = together.prepare(session, dt, puppets);
-    const dummies = range.frame(session, dt, session.ticks * session.clock.dt);
+    const dummies = range.frame(session, session.ticks * session.clock.dt);
     let pose: CameraPose;
     if (mode === 'fly') {
       fly.sensitivity = settings.sensitivity;
@@ -975,7 +978,12 @@ async function start(): Promise<void> {
     // The battle seen (its flares, flashes, smoke, tracers, and fires' flames and plumes) as the lights last showed it; none at rest.
     const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
     // The dummies after any others: the renderer has eight soldiers' slots.
-    renderer.setSoldiers(dummies.length > 0 ? [...draws, ...dummies] : draws);
+    if (dummies.length > 0) {
+      soldiers.length = 0;
+      for (const d of draws) soldiers.push(d);
+      for (const d of dummies) soldiers.push(d);
+      renderer.setSoldiers(soldiers);
+    } else renderer.setSoldiers(draws);
     together.after(session, events, draws, performance.now());
     // The player's rounds on the range, read out under the marker.
     readout.show(range.after(events, session.ticks * session.clock.dt), now / 1000);
