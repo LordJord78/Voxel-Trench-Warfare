@@ -132,6 +132,22 @@ export interface Hooks {
   setShelling(i: 'off' | 'light' | 'heavy'): void;
   /** The front's fire, for this visit (the pause menu's choice is what is kept). */
   setIntensity(i: 'off' | 'light' | 'heavy'): void;
+  /**
+   * The range (src/app/range.ts) allowed or not, for this visit: up or down at once once play has
+   * started (the start screen left), or at the click that starts it; never in a room.
+   */
+  range(on: boolean): void;
+  /**
+   * The range as it stands: its dummies (body ids 200 on; their feet, metres; health; down), its
+   * plates (numbered as laid, torso then head; the middle of their steel, metres; the player's rounds
+   * into them), and the HUD's readout (null when none shows).
+   */
+  rangeState(): {
+    up: boolean;
+    dummies: { id: number; position: [number, number, number]; hp: number; down: boolean }[];
+    plates: { index: number; at: [number, number, number]; hits: number }[];
+    readout: string | null;
+  };
   /** What the last frame's effects held: particles' billboards, tracers, flash stars, transient lights; the battle's tracers, fires' flames, and every tracer's head; the ricochets and embers, and them by their tracer's kind (TRACER_KIND: none, amber, red, blue). */
   effects(): { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number; ricochetsByKind: number[]; embersByKind: number[] };
   /** Test quads (metres, metres across, linear colour) drawn with the effects from the next frame, emissive or `lit` as dust is; [] for none. */
@@ -248,8 +264,10 @@ export async function openGame(page: Page, path = '/'): Promise<string[]> {
   await hooks(page, async (h) => {
     if (h.error !== undefined) return;
     h.holdLights();
-    // The front holds its fire unless a test asks for it (a visitor's default is light).
+    // The front holds its fire unless a test asks for it (a visitor's default is light), and no range
+    // stands unless a test asks for one (a visitor's solo play has one from the click).
     h.setIntensity('off');
+    h.range(false);
     await h.waitFrames(1);
   });
   return errors;

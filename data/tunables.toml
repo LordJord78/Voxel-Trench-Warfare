@@ -633,6 +633,9 @@ max_slope_deg       = 30.0     # over half a metre either way
 bowl_m              = 0.6      # under the mean of the ground 3 m round it
 down_s              = 4.0
 readout_s           = 1.5      # the HUD's readout of a hit
+range_shell_clear_m = 6.0      # while it stands, the solo artillery lands no shell this near a spot
+                               # (a mover's: anywhere along its walk). A crater would carve a plate
+                               # and leave a dummy standing on air; a strike's fire would char the steel
 
 [hits]
 # Hit feedback (the shots spec's §4). A critical hit (a headshot, or the round

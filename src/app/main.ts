@@ -4,7 +4,8 @@
  * The page asks for WebGPU first and says at once if there is none. The world
  * generates in workers while the loading screen inks a trench trace; it is
  * uploaded, and the player is drawn standing in the front-line bay behind a
- * "click to play" prompt. Playing, every frame turns the mouse, runs the
+ * "click to play" prompt; in solo play, the click raises the range out in front
+ * of the bay (range.ts). Playing, every frame turns the mouse, runs the
  * 60 Hz simulation over the frame's time, places the camera between the last
  * two ticks and draws. Esc (or losing the pointer lock) pauses to a menu with
  * the world still drawn behind it. Alt+Enter, or the menus' Fullscreen, takes
@@ -39,11 +40,13 @@ import { idleIntent, Session, SHOVEL_HELD, type CombatEvents } from '../sim/sess
 import { MAP_SEEDS, isMapId, type MapId } from '../world/generation/params';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
 import { relayUrl, Together, type Figure } from './together';
+import { rangeAllowed, RangeView } from './range';
 import { Fullscreen, fullscreenButtons } from '../ui/fullscreen';
 import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
 import { Hud, type HudTag, type Reticle } from '../ui/hud';
+import { Readout } from '../ui/readout';
 import { kitSummary, loadLoadout, LoadoutMenu, saveLoadout } from '../ui/loadout';
 import { MapView } from '../ui/map-view';
 import type { SoldierDraw } from '../render/soldiers';
@@ -647,11 +650,32 @@ async function start(): Promise<void> {
     },
   });
 
+  // The range (range.ts): solo play's dummies and steel plates in front of the spawn bay, from the
+  // click that starts play. Never in a room or a check run, nor with ?range=0; and a test's world has
+  // one only when it asks (hooks.range, which sets whether it may stand).
+  const range = new RangeView(tun);
+  const readout = new Readout(document.querySelector<HTMLElement>('#hud .readout'), range.t.readoutS);
+  let rangeOn = rangeAllowed({ room: together.net !== null, check: checkRun !== null, param: searchParams.get('range') });
+  /** Whether play has started: the range goes up with the first start. */
+  let played = false;
+  const raiseRange = () => {
+    if (rangeOn && together.net === null) range.raise(session, world.spawn);
+  };
+  const lowerRange = () => {
+    range.lower(session);
+    readout.clear();
+  };
+
   const play = (lock: boolean) => {
     if (stopped) return;
     loading.hide();
     // From the backdrop to the spawn: a cut, so the image starts afresh.
     if (mode === 'ready') renderer.resetHistory();
+    // The range goes up with the click that starts play: until then the page's still holds.
+    if (!played) {
+      played = true;
+      raiseRange();
+    }
     mode = 'playing';
     // The click that starts play is where the browser lets the sound start.
     audio.start();
@@ -880,8 +904,12 @@ async function start(): Promise<void> {
     last = now;
     followCanvas(now);
     if (lapse > 0 && mode !== 'loading') timeOfDay = (timeOfDay + (lapse * dt) / 60) % 24;
-    // The others posed, given to the session to strike, and their shots fired, before its ticks run.
+    // A room joined takes the range down: there is none in a room.
+    if (range.up && together.net !== null) lowerRange();
+    // The others posed, given to the session to strike, and their shots fired, before its ticks run;
+    // the range's dummies posed, the standing ones given to it as targets (the player's rounds alone).
     const draws = together.prepare(session, dt, puppets);
+    const dummies = range.frame(session, dt, session.ticks * session.clock.dt);
     let pose: CameraPose;
     if (mode === 'fly') {
       fly.sensitivity = settings.sensitivity;
@@ -946,8 +974,12 @@ async function start(): Promise<void> {
     }
     // The battle seen (its flares, flashes, smoke, tracers, and fires' flames and plumes) as the lights last showed it; none at rest.
     const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
-    renderer.setSoldiers(draws);
+    // The dummies after any others: the renderer has eight soldiers' slots.
+    renderer.setSoldiers(dummies.length > 0 ? [...draws, ...dummies] : draws);
     together.after(session, events, draws, performance.now());
+    // The player's rounds on the range, read out under the marker.
+    readout.show(range.after(events, session.ticks * session.clock.dt), now / 1000);
+    readout.tick(now / 1000);
     // The tracers burn brighter by day, by the sun the frame is lit with, and while it is up their light
     // covers the haze behind them.
     const sun = skyNow().sunElevationDeg;
@@ -1271,6 +1303,17 @@ async function start(): Promise<void> {
       puppets = list.map((p, i) => ({ seat: 100 + i, velocity: [0, 0, 0], deadFor: null, ...p }));
     },
     soldiersDrawn: () => renderer.soldiersDrawn(),
+    /**
+     * The range (range.ts) allowed or not, for this visit: up or down at once once play has started
+     * (the start screen left), or at the click that starts it; never in a room.
+     */
+    range(on: boolean) {
+      rangeOn = on;
+      if (!on) lowerRange();
+      else if (mode !== 'loading' && mode !== 'ready') raiseRange();
+    },
+    /** The range as it stands: its dummies (body ids 200 on), its plates, and the readout's words (null when none shows). */
+    rangeState: () => ({ ...range.state(), readout: readout.text }),
     /** The camera held at `pose` while the session runs (null: play again); peak-combat.ts's. */
     spectate(pose: CameraPose | null) {
       peakGame.spectate(pose);

@@ -191,7 +191,7 @@
        * apart, 0.020 long, 0.0022 thick), haloed so they read against the dusk sky and the clay.
        */
       #hud { position: fixed; inset: 0; pointer-events: none; --tick: max(1px, 0.11vh); }
-      #hud .readout {
+      #hud .reckoning {
         position: absolute; left: clamp(16px, 6vw, 88px); bottom: clamp(24px, 7vh, 72px); margin: 0;
         line-height: 1.5; text-shadow: 0 1px 2px rgba(23, 20, 31, 0.9), 0 0 10px rgba(23, 20, 31, 0.6);
       }
@@ -209,6 +209,12 @@
       #hud .crosshair i:nth-child(2) { left: calc(var(--tick) / -2); top: var(--gap); width: var(--tick); height: 1vh; }
       #hud .crosshair i:nth-child(3) { left: var(--gap); top: calc(var(--tick) / -2); width: 1vh; height: var(--tick); }
       #hud .crosshair i:nth-child(4) { left: calc(-1vh - var(--gap)); top: calc(var(--tick) / -2); width: 1vh; height: var(--tick); }
+      /* The range's readout (the shots spec's §5): what a hit did, in small capitals 4.2vh under the middle, under the marker; a kill's two lines. */
+      #hud .readout {
+        position: absolute; left: 50%; top: calc(50% + 4.2vh); transform: translateX(-50%); margin: 0; white-space: pre; text-align: center;
+        font-size: 1.05rem; letter-spacing: 0.08em; font-variant-caps: small-caps; font-variant-numeric: tabular-nums;
+        color: var(--haze); text-shadow: 0 1px 2px rgba(23, 20, 31, 0.9), 0 0 10px rgba(23, 20, 31, 0.6);
+      }
 
       /* F3: what the frame costs. A developer's readout, so it is set as one. */
       #overlay {
@@ -306,12 +312,13 @@
       <canvas class="map" aria-label="The trench map" hidden></canvas>
       <ol class="feed" aria-live="polite"></ol>
       <div class="marker" aria-hidden="true" hidden><i></i><i></i><i></i><i></i></div>
+      <div class="readout" aria-hidden="true" hidden></div>
       <div class="harm" aria-hidden="true" hidden></div>
       <p class="aimed" hidden></p>
       <div class="fallen" hidden><p class="by"></p><p class="back"></p><p class="kit-hint">Esc, then Loadout, to change your kit before you are back in</p></div>
       <p class="won" hidden></p>
       <div class="board" hidden></div>
-      <div class="readout">
+      <div class="reckoning">
         <p class="health" hidden></p>
         <p class="stance"></p>
         <p class="exposure"></p>
