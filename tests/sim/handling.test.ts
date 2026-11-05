@@ -53,6 +53,22 @@ function stillMuzzle(s: Session): [number, number, number] {
   s.handsStill = was;
   return m;
 }
+/** `stand`, with the gun in `slot` up, then Shift and W held for a second: a full sprint. */
+function sprinting(loadout?: Loadout, slot = 0): Session {
+  const s = stand(loadout);
+  s.intent = { ...idleIntent(), swap: slot };
+  for (let k = 0; k < 90; k++) s.tick();
+  s.intent = { ...idleIntent(), forward: 1, sprint: true };
+  for (let k = 0; k < 60; k++) s.tick();
+  expect([s.held, s.ready, s.handling.sprint]).toEqual([slot, 1, 1]);
+  s.drainEvents();
+  return s;
+}
+/** Shift and W held, and the trigger as given: a tick of a sprint. */
+const sprintTick = (s: Session, fire: boolean) => {
+  s.intent = { ...idleIntent(), forward: 1, sprint: true, fire };
+  s.tick();
+};
 
 describe('the gun in the hands, in play', () => {
   it('with fire held the player never sprints, and the first shot leaves within 0.12 s of the press out of a full sprint', () => {
@@ -91,6 +107,99 @@ describe('the gun in the hands, in play', () => {
       for (let k = 0; k < first; k++) expect(blends[k]).toBeGreaterThanOrEqual(ht.sprintBlocksFire);
       expect(blends[first]).toBeLessThan(ht.sprintBlocksFire);
     }
+  });
+
+  it('a tap out of a full sprint is not lost: it fires once as the gun comes up, when a held press would, and the sprint comes back', () => {
+    // Shift and W held throughout, the button down for a tick (a trackpad's tap: input.ts holds a
+    // press for the tick that takes it) or for five (a quick click), let go while the gun is still
+    // swung low. The press waits, the sprint dropped though the button is up, and fires as the blend
+    // falls under 0.3. Each gun: the AK (automatic), the SVD and the M870 (a shot a press), the pistol.
+    const guns: [Loadout, number][] = [
+      [bare('ak74'), 0],
+      [bare('svd'), 0],
+      [bare('m870'), 0],
+      [bare('ak74'), 1],
+    ];
+    for (const [loadout, slot] of guns) {
+      // When a press held from the same sprint first fires: tick k is (k + 1) ticks after the press.
+      const held = sprinting(loadout, slot);
+      let due = -1;
+      for (let k = 0; k < 30 && due < 0; k++) {
+        sprintTick(held, true);
+        if (held.shots.length > 0) due = k;
+      }
+      expect(due).toBeGreaterThan(0);
+      for (const tap of [1, 5]) {
+        const label = `${slot === 0 ? loadout.primary : loadout.secondary}, a ${tap}-tick tap`;
+        const s = sprinting(loadout, slot);
+        const blends: number[] = [];
+        const shots: number[] = [];
+        for (let k = 0; k < 60; k++) {
+          sprintTick(s, k < tap);
+          blends.push(s.handling.sprint);
+          if (s.shots.length > 0) shots.push(k);
+        }
+        // One shot, on the tick a held press's first leaves: within 0.12 s, the gun up out of the sprint.
+        expect(shots, label).toEqual([due]);
+        expect(s.weapon.shotsFired, label).toBe(1);
+        expect((due + 1) * TICK, label).toBeLessThanOrEqual(0.12);
+        expect(blends[due], label).toBeLessThan(ht.sprintBlocksFire);
+        // Before it the gun was swung low, and coming up the whole while, the button up or not.
+        for (let k = 0; k < due; k++) {
+          expect(blends[k], label).toBeGreaterThanOrEqual(ht.sprintBlocksFire);
+          expect(blends[k], label).toBeLessThan(k === 0 ? 1 : blends[k - 1]);
+        }
+        // Then, with Shift and W still held, the sprint is back: nothing is left holding it off.
+        expect(blends[59], label).toBe(1);
+      }
+    }
+  });
+
+  it('a tap out of a sprint on an empty magazine clicks as the gun comes up, and the reload begins 0.25 s after the click', () => {
+    for (const tap of [1, 5]) {
+      const label = `a ${tap}-tick tap`;
+      const s = sprinting();
+      const w = s.weapon;
+      w.rounds = 0;
+      const start = s.ticks;
+      const heard: CombatEvents['handling'] = [];
+      let began = -1;
+      for (let k = 0; k < 40; k++) {
+        sprintTick(s, k < tap);
+        const got = s.drainEvents().handling;
+        // Heard once the gun is up out of the sprint, at its muzzle then.
+        for (const c of got) {
+          expect(c.at, label).toEqual(s.muzzle());
+          expect(s.handling.sprint, label).toBeLessThan(ht.sprintBlocksFire);
+        }
+        heard.push(...got);
+        if (began < 0 && w.reloading) began = s.ticks;
+      }
+      expect(heard.map((c) => c.cue), label).toEqual(['dry']);
+      // The press's tick is the first after it.
+      expect((heard[0].tick - start) * TICK, label).toBeLessThanOrEqual(0.12);
+      expect(began - heard[0].tick, label).toBe(Math.round(ht.dryReloadS / TICK));
+    }
+  });
+
+  it('killed while a tap waits for the gun to come up out of a sprint, the press is gone', () => {
+    const s = sprinting();
+    sprintTick(s, true);
+    sprintTick(s, false);
+    expect(s.handling.sprint).toBeGreaterThanOrEqual(ht.sprintBlocksFire);
+    s.alive = false;
+    for (let k = 0; k < 30; k++) {
+      sprintTick(s, false);
+      expect(s.shots, `tick ${k}`).toHaveLength(0);
+    }
+    expect(s.handling.sprint).toBe(0);
+    // Back in, nothing fires that was not pressed in this life.
+    s.respawn([12.8, 0.4, 2], 0);
+    for (let k = 0; k < 30; k++) {
+      sprintTick(s, false);
+      expect(s.shots, `back in, tick ${k}`).toHaveLength(0);
+    }
+    expect(s.weapon.shotsFired).toBe(0);
   });
 
   it('the sights held drop the sprint at once, as fire does', () => {

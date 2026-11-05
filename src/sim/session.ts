@@ -230,6 +230,8 @@ export class Session {
   /** The trigger as the last tick had it in the hands (a press is its rising), and an empty trigger's reload: its tick, and its gun. */
   private triggerWas = false;
   private dryReload: { tick: number; weapon: Weapon } | null = null;
+  /** A press the sprint alone held back, the gun still swung low: it stands, the sprint dropped, until the gun is up to take it. */
+  private pressWaiting = false;
   /** The hands' cues heard this tick: each is placed at the muzzle as the tick leaves it. */
   private heard: HandlingCue[] = [];
   /** The gun's light (or laser) switched on. */
@@ -570,8 +572,9 @@ export class Session {
     this.ticks++;
     this.acting = this.alive ? this.intent : idleIntent();
     const p = this.player;
-    // Firing, aiming or aimed down the sights the player does not sprint.
-    if ((this.acting.fire || this.acting.aim === true || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
+    // Firing (a press waiting for the gun to come up out of a sprint as well), aiming or aimed down
+    // the sights the player does not sprint.
+    if ((this.acting.fire || this.pressWaiting || this.acting.aim === true || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
     // Suppression as the last tick left it slows the feet and pins the player off the step; what
     // is in the hands, and the sights up, slow them too.
     const carried = this.held === SHOVEL_HELD ? 1 : this.arm.spec.move;
@@ -743,8 +746,14 @@ export class Session {
     if (this.acting.reload && this.held !== SHOVEL_HELD) w.beginReload();
     const eye: [number, number, number] = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
     // No shot with the shovel in the hands, a gun not yet up, through the periscope, or the gun still
-    // swung low from a sprint (its blend at or over sprint_blocks_fire); an empty one clicks.
-    const trigger = this.acting.fire && p.stance !== Stance.PERISCOPE && inHand && this.handling.sprint < this.handling.t.sprintBlocksFire;
+    // swung low from a sprint (its blend at or over sprint_blocks_fire); an empty one clicks. The
+    // sprint delays a press and does not lose it: one it alone holds back waits, the sprint dropped
+    // meanwhile (tick()), so the blend falls a tick's share each tick and the press pulls the trigger
+    // as it passes under, a tap out of a sprint as a held press would. Killed, nothing waits.
+    const low = this.handling.sprint >= this.handling.t.sprintBlocksFire;
+    const pulled = (this.acting.fire || (this.pressWaiting && this.alive)) && p.stance !== Stance.PERISCOPE && inHand;
+    const trigger = pulled && !low;
+    this.pressWaiting = pulled && low;
     this.dryTrigger(w, trigger);
     if (w.wants(trigger)) {
       const aim: [number, number] = [p.yaw + this.recoil.yaw + this.suppression.flinchYaw, p.pitch + this.recoil.pitch + this.suppression.flinchPitch];
