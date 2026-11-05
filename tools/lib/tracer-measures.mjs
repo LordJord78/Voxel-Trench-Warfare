@@ -741,7 +741,9 @@ const num = (x) => typeof x === 'number' && Number.isFinite(x);
  *     wall: (e) (the wall's head, beside its own shot's flash in every frame it is drawn, reported).
  *   - Far (from the eye or the side, not aimed): (b) after dark, against the shooter's team's hue (by
  *     day reported); (d) at noon (at 17:35 reported). Side on: (c).
- *   - `battle`: the battle's amber. The graze: a ricochet of the player's kind. Every capture: enough GPU samples.
+ *   - `battle`: the battle's amber. The graze: a ricochet of the player's kind. `front` (heavy): the
+ *     enemy line's amber in the frame (the window is chosen at a frame it is drawn in), tinted amber.
+ *     Every capture: enough GPU samples.
  */
 export function gateCapture(c, m, burst) {
   const failures = [];
@@ -783,6 +785,10 @@ export function gateCapture(c, m, burst) {
     const bc = m.battleColour;
     if (!(bc?.measured === true)) failures.push(`the battle's streams at night: ${bc?.n ?? 0} lit pixels, fewer than ${FAR_LIT_MIN}`);
     else if (!(num(bc.saturation) && bc.saturation >= TARGET.battleSaturation)) failures.push(`the battle's streams at night: saturation ${round3(bc.saturation)} < ${TARGET.battleSaturation} (hue ${bc.hueDeg?.toFixed(1)})`);
+  }
+  if (c.front) {
+    const fc = m.frontColour;
+    if (!(num(fc?.drawn) && fc.drawn >= 1 && num(fc.n) && fc.n >= FAR_LIT_MIN)) failures.push(`the front's amber: ${fc?.drawn ?? 0} rounds drawn, ${fc?.n ?? 0} pixels tinted amber (fewer than ${FAR_LIT_MIN})`);
   }
   if (c.burst === 'graze') {
     const mine = burst.most?.ricochetsByKind?.[kind];

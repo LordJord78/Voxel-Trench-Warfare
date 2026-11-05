@@ -308,6 +308,7 @@ function passing(c: Capture): Measures {
     stream: { share: 0.95, span: 0.75, samples: 80, reachPx: 300, muzzlePx: 400 },
     pathCover: { share: 0.95 },
     noonContrast: { ratio: 1.9 },
+    frontColour: { drawn: 2, n: 300, saturation: 0.7, hueDeg: TEAM.amber.hue },
   };
 }
 const burstOf = (ricochetsByKind = [0, 2, 3, 3]): Burst => ({ most: { ricochets: ricochetsByKind.reduce((a, b) => a + b, 0), embers: 6, ricochetsByKind, embersByKind: [0, 2, 4, 0] }, gpuSamples: 120 });
@@ -335,6 +336,7 @@ function gated(c: Capture): string[] {
   if (far && c.hours === 12) paths.push('noonContrast', 'noonContrast.ratio');
   if (c.side) paths.push('pathCover', 'pathCover.share');
   if (c.battle) paths.push('battleColour', 'battleColour.measured', 'battleColour.saturation');
+  if (c.front) paths.push('frontColour', 'frontColour.drawn', 'frontColour.n');
   return paths;
 }
 
@@ -395,6 +397,12 @@ describe("G1's proof: its gates", () => {
     const m = passing(wall);
     expect(gateCapture(wall, { ...m, stream: { ...m.stream, share: TARGET.streamCover - 0.01 } }, burstOf()).length).toBe(1);
     expect(gateCapture(wall, { ...m, nearWidth: { px: TARGET.nearWidthPx + 1, samples: 10 } }, burstOf()).length).toBe(1);
+    // With the front heavy, its amber in the frame, read as amber.
+    const heavy = CAPTURES.find((x) => x.name === 'side-1735-heavy')!;
+    const h = passing(heavy);
+    expect(gateCapture(heavy, { ...h, pathCover: { share: 1 } }, burstOf())).toEqual([]);
+    expect(gateCapture(heavy, { ...h, pathCover: { share: 1 }, frontColour: { drawn: 0, n: 0, saturation: null, hueDeg: null } }, burstOf()).length).toBe(1);
+    expect(gateCapture(heavy, { ...h, pathCover: { share: 1 }, frontColour: { drawn: 1, n: FAR_LIT_MIN - 1, saturation: 0.7, hueDeg: 40 } }, burstOf()).length).toBe(1);
     // Its head is drawn only in the frame its round is fired, its own shot's flash beside it: reported.
     expect(gateCapture(wall, { ...m, headline: { ...m.headline, ratioTop: 2.9 } }, burstOf())).toEqual([]);
     expect(gateCapture(wall, without(m, 'headline'), burstOf())).toEqual([]);

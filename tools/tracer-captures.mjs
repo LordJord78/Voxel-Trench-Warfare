@@ -167,7 +167,9 @@ async function captureAt(page, c) {
         const fx = h.effects();
         // The effects' own passes (the billboards' light and the draw), the latest measured frame's: what the tracers' look costs.
         const fxMs = (s.ownLast?.['effects-light'] ?? 0) + (s.ownLast?.effects ?? 0);
-        return { frame: h.frames(), gpu: s.gpuLastMs, gpuSamples: s.gpuSamples, fxMs, rounds: t.weapon.rounds, live: own.length, heads: own.filter((x) => x.headDrawn).length, ricochets: fx.ricochets, embers: fx.embers, ricochetsByKind: fx.ricochetsByKind, embersByKind: fx.embersByKind };
+        // The enemy line's rounds drawn (the session's amber, TRACER_KIND 1).
+        const amber = t.tracers.filter((x) => x.kind === 1 && x.head && x.tail).length;
+        return { frame: h.frames(), gpu: s.gpuLastMs, gpuSamples: s.gpuSamples, fxMs, rounds: t.weapon.rounds, live: own.length, heads: own.filter((x) => x.headDrawn).length, amber, ricochets: fx.ricochets, embers: fx.embers, ricochetsByKind: fx.ricochetsByKind, embersByKind: fx.embersByKind };
       }, { kind, hold: !!c.front }),
       `${c.name}: a frame`,
     );
@@ -241,7 +243,8 @@ async function captureAt(page, c) {
         effectsGpu.push(s.fxMs);
       }
       lastSamples = s.gpuSamples;
-      if (windowAt === null && firstShotAt !== null && k >= firstShotAt + SHOT_AFTER_FIRST && fired) {
+      // With the front's fire heavy, the window opens on a frame the enemy line's amber is drawn in too.
+      if (windowAt === null && firstShotAt !== null && k >= firstShotAt + SHOT_AFTER_FIRST && fired && (!c.front || s.amber > 0)) {
         windowAt = k;
         // The HUD's crosshair and reticle are white at the middle, where the rounds go: out of the measured pictures.
         hidden = await page.addStyleTag({ content: HIDE_HUD_MARK });
