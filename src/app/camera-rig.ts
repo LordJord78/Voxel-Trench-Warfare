@@ -19,7 +19,7 @@
  * standstill, which leaves the velocity nothing to explain the drop the
  * frames still show by, so over those frames the session's own account of
  * the body's rise explains it (Session.risen), and a landing's feel is the
- * dip alone.
+ * dip alone. A step taken as the body lands is still a step.
  */
 
 import { modelToView } from '../combat/viewmodel';
@@ -105,7 +105,9 @@ export class CameraRig {
       // and that tick's drop (the fall, and the ground's catch that ends it). A landing is not a step:
       // the frames that show any of it, from the first drawn after the landing tick to the first drawn
       // after the tick that follows it, take the session's own account of the body's rise, the drop at
-      // the speed it came down at. A step or a teleport among them is still the eye's to ease or snap.
+      // the speed it came down at. A step or a teleport among them is still the eye's to ease or snap,
+      // one taken on the landing tick itself too (a lip stepped up onto in the air as the fall meets
+      // it, the controller's unstick): the account takes no rise on a landing tick.
       const landing = session.landedTick >= this.lastTicks;
       const moved = landing ? risen - this.lastRisen : player.velocity.y * (simTime - this.lastSimTime);
       const jump = body - this.lastEye - moved;

@@ -4,7 +4,7 @@ import { CameraRig, rigTunables } from '../../src/app/camera-rig';
 import { handlingTunables } from '../../src/combat/handling';
 import { rifleModel } from '../../src/combat/rifle-model';
 import { viewmodelTunables } from '../../src/combat/viewmodel';
-import { Stance } from '../../src/physics/character';
+import { type MoveIntent, Stance } from '../../src/physics/character';
 import { Vec3 } from '../../src/physics/vec';
 import { Rng } from '../../src/core/rng';
 import { cameraBasis, type CameraPose } from '../../src/render/camera';
@@ -292,7 +292,7 @@ describe('the eye over steps', () => {
     expect(Math.abs(snapTo(s, rig, 9.0) - (9.0 + 1.62))).toBeLessThan(0.01);
   });
 
-  it('a landing lets nothing else go uneased: put half a metre up, its settle a landing in the same frame (as every respawn is), the eye eases there', () => {
+  it('a landing lets no teleport go uneased: put half a metre up, its settle a landing in the same frame (as every respawn is), the eye eases there', () => {
     // A respawn's first frame runs its first tick, on which the body put down settles: a landing,
     // whose own motion (none here) the eye follows. The height it was put at is the teleport's, which
     // the eye eases under a metre and snaps over one, as it always has. The game's frames, 60 a second.
@@ -314,6 +314,80 @@ describe('the eye over steps', () => {
     expect(2.5 + 1.62 - eye).toBeGreaterThan(0.3);
     for (let f = 1; f < 30; f++) eye = frame();
     expect(Math.abs(eye - (2.5 + 1.62))).toBeLessThan(0.005);
+  });
+
+  /**
+   * One rig, kept as the game keeps it, drawing every frame at `hz`, the ticks run as Session.advance
+   * runs them: `intentFor` gives each tick's intent (by the tick's number, and whether the landing has
+   * come), and `edit` runs before each frame. The first landing from here (`landedTick`): its tick and
+   * how far the foot rose on it. Then the eye's trail (the kept rig's eye less a fresh rig's, which
+   * draws the body's own eye: nothing to ease) on the first frame after it that draws the foot at `top`,
+   * and half a second after that.
+   */
+  function overTheRise(s: Session, hz: number, top: number, intentFor: (tick: number, down: boolean) => MoveIntent, edit?: (f: number) => void) {
+    const rig = new CameraRig(rigTunables(tun));
+    let [landed, rise, up, there, trail] = [-1, 0, -1, NaN, NaN];
+    for (let f = 0; up < 0 ? f < 4 * hz : f - up <= 0.5 * hz; f++) {
+      edit?.(f);
+      const ticks = s.clock.advance(1 / hz);
+      for (let i = 0; i < ticks; i++) {
+        s.intent = intentFor(s.ticks + 1, landed >= 0);
+        const y = s.player.position.y;
+        s.tick();
+        if (landed < 0 && s.landedTick === s.ticks) [landed, rise] = [s.ticks, s.player.position.y - y];
+      }
+      trail = rig.pose(s, 1 / hz).position[1] - new CameraRig(rigTunables(tun)).pose(s, 1 / hz).position[1];
+      if (landed >= 0 && up < 0 && s.footAt().y >= top - 1e-9) [up, there] = [f, trail];
+    }
+    return { landed, rise, there, after: trail };
+  }
+
+  it('a step taken as the body lands is still a step: a tapped jump that comes down on the face of a lip 0.3 m high steps up onto it on its landing tick, and the eye eases up after it, at 60 Hz and at 30 to 240', () => {
+    // In the air with jump not held (a tap: the mantle wants it held), a body moving into a lip up to
+    // [player] air_step_up over its feet steps up onto it, and its fall meets the lip's top at once: the
+    // landing tick rises. That rise is a step, not the body's own motion (a landing comes down), so the
+    // eye eases it as it eases any step; the fall before it is the body's own, which the eye follows.
+    const JUMP_AT = 27;
+    for (const hz of [60, 120, 144, 240, 30]) {
+      const map = new BrickMap({ x: 64, y: 64, z: 64 });
+      map.fillBox(0, 0, 0, 64, 20, 64, P.SOD);
+      map.fillBox(40, 20, 0, 64, 23, 64, P.SOD);
+      // Facing +x, the lip's face 3.4 m ahead: walking at it, a tap of jump; once down, still.
+      const s = Session.create({ map, plan: null, spawn: { position: [0.6, 2.0, 3.2] } }, tun, 7, 90);
+      for (let k = 0; k < 10; k++) s.tick();
+      const { landed, rise, there, after } = overTheRise(s, hz, 2.3, (tick, down) => ({ ...idleIntent(), forward: down ? 0 : 1, jump: tick === JUMP_AT }));
+      const label = `${hz} Hz`;
+      // It came down on the lip's face, well after the tap, and rose onto its top on the landing tick.
+      expect(landed, label).toBeGreaterThan(JUMP_AT + 10);
+      expect(rise, label).toBeGreaterThan(0.1);
+      // The frame that first draws the body on the lip's top draws the eye most of the step below it,
+      // as any step is drawn, not up there with it; and the eye is there in half a second.
+      expect(there, label).toBeLessThan(-rise / 2);
+      expect(Math.abs(after), label).toBeLessThan(0.005);
+    }
+  });
+
+  it("the controller's unstick, lifting a buried body out and landing it there in one tick, is eased as it always was", () => {
+    // A body inside the world [player] unstick_ticks running is lifted to the nearest free space (here
+    // out of ground piled 0.6 m over its feet), still, and comes down on it in the same tick: a landing
+    // that rose. The lift is no motion of the body's own, so the eye eases it, as it eases a teleport
+    // under a metre. The ground is piled outside the session's edits, whose own lift (liftOut) would
+    // come first.
+    for (const hz of [60, 120, 144, 240, 30]) {
+      const map = new BrickMap({ x: 64, y: 64, z: 64 });
+      map.fillBox(0, 0, 0, 64, 20, 64, P.SOD);
+      const s = Session.create({ map, plan: null, spawn: { position: [3.2, 2.0, 3.2] } }, tun, 7);
+      for (let k = 0; k < 30; k++) s.tick();
+      const pile = (f: number) => {
+        if (f === 5) map.fillBox(0, 20, 0, 64, 26, 64, P.SOD);
+      };
+      const { landed, rise, there, after } = overTheRise(s, hz, 2.6, () => idleIntent(), pile);
+      const label = `${hz} Hz`;
+      expect(landed, label).toBeGreaterThan(0);
+      expect(rise, label).toBeCloseTo(0.6, 9);
+      expect(there, label).toBeLessThan(-rise / 2);
+      expect(Math.abs(after), label).toBeLessThan(0.005);
+    }
   });
 });
 

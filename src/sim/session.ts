@@ -200,11 +200,14 @@ export class Session {
   /**
    * How far the player's foot has risen (metres; a fall's negative) at its own speed over the ticks
    * run, now and as the tick before the last left it: each tick its velocity by the tick's time, but a
-   * landing tick its whole drop, the fall and the ground's catch that ends it (the landing leaves the
-   * body at a standstill, so its velocity explains none of it: the drop is at the speed it came down
-   * at). A step's snap, a climb, a lift out of the ground and a teleport are not in it (a teleport
-   * holds it where the frames between ticks showed it). The camera explains the frames that show a
-   * landing by it, not as a step (camera-rig.ts).
+   * landing tick its drop, the fall and the ground's catch that ends it (the landing leaves the body at
+   * a standstill, so its velocity explains none of it: the drop is at the speed it came down at), and
+   * never a rise: a landing comes down. A step's snap is not in it, nor is one taken on the landing
+   * tick itself: a lip up to [player] air_step_up stepped up onto in the air as the fall meets it, a
+   * settle's lift of a body put into the ground, the controller's unstick. Nor are a climb, a lift out
+   * of the ground (liftOut) or a teleport (a teleport holds it where the frames between ticks showed
+   * it). The camera explains the frames that show a landing by it, not as a step, and eases the rest
+   * as it eases any step (camera-rig.ts).
    */
   risen = 0;
   prevRisen = 0;
@@ -638,8 +641,10 @@ export class Session {
     this.prevStroke = this.stroke;
     this.controller.tick(p, this.acting, this.clock.dt);
     // The foot's rise at its own speed, the controller's alone (a lift out of the ground comes after).
+    // A landing comes down: its tick's is its drop, and anything it rose is a step taken as it landed
+    // (a lip stepped up onto in the air, a settle's lift, the controller's unstick), the eye's to ease.
     const landed = p.landingImpact > this.prevLandingImpact;
-    this.risen += landed ? p.position.y - this.prevPosition.y : p.velocity.y * this.clock.dt;
+    this.risen += landed ? Math.min(0, p.position.y - this.prevPosition.y) : p.velocity.y * this.clock.dt;
     if (landed) this.landedTick = this.ticks;
     if (wasOnStep && p.pinned && p.stance !== Stance.FIRING_STEP) this.ejected++;
     // To the shoulder on the firing step, over the parapet; down off it.
