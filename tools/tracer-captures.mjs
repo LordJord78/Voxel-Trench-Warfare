@@ -13,8 +13,10 @@
 //     strikes within its first tick, so it is drawn once, from the muzzle to the wall.
 // 17:35 is seen side on as Blue too, and with the enemy line's rifle fire heavy (its amber in the frame:
 // the battle does not fire by day), set once the shooter has settled on the step; the shooter's
-// suppression is held at none through that burst (the line's heavy fire pins a man off the step within
-// it, and his stream with him) and each frame's level, after its tick, reported.
+// suppression is held at none through that burst, its flinch with it (Suppression.calm before each
+// tick: the line's heavy fire pins a man off the step within it, and his stream with him, and its near
+// misses drag his muzzle up, toward the low sun), each frame's level after its tick reported, and the
+// burst fails if a round leaves with a flinch.
 // The front's shelling is off (a crater in the step would move the shooter between captures); its
 // rifle fire goes on, and each window frame's suppression is reported. A burst whose shooter is not on
 // the firing step fails.
@@ -159,7 +161,12 @@ async function captureAt(page, c) {
     withTimeout(
       page.evaluate(async ({ kind, hold }) => {
         const h = window.__trenchline;
-        if (hold) h.session.suppression.level = 0;
+        // Held, the shooter's suppression is none as each tick begins, the flinch too: a near miss drags
+        // the muzzle up by flinch_deg, and the front's heavy fire took a followed round's path into the
+        // low sun's glare, its pixels washed pale.
+        if (hold) h.session.suppression.calm();
+        // The flinch this tick's round leaves with (a near miss's drag on the muzzle, degrees).
+        const flinch = Math.hypot(h.session.suppression.flinchPitch, h.session.suppression.flinchYaw);
         await h.stepFrames(1);
         const s = h.stats();
         const t = h.tracerPixels();
@@ -169,7 +176,7 @@ async function captureAt(page, c) {
         const fxMs = (s.ownLast?.['effects-light'] ?? 0) + (s.ownLast?.effects ?? 0);
         // The enemy line's rounds drawn (the session's amber, TRACER_KIND 1).
         const amber = t.tracers.filter((x) => x.kind === 1 && x.head && x.tail).length;
-        return { frame: h.frames(), gpu: s.gpuLastMs, gpuSamples: s.gpuSamples, fxMs, rounds: t.weapon.rounds, live: own.length, heads: own.filter((x) => x.headDrawn).length, amber, ricochets: fx.ricochets, embers: fx.embers, ricochetsByKind: fx.ricochetsByKind, embersByKind: fx.embersByKind };
+        return { flinch, frame: h.frames(), gpu: s.gpuLastMs, gpuSamples: s.gpuSamples, fxMs, rounds: t.weapon.rounds, live: own.length, heads: own.filter((x) => x.headDrawn).length, amber, ricochets: fx.ricochets, embers: fx.embers, ricochetsByKind: fx.ricochetsByKind, embersByKind: fx.embersByKind };
       }, { kind, hold: !!c.front }),
       `${c.name}: a frame`,
     );
@@ -219,6 +226,9 @@ async function captureAt(page, c) {
   let windowAt = null;
   let retired = null;
   let rounds = first.rounds;
+  /** Held, the flinch of each round that left with one (degrees). */
+  const flinched = [];
+  let shots = 0;
   // The most drawn in a frame: of every kind (the front's amber too), and by kind (TRACER_KIND).
   const most = { ricochets: 0, embers: 0, ricochetsByKind: [0, 0, 0, 0], embersByKind: [0, 0, 0, 0] };
   const frames = [];
@@ -231,6 +241,8 @@ async function captureAt(page, c) {
       if (firstShotAt === null && fired) firstShotAt = k;
       if (fired) lastShotAt = k;
       rounds = s.rounds;
+      if (fired) shots++;
+      if (fired && c.front && s.flinch > 0) flinched.push(s.flinch);
       most.ricochets = Math.max(most.ricochets, s.ricochets);
       most.embers = Math.max(most.embers, s.embers);
       for (let j = 0; j < 4; j++) {
@@ -291,6 +303,7 @@ async function captureAt(page, c) {
     });
   }
   if (firstShotAt === null || frames.length < PERSIST_FRAMES || retired === null) throw new Error(`${c.name}: the burst did not run: first shot ${firstShotAt}, ${frames.length} frames photographed, retired ${retired}`);
+  if (flinched.length) throw new Error(`${c.name}: the shooter's suppression was not held at none: ${flinched.length} of ${shots} rounds left with a flinch, up to ${Math.max(...flinched).toFixed(2)} degrees`);
   return {
     frames,
     pathDepth,
