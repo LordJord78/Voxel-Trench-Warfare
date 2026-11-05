@@ -96,6 +96,43 @@ describe('the rifle', () => {
     expect(run(w, 20, (k) => k >= 10)).toEqual([10]);
   });
 
+  it('holding its fire (its holder mid-climb), a gun fires nothing and takes no press: a press it took stays taken while held, and one made meanwhile is a press after', () => {
+    const SVD = weaponSpec(tun, 'svd');
+    /** `ticks` ticks holding fire, the trigger as `held(tick)` says. */
+    const hold = (w: Weapon, ticks: number, held: (k: number) => boolean) => {
+      for (let k = 0; k < ticks; k++) {
+        w.tick(TICK);
+        w.holdFire(held(k));
+      }
+    };
+    // A press taken, then held through and held on: not a press again.
+    const taken = new Weapon(SVD);
+    expect(run(taken, 1, () => true)).toEqual([0]);
+    hold(taken, 30, () => true);
+    expect(run(taken, 30, () => true)).toEqual([]);
+    // Let go while holding: the next press is one, and fires at once.
+    const letGo = new Weapon(SVD);
+    run(letGo, 1, () => true);
+    hold(letGo, 30, (k) => k < 10);
+    expect(run(letGo, 30, () => true)).toEqual([0]);
+    // Pressed while holding, fresh or after being let go: taken as a press once the gun can fire.
+    for (const before of [false, true]) {
+      const w = new Weapon(SVD);
+      if (before) run(w, 1, () => true);
+      hold(w, 30, (k) => (before ? k < 5 || k >= 10 : k >= 10));
+      expect(run(w, 30, () => true), `taken before: ${before}`).toEqual([0]);
+    }
+    // Automatic, held through 30 ticks: the first tick after fires, the next 5 or 6 ticks on. The
+    // timer rested meanwhile, as for a trigger at rest: no burst for the time held.
+    const auto = new Weapon(RIFLE);
+    run(auto, 1, () => true);
+    hold(auto, 30, () => true);
+    expect(auto.rounds).toBe(29);
+    const fired = run(auto, 20, () => true);
+    expect(fired[0]).toBe(0);
+    expect([5, 6]).toContain(fired[1] - fired[0]);
+  });
+
   it('dispersion is a cone, not a square', () => {
     const w = new Weapon(RIFLE);
     const rng = Rng.root(7).derive('combat.dispersion');

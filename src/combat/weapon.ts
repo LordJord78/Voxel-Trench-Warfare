@@ -8,7 +8,8 @@
  * minute fires 5 and 6 ticks apart in turn (the reference reset it each shot
  * and fired at 600). While the trigger rests, or the rifle cannot fire, the
  * timer is held at one interval: a fresh pull fires at once, with no catch-up
- * burst. A semi-automatic weapon fires once per press. A reload runs its time
+ * burst. A semi-automatic weapon fires once per press, and a gun holding its
+ * fire for a moment (holdFire) keeps a press it took. A reload runs its time
  * and then fills the magazine; there is no round in the chamber to keep. A gun
  * loaded a round at a time (the shotgun's tube) takes a base time and a time
  * for each round missing, but it too fills only at the end: loading shell by
@@ -159,6 +160,17 @@ export class Weapon {
   toggleMode(): boolean {
     if (this.spec.automatic) this.semi = !this.semi;
     return this.semi || !this.spec.automatic;
+  }
+
+  /**
+   * Once a tick in place of wants() while the gun holds its fire for a moment (its holder mid-climb,
+   * the hands on the parapet): no shot, the timer held at one interval as for a trigger at rest, and
+   * no press taken. A trigger already down stays down while it is held, so the press it was is not a
+   * press again once the gun can fire; let go, it is up, and the next press is one.
+   */
+  holdFire(trigger: boolean): void {
+    this.held = this.held && trigger;
+    this.timer = Math.min(this.timer, this.interval);
   }
 
   /** Once a tick, with the trigger as it is: whether a shot leaves now. */

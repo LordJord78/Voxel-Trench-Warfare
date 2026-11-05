@@ -77,6 +77,51 @@ const sprintTick = (s: Session, fire: boolean) => {
   s.intent = { ...idleIntent(), forward: 1, sprint: true, fire };
   s.tick();
 };
+/**
+ * A timber tread with a bench `h` voxels (10 cm each) over it at z 8.0–8.5 m and a clay parapet
+ * behind: 6.5 m from the spawn to walk or sprint at it. Walked into, the bench is climbed.
+ */
+function benchAhead(h: number): BrickMap {
+  const map = new BrickMap({ x: 64, y: 64, z: 128 });
+  map.fillBox(0, 0, 0, 64, 4, 128, P.TIMBER);
+  map.fillBox(0, 4, 80, 64, 4 + h, 85, P.TIMBER);
+  map.fillBox(0, 3 + h, 80, 64, 4 + h, 85, P.BENCH);
+  map.fillBox(0, 4, 85, 64, 18 + h, 128, P.CLAY);
+  return map;
+}
+/** A player settled at the spawn facing the bench `h` voxels high, carrying `loadout`'s guns if given. */
+function facingBench(h: number, loadout?: Loadout): Session {
+  const s = Session.create({ map: benchAhead(h), plan: null, spawn: { position: [3.2, 0.4, 1.5] } }, tun, 7, 0);
+  if (loadout) s.equip(loadout);
+  for (let k = 0; k < 40; k++) s.tick();
+  s.drainEvents();
+  return s;
+}
+/**
+ * `ticks` ticks of `s`, tick k's intent `intent(k)`: the ticks a shot left on and a dry click was
+ * heard on, each tick's sprint blend, the climb's first tick, and the tick it ended on (the first
+ * whose combat finds no climb under way); -1 for none.
+ */
+function throughClimb(s: Session, ticks: number, intent: (k: number) => MoveIntent) {
+  const shots: number[] = [];
+  const dry: number[] = [];
+  const blends: number[] = [];
+  let began = -1;
+  let ended = -1;
+  for (let k = 0; k < ticks; k++) {
+    s.intent = intent(k);
+    const was = s.player.climbTo;
+    s.tick();
+    if (was === null && s.player.climbTo !== null && began < 0) began = k;
+    if (was !== null && s.player.climbTo === null && ended < 0) ended = k;
+    if (s.shots.length > 0) shots.push(k);
+    for (const c of s.drainEvents().handling) if (c.cue === 'dry') dry.push(k);
+    blends.push(s.handling.sprint);
+  }
+  return { shots, dry, blends, began, ended };
+}
+/** W held, the trigger as given, and a gun asked for by its place if one is. */
+const walkAt = (fire: boolean, swap?: number): MoveIntent => ({ ...idleIntent(), forward: 1, fire, ...(swap === undefined ? {} : { swap }) });
 
 describe('the gun in the hands, in play', () => {
   it('with fire held the player never sprints, and the first shot leaves within 0.12 s of the press out of a full sprint', () => {
@@ -474,6 +519,104 @@ describe('the gun in the hands, in play', () => {
       if (button === 'fire') expect([s.shots.length, s.weapon.shotsFired], label).toEqual([1, 1]);
       else expect([s.shots.length, s.aimed > 0], label).toEqual([0, true]);
     }
+  });
+
+  it('a press taken before a climb is not taken again as it ends: held through it, a gun that fires once a press neither fires nor clicks empty; let go and pressed, it is a press again', () => {
+    // The climb holds the shot; it does not let go of the trigger. Before the ruling the trigger was
+    // taken mid-climb, so a press held through it stayed the one press, and it still does. Fire held
+    // from a standstill, walking at the bench: the press is taken on its first tick, then held
+    // through the climb and on along the bench. The SVD, the AK switched to single shots (B), and the
+    // SVD on its last round, which that press empties: held, it does not click.
+    const cases: [string, Loadout | undefined, (s: Session) => void][] = [
+      ['the SVD', bare('svd'), () => {}],
+      [
+        'the AK in single shots',
+        undefined,
+        (s) => {
+          s.intent = { ...idleIntent(), mode: true };
+          s.tick();
+          expect(s.weapon.semi).toBe(true);
+        },
+      ],
+      ['the SVD on its last round', bare('svd'), (s) => (s.weapon.rounds = 1)],
+    ];
+    for (const [label, loadout, prep] of cases) {
+      const s = facingBench(10, loadout);
+      prep(s);
+      s.drainEvents();
+      const last = s.weapon.rounds === 1;
+      const held = throughClimb(s, 180, () => walkAt(true));
+      expect(held.began, label).toBeGreaterThan(0);
+      expect(held.ended, label).toBeGreaterThan(held.began + 10);
+      expect(held.ended, label).toBeLessThan(150);
+      expect(s.player.position.y, label).toBeCloseTo(1.4, 6);
+      // Its one shot, on the press's tick: none mid-climb, none as the climb ends, none on the bench.
+      expect([held.shots, held.dry, s.weapon.shotsFired], label).toEqual([[0], [], 1]);
+      expect(s.weapon.reloading, label).toBe(false);
+      // Let go for a tick and pressed again on the bench: a press, so a shot, or on an empty magazine a click.
+      const again = throughClimb(s, 10, (k) => walkAt(k > 0));
+      expect([again.shots, again.dry], label).toEqual(last ? [[], [1]] : [[1], []]);
+    }
+  });
+
+  it('a press not yet taken waits out a climb, as one the sprint holds back does, and fires as it ends; a gun put down mid-climb lets it go', () => {
+    // When the climb begins with nothing pressed: sessions alike run alike up to the press.
+    const begins = (h: number, intent: (k: number) => MoveIntent, loadout?: Loadout) => throughClimb(facingBench(h, loadout), 180, intent).began;
+    const sprintAt = (fire: boolean): MoveIntent => ({ ...idleIntent(), forward: 1, sprint: true, fire });
+
+    // A tap in a full sprint's last ticks before the bench: still waiting, the gun swung low, as the
+    // climb begins. Before the ruling it fired mid-climb as the blend fell under 0.3; it now waits the
+    // climb out and fires as it ends, where a press held from the climb's first tick fires. Shift and W
+    // held, neither press holds the sprint off while the climb holds the gun (a press drops it only
+    // while a gun is up to take it), so the climb's last tick, on the bench's top, brings a tick's
+    // share of it back.
+    const sprinted = begins(10, () => sprintAt(false));
+    const fromSprint: [string, (k: number) => boolean, boolean][] = [
+      ['a tap waiting out the sprint', (k) => k === sprinted - 2, false],
+      ["a press held from the climb's first tick", (k) => k >= sprinted, true],
+    ];
+    for (const [label, fire, held] of fromSprint) {
+      const out = throughClimb(facingBench(10), 180, (k) => sprintAt(fire(k)));
+      expect(out.blends[sprinted - 3], label).toBe(1);
+      expect(out.began, label).toBeGreaterThanOrEqual(sprinted);
+      expect(out.blends[out.began - 1], label).toBeGreaterThanOrEqual(ht.sprintBlocksFire);
+      expect(out.ended, label).toBeGreaterThan(out.began + 10);
+      // None before the climb or in it: the first leaves as it ends, and a tap's is its only one (the
+      // AK held fires on at its rate).
+      expect(out.shots[0], label).toBe(out.ended);
+      if (!held) expect(out.shots, label).toEqual([out.ended]);
+      expect(out.blends[out.ended], label).toBeCloseTo(TICK / ht.sprintInS, 12);
+    }
+
+    // A tap mid-climb, of a tick or of five: it waits, as a tap out of a sprint does, and fires as the climb ends.
+    const walked = begins(10, () => walkAt(false));
+    for (const tap of [1, 5]) {
+      const mid = throughClimb(facingBench(10), 180, (k) => walkAt(k >= walked + 3 && k < walked + 3 + tap));
+      expect(mid.began, `a ${tap}-tick tap`).toBe(walked);
+      expect(mid.ended, `a ${tap}-tick tap`).toBeGreaterThan(walked + 3 + tap);
+      expect(mid.shots, `a ${tap}-tick tap`).toEqual([mid.ended]);
+    }
+
+    // The SVD's press taken before the climb, let go mid-climb and pressed again: that is a press, and
+    // it fires as the climb ends.
+    const svd = begins(10, () => walkAt(true), bare('svd'));
+    const re = throughClimb(facingBench(10, bare('svd')), 180, (k) => walkAt(k < svd + 3 || k >= svd + 6));
+    expect(re.began).toBe(svd);
+    expect(re.shots).toEqual([0, re.ended]);
+
+    // A tap mid-climb up a bench 1.5 m high, then the pistol asked for: the AK goes down, which lets
+    // the press go as any gun put down does, and the pistol is up before the climb ends. Nothing
+    // fires: the press was not made for it.
+    const tall = begins(15, () => walkAt(false));
+    const put = facingBench(15);
+    const lead = throughClimb(put, tall + 30, (k) => walkAt(k === tall + 2, k === tall + 3 ? 1 : undefined));
+    expect(lead.began).toBe(tall);
+    expect(put.player.climbTo).not.toBeNull();
+    expect([put.held, put.ready]).toEqual([1, 1]);
+    const rest = throughClimb(put, 60, () => walkAt(false));
+    expect(rest.ended).toBeGreaterThan(0);
+    expect(put.player.position.y).toBeCloseTo(1.9, 6);
+    expect([lead.shots, rest.shots, put.weapon.shotsFired]).toEqual([[], [], 0]);
   });
 
   it('a press on an empty magazine clicks once and starts a reload 0.25 s later', () => {

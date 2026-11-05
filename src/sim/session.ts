@@ -245,7 +245,11 @@ export class Session {
   /** The trigger as the last tick had it in the hands (a press is its rising), and an empty trigger's reload: its tick, and its gun. */
   private triggerWas = false;
   private dryReload: { tick: number; weapon: Weapon } | null = null;
-  /** A press the sprint alone held back, the gun still swung low: it stands, the sprint dropped, until the gun is up to take it. */
+  /**
+   * A press the gun could not take yet: one the sprint alone held back, the gun still swung low, or
+   * one a climb holds (the hands on the parapet). It stands until the gun takes it, dropping the
+   * sprint while the gun is up; a gun put down lets it go.
+   */
   private pressWaiting = false;
   /** The hands' cues heard this tick: each is placed at the muzzle as the tick leaves it. */
   private heard: HandlingCue[] = [];
@@ -600,12 +604,12 @@ export class Session {
     this.ticks++;
     this.acting = this.alive ? this.intent : idleIntent();
     const p = this.player;
-    // Firing (a press waiting for the gun to come up out of a sprint as well), aiming or aimed down
-    // the sights the player does not sprint. The trigger and the sights are a gun's: a button drops
-    // the sprint only while a gun is up to take it (gunUp, as the trigger and the sights have it: the
-    // shovel out, digging, the periscope up or a climb under way, it does not), the hands as the last
-    // tick left them.
-    if ((((this.acting.fire || this.acting.aim === true) && this.gunUp(p)) || this.pressWaiting || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
+    // Firing (a press waiting to be taken as well), aiming or aimed down the sights the player does
+    // not sprint. The trigger and the sights are a gun's: a button, or a press waiting, drops the
+    // sprint only while a gun is up to take it (gunUp, as the trigger and the sights have it: the
+    // shovel out, digging, the periscope up or a climb under way, it does not, so a press waiting out
+    // a climb holds the sprint off only once the climb is over), the hands as the last tick left them.
+    if ((((this.acting.fire || this.acting.aim === true || this.pressWaiting) && this.gunUp(p)) || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
     // Suppression as the last tick left it slows the feet and pins the player off the step; what
     // is in the hands, and the sights up, slow them too.
     const carried = this.held === SHOVEL_HELD ? 1 : this.arm.spec.move;
@@ -692,10 +696,11 @@ export class Session {
    * A gun up to take the trigger and the sights, and either button to drop the sprint: one in the
    * hands (not the shovel), raised, not put down to dig, not at the periscope (whose holder holds that
    * rather than the gun), and no climb under way (the hands are on the parapet). The gun-up rule, in
-   * one place, read as the hands stand when it is asked.
+   * one place, read as the hands stand when it is asked. `climbing` false asks it with the climb set
+   * aside: a gun up but for a climb is not put down, so the trigger waits the climb out (combat()).
    */
-  private gunUp(p: CharacterState): boolean {
-    return this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && p.climbTo === null;
+  private gunUp(p: CharacterState, climbing = p.climbTo !== null): boolean {
+    return this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && !climbing;
   }
 
   /**
@@ -790,18 +795,32 @@ export class Session {
     this.blastShake.tick(dt);
     if (this.acting.reload && this.held !== SHOVEL_HELD) w.beginReload();
     const eye: [number, number, number] = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
-    // No shot with the shovel in the hands, a gun not yet up, through the periscope, mid-climb (the
-    // hands on the parapet: a press held through it fires as it ends), or the gun still swung low
-    // from a sprint (its blend at or over sprint_blocks_fire); an empty one clicks. The sprint delays
-    // a press and does not lose it: one it alone holds back waits, the sprint dropped meanwhile
-    // (tick()), so the blend falls a tick's share each tick and the press pulls the trigger as it
-    // passes under, a tap out of a sprint as a held press would. Killed, nothing waits.
+    // No shot with the shovel in the hands, a gun not yet up, through the periscope, mid-climb, or the
+    // gun still swung low from a sprint (its blend at or over sprint_blocks_fire); an empty one clicks.
+    // The sprint delays a press and does not lose it: one it alone holds back waits, the sprint
+    // dropped meanwhile (tick()), so the blend falls a tick's share each tick and the press pulls the
+    // trigger as it passes under, a tap out of a sprint as a held press would. A climb, the gun up but
+    // for it (the hands on the parapet), delays the trigger and lets nothing go: a press taken before
+    // it stays taken while held, so the climb's end is no new press (a gun that fires once a press
+    // fires no more, and an empty one clicks no more); one not yet taken (waiting out a sprint, or
+    // made mid-climb) waits, and pulls the trigger as the climb ends. A gun put down lets a press go,
+    // mid-climb too; killed, nothing waits.
     const low = this.handling.sprint >= this.handling.t.sprintBlocksFire;
-    const pulled = (this.acting.fire || (this.pressWaiting && this.alive)) && this.gunUp(p);
-    const trigger = pulled && !low;
-    this.pressWaiting = pulled && low;
-    this.dryTrigger(w, trigger);
-    if (w.wants(trigger)) {
+    const wanted = this.acting.fire || (this.pressWaiting && this.alive);
+    let fires = false;
+    if (p.climbTo !== null && this.gunUp(p, false)) {
+      const kept = this.triggerWas && this.acting.fire;
+      this.pressWaiting = wanted && !kept;
+      this.dryTrigger(w, kept);
+      w.holdFire(this.acting.fire);
+    } else {
+      const pulled = wanted && this.gunUp(p);
+      const trigger = pulled && !low;
+      this.pressWaiting = pulled && low;
+      this.dryTrigger(w, trigger);
+      fires = w.wants(trigger);
+    }
+    if (fires) {
       const aim: [number, number] = [p.yaw + this.recoil.yaw + this.suppression.flinchYaw, p.pitch + this.recoil.pitch + this.suppression.flinchPitch];
       const cone = sway * this.suppression.swayScale;
       const dir = w.aim(aim[0], aim[1], cone, this.dispersion);
