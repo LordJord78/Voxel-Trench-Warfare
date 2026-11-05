@@ -640,8 +640,9 @@ describe("a round that strikes within the frame's ticks", () => {
   // A round is retired at its strike, inside the tick: one whose whole flight fits in the frame's
   // ticks (an AK round's under 14.7 m at 60 Hz, a pellet's under 6.7 m, twice that when a frame runs
   // two ticks) would never be drawn, and a longer stream would stop a tick short of what it struck. The
-  // strike carries the round's draw, and the frame that drains it draws the last of its flight once,
-  // by the law the live rounds are drawn by, ending where it struck.
+  // strike carries the round's draw, and the frame that drains it draws the last of its flight once
+  // more, by the law the live rounds are drawn by, ending where it struck; each frame after it that runs
+  // no tick draws it again, as a live round is drawn where its last tick left it.
   const length = (d: { tail: readonly number[]; head: readonly number[] }) => Math.hypot(d.head[0] - d.tail[0], d.head[1] - d.tail[1], d.head[2] - d.tail[2]);
 
   it('a wall 10 m out: one AK shot draws one tracer, its head at the wall and its tail at the drawn muzzle', () => {
@@ -726,6 +727,62 @@ describe("a round that strikes within the frame's ticks", () => {
     expect(d.struck).toBe(true);
     close(d.head, [0, 1, 2].map((k) => hit.position[k] - hit.dir[k] * (t.tracerHeadM / 2)), 4, 'head');
     close(d.tail, events.shots[0].muzzle, 2, 'tail');
+  });
+
+  // A struck round's last streak is held as a live round is: each tick's state is drawn in every frame
+  // until the next tick runs. At 120 Hz half the frames run no tick, and while paused none do.
+  it("at 120 Hz (a tick, none, a tick, none) a wall strike's streak is drawn in its tick's frame and the next, which runs none, and is gone after the next tick's", () => {
+    const s = facing(10);
+    const b = new EffectsFrameBuilder(t);
+    const struck = frameOf(s, b, 1, true);
+    expect(struck.events.impacts).toHaveLength(1);
+    expect(struck.built.counts.tracers).toBe(1);
+    expect(struck.built.drawn.map((d) => d.struck)).toEqual([true]);
+    const ribbons = tracerRibbons(struck.built);
+    // The frame between ticks: nothing drained, the same streak drawn and counted.
+    const between = frameOf(s, b, 0);
+    expect(between.events.impacts).toHaveLength(0);
+    expect(between.built.counts.tracers).toBe(1);
+    expect(between.built.drawn).toEqual(struck.built.drawn);
+    expect(tracerRibbons(between.built)).toEqual(ribbons);
+    expect(between.built.counts.heads).toBe(struck.built.counts.heads);
+    // The next tick drains nothing struck: gone, in its frame and the one after.
+    const next = frameOf(s, b, 1);
+    expect(next.built.counts.tracers).toBe(0);
+    expect(next.built.drawn).toHaveLength(0);
+    expect(frameOf(s, b, 0).built.counts.tracers).toBe(0);
+  });
+
+  it("while paused (no ticks for 10 frames) a struck round's streak stays drawn", () => {
+    const s = facing(10);
+    const b = new EffectsFrameBuilder(t);
+    const struck = frameOf(s, b, 1, true);
+    expect(struck.built.counts.tracers).toBe(1);
+    for (let f = 0; f < 10; f++) {
+      const paused = frameOf(s, b, 0);
+      expect(paused.built.counts.tracers, `paused frame ${f}`).toBe(1);
+      expect(paused.built.drawn, `paused frame ${f}`).toEqual(struck.built.drawn);
+    }
+    expect(frameOf(s, b, 1).built.counts.tracers).toBe(0);
+  });
+
+  it("at 60 Hz (a tick every frame) a struck round's streak is drawn in its own frame alone, as before", () => {
+    const s = facing(10);
+    const b = new EffectsFrameBuilder(t);
+    expect(frameOf(s, b, 1, true).built.counts.tracers).toBe(1);
+    for (let f = 0; f < 5; f++) expect(frameOf(s, b, 1).built.counts.tracers, `frame ${f}`).toBe(0);
+  });
+
+  it("another session's first frame draws none of the last one's held strikes, though its ticks are as many", () => {
+    const s = facing(10);
+    const b = new EffectsFrameBuilder(t);
+    expect(frameOf(s, b, 1, true).built.counts.tracers).toBe(1);
+    // A world replaced (a session is its world's): the same builder, ticks at the same count, none run.
+    const other = facing(10);
+    while (other.ticks < s.ticks) other.tick();
+    other.drainEvents();
+    expect(other.ticks).toBe(s.ticks);
+    expect(frameOf(other, b, 0).built.counts.tracers).toBe(0);
   });
 
   it('a strike the frame drained without a draw (a round that burns no tracer) draws nothing', () => {

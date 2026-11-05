@@ -6,7 +6,8 @@
  * (Session.aimRange: the round leaves the eye, so the reticle tells the truth,
  * and its tracer reaches across to it), and each round that struck in the
  * frame's ticks once more, by the same law, ending where it struck (so one
- * whose whole flight fitted in the ticks is seen); and each shot's flash
+ * whose whole flight fitted in the ticks is seen), held as a live round is in
+ * each frame until the next tick runs; and each shot's flash
  * — a star of three ribbons from the drawn muzzle along its bore and a
  * transient light there — for `flash_s` of the world's time, so as long at any
  * frame rate and held while paused (spec §4). The simulation's muzzle is the
@@ -50,6 +51,15 @@ import { throughPose, type RiflePose } from '../render/rifle';
 import { MUZZLE_ANCHOR, PORT_ANCHOR, SHOVEL_HELD, type CombatEvents, type Session } from '../sim/session';
 
 type V3 = [number, number, number];
+
+/** A round that struck, to be drawn to where it struck: there (m), its way, its flight, its head held off what it struck by `lift` (m), and how its tracer is drawn. */
+interface Ended {
+  at: readonly number[];
+  dir: readonly number[];
+  flown: number;
+  lift: V3;
+  draw: StrikeDraw;
+}
 
 /** The battle as a frame draws it (src/battle/director.ts): at its moment, its flares, its newest distant shells' flashes, the far shells' smoke, the machine guns' tracers, and the fires' flames, embers and plumes. */
 export interface ShownBattle {
@@ -243,7 +253,8 @@ export interface BuiltEffects {
    * The session's own tracers as drawn this frame (their offsets applied), metres: for a test to find
    * them on the image. `headDrawn`: the burning head is drawn (past tracer_head_from_m); `joinsM`: how
    * far out the tracer joins its round's path (0: drawn on it); `struck`: a round that struck in the
-   * frame's ticks, drawn once more, ending where it struck.
+   * frame's ticks (in a frame that runs none, the last ticks run), drawn once more, ending where it
+   * struck.
    */
   drawn: { tail: [number, number, number]; head: [number, number, number]; kind: number; flown: number; headDrawn: boolean; joinsM: number; struck: boolean }[];
 }
@@ -316,6 +327,12 @@ export class EffectsFrameBuilder {
   private landed: { at: V3; radiusM: number; age: number }[] = [];
   /** The world's time the last frame showed. */
   private shown: number | null = null;
+  /**
+   * The rounds that struck in the last frame whose ticks ran (or whose drain had strikes), of `session`
+   * at its `ticks`: drawn again in each frame that runs none, as a live round is drawn where its last
+   * tick left it until the next runs (at 120 Hz every other frame; every frame while paused).
+   */
+  private struck: { session: Session | null; ticks: number; ended: Ended[] } = { session: null, ticks: -1, ended: [] };
 
   /** Tracer strikes' embers and the ricochets that glanced off, aged by the world's time. */
   private readonly ricochets: Ricochets;
@@ -511,17 +528,20 @@ export class EffectsFrameBuilder {
     // and a stream reaches what it struck rather than stopping a tick short. Each joins its path where
     // it struck if that is nearer than where it was aimed, and its head is held off what it struck by
     // its own radius, so the face does not hide half of it: off a face along its normal; off a body,
-    // or the voxel a round started in, back along its way.
+    // or the voxel a round started in, back along its way. Held as a live round is: a frame that runs
+    // no tick (the session's ticks where the last frame left them) draws the last tick's strikes again;
+    // the next to run a tick, or another session's first, draws its own drain's (none, it may be).
     const r = t.tracerHeadM / 2;
-    const ended: { at: readonly number[]; dir: readonly number[]; flown: number; lift: V3; draw: StrikeDraw }[] = [];
+    const drained: Ended[] = [];
     for (const hit of events.impacts) {
       if (!hit.draw) continue;
       const n = hit.normal;
       const lift: V3 = n[0] === 0 && n[1] === 0 && n[2] === 0 ? [-hit.dir[0] * r, -hit.dir[1] * r, -hit.dir[2] * r] : [n[0] * r, n[1] * r, n[2] * r];
-      ended.push({ at: hit.position, dir: hit.dir, flown: hit.distance, lift, draw: hit.draw });
+      drained.push({ at: hit.position, dir: hit.dir, flown: hit.distance, lift, draw: hit.draw });
     }
-    for (const hit of events.hits) if (hit.draw) ended.push({ at: hit.position, dir: hit.dir, flown: hit.distance, lift: [-hit.dir[0] * r, -hit.dir[1] * r, -hit.dir[2] * r], draw: hit.draw });
-    for (const e of ended) {
+    for (const hit of events.hits) if (hit.draw) drained.push({ at: hit.position, dir: hit.dir, flown: hit.distance, lift: [-hit.dir[0] * r, -hit.dir[1] * r, -hit.dir[2] * r], draw: hit.draw });
+    if (session !== this.struck.session || session.ticks !== this.struck.ticks || drained.length > 0) this.struck = { session, ticks: session.ticks, ended: drained };
+    for (const e of this.struck.ended) {
       if (full) break;
       const d = e.draw;
       const back = Math.min(streak(d.speed, t.tracerMaxM), e.flown);
