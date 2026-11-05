@@ -7,11 +7,14 @@
  *
  * The pose is built in the world from points: the hips over the feet; the legs and the arms each
  * two bones reaching for a target (the ground, the rifle's grips), solved by the law of cosines;
- * the rifle along the aim from the right shoulder. A frame is then made from each bone. Pure
+ * the rifle along the aim from the right shoulder. A frame is then made from each bone. A round's
+ * flinch then leans the upper body, and a killed body falls (the shots spec's §4). Pure
  * arithmetic (dmath), so every client poses a body alike.
  */
 
-import { cos, HALF_PI, hypot, radians, sin, TAU } from '../core/dmath';
+import { cos, exp, HALF_PI, hypot, radians, sin, TAU } from '../core/dmath';
+import { loadTunables, type Tunables } from '../core/tunables';
+import { SETTLE_CONSTANT } from './spring';
 
 export type V3 = [number, number, number];
 
@@ -68,8 +71,35 @@ const H_PRONE = 0.55;
 /** On the rifle: the pistol grip (right hand) and the handguard (left), model metres (rifle-model.ts). */
 const GRIP: V3 = [0, -0.07, 0.04];
 const HANDGUARD: V3 = [0, -0.03, 0.42];
-/** How long a killed body takes to fall. */
-const FALL_S = 0.7;
+/** What a flinch leans from the waist: all above it, the torso and what it carries. */
+const UPPER: readonly PartName[] = ['torso', 'head', 'upperArmL', 'upperArmR', 'forearmL', 'forearmR', 'rifle'];
+/** A killed body pivots at least this far out from its feet the way it falls (m). */
+const FALL_PIVOT_M = 0.1;
+
+/** [hits] as the rig poses a body struck: the torso's lean and a headshot's snap (degrees), the time either springs back in, and a killed body's fall (s) unless the caller gives one. */
+interface RigHits {
+  flinchDeg: number;
+  headSnapDeg: number;
+  flinchS: number;
+  fallS: number;
+}
+
+function rigHits(tun: Tunables): RigHits {
+  return { flinchDeg: tun.f('hits.flinch_deg'), headSnapDeg: tun.f('hits.head_snap_deg'), flinchS: tun.f('hits.flinch_s'), fallS: tun.f('hits.fall_s') };
+}
+
+/** The game's [hits], read the first time a body is struck or killed. */
+let gameHits: RigHits | null = null;
+const hits = (): RigHits => (gameHits ??= rigHits(loadTunables()));
+
+/**
+ * A lean of `peak` released at once into a critically damped spring that settles it to 2% in
+ * `settleS` (combat/spring.ts), `age` seconds on: peak (1 + ωt)e^−ωt.
+ */
+function released(peak: number, age: number, settleS: number): number {
+  const u = (SETTLE_CONSTANT / settleS) * Math.max(0, age);
+  return peak * (1 + u) * exp(-u);
+}
 
 /** What the hands hold, for the pose: a gun's grips (model metres), whether a pistol, or the shovel and its stroke (turns) while digging. */
 export interface Hold {
@@ -80,6 +110,13 @@ export interface Hold {
 }
 
 const RIFLE_HOLD: Hold = { kind: 'rifle', grip: GRIP, fore: HANDGUARD };
+
+/** A round's flinch: the way it went (unit, world), seconds since it struck, and whether it struck the head. */
+export interface Flinch {
+  dir: V3;
+  age: number;
+  head: boolean;
+}
 
 export interface PoseInput {
   /** Foot centre, metres. */
@@ -96,6 +133,11 @@ export interface PoseInput {
   deadFor: number | null;
   /** What is in the hands: the AK, unless said. */
   hold?: Hold;
+  /** The last round to strike the body, which leans it ([hits] flinch_deg, head_snap_deg) and lets it spring back over flinch_s; none, unflinching. */
+  flinch?: Flinch;
+  /** Killed: the bearing the body falls toward (degrees, world: 0 is +z), and in how long (s). Unless said, back from its feet, in [hits] fall_s. */
+  fallYaw?: number;
+  fallS?: number;
 }
 
 const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -252,16 +294,66 @@ export function pose(p: PoseInput): Record<PartName, Frame> {
     rifle,
   };
 
-  // Killed: the body falls back from its feet, and lies there.
+  // Killed, the body falls from its feet toward fallYaw (back, unless told) in fallS. Where it
+  // pivots is decided by the body as it stood, before any flinch, so that it does not slide as the
+  // flinch springs back.
+  let fall: { pivot: V3; axis: V3; angle: number } | null = null;
   if (p.deadFor !== null) {
-    const f = clamp01(p.deadFor / FALL_S);
-    const angle = f * f * (HALF_PI - 0.12) * (1 - prone);
-    if (angle > 0) {
-      const pivot = add(feet, mul(forward, -0.1));
-      frames = Object.fromEntries(PARTS.map((n) => [n, n === 'rifle' ? frames[n] : turn(frames[n], pivot, right, -angle)])) as Record<PartName, Frame>;
+    const end = (HALF_PI - 0.12) * (1 - prone);
+    const f = clamp01(p.deadFor / (p.fallS ?? hits().fallS));
+    if (end > 0 && f > 0) {
+      const toward = radians(p.fallYaw ?? p.yaw + 180);
+      const way: V3 = [sin(toward), 0, cos(toward)];
+      fall = { pivot: add(feet, mul(way, pivotReach(frames, feet, way, end))), axis: [way[2], 0, -way[0]], angle: f * f * end };
     }
   }
+
+  // Struck: the torso leans along the round from the waist, carrying the head, the arms and what
+  // they hold (a dead body's rifle lies where it fell); a headshot turns the head on its neck as
+  // well. Both spring back over flinch_s. A body lying down is not leaned: it would be into the ground.
+  if (p.flinch && prone < 1) {
+    const { dir, age, head: inHead } = p.flinch;
+    const level = hypot(dir[0], dir[2]);
+    if (level > 1e-9) {
+      const h = hits();
+      // Square to the round over the ground: turning about it takes up toward the round's way.
+      const axis: V3 = [dir[2] / level, 0, -dir[0] / level];
+      const share = 1 - prone;
+      if (inHead) frames.head = turn(frames.head, neck, axis, radians(released(h.headSnapDeg, age, h.flinchS)) * share);
+      const lean = radians(released(h.flinchDeg, age, h.flinchS)) * share;
+      for (const n of UPPER) if (n !== 'rifle' || !dead) frames[n] = turn(frames[n], hips, axis, lean);
+    }
+  }
+
+  // The fall, and the body lies there.
+  if (fall) {
+    const { pivot, axis, angle } = fall;
+    frames = Object.fromEntries(PARTS.map((n) => [n, n === 'rifle' ? frames[n] : turn(frames[n], pivot, axis, angle)])) as Record<PartName, Frame>;
+  }
   return frames;
+}
+
+/**
+ * How far out along `way` (level, unit) from `feet` a body posed as `frames` pivots to fall `end`
+ * radians that way: at least FALL_PIVOT_M, and far enough that no corner of its parts ends under
+ * the ground, nor one already under it goes deeper as it falls. Turned by θ about a pivot r out, a
+ * corner h over the ground and d out ends h cos θ − (d − r) sin θ over it: so r ≥ d − h cot θ,
+ * and r ≥ d for one under the ground.
+ */
+function pivotReach(frames: Record<PartName, Frame>, feet: V3, way: V3, end: number): number {
+  const cot = cos(end) / sin(end);
+  let reach = FALL_PIVOT_M;
+  for (const part of PARTS) {
+    if (part === 'rifle') continue;
+    const { min, max } = PART_BOX[part];
+    for (let c = 0; c < 8; c++) {
+      const w = toWorld(frames[part], [c & 1 ? max[0] : min[0], c & 2 ? max[1] : min[1], c & 4 ? max[2] : min[2]]);
+      const h = w[1] - feet[1];
+      const d = (w[0] - feet[0]) * way[0] + (w[2] - feet[2]) * way[2];
+      reach = Math.max(reach, h < 0 ? d : d - h * cot);
+    }
+  }
+  return reach;
 }
 
 /** A point in a frame (local metres) in the world. */
@@ -315,7 +407,11 @@ export function hitParts(frames: Record<PartName, Frame>, from: readonly number[
   return best;
 }
 
-/** A sphere round a posed body's parts a round can strike (centre, radius), standing to lying dead: segments that miss it miss every part. */
+/**
+ * A sphere round a posed body's parts a round can strike (centre, radius), standing to lying dead,
+ * whichever way it fell (a runner's fall pivots on its leading boot: some 2.19 m out at most):
+ * segments that miss it miss every part.
+ */
 export function bodySphere(feet: readonly number[]): { centre: V3; radius: number } {
-  return { centre: [feet[0], feet[1] + 0.8, feet[2]], radius: 2.1 };
+  return { centre: [feet[0], feet[1] + 0.8, feet[2]], radius: 2.3 };
 }

@@ -16,6 +16,7 @@ import { aimRangeM, ballisticsTunables, projectileSpec, Rounds, type BodyHit, ty
 import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
 import { Entrenching, entrenchingTunables, type Scoop } from '../combat/entrenching';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
+import { gunClass, Handling, handlingTunables, ZERO_HANDS, type HandlingCue } from '../combat/handling';
 import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
 import { Recoil } from '../combat/recoil';
 import { bodySphere, hitParts, pose, type Frame, type PartName } from '../combat/soldier-rig';
@@ -25,9 +26,10 @@ import { heldPose, modelToView, viewBasis, viewmodelTunables, type Holding, type
 import { Weapon, weaponSpec } from '../combat/weapon';
 import { FixedClock } from '../core/clock';
 import { cos, exp, hypot, radians, sin, TAU } from '../core/dmath';
+import { hash32 } from '../core/hash';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
-import { CharacterController, controllerTunables, letGoOfLedge, newCharacter, Stance, type CharacterState, type MoveIntent } from '../physics/character';
+import { CharacterController, controllerTunables, letGoOfLedge, newCharacter, sprints, Stance, type CharacterState, type MoveIntent } from '../physics/character';
 import { boxHitsSolid } from '../physics/collision';
 import { brickGrid } from '../physics/grid';
 import { Vec3, ZERO } from '../physics/vec';
@@ -35,6 +37,7 @@ import type { BrickMap } from '../world/bricks';
 import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, P, paletteData } from '../world/materials';
 import { groundTop } from '../world/raycast';
+import { spatter, spatterTunables, type SpatterTunables } from '../world/spatter';
 import { BARE, decodeShotMark, encodeShotMark, GUNS, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
 import type { Team } from '../net/protocol';
 import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from './destruction';
@@ -151,10 +154,12 @@ export interface CombatEvents {
   hits: (BodyHit & { tick: number })[];
   /** Where rounds went into water, shells landed on it and their debris fell into it (metres), and with how much energy. */
   splashes: { tick: number; at: [number, number, number]; energyJ: number; kind: 'round' | 'shell' | 'debris' }[];
+  /** What the hands did that is heard (handling.ts): a reload's marks, the pump, an empty trigger's click; each at the gun's muzzle as its tick left it (`muzzle()`). */
+  handling: { tick: number; cue: HandlingCue; at: [number, number, number] }[];
 }
 
 function noEvents(): CombatEvents {
-  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [] };
+  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [] };
 }
 
 export interface SessionWorld {
@@ -210,6 +215,25 @@ export class Session {
   /** The shovel's stroke as drawn while it is clearing (in turns, 0 to 1), and before the last tick; null at rest. */
   stroke: number | null = null;
   private prevStroke: number | null = null;
+  /**
+   * The gun in the hands moving as a held gun does (handling.ts): its bob, sway, breathing, sprint,
+   * landing, reload and pump. Ticked after the hands and before combat, drawn between ticks.
+   */
+  readonly handling: Handling;
+  /**
+   * The hands held still: what is held is drawn, and its muzzle and port placed, without the hands'
+   * motion (ZERO_HANDS), as before it, for a test that pins a pose. The sprint's rule and the cues run on.
+   */
+  handsStill = false;
+  /** The view's yaw and pitch as the last tick left them: the next tick's turn is from here. */
+  private look: [number, number];
+  /** The trigger as the last tick had it in the hands (a press is its rising), and an empty trigger's reload: its tick, and its gun. */
+  private triggerWas = false;
+  private dryReload: { tick: number; weapon: Weapon } | null = null;
+  /** A press the sprint alone held back, the gun still swung low: it stands, the sprint dropped, until the gun is up to take it. */
+  private pressWaiting = false;
+  /** The hands' cues heard this tick: each is placed at the muzzle as the tick leaves it. */
+  private heard: HandlingCue[] = [];
   /** The gun's light (or laser) switched on. */
   lightOn = false;
   /** The loadout taken in, if one was (the session's own default otherwise). */
@@ -281,7 +305,11 @@ export class Session {
   private debrisFalling: { tick: number; at: [number, number, number] }[] = [];
   private events: CombatEvents = noEvents();
   private readonly particleRng: Rng;
-  private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris', ParticleSpec>;
+  private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris' | 'blood' | 'mist', ParticleSpec>;
+  /** [hits]: a critical hit's droplets and mist, a helmet's sparks, and how many rounds a body bleeds (and its head spatters) a tick at most. */
+  private readonly bleeding: { criticalDroplets: number; criticalMist: number; helmetSparks: number; burstsPerTick: number };
+  /** [hits]: a critical hit's spatter, its rays on along the round and falling, their cones and reaches (in voxels), and how they pack. */
+  private readonly spattering: SpatterTunables;
   /** Each palette entry's linear colour, for the dust it throws. */
   private readonly tints: [number, number, number][];
 
@@ -327,6 +355,8 @@ export class Session {
     this.prevView = this.view();
     this.viewmodel = viewmodelTunables(tun);
     this.prevKick = this.kick();
+    this.handling = new Handling(handlingTunables(tun));
+    this.look = [this.player.yaw, this.player.pitch];
     this.particles = new Particles(tun.i('particles.pool_capacity'));
     this.particleRng = this.streams.derive('effects.particles');
     this.kinds = {
@@ -337,7 +367,16 @@ export class Session {
       blastFlash: particleSpec(tun, 'blast_flash'),
       soil: particleSpec(tun, 'shell_soil'),
       debris: particleSpec(tun, 'debris'),
+      blood: particleSpec(tun, 'blood'),
+      mist: particleSpec(tun, 'blood_mist'),
     };
+    this.bleeding = {
+      criticalDroplets: tun.i('hits.critical_droplets'),
+      criticalMist: tun.i('hits.critical_mist'),
+      helmetSparks: tun.i('hits.helmet_sparks'),
+      burstsPerTick: tun.i('hits.bursts_per_tick'),
+    };
+    this.spattering = spatterTunables(tun, voxel);
     const palette = paletteData();
     this.tints = Array.from({ length: 256 }, (_, id) => [palette[id * 8], palette[id * 8 + 1], palette[id * 8 + 2]]);
     const waterTable = world.waterTable ?? world.plan?.params.waterTable ?? -1;
@@ -476,6 +515,8 @@ export class Session {
     this.stroke = this.prevStroke = null;
     this.lightOn = false;
     this.prevKick = this.kick();
+    // A press waiting out a sprint was made for the last gun: none fires the new one.
+    this.pressWaiting = false;
   }
 
   /** What the player shows the others (net/gear.ts): what is in their hands and its fit, their light. */
@@ -520,6 +561,8 @@ export class Session {
     this.stroke = this.prevStroke = null;
     this.suppression.calm();
     this.digging = false;
+    // Nor does one from the last life: a match's end and the next one's deploy run no tick between.
+    this.pressWaiting = false;
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -533,8 +576,12 @@ export class Session {
     this.ticks++;
     this.acting = this.alive ? this.intent : idleIntent();
     const p = this.player;
-    // Aimed down the sights the player does not sprint.
-    if (this.aimed > 0.5 && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
+    // Firing (a press waiting for the gun to come up out of a sprint as well), aiming or aimed down
+    // the sights the player does not sprint. The trigger and the sights are a gun's: a button drops
+    // the sprint only while a gun is up to take it, as handle()'s canAim has it (the shovel out,
+    // digging, the periscope up or a climb under way, it does not), the hands as the last tick left them.
+    const gunUp = this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && p.climbTo === null;
+    if ((((this.acting.fire || this.acting.aim === true) && gunUp) || this.pressWaiting || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
     // Suppression as the last tick left it slows the feet and pins the player off the step; what
     // is in the hands, and the sights up, slow them too.
     const carried = this.held === SHOVEL_HELD ? 1 : this.arm.spec.move;
@@ -555,11 +602,15 @@ export class Session {
     this.raised += (raise - this.raised) * (1 - exp(-this.clock.dt / this.viewmodel.raiseS));
     this.dig(this.clock.dt);
     this.handle(this.clock.dt);
+    this.moveHands(this.clock.dt);
     this.combat(this.clock.dt);
     for (const c of this.destruction.tick()) this.events.craters.push({ ...c, tick: this.ticks });
     for (const c of this.destruction.cuts) this.events.cuts.push({ ...c, tick: this.ticks });
     if (this.destruction.written > 0) this.liftOut();
     this.particles.step(this.clock.dt);
+    // What the hands did that is heard, at the gun's muzzle as the tick leaves it.
+    for (const cue of this.heard) this.events.handling.push({ tick: this.ticks, cue, at: this.muzzle() });
+    this.heard.length = 0;
   }
 
   /**
@@ -612,6 +663,64 @@ export class Session {
     this.stroke = this.digging && this.held === SHOVEL_HELD && this.ready >= 1 && this.entrenching.inReach ? ((this.stroke ?? 0) + dt / h.strokeS) % 1 : null;
   }
 
+  /**
+   * The gun in the hands (handling.ts), after the hands and before combat, so a shot leaves the
+   * muzzle as drawn this tick. It is fed the body as the controller left it; this tick's turn of the
+   * view, from the last tick's the short way round; the controller's sprint, on the ground, once fire
+   * and the sights have dropped it; the sights; and the gun's reload and shot clock (the shovel has
+   * neither). What it does that is heard is heard this tick. Killed, the hands are quiet: they work no
+   * reload and no pump, so the gun eases to rest, and nothing they do is heard.
+   */
+  private moveHands(dt: number): void {
+    const p = this.player;
+    const w = this.weapon;
+    const gun = this.held !== SHOVEL_HELD && this.alive;
+    const turn = (now: number, was: number) => {
+      const d = now - was;
+      return d - 360 * Math.round(d / 360);
+    };
+    const yawRate = turn(p.yaw, this.look[0]) / dt;
+    const pitchRate = turn(p.pitch, this.look[1]) / dt;
+    this.look = [p.yaw, p.pitch];
+    const phase = gun ? w.reloadPhase : null;
+    const { cues } = this.handling.tick({
+      dt,
+      time: this.ticks * dt,
+      yawRate,
+      pitchRate,
+      speedRatio: p.velocity.horizontalLength / this.handling.t.runMps,
+      bobPhase: p.bobPhase,
+      onGround: p.onGround,
+      // As the controller left it: a tick decayed already (0.9 of the landing speed), as the eye's dip reads it.
+      landingImpact: p.landingImpact,
+      sprinting: sprints(this.acting, p) && p.onGround,
+      aimed: this.aimed,
+      reload: phase === null ? null : { phase, shells: w.reloadShells },
+      sinceShot: gun ? w.sinceShot : Number.POSITIVE_INFINITY,
+      gun: gunClass(this.arm.spec.gun.key),
+    });
+    // Dead, nothing is heard: not even a pump still to come, which the shot clock's end (+∞) crosses
+    // on the first tick dead.
+    if (this.alive) this.heard.push(...cues);
+  }
+
+  /**
+   * An empty trigger (the shots spec's §2): a press (the trigger in the hands rising) on an empty
+   * magazine, no reload under way, clicks (the cue `dry`), once a press; and the first click begins
+   * a reload dry_reload_s later, if the same gun is in the hands then.
+   */
+  private dryTrigger(w: Weapon, trigger: boolean): void {
+    if (trigger && !this.triggerWas && w.rounds <= 0 && !w.reloading) {
+      this.heard.push('dry');
+      this.dryReload ??= { tick: this.ticks + Math.max(1, Math.round(this.handling.t.dryReloadS / this.clock.dt)), weapon: w };
+    }
+    this.triggerWas = trigger;
+    if (this.dryReload && this.ticks >= this.dryReload.tick) {
+      if (this.dryReload.weapon === w && this.held !== SHOVEL_HELD) w.beginReload();
+      this.dryReload = null;
+    }
+  }
+
   /** How exposed the player stands (the stance's), and more while digging. Nothing hits the player yet: it is shown only. */
   exposure(): number {
     return this.controller.t.stances[this.player.stance].exposure * (this.digging ? this.entrenching.t.exposureScale : 1);
@@ -647,8 +756,17 @@ export class Session {
     const inHand = this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging;
     if (this.acting.reload && this.held !== SHOVEL_HELD) w.beginReload();
     const eye: [number, number, number] = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
-    // No shot with the shovel in the hands, a gun not yet up, or through the periscope.
-    if (w.wants(this.acting.fire && p.stance !== Stance.PERISCOPE && inHand)) {
+    // No shot with the shovel in the hands, a gun not yet up, through the periscope, or the gun still
+    // swung low from a sprint (its blend at or over sprint_blocks_fire); an empty one clicks. The
+    // sprint delays a press and does not lose it: one it alone holds back waits, the sprint dropped
+    // meanwhile (tick()), so the blend falls a tick's share each tick and the press pulls the trigger
+    // as it passes under, a tap out of a sprint as a held press would. Killed, nothing waits.
+    const low = this.handling.sprint >= this.handling.t.sprintBlocksFire;
+    const pulled = (this.acting.fire || (this.pressWaiting && this.alive)) && p.stance !== Stance.PERISCOPE && inHand;
+    const trigger = pulled && !low;
+    this.pressWaiting = pulled && low;
+    this.dryTrigger(w, trigger);
+    if (w.wants(trigger)) {
       const aim: [number, number] = [p.yaw + this.recoil.yaw + this.suppression.flinchYaw, p.pitch + this.recoil.pitch + this.suppression.flinchPitch];
       const cone = sway * this.suppression.swayScale;
       const dir = w.aim(aim[0], aim[1], cone, this.dispersion);
@@ -691,12 +809,14 @@ export class Session {
       for (const f of this.debrisFalling) if (f.tick <= this.ticks) this.events.splashes.push({ tick: this.ticks, at: f.at, energyJ: this.debris.energyJ, kind: 'debris' });
       this.debrisFalling = this.debrisFalling.filter((f) => f.tick > this.ticks);
     }
-    // Rounds into bodies: a puff of the uniform's dust where each struck.
+    // Rounds into bodies: a puff of the uniform's dust where each struck, and blood, but not out of the player's own.
     for (const hit of this.rounds.bodyHits) {
       this.events.hits.push({ ...hit, tick: this.ticks });
       const { dust } = this.kinds;
       this.particles.emit(hit.position, [-hit.dir[0] * dust.speed, dust.lift, -hit.dir[2] * dust.speed], dust, dust.count, this.particleRng, this.tints[P_KHAKI]);
     }
+    this.bleedHits(this.rounds.bodyHits);
+    this.spatterHits(this.rounds.bodyHits);
     for (const hit of this.rounds.impacts) {
       this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
       if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
@@ -819,6 +939,77 @@ export class Session {
     if (METAL.has(kindOf(hit.material))) this.particles.emit(hit.position, [n[0] * spark.speed, n[1] * spark.speed + spark.lift, n[2] * spark.speed], spark, spark.count, this.particleRng);
   }
 
+  /**
+   * Blood where a round struck a body (the shots spec's §4), at `at` along the round's unit `dir`:
+   * [particles.blood]'s droplets thrown out of the far side and a puff of [particles.blood_mist];
+   * critical (a headshot, or the round that kills), [hits] critical_droplets and critical_mist of
+   * them; and off a `helmet`, helmet_sparks sparks back along the round. combat() bleeds the rounds
+   * into others' bodies; the app bleeds a kill's.
+   */
+  bleed(at: readonly number[], dir: readonly number[], critical: boolean, helmet = false): void {
+    const { blood, mist, spark } = this.kinds;
+    const b = this.bleeding;
+    const along = (spec: ParticleSpec, k: number) => [dir[0] * spec.speed * k, dir[1] * spec.speed * k + spec.lift, dir[2] * spec.speed * k];
+    this.particles.emit(at, along(blood, 1), blood, critical ? b.criticalDroplets : blood.count, this.particleRng);
+    this.particles.emit(at, along(mist, 1), mist, critical ? b.criticalMist : mist.count, this.particleRng);
+    if (helmet) this.particles.emit(at, along(spark, -1), spark, b.helmetSparks, this.particleRng);
+  }
+
+  /**
+   * The tick's rounds into others' bodies bled: critical in the head, whose every hit sparks off the
+   * helmet too (the ledger's ruling). A body bleeds [hits] bursts_per_tick of them at most, its
+   * headshots first: a shotgun's nine pellets bleed it twice, and never leave a headshot's burst out.
+   * The player's own body (LOCAL_BODY) bleeds none: no body of theirs is drawn in first person, so
+   * its blood would be thrown into the eye, and being hit is the red flash, the aim's flinch and the
+   * hurt voice (the shots spec's §4).
+   */
+  private bleedHits(hits: readonly BodyHit[]): void {
+    if (hits.length === 0) return;
+    const bled = new Map<number, number>();
+    for (const head of [true, false]) {
+      for (const hit of hits) {
+        if (hit.body === LOCAL_BODY || (hit.zone === 'head') !== head) continue;
+        const n = bled.get(hit.body) ?? 0;
+        if (n >= this.bleeding.burstsPerTick) continue;
+        bled.set(hit.body, n + 1);
+        this.bleed(hit.position, hit.dir, head, head);
+      }
+    }
+  }
+
+  /**
+   * Spatter (the shots spec's §4) from `at` (metres) on along the round's `dir`: what is behind a
+   * critical hit, and the ground behind the body's feet, marked with its blood (world/spatter.ts),
+   * drawn from `seed` (any finite number; a fraction draws as its floor). Nothing is marked inside a
+   * crater's region while it is out, whose bricks coming back would undo it. The voxels it marked,
+   * whose bricks upload as any edit's do. combat() spatters the headshots into others' bodies; the
+   * app spatters a kill's.
+   */
+  spatterAt(at: readonly number[], dir: readonly number[], seed: number): number {
+    const v = this.voxel;
+    return spatter(this.map, [at[0] / v, at[1] / v, at[2] / v], dir, seed, this.spattering, (box) => this.destruction.overlapsOut(box));
+  }
+
+  /**
+   * The tick's headshots into others' bodies spattered, each drawn from the hash of the tick and
+   * where it struck (to a tenth of a millimetre). A body's head spatters [hits] bursts_per_tick of
+   * them at most, its first, counted as bleedHits counts: the same headshots bleed critical, and a
+   * shotgun's nine pellets into one head spatter twice. The player's own head spatters nothing, as
+   * it bleeds nothing (bleedHits): being hit is the flash, the flinch and the voice.
+   */
+  private spatterHits(hits: readonly BodyHit[]): void {
+    if (hits.length === 0) return;
+    const spattered = new Map<number, number>();
+    for (const hit of hits) {
+      if (hit.body === LOCAL_BODY || hit.zone !== 'head') continue;
+      const n = spattered.get(hit.body) ?? 0;
+      if (n >= this.bleeding.burstsPerTick) continue;
+      spattered.set(hit.body, n + 1);
+      const [x, y, z] = hit.position;
+      this.spatterAt(hit.position, hit.dir, hash32(this.ticks, Math.round(x * 1e4), Math.round(y * 1e4), Math.round(z * 1e4)));
+    }
+  }
+
   /** What combat did since the last drain, oldest first; the session's own start afresh. */
   drainEvents(): CombatEvents {
     const out = this.events;
@@ -845,7 +1036,8 @@ export class Session {
 
   /**
    * The rifle's pose between the last two ticks, `alpha` of the way to the latest, with the
-   * walk's sway (metres, as the camera's) and a run's share of full speed, which the camera has.
+   * walk's sway (metres, as the camera's) and a run's share of full speed, which the camera has,
+   * moved by the hands between the same two ticks (none while they are held still).
    */
   viewmodelAt(alpha = this.clock.alpha, sway = 0, speedRatio = 0): ViewmodelPose {
     const a = this.prevKick;
@@ -860,7 +1052,8 @@ export class Session {
       const to = stroke < this.prevStroke ? stroke + 1 : stroke;
       stroke = this.prevStroke + (to - this.prevStroke) * alpha;
     }
-    return heldPose(this.viewmodel, this.holding(), { back: at('back'), up: at('up'), side: at('side'), pitch: at('pitch'), yaw: at('yaw'), roll: at('roll') }, sway, speedRatio, raised, aimed, ready, stroke);
+    const hands = this.handsStill ? ZERO_HANDS : this.handling.at(alpha);
+    return heldPose(this.viewmodel, this.holding(), { back: at('back'), up: at('up'), side: at('side'), pitch: at('pitch'), yaw: at('yaw'), roll: at('roll') }, sway, speedRatio, raised, aimed, ready, stroke, hands);
   }
 
   /**
@@ -883,12 +1076,13 @@ export class Session {
     return this.rifleToWorld(this.arm.spec.port);
   }
 
-  /** A rifle point (model metres) in the world, from the eye along the view with its offsets; the walk's sway and dip (a centimetre) are the camera's. */
+  /** A rifle point (model metres) in the world, from the eye along the view with its offsets and the hands' as the last tick left them; the walk's sway and dip (a centimetre) are the camera's. */
   private rifleToWorld(point: readonly number[]): [number, number, number] {
     const p = this.player;
     const view = this.view();
     const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
-    const v = modelToView(heldPose(this.viewmodel, this.holding(), this.kick(), 0, 0, this.raised, this.aimed, this.ready, this.stroke), point);
+    const hands = this.handsStill ? ZERO_HANDS : this.handling.delta;
+    const v = modelToView(heldPose(this.viewmodel, this.holding(), this.kick(), 0, 0, this.raised, this.aimed, this.ready, this.stroke, hands), point);
     const eye = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
     return [0, 1, 2].map((k) => eye[k] + right[k] * v[0] + up[k] * v[1] + forward[k] * v[2]) as [number, number, number];
   }
@@ -926,5 +1120,7 @@ export class Session {
     p.embedded = 0;
     p.bobPhase = 0;
     this.prevPosition = p.position;
+    // Put there facing the way given: no turn of the view for the hands to trail.
+    this.look = [yaw, pitch];
   }
 }

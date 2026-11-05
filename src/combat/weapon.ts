@@ -9,7 +9,10 @@
  * and fired at 600). While the trigger rests, or the rifle cannot fire, the
  * timer is held at one interval: a fresh pull fires at once, with no catch-up
  * burst. A semi-automatic weapon fires once per press. A reload runs its time
- * and then fills the magazine; there is no round in the chamber to keep.
+ * and then fills the magazine; there is no round in the chamber to keep. A gun
+ * loaded a round at a time (the shotgun's tube) takes a base time and a time
+ * for each round missing, but it too fills only at the end: loading shell by
+ * shell is how its hands look (handling.ts), not a new rule.
  *
  * Dispersion is decided at the muzzle, as the reference does it: a uniform
  * disc of the cone's half-angle (MOA / 60 degrees, times the caller's sway) in
@@ -29,7 +32,11 @@ export interface WeaponSpec {
   magazine: number;
   /** The cone's half-angle in minutes of arc, at a sway of 1. */
   dispersionMoa: number;
+  /** A whole magazine's reload (s): every reload's for a gun loaded a magazine at a time, and the figure shown. */
   reloadS: number;
+  /** Loaded a round at a time: this long first, then this long a round missing (s); 0 a round, a magazine at a time. */
+  reloadBaseS: number;
+  reloadPerRoundS: number;
   automatic: boolean;
   /** Every n-th round is a tracer; 0, none. */
   tracerEvery: number;
@@ -58,6 +65,8 @@ export function weaponSpec(tun: Tunables, key: string): WeaponSpec {
     magazine: tun.i(`${k}.magazine`),
     dispersionMoa: tun.f(`${k}.dispersion_moa`),
     reloadS: tun.f(`${k}.reload_time_s`),
+    reloadBaseS: or('reload_base_s', 0),
+    reloadPerRoundS: or('reload_per_round_s', 0),
     automatic: table.automatic === true,
     tracerEvery: table.tracer === true ? tun.i(`${k}.tracer_every`) : 0,
     projectile: projectileSpec(tun, key),
@@ -73,18 +82,37 @@ export class Weapon {
   /** An automatic weapon switched to single shots (B): one a press, as a semi-automatic's. */
   semi = false;
   private readonly interval: number;
-  private sinceShot: number;
+  /** Seconds since the last shot, held at one interval while the trigger rests (`sinceShot`). */
+  private timer: number;
   private reloadLeft = 0;
+  /** The reload under way: its whole time, and the rounds it puts in (counted as it begins). */
+  private reloadTotal = 0;
+  private reloadRounds = 0;
   private held = false;
 
   constructor(readonly spec: WeaponSpec) {
     this.rounds = spec.magazine;
     this.interval = 60 / spec.rpm;
-    this.sinceShot = this.interval;
+    this.timer = this.interval;
   }
 
   get reloading(): boolean {
     return this.reloadLeft > 0;
+  }
+
+  /** How far through the reload under way: 0 as it begins, toward 1 as it ends; null while none is. */
+  get reloadPhase(): number | null {
+    return this.reloadLeft > 0 ? 1 - this.reloadLeft / this.reloadTotal : null;
+  }
+
+  /** The rounds the reload under way puts in: the shotgun's shells, pushed in one by one. 0 while none is. */
+  get reloadShells(): number {
+    return this.reloadLeft > 0 ? this.reloadRounds : 0;
+  }
+
+  /** Seconds since the last shot: held at one interval while the trigger rests or the gun cannot fire (the pump's clock). */
+  get sinceShot(): number {
+    return this.timer;
   }
 
   /** A full magazine, nothing under way: a soldier back in after being killed. */
@@ -92,12 +120,12 @@ export class Weapon {
     this.rounds = this.spec.magazine;
     this.reloadLeft = 0;
     this.held = false;
-    this.sinceShot = this.interval;
+    this.timer = this.interval;
   }
 
   /** The timer, and a reload under way. */
   tick(dt: number): void {
-    this.sinceShot += dt;
+    this.timer += dt;
     if (this.reloadLeft > 0) {
       this.reloadLeft -= dt;
       if (this.reloadLeft <= EPS) {
@@ -107,10 +135,16 @@ export class Weapon {
     }
   }
 
-  /** Start a reload: false if one is running or the magazine is full. */
+  /**
+   * Start a reload: false if one is running or the magazine is full. It takes reloadS, or, for a gun
+   * loaded a round at a time, its base time and its time for each round missing.
+   */
   beginReload(): boolean {
     if (this.reloading || this.rounds >= this.spec.magazine) return false;
-    this.reloadLeft = this.spec.reloadS;
+    const s = this.spec;
+    this.reloadRounds = s.magazine - this.rounds;
+    this.reloadTotal = s.reloadPerRoundS > 0 ? s.reloadBaseS + s.reloadPerRoundS * this.reloadRounds : s.reloadS;
+    this.reloadLeft = this.reloadTotal;
     return true;
   }
 
@@ -118,7 +152,7 @@ export class Weapon {
   cancelReload(): void {
     this.reloadLeft = 0;
     this.held = false;
-    this.sinceShot = Math.min(this.sinceShot, this.interval);
+    this.timer = Math.min(this.timer, this.interval);
   }
 
   /** Automatic and single shots in turn, for a weapon that has both; whether it now fires singly. */
@@ -132,11 +166,11 @@ export class Weapon {
     const pressed = trigger && !this.held;
     this.held = trigger;
     if (!trigger || this.reloading || this.rounds <= 0) {
-      this.sinceShot = Math.min(this.sinceShot, this.interval);
+      this.timer = Math.min(this.timer, this.interval);
       return false;
     }
     if ((!this.spec.automatic || this.semi) && !pressed) return false;
-    return this.sinceShot + EPS >= this.interval;
+    return this.timer + EPS >= this.interval;
   }
 
   /** A shot's direction (unit) aimed along `yawDeg`, `pitchDeg`, with the cone scaled by `sway`, drawn from `rng`. */
@@ -152,7 +186,7 @@ export class Weapon {
   shot(): void {
     this.rounds--;
     this.shotsFired++;
-    this.sinceShot = Math.max(0, this.sinceShot - this.interval);
+    this.timer = Math.max(0, this.timer - this.interval);
   }
 
   /** Whether the next shot is a tracer. */

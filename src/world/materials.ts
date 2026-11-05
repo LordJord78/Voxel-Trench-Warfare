@@ -135,6 +135,14 @@ const DEFS: readonly Def[] = [
   // dummies' hunter-orange tape, never placed in the world, lifted as the teams' tapes are.
   ['TARGET_STEEL', K.HULL, 226, 222, 210, 0.45], ['TARGET_STEEL_HIT', K.HULL, 104, 104, 108, 0.6],
   ['TAPE_RANGE', K.CLOTH, 255, 110, 20, 0.75, 0.6],
+  // Blood (the shots spec's §4): what a critical hit leaves on what is behind the body and on the
+  // ground behind it (world/spatter.ts), darker red-brown, each of the kind it marks so only its
+  // colour changes, as a char's does. Sod and mud take BLOOD_SOIL, which is mud's, since their rules
+  // are alike; clay, subsoil and spoil each take their own (BLOOD_OF). Never generated.
+  ['BLOOD_SOIL', K.MUD, 70, 22, 18], ['BLOOD_TIMBER', K.TIMBER, 72, 20, 16],
+  ['BLOOD_SANDBAG', K.SANDBAG, 84, 26, 20], ['BLOOD_DUCKBOARD', K.DUCKBOARD, 70, 22, 16],
+  ['BLOOD_CLOTH', K.CLOTH, 80, 16, 16],
+  ['BLOOD_CLAY', K.CLAY, 86, 30, 22], ['BLOOD_SUBSOIL', K.SUBSOIL, 78, 26, 20], ['BLOOD_SPOIL', K.SPOIL, 72, 22, 17],
 ];
 
 /** Palette ids by name. Kept explicit so ids are stable and greppable; checked against DEFS below. */
@@ -154,6 +162,8 @@ export const P = {
   GUN_BLACK: 68, GUN_POLYMER: 69, GUN_TAN: 70, GUN_OD: 71, GUN_WOOD: 72, GUN_BRASS: 73,
   OPTIC_GLASS: 74, OPTIC_DOT: 75, LIGHT_LENS: 76, SHOVEL_HANDLE: 77, SHOVEL_BLADE: 78, SHOVEL_EDGE: 79,
   TARGET_STEEL: 80, TARGET_STEEL_HIT: 81, TAPE_RANGE: 82,
+  BLOOD_SOIL: 83, BLOOD_TIMBER: 84, BLOOD_SANDBAG: 85, BLOOD_DUCKBOARD: 86, BLOOD_CLOTH: 87,
+  BLOOD_CLAY: 88, BLOOD_SUBSOIL: 89, BLOOD_SPOIL: 90,
 } as const;
 
 export const PALETTE: readonly PaletteEntry[] = DEFS.map(([name, kind, r, g, b, roughness, emission]) => ({
@@ -217,6 +227,26 @@ export function hardness(p: number): number {
 export function spoilOf(p: number): number {
   if (p === P.TARGET_STEEL || p === P.TARGET_STEEL_HIT) return p;
   return BASE[KIND_SPOIL[PALETTE_KIND[p]]];
+}
+
+/**
+ * Each kind's blood shade (world/spatter.ts); the kinds not here take none. Every shade keeps every
+ * rule of the kind it marks, so a world spattered otherwise differs only in colour (the shots spec's
+ * §4), and M6 may count them all cosmetic. Sod and mud take BLOOD_SOIL, which is mud's, since their
+ * rules are alike. Clay, subsoil and spoil each take their own: bloodied clay and subsoil chip at
+ * their own hardness, and bloodied spoil is still loose, which the shovel digs and a collapse slumps.
+ */
+const BLOOD: Partial<Record<number, number>> = {
+  [K.SOD]: P.BLOOD_SOIL, [K.MUD]: P.BLOOD_SOIL, [K.CLAY]: P.BLOOD_CLAY, [K.SUBSOIL]: P.BLOOD_SUBSOIL, [K.SPOIL]: P.BLOOD_SPOIL,
+  [K.TIMBER]: P.BLOOD_TIMBER, [K.SANDBAG]: P.BLOOD_SANDBAG, [K.DUCKBOARD]: P.BLOOD_DUCKBOARD, [K.CLOTH]: P.BLOOD_CLOTH,
+};
+
+/**
+ * The blood shade a voxel of `kind` takes when a critical hit spatters it (world/spatter.ts), or null
+ * for a kind that takes none: water, wire, metal, masonry, rubble and the trees.
+ */
+export function BLOOD_OF(kind: number): number | null {
+  return BLOOD[kind] ?? null;
 }
 
 /** 256 entries of [r, g, b (linear), roughness, emission r, g, b, kind] for the GPU. */

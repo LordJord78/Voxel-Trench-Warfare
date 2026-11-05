@@ -1,19 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { loadTunables } from '../../src/core/tunables';
+import { loadTunables, Tunables } from '../../src/core/tunables';
 import { CameraRig, rigTunables } from '../../src/app/camera-rig';
+import { handlingTunables } from '../../src/combat/handling';
 import { rifleModel } from '../../src/combat/rifle-model';
+import { viewmodelTunables } from '../../src/combat/viewmodel';
 import { Stance } from '../../src/physics/character';
 import { Vec3 } from '../../src/physics/vec';
 import { Rng } from '../../src/core/rng';
-import { Session } from '../../src/sim/session';
+import { cameraBasis, type CameraPose } from '../../src/render/camera';
+import { idleIntent, Session } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
 import { P } from '../../src/world/materials';
 
 const tun = loadTunables();
-function standing(): Session {
+function standing(t = tun): Session {
   const map = new BrickMap({ x: 64, y: 64, z: 64 });
   map.fillBox(0, 0, 0, 64, 20, 64, P.SOD);
-  const s = Session.create({ map, plan: null, spawn: { position: [3.2, 2.0, 3.2] } }, tun, 7);
+  const s = Session.create({ map, plan: null, spawn: { position: [3.2, 2.0, 3.2] } }, t, 7);
   for (let t = 0; t < 10; t++) s.tick();
   // Settling from the spawn is itself a small landing; these tests want none.
   s.player.landingImpact = 0;
@@ -191,6 +194,10 @@ describe('the rifle as the rig draws it', () => {
 
   it("its muzzle is drawn where the session fires from", () => {
     const s = standing();
+    // The hands held still: no tick runs between these, so the rig draws the last tick but one (alpha
+    // 0) and the session fires from the last, and a still gun breathes between the two. A shot's own
+    // muzzle is carried to the drawn gun's in effects-frame (its drift), as in play.
+    s.handsStill = true;
     const rig = new CameraRig(rigTunables(tun));
     const drawn = through(rig.rifle(s, rig.pose(s, 1 / 60)).toWorld, rifleModel().muzzle);
     const fired = s.muzzle();
@@ -220,5 +227,83 @@ describe('the rifle as the rig draws it', () => {
     const second = rig.rifle(s, rig.pose(s, 1 / 60));
     expect(Array.from(second.prevToWorld)).toEqual(Array.from(first.toWorld));
     expect(Array.from(second.toWorld)).not.toEqual(Array.from(first.toWorld));
+  });
+
+  const TICK = 1 / 60;
+  const dot = (a: readonly number[], b: readonly number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  /** Where the rig draws the gun's model origin, in the view `pose` shows: right, up and forward of the eye (metres). */
+  function drawnAt(rig: CameraRig, s: Session, pose: CameraPose): { right: number; up: number } {
+    const m = rig.rifle(s, pose).toWorld;
+    const basis = cameraBasis(pose.yaw, pose.pitch, pose.roll ?? 0);
+    const at = [m[9] - pose.position[0], m[10] - pose.position[1], m[11] - pose.position[2]];
+    return { right: dot(at, basis.right), up: dot(at, basis.up) };
+  }
+
+  it("at a walk it swings across by the hands' figure eight alone: either side of centre by turns, within 0.006 m by the run's share", () => {
+    // The gun's stride motion is the hands' (handling.ts), not the eye's sway, which is the eye's own
+    // lean. Each stride swings it the other way; it still drops a little at speed (run_dip_m).
+    const map = new BrickMap({ x: 256, y: 64, z: 512 });
+    map.fillBox(0, 0, 0, 256, 4, 512, P.SOD);
+    const s = Session.create({ map, plan: null, spawn: { position: [12.8, 0.4, 2] } }, tun, 7, 0);
+    for (let k = 0; k < 10; k++) s.tick();
+    const rig = new CameraRig(rigTunables(tun));
+    const vt = viewmodelTunables(tun);
+    const ht = handlingTunables(tun);
+    s.intent = { ...idleIntent(), forward: 1 };
+    const strides: number[][] = [[]];
+    let last = s.player.bobPhase;
+    let ratio = 0;
+    let lean = 0;
+    for (let k = 0; k < 270; k++) {
+      // Drawn at alpha 0 (no frame between ticks here), the gun is as the last tick but one left the
+      // hands, so its stride is the body's before this tick.
+      const phase = s.player.bobPhase;
+      if (phase < last - Math.PI) strides.push([]);
+      last = phase;
+      s.tick();
+      const pose = rig.pose(s, TICK);
+      const drawn = drawnAt(rig, s, pose);
+      const hands = s.handling.at(0);
+      const share = Math.min(1, s.player.velocity.horizontalLength / ht.runMps);
+      // Across, the hands' alone; up, the hands' and the run's dip.
+      const across = drawn.right - vt.restRightM;
+      expect(across, `tick ${k}`).toBeCloseTo(hands.offset[0], 5);
+      expect(drawn.up - vt.restUpM, `tick ${k}`).toBeCloseTo(hands.offset[1] - share * vt.runDipM, 5);
+      strides[strides.length - 1].push(across);
+      ratio = share;
+      // The eye's own lean along its right (facing +z, its right is +x), which stays.
+      lean = Math.max(lean, pose.position[0] - s.footAt().x);
+    }
+    // The walk's first stride (getting up to speed) and its last (cut short) aside, at least four whole ones.
+    const whole = strides.slice(1, -1);
+    expect(whole.length).toBeGreaterThanOrEqual(4);
+    const most = 0.006 * ratio + 0.0015;
+    const swings = whole.map((st) => st.reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a), 0));
+    for (let j = 0; j < whole.length; j++) {
+      for (const x of whole[j]) expect(Math.abs(x), `stride ${j}`).toBeLessThanOrEqual(most);
+      expect(Math.abs(swings[j]), `stride ${j}`).toBeGreaterThan(0.8 * 0.006 * ratio);
+      if (j > 0) expect(Math.sign(swings[j]), `stride ${j}`).toBe(-Math.sign(swings[j - 1]));
+    }
+    expect(ratio).toBeGreaterThan(0.7);
+    expect(lean).toBeGreaterThan(0.004);
+  });
+
+  it("the rig's share of a run is the body's speed over [handling] run_mps: the eye's bob and the gun's dip follow it", () => {
+    for (const runMps of [5, 8]) {
+      const raw = tun.raw();
+      (raw.handling as Record<string, unknown>).run_mps = runMps;
+      const t = new Tunables(raw);
+      const s = standing(t);
+      s.handsStill = true;
+      const rig = new CameraRig(rigTunables(t));
+      s.player.velocity = new Vec3(0, 0, 4);
+      s.player.bobPhase = Math.PI / 2;
+      const share = 4 / runMps;
+      const pose = rig.pose(s, TICK);
+      // The eye: up by the head bob's amplitude at the stride's top, by the share.
+      expect(pose.position[1] - 3.62, `run_mps ${runMps}`).toBeCloseTo(t.f('camera.head_bob_amplitude') * share, 9);
+      // The gun: dropped by run_dip_m, by the share.
+      expect(drawnAt(rig, s, pose).up - t.f('viewmodel.rest_up_m'), `run_mps ${runMps}`).toBeCloseTo(-t.f('viewmodel.run_dip_m') * share, 5);
+    }
   });
 });

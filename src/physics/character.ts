@@ -185,6 +185,11 @@ export function letGoOfLedge(state: CharacterState): void {
   state.climbOver = 0;
 }
 
+/** Whether `intent` sprints a body in `state`: sprint held, pushing well forward, standing. */
+export function sprints(intent: MoveIntent, state: CharacterState): boolean {
+  return intent.sprint && intent.forward > 0.3 && state.stance === Stance.STANDING;
+}
+
 /** Moves a CharacterState through a voxel grid. */
 export class CharacterController {
   readonly grid: VoxelGrid;
@@ -379,8 +384,7 @@ export class CharacterController {
     let wish = forward.mul(intent.forward).add(right.mul(intent.strafe));
     if (wish.lengthSq < 1e-8) return ZERO;
     wish = wish.normalised();
-    const sprinting = intent.sprint && intent.forward > 0.3 && state.stance === Stance.STANDING;
-    let speed = sprinting ? profile.sprintSpeed : profile.speed;
+    let speed = sprints(intent, state) ? profile.sprintSpeed : profile.speed;
     speed *= Math.max(0, state.speedScale);
     // Wading costs you: knee-deep water in a crater is not a shortcut.
     if (state.wadeDepth > 0.15) speed *= Math.max(0.35, 1 - state.wadeDepth * 0.9);

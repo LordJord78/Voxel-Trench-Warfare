@@ -332,7 +332,9 @@ cross_section_m2    = 0.0000554   # 8.4 mm
 rounds_per_minute   = 75.0     # pumped
 magazine            = 7        # the tube
 dispersion_moa      = 160.0    # each pellet's cone: a 0.9 m spread at 20 m
-reload_time_s       = 4.2
+reload_time_s       = 4.0      # a full tube's: reload_base_s + 7 × reload_per_round_s
+reload_base_s       = 0.5      # shell by shell: this long first, then
+reload_per_round_s  = 0.5      # this long a shell (the hands lay their pushes out by these)
 automatic           = false
 tracer              = true
 tracer_every        = 1
@@ -632,6 +634,39 @@ bowl_m              = 0.6      # under the mean of the ground 3 m round it
 down_s              = 4.0
 readout_s           = 1.5      # the HUD's readout of a hit
 
+[hits]
+# Hit feedback (the shots spec's §4). A critical hit (a headshot, or the round
+# that kills) bleeds more, and spatters what is behind the body and the ground
+# behind its feet; a helmet struck sparks. A round leans the body it strikes:
+# the torso along it from the waist, and on a headshot the head on its neck as
+# well, springing back (critically damped) within flinch_s. A killed body falls
+# toward the killing round's bearing.
+critical_droplets   = 18       # [particles.blood]'s, out of the far side
+critical_mist       = 3        # [particles.blood_mist]'s
+helmet_sparks       = 4        # [particles.spark]'s: every head hit's
+bursts_per_tick     = 2        # a body bleeds this many rounds a tick at most,
+                               # and spatters this many of its headshots: a
+                               # shotgun's nine pellets bleed twice, not nine times
+flinch_deg          = 12
+head_snap_deg       = 25       # on top of the torso's lean
+flinch_s            = 0.25     # back to 2% of either
+fall_s              = 0.7      # a killed body's fall, unless told otherwise
+head_fall_s         = 0.45     # killed by a headshot
+spatter_rays        = 14       # a critical hit's spatter: rays from where it
+                               # struck, on along the round, each marking the
+                               # first thing it meets with blood (world/spatter.ts)
+spatter_cone_deg    = 25       # their cone's half-angle about the round
+spatter_reach_m     = 2.5      # nothing further from the hit is marked
+spatter_core        = 2        # both cones pack toward their axis: a ray's angle
+                               # off it is the half-angle × r^core, r uniform in
+                               # [0, 1). 1 spreads the rays evenly over the cone's
+                               # width; 2 packs a splat with a thin fringe
+spatter_fall_rays   = 10       # and rays falling from it, so a body standing in
+                               # the open marks the ground behind it
+spatter_fall_cone_deg = 30     # their cone's half-angle about an axis tilted
+spatter_fall_tilt_deg = 30     # this far from straight down toward the round
+spatter_fall_reach_m  = 2.5    # nothing further along them is marked
+
 # ---------------------------------------------------------------------------
 # DESTRUCTION
 #
@@ -873,6 +908,42 @@ lift                = 4.0
 spread              = 2.5
 speed_jitter        = 0.25
 
+# Blood (the shots spec's §4): a round into a body throws droplets and a puff
+# of mist out along it, beside the uniform's khaki dust; a critical hit throws
+# [hits] critical_droplets and critical_mist of them. Dark red, lit by the
+# world as dust is.
+[particles.blood]
+life_s              = 0.8
+gravity             = -9.81
+drag                = 1.2
+size_start_m        = 0.03
+size_end_m          = 0.02
+colour_start        = [0.32, 0.02, 0.02, 1.0]
+colour_end          = [0.32, 0.02, 0.02, 0.0]
+emissive            = false
+square              = false
+count               = 6        # an ordinary hit's
+speed               = 3.5      # out of the far side, along the round
+lift                = 0.0
+spread              = 0.6
+speed_jitter        = 0.3
+
+[particles.blood_mist]
+life_s              = 0.9
+gravity             = -0.4     # it hangs, growing as it thins
+drag                = 3.0
+size_start_m        = 0.15
+size_end_m          = 0.6
+colour_start        = [0.42, 0.04, 0.04, 0.45]
+colour_end          = [0.42, 0.04, 0.04, 0.0]
+emissive            = false
+square              = false
+count               = 1        # an ordinary hit's
+speed               = 0.8      # along the round
+lift                = 0.0
+spread              = 0.8
+speed_jitter        = 0.0
+
 # The sound (src/audio): every voice made in WebAudio, nothing loaded. A sound is
 # late by its distance at the speed of sound, quieter past reference_m, and duller
 # toward far_m.
@@ -1055,6 +1126,101 @@ step_raise_m        = 0.14     # raised to the shoulder on the firing step, so i
                                # clears a crest 0.12 m under a standing eye (at
                                # rest it hangs 0.205 m under it, in the parapet)
 raise_s             = 0.18     # how long raising and lowering it takes, roughly
+
+# ---------------------------------------------------------------------------
+# HANDLING
+#
+# The gun in the hands (src/combat/handling.ts), moving as a held gun does: it
+# bobs with the stride, trails the view's turn, breathes at rest, swings low and
+# across at a sprint, dips on a hard landing, and works through its reload and
+# its pump. All of it is the hands' alone: none of it moves a round, which
+# leaves from the eye. Offsets are metres in view space (x right, y up, z
+# forward, as [viewmodel]'s); turns are degrees (pitch muzzle up, yaw muzzle
+# right, roll right side up). heldPose adds them after the aim's blend.
+# ---------------------------------------------------------------------------
+
+[handling]
+# The stride's bob, × the run's share of full speed: up and down at the
+# stride's phase, across and rolling at half its rate (a figure eight).
+bob_up_m            = 0.008
+bob_side_m          = 0.006
+bob_roll_deg        = 0.8
+bob_aimed           = 0.15     # aimed, this much of it
+bob_sprint          = 1.8      # at a sprint, this many times it
+# The look's sway: the gun trails the view's turn on a spring, aside and up,
+# and banks into it, as a gun hung from the hands.
+sway_m_per_dps        = 0.00012  # metres per degree a second of turn
+sway_roll_deg_per_dps = 0.004    # degrees of roll per degree a second
+sway_max_m          = 0.025    # held to these
+sway_max_deg        = 4.0
+sway_settle_s       = 0.18
+sway_damping        = 0.7      # under critical: it swings a little past rest
+sway_aimed          = 0.25
+# Breathing at rest: up and down, and aside at half the rate. Gone at a run.
+breath_up_m         = 0.0025
+breath_up_hz        = 0.22
+breath_side_m       = 0.0015
+breath_side_hz      = 0.11
+breath_aimed        = 0.35
+# The sprint: the gun swung low and across, in over sprint_in_s and out over
+# sprint_out_s. Firing or aiming drops the sprint (the session's rule).
+sprint_offset_m     = [0.06, -0.06, -0.04]
+sprint_pitch_deg    = -18.0
+sprint_yaw_deg      = 32.0
+sprint_roll_deg     = 18.0
+sprint_in_s         = 0.18
+sprint_out_s        = 0.12
+sprint_blocks_fire  = 0.3      # no shot leaves while the sprint's blend is at or over this
+# A landing dips it by its share of a hard one, min(1, impact / landing_hard_mps),
+# and it settles back.
+landing_drop_m      = 0.03
+landing_pitch_deg   = -4.0
+landing_hard_mps    = 8.0      # landed this fast (m/s), the full dip, as the eye's
+landing_settle_s    = 0.25
+landing_damping     = 1.0      # critically damped: back without a bounce
+# Reloads: curves keyed over the reload's phase (0 to 1), from rest and back to
+# it, eased between keys as the shovel's stroke is. A cue is heard as its key is
+# passed. The long guns' (rifle, carbine, SMG and marksman):
+reload_tilt_at          = 0.12     # tilted: turned over, the muzzle up, low and in
+reload_tilt_m           = [-0.02, -0.04, -0.03]
+reload_tilt_pitch_deg   = 8.0
+reload_tilt_roll_deg    = 28.0
+reload_mag_out_at       = 0.28     # the magazine out: a jolt down (mag-out)
+reload_mag_out_drop_m   = 0.015
+reload_hold_at          = 0.55     # held tilted for the next one
+reload_mag_in_at        = 0.62     # the magazine in: a jolt up, the muzzle up (mag-in)
+reload_mag_in_rise_m    = 0.02
+reload_mag_in_pitch_deg = 3.0
+reload_bolt_at          = 0.82     # the bolt: drawn back, turned further (bolt)
+reload_bolt_back_m      = 0.02
+reload_bolt_roll_deg    = 34.0
+reload_cut_s            = 0.15     # a reload cut short eases back to rest over this
+# The machine gun's: the long guns', this many times as deep, with the feed
+# cover's clap (cover).
+mg_depth            = 1.3
+mg_cover_at         = 0.45
+# A pistol's: the long guns', tilted less, its magazine out and in and its slide
+# released (bolt) at its own marks.
+pistol_tilt_roll_deg = 18.0
+pistol_mag_out_at   = 0.30
+pistol_mag_in_at    = 0.62
+pistol_slide_at     = 0.86
+# The shotgun's: a shell at a time, each a push with the muzzle up at the middle
+# of its turn (shell), evenly after [weapon.m870]'s reload_base_s, each
+# reload_per_round_s long ...
+shell_push_m        = [0.0, 0.02, 0.0]
+shell_pitch_deg     = 6.0
+# ... and its pump after each shot: from pump_after_s, back over pump_stroke_s
+# and forward over as long again (pump).
+pump_after_s        = 0.12
+pump_back_m         = 0.035
+pump_stroke_s       = 0.12
+# Empty: a press on an empty magazine clicks (dry), and a reload begins this
+# long after (the session's).
+dry_reload_s        = 0.25
+# A run's speed (m/s), as the camera's stride has it: the session's share of a
+# run (the bob's, and what is left of breathing) is the body's speed over this.
+run_mps             = 5.0
 
 # The trench periscope. Elevation is the payoff — this is the only way to look
 # at no-man's-land from behind the parapet rather than over it — and the costs

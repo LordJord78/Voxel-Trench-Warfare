@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/core/rng';
 import { BrickMap } from '../../src/world/bricks';
-import { isSolid, P } from '../../src/world/materials';
+import { isOpaque, isSolid, K, kindOf, P } from '../../src/world/materials';
 import { raycast } from '../../src/world/raycast';
 import { SYNTHETIC, syntheticWorld } from '../support/synthetic';
 import { traceRef, type Vec3 } from '../support/trace-ref';
@@ -91,6 +91,21 @@ describe('the CPU raycast', () => {
 
   it('lets water, wire and cloth through, and stops at the first solid voxel past them', () => {
     expect(raycast(row(), [5.5, 5.5, 0.5], [0, 0, 1], 1000)).toEqual({ t: 39.5, cell: [5, 5, 40], face: 4, material: P.CLAY });
+  });
+
+  it('told what stops it, a ray stops at the first voxel that does: cloth, or water, as it is told', () => {
+    const opaque = Uint8Array.from({ length: 256 }, (_, p) => (isOpaque(p) ? 1 : 0));
+    // Through the water and the wire, which are not opaque, to the cloth.
+    expect(raycast(row(), [5.5, 5.5, 0.5], [0, 0, 1], 1000, undefined, opaque)).toEqual({ t: 29.5, cell: [5, 5, 30], face: 4, material: P.CLOTH });
+    // Water too: at the water.
+    const wet = Uint8Array.from(opaque, (stop, p) => (stop || kindOf(p) === K.WATER ? 1 : 0));
+    expect(raycast(row(), [5.5, 5.5, 0.5], [0, 0, 1], 1000, undefined, wet)).toEqual({ t: 9.5, cell: [5, 5, 10], face: 4, material: P.WATER });
+    // A uniform brick of it, stepped into whole: a hit at once.
+    const map = new BrickMap({ x: 32, y: 32, z: 32 });
+    map.fillBox(0, 0, 16, 32, 32, 24, P.LEAF);
+    expect(raycast(map, [5.5, 5.5, 0.5], [0, 0, 1], 1000, undefined, opaque)).toEqual({ t: 15.5, cell: [5, 5, 16], face: 4, material: P.LEAF });
+    // Not told, it stops only at the solid, as a round does.
+    expect(raycast(map, [5.5, 5.5, 0.5], [0, 0, 1], 1000)).toBeNull();
   });
 
   it('a ray notes the first water it enters, and none when it starts in water', () => {
