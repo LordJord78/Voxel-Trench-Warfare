@@ -25,6 +25,8 @@ type H = {
   trigger(held: boolean): void;
   /** The session's tracers the last frame drew (net/gear.ts TRACER_KIND: amber 1, red 2, blue 3): this player's rounds and the others'. */
   tracerPixels(): { tracers: { kind: number }[] };
+  /** The side this page fires for: its own rounds' colour, and the word each of its shots carries. */
+  session: { team: 'red' | 'blue' };
   waitFrames(n: number): Promise<void>;
 };
 
@@ -95,9 +97,9 @@ test('one hosts, a friend follows the link: one lobby, two teams, a match, and e
   // Each sees the other's rounds in their team's colour (the shots spec §1, done row 2): a short burst
   // from the friend (Blue) is drawn blue on both pages, the shooter's own rounds and the room's copy
   // of them; then one from the host (Red), red on both. Fired well up into the sky, clear of everyone.
-  for (const [shooter, kind, who] of [[friend.page, 3, 'Blue'], [host.page, 2, 'Red']] as const) {
+  /** A short burst from `shooter`: every kind each page (the host's, the friend's) draws over the next 240 frames, and how many frames drew one. */
+  const burst = async (shooter: Page) => {
     for (const p of [host.page, friend.page]) await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.tracerPixels().tracers.length === 0, null, { timeout: 15_000 });
-    // Every kind each page draws over the next 240 frames, and how many frames drew one.
     const watch = (p: Page) =>
       h(p, async (x) => {
         const kinds: number[] = [];
@@ -117,12 +119,26 @@ test('one hosts, a friend follows the link: one lobby, two teams, a match, and e
     });
     await shooter.waitForTimeout(300);
     await h(shooter, (x) => x.trigger(false));
-    const [onHost, onFriend] = await seen;
+    return seen;
+  };
+  for (const [shooter, kind, who] of [[friend.page, 3, 'Blue'], [host.page, 2, 'Red']] as const) {
+    const [onHost, onFriend] = await burst(shooter);
     expect(onHost.frames, `${who}'s rounds drawn on the host's page`).toBeGreaterThan(0);
     expect(onFriend.frames, `${who}'s rounds drawn on the friend's page`).toBeGreaterThan(0);
     expect(onHost.kinds, `${who}'s rounds on the host's page`).toEqual([kind]);
     expect(onFriend.kinds, `${who}'s rounds on the friend's page`).toEqual([kind]);
   }
+  // Another's rounds are drawn in their seat's team's colour whatever their shot's word says (together.ts
+  // prepare, shotTracer). The friend's own page made to fight for Red: its rounds are red there, and the
+  // word each shot carries says red; the host draws them in the friend's seat's colour, Blue.
+  await h(friend.page, (x) => {
+    x.session.team = 'red';
+  });
+  const [onHost, onFriend] = await burst(friend.page);
+  expect(onFriend.frames, "the friend's rounds drawn on the friend's page, its word made red").toBeGreaterThan(0);
+  expect(onFriend.kinds, "the friend's rounds on the friend's page, its word made red").toEqual([2]);
+  expect(onHost.frames, "the friend's rounds drawn on the host's page, its word made red").toBeGreaterThan(0);
+  expect(onHost.kinds, "the friend's rounds on the host's page, its word made red: their seat's Blue").toEqual([3]);
   expect(host.errors).toEqual([]);
   expect(friend.errors).toEqual([]);
   // Each window draws the world on the one GPU: let them go before the next test's.
