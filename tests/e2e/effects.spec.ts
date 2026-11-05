@@ -916,10 +916,13 @@ test('a tracer seen end on is its head alone: lit every frame 150 m out, its cap
   expect(errors).toEqual([]);
 });
 
-test("a strike's ember far off is lit every frame: held no smaller than a head's three pixels, its light kept", async ({ page }) => {
+test("a strike's ember far off is lit every frame: held no smaller than a head's three pixels, its light kept; near the eye held to ember_max_px across, not brightened", async ({ page }) => {
   // An ember is 6 cm across: 100 m out, under half a pixel, so moving across the view it lit some
   // frames and not others (a twinkle). It is drawn no smaller than a tracer's head is, its light
   // kept, so it lights the same light's worth of pixels every frame however it falls among them.
+  // Near the eye it is held no wider than [effects.ricochet] ember_max_px (12 px across), narrowed and
+  // not brightened, as a head is held to its cap: 1.5 m out its 6 cm would be a ball some 26 px across
+  // on this 1280 px image (32 on the captures' 1600).
   const errors = await openGame(page);
   const at = await hooks(page, async (h) => {
     h.view('step');
@@ -943,36 +946,81 @@ test("a strike's ember far off is lit every frame: held no smaller than a head's
     const n = Math.hypot(d[0], d[1], d[2]);
     return { at: d.map((v, k) => at.position[k] + (v / n) * m) as [number, number, number], px: [at.res[0] / 2 + side, at.res[1] / 2 - (Math.tan(up * RAD) / tanHalf) * (at.res[0] / 2)] };
   };
+  /** The light each ember adds over `box` of the internal image (each, less the image without it): luminance, a row at a time. */
+  const emberLight = (embers: [number, number, number][], box: [number, number, number, number]) =>
+    hooks(
+      page,
+      async (h, arg) => {
+        const { embers, box } = arg as { embers: [number, number, number][]; box: [number, number, number, number] };
+        const lum = (a: number[], i: number) => 0.2126 * a[i * 3] + 0.7152 * a[i * 3 + 1] + 0.0722 * a[i * 3 + 2];
+        h.debugEmber(null);
+        await h.stepFrames(2);
+        const without = await h.sharpAt(box);
+        const seen: number[][] = [];
+        for (const e of embers) {
+          h.debugEmber({ at: e, kind: 2 });
+          await h.stepFrames(2);
+          const withIt = await h.sharpAt(box);
+          seen.push(Array.from({ length: box[2] * box[3] }, (_, i) => lum(withIt, i) - lum(without, i)));
+        }
+        h.debugEmber(null);
+        return seen;
+      },
+      { embers, box },
+    );
   // 100 m out, 20° over the view against the night sky, moving a third of a pixel right and a quarter
   // up each frame.
   const steps = Array.from({ length: 8 }, (_, k) => out(20 + 0.023 * k, 0.37 * k, 100));
   const box: [number, number, number, number] = [Math.round(steps[0].px[0]) - 8, Math.round(steps[steps.length - 1].px[1]) - 8, 20, 20];
-  const frames = await hooks(
-    page,
-    async (h, arg) => {
-      const { embers, box } = arg as { embers: [number, number, number][]; box: [number, number, number, number] };
-      const lum = (a: number[], i: number) => 0.2126 * a[i * 3] + 0.7152 * a[i * 3 + 1] + 0.0722 * a[i * 3 + 2];
-      h.debugEmber(null);
-      await h.stepFrames(2);
-      const without = await h.sharpAt(box);
-      const seen: number[][] = [];
-      for (const e of embers) {
-        h.debugEmber({ at: e, kind: 2 });
-        await h.stepFrames(2);
-        const withIt = await h.sharpAt(box);
-        seen.push(Array.from({ length: box[2] * box[3] }, (_, i) => lum(withIt, i) - lum(without, i)));
-      }
-      h.debugEmber(null);
-      return seen;
-    },
-    { embers: steps.map((s) => s.at), box },
-  );
+  const frames = await emberLight(steps.map((s) => s.at), box);
   const totals = frames.map((f) => f.reduce((a, b) => a + b, 0));
   const peaks = frames.map((f) => Math.max(...f));
   const seen = JSON.stringify({ totals, peaks });
   for (const p of peaks) expect(p, seen).toBeGreaterThan(0.05 * Math.max(...peaks));
   expect(Math.min(...totals) / Math.max(...totals), seen).toBeGreaterThan(0.9);
   expect(Math.min(...totals), seen).toBeGreaterThan(0);
+
+  // 1.5 m out, 10° over the view's middle against the night sky: a row and a column through it lit
+  // (over a hundredth of its brightest) across 12 px at most. Then with the look's cap lifted (as a
+  // tunable would lift it: the renderer's effects' look, from the tunables), across its own 6 cm (some
+  // 26 px), and as bright at its middle: held narrower, not brightened.
+  const near = out(10, 0, 1.5);
+  const [cx, cy] = near.px.map(Math.round);
+  const ownPx = (0.06 * at.res[0]) / (2 * 1.5 * Math.cos(10 * RAD) * tanHalf);
+  const across = (line: number[]) => {
+    const peak = Math.max(...line);
+    const lit = line.map((v, i) => (v > 0.01 * peak ? i : -1)).filter((i) => i >= 0);
+    return { peak, width: lit.length > 0 ? lit[lit.length - 1] - lit[0] + 1 : 0 };
+  };
+  const nearLines = async () => {
+    const [row] = await emberLight([near.at], [0, cy, at.res[0], 1]);
+    const [column] = await emberLight([near.at], [cx, 0, 1, at.res[1]]);
+    return { row: across(row), column: across(column) };
+  };
+  const capped = await nearLines();
+  type Look = { renderer: { effects: { look: { emberMaxPx: number } } } };
+  const cap = await hooks(page, (h) => {
+    const look = (h as unknown as Look).renderer.effects.look;
+    const was = look.emberMaxPx;
+    look.emberMaxPx = 1000;
+    return was;
+  });
+  const lifted = await nearLines();
+  await hooks(
+    page,
+    (h, was) => {
+      (h as unknown as Look).renderer.effects.look.emberMaxPx = was as number;
+    },
+    cap,
+  );
+  const nearSeen = JSON.stringify({ cap, ownPx, capped, lifted });
+  for (const line of ['row', 'column'] as const) {
+    expect(capped[line].peak, nearSeen).toBeGreaterThan(1);
+    expect(capped[line].width, nearSeen).toBeLessThanOrEqual(12);
+    expect(lifted[line].width, nearSeen).toBeGreaterThanOrEqual(ownPx - 3);
+    expect(capped[line].peak / lifted[line].peak, nearSeen).toBeGreaterThan(0.9);
+    expect(capped[line].peak / lifted[line].peak, nearSeen).toBeLessThan(1.1);
+  }
   expect(errors).toEqual([]);
 });
 

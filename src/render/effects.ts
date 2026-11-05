@@ -38,13 +38,13 @@ export const RIBBON_STYLE = { star: 0, tracer: 1 } as const;
  * widest, narrowed and not brightened; that cap is never under the floor.
  */
 export const HEAD_BILLBOARD = 3;
-/** A tracer strike's ember: emissive, kept at its hue as a tracer's head is (effects.wgsl keepHue), and held no smaller than MIN_HEAD_PX, its light kept, as a head is; never held narrower. */
+/** A tracer strike's ember: emissive, kept at its hue as a tracer's head is (effects.wgsl keepHue), and held no smaller than MIN_HEAD_PX, its light kept, as a head is; and near the eye no wider than its own cap ([effects.ricochet] ember_max_px), narrowed and not brightened, a cap never under that floor. */
 export const EMBER_BILLBOARD = 4;
 /** A billboard's floats, as particles.ts writes them. */
 const BILLBOARD_FLOATS = 9;
 /** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4). */
 const LIT_BYTES = 32;
-/** effects.wgsl's EffectsDraw: two counts and nine floats, padded to 16 bytes. */
+/** effects.wgsl's EffectsDraw: two counts and ten floats, 16 bytes a row. */
 const DRAW_PARAMS_BYTES = 48;
 /** The particle pool, room for test quads, the battle's allowance (its flares, far shells' flashes and smoke, and fires' flames, embers and smoke), and a head for each tracer drawn. */
 export const MAX_BILLBOARDS = 4096 + 64 + 1024 + 2048;
@@ -92,11 +92,11 @@ export interface SmokePuff {
 /**
  * How the billboards are lit: the emissive's glow, and how much of the key's and the sky's light the
  * rest take; the narrowest and the widest a tracer's glow is drawn, in pixels, and the widest its head
- * is (its share of that, as its width is of the glow's; effects.wgsl never caps it under its
- * MIN_HEAD_PX floor); the distances (m) over which a tracer's core goes from its whiteness near
- * the eye to none; and how much of what is behind it a tracer's light covers where it shows its colour
- * at the tone curve's top while the sun is up ([effects] tracer_cover; the frame's `cover` is its share
- * by the sun).
+ * is (its share of that, as its width is of the glow's) and a strike's ember is ([effects.ricochet]
+ * ember_max_px), each across (effects.wgsl never caps either under its MIN_HEAD_PX floor); the
+ * distances (m) over which a tracer's core goes from its whiteness near the eye to none; and how much
+ * of what is behind it a tracer's light covers where it shows its colour at the tone curve's top while
+ * the sun is up ([effects] tracer_cover; the frame's `cover` is its share by the sun).
  */
 export interface EffectsLook {
   glow: number;
@@ -105,6 +105,7 @@ export interface EffectsLook {
   tracerGlowMinPx: number;
   tracerGlowMaxPx: number;
   tracerHeadMaxPx: number;
+  emberMaxPx: number;
   tracerWhiteNearM: number;
   tracerWhiteFarM: number;
   tracerCover: number;
@@ -119,6 +120,7 @@ export function effectsLook(tun: Tunables): EffectsLook {
     tracerGlowMinPx: tun.f('effects.tracer_glow_min_px'),
     tracerGlowMaxPx: glowMaxPx,
     tracerHeadMaxPx: (glowMaxPx * tun.f('effects.tracer_head_m')) / tun.f('effects.tracer_glow_width_m'),
+    emberMaxPx: tun.f('effects.ricochet.ember_max_px'),
     tracerWhiteNearM: tun.f('effects.tracer_white_near_m'),
     tracerWhiteFarM: tun.f('effects.tracer_white_far_m'),
     tracerCover: tun.f('effects.tracer_cover'),
@@ -282,10 +284,11 @@ export class Effects {
     queue.writeBuffer(this.lightParams, 0, light);
     // effects.wgsl's EffectsDraw: the counts; the widest a tracer's glow and its head are drawn, and
     // the narrowest its glow is; where its core's whiteness starts to fall and where it is gone; the
-    // tone's (encode's), how white a tracer's core is at least, and how much its light covers.
+    // tone's (encode's), how white a tracer's core is at least, how much its light covers, and the
+    // widest a strike's ember is drawn.
     new Uint32Array(this.draw, 0, 2).set([this.billboardCount, this.ribbonCount]);
     new Float32Array(this.draw, 8, 5).set([this.look.tracerGlowMaxPx, this.look.tracerHeadMaxPx, this.look.tracerGlowMinPx, this.look.tracerWhiteNearM, this.look.tracerWhiteFarM]);
-    new Float32Array(this.draw, 36, 2).set([frame.whiteFloor ?? 0, this.look.tracerCover * Math.min(1, Math.max(0, frame.cover ?? 0))]);
+    new Float32Array(this.draw, 36, 3).set([frame.whiteFloor ?? 0, this.look.tracerCover * Math.min(1, Math.max(0, frame.cover ?? 0)), this.look.emberMaxPx]);
   }
 
   /**

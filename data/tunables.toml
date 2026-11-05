@@ -1039,6 +1039,10 @@ burn_s              = [0.4, 0.9]    # it burns this long, fading, falling under 
 max                 = 64       # the most in flight; the oldest goes first
 ember_m             = 0.06     # a strike's ember: this wide, of its tracer's colour,
 ember_s             = 0.35     # fading over this long
+ember_max_px        = 12.0     # and drawn no wider than this, in pixels of the internal image, as a
+                               # tracer's head is held to its cap: narrowed, not brightened, and
+                               # never under a head's 3 px floor (at its feet a 6 cm ember 1.5 m off
+                               # was a 32 px ball on a 1600 px image)
 
 
 [viewmodel]
