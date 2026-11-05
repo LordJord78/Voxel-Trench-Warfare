@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { Handling, ZERO_HANDS, gunClass, handlingTunables, type GunClass, type HandlingCue, type HandlingInput, type HandsDelta } from '../../src/combat/handling';
+import { weaponSpec } from '../../src/combat/weapon';
 import { TAU } from '../../src/core/dmath';
 import { loadTunables } from '../../src/core/tunables';
 import { GUNS } from '../../src/net/gear';
@@ -325,6 +326,17 @@ describe('handling', () => {
     const one = reloadCues('pump', t.shellBaseS + t.shellEachS, 1);
     expect(one.map((c) => c.cue)).toEqual(['shell']);
     heardAt(one, 'shell', 0.75, TICK / (t.shellBaseS + t.shellEachS));
+  });
+
+  it("a full tube's pushes take the shotgun's whole reload: reload_time_s is 0.5 + 0.5 × 7 = 4.0 s", () => {
+    // The pushes are laid out by [weapon.m870]'s reload_base_s and reload_per_round_s. Its
+    // reload_time_s (reloadS, the full figure: a reload's length until it goes shell by shell, and
+    // the loadout's handling stat) is a whole tube's by the same two, as the G4 ledger rules, so
+    // the hands and the weapon agree on a full reload.
+    const m870 = weaponSpec(tun, 'm870');
+    expect(m870.magazine).toBe(7);
+    expect(t.shellBaseS + m870.magazine * t.shellEachS).toBe(4);
+    expect(m870.reloadS).toBe(t.shellBaseS + m870.magazine * t.shellEachS);
   });
 
   it('the pump runs from 0.12 s after a shot and is home by 0.36 s', () => {
