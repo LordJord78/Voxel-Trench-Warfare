@@ -145,6 +145,34 @@ describe('a landing, recorded once as the body comes down', () => {
       expect(b.position.y, `${rise} high`).toBeCloseTo(0.4, 9);
     }
   });
+
+  it('at 5 cm voxels, walking off a one-voxel step is set down by the ground probe, and records none', () => {
+    // The probe sets down a body whose tick ends within 0.06 m of the ground. At 10 cm no step is that
+    // shallow, so a body on the ground never meets it; at 5 cm a duckboard step one voxel high is, and
+    // a body walking off it is on the ground last tick: it is walking, and lands on none.
+    const map = new BrickMap({ x: 64, y: 64, z: 256 });
+    map.fillBox(0, 0, 0, 64, 8, 256, P.SOD);
+    map.fillBox(0, 8, 0, 64, 9, 120, P.DUCKBOARD);
+    const c = new CharacterController(brickGrid(map, 0.05), T);
+    const s = newCharacter(new Vec3(1.6, 0.45, 1.6));
+    for (let t = 0; t < 60; t++) c.tick(s, intent(Stance.STANDING), DT);
+    expect(s.onGround).toBe(true);
+    let downs = 0;
+    for (let t = 0; t < 120; t++) {
+      const y = s.position.y;
+      c.tick(s, walk(), DT);
+      if (s.position.y < y - 0.025) {
+        downs++;
+        // Down the step in the one tick, by its whole height.
+        expect(y - s.position.y, `tick ${t}`).toBeCloseTo(0.05, 9);
+      }
+      expect(s.onGround, `tick ${t}`).toBe(true);
+      expect(s.landingImpact, `tick ${t}`).toBeLessThan(0.05);
+    }
+    expect(downs).toBe(1);
+    expect(s.position.y).toBeCloseTo(0.4, 9);
+    expect(s.velocity.horizontalLength).toBeGreaterThan(4);
+  });
 });
 
 describe('the periscope at 10 cm', () => {

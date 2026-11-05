@@ -18,8 +18,10 @@ function standing(t = tun): Session {
   map.fillBox(0, 0, 0, 64, 20, 64, P.SOD);
   const s = Session.create({ map, plan: null, spawn: { position: [3.2, 2.0, 3.2] } }, t, 7);
   for (let k = 0; k < 10; k++) s.tick();
-  // Settling from the spawn is itself a small landing; these tests want none.
+  // Settling from the spawn is itself a small landing; these tests want none, in either of the last
+  // two ticks (the eye's dip is drawn between them).
   s.player.landingImpact = 0;
+  s.prevLandingImpact = 0;
   return s;
 }
 
@@ -104,12 +106,58 @@ describe('the camera rig', () => {
   });
 
   it('dips the eye 0.11 m on a hard landing', () => {
+    // As both of the last two ticks left it, so any frame between them.
     const s = standing();
     const rig = new CameraRig(rigTunables(tun));
-    s.player.landingImpact = 8;
+    s.prevLandingImpact = s.player.landingImpact = 8;
     expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(3.62 - 0.11, 9);
-    s.player.landingImpact = 20;
+    s.prevLandingImpact = s.player.landingImpact = 20;
     expect(rig.pose(s, 1 / 60).position[1]).toBeCloseTo(3.62 - 0.11, 9);
+  });
+
+  it("eases the eye's landing dip between ticks, as the foot is: at alpha 0.5, midway between the two ticks' dips", () => {
+    // A standing jump on flat ground lands at about its jump speed, and the dip it records falls a
+    // tenth a tick. Drawn as the tick left it, the eye would step at 60 Hz, each step held for 2–4
+    // frames at 120–240 Hz; every frame between two ticks is drawn between their dips instead.
+    const s = standing();
+    expect(s.clock.advance(s.clock.dt * 0.5)).toBe(0);
+    expect(s.clock.alpha).toBe(0.5);
+    const dipOf = (impact: number) => (-Math.min(impact, 8) / 8) * tun.f('camera.landing_dip');
+    s.intent = { ...idleIntent(), jump: true };
+    s.tick();
+    s.intent = idleIntent();
+    expect(s.player.onGround).toBe(false);
+    let after = -1;
+    for (let k = 0; k < 120 && after < 20; k++) {
+      const was = s.player.landingImpact;
+      s.tick();
+      if (after < 0 && !s.player.onGround) continue;
+      after++;
+      const [a, b] = [dipOf(was), dipOf(s.player.landingImpact)];
+      // On the landing tick the dip comes in, most of 6 cm at once.
+      if (after === 0) expect(b - a).toBeLessThan(-0.04);
+      // A fresh rig (no step of the eye's to ease), standing still (no bob or lean) and no shot (no shake).
+      const rig = new CameraRig(rigTunables(tun));
+      const eye = rig.pose(s, 1 / 60).position[1] - (s.footAt().y + s.controller.eyeHeight(s.player));
+      expect(eye, `${after} ticks after landing`).toBeCloseTo((a + b) / 2, 12);
+    }
+    expect(after).toBe(20);
+  });
+
+  it("a teleport (a respawn) lets the last place's landing go: the eye is not dipped by it in any frame after", () => {
+    // Down off a jump, a tick on, then put elsewhere before the next tick runs: the frames between
+    // draw the eye at the new place undipped, as they draw the foot there unmoved.
+    const s = standing();
+    expect(s.clock.advance(s.clock.dt * 0.5)).toBe(0);
+    s.intent = { ...idleIntent(), jump: true };
+    s.tick();
+    s.intent = idleIntent();
+    for (let k = 0; k < 60 && !s.player.onGround; k++) s.tick();
+    s.tick();
+    expect(s.landingDipAt()).toBeLessThan(-0.04);
+    s.teleport([3.2, 2.0, 3.2], 0, 0);
+    const rig = new CameraRig(rigTunables(tun));
+    expect(rig.pose(s, 1 / 60).position[1] - (s.footAt().y + s.controller.eyeHeight(s.player))).toBeCloseTo(0, 12);
   });
 
   it('standing still for 2 s, no landing is recorded and the eye is not dipped at all', () => {
@@ -254,6 +302,28 @@ describe('the rifle as the rig draws it', () => {
     const drawn = through(rig.rifle(s, rig.pose(s, 1 / 60)).toWorld, rifleModel().muzzle);
     const fired = s.muzzle();
     for (let k = 0; k < 3; k++) expect(drawn[k]).toBeCloseTo(fired[k], 5);
+  });
+
+  it("its muzzle is drawn where the session fires from after a jump's landing: the eye's dip carries both", () => {
+    // A standing jump on flat ground: the eye dips most of 6 cm on landing and recovers over 0.3 s, and
+    // the drawn gun, held in the view, dips with it, so the muzzle the session puts the flash, the
+    // tracer's start, the brass and the cues at must as well. Frames a whisker short of the next tick
+    // (drawn as the last tick left everything), each by a fresh rig: no step of the eye's to ease.
+    const s = standing();
+    expect(s.clock.advance(s.clock.dt * (1 - 1e-9))).toBe(0);
+    s.intent = { ...idleIntent(), jump: true };
+    s.tick();
+    s.intent = idleIntent();
+    for (let k = 0; k < 60 && !s.player.onGround; k++) s.tick();
+    expect(s.player.onGround).toBe(true);
+    expect((Math.min(s.player.landingImpact, 8) / 8) * tun.f('camera.landing_dip')).toBeGreaterThan(0.04);
+    for (let k = 0; k <= 30; k++) {
+      if (k > 0) s.tick();
+      const rig = new CameraRig(rigTunables(tun));
+      const drawn = through(rig.rifle(s, rig.pose(s, 1 / 60)).toWorld, s.arm.spec.muzzle);
+      const fired = s.muzzle();
+      for (let c = 0; c < 3; c++) expect(Math.abs(drawn[c] - fired[c]), `${k} ticks after landing, axis ${c}`).toBeLessThan(1e-6);
+    }
   });
 
   it('turns with the view, its axes square', () => {

@@ -1,7 +1,8 @@
 /**
  * Where the camera is each frame: the player's interpolated foot raised to
  * the eye (which follows the body's height, so crouching is smooth), bobbing
- * with the stride, dipping on a hard landing, and narrowing for the periscope,
+ * with the stride, dipping on a landing (the session's dip, eased between
+ * ticks as the foot is, which its muzzle carries), and narrowing for the periscope,
  * eased so raising it does not read as a cut; turned by the rifle's recoil,
  * suppression's flinch and shake, the view kick's pulse of the field of view
  * and its camera's roll, and turned and moved by a shot's shake, interpolated
@@ -23,12 +24,12 @@ import { cameraBasis, type CameraPose } from '../render/camera';
 import type { RiflePose } from '../render/rifle';
 import type { Session } from '../sim/session';
 
+/** The camera's own: its field of view and how it eases, and the head's bob. Its landing dip is the session's (landingDipAt), which the muzzle carries too. */
 export interface RigTunables {
   /** Horizontal degrees. */
   fov: number;
   fovLerpPerS: number;
   bobAmplitude: number;
-  landingDip: number;
 }
 
 export function rigTunables(tun: Tunables): RigTunables {
@@ -36,7 +37,6 @@ export function rigTunables(tun: Tunables): RigTunables {
     fov: tun.f('camera.fov'),
     fovLerpPerS: tun.f('camera.fov_lerp_per_s'),
     bobAmplitude: tun.f('camera.head_bob_amplitude'),
-    landingDip: tun.f('camera.landing_dip'),
   };
 }
 
@@ -82,7 +82,9 @@ export class CameraRig {
     const eye = session.controller.eyeHeight(player);
     const { speedRatio, sway } = this.stride(session);
     const bob = Math.sin(player.bobPhase) * this.t.bobAmplitude * speedRatio;
-    const dip = (-Math.min(player.landingImpact, 8) / 8) * this.t.landingDip;
+    // A landing's dip, between the last two ticks' as the foot is: the session's, whose muzzle (the
+    // flash, the tracer's start, the brass) carries the tick's own.
+    const dip = session.landingDipAt();
     const body = foot.y + eye;
     const clock = session.clock;
     const simTime = clock.simTime + clock.alpha * clock.dt;

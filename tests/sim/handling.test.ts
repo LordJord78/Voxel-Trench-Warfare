@@ -243,7 +243,7 @@ describe('the gun in the hands, in play', () => {
     }
   });
 
-  it("a deploy starts the hands clean: the last gun's pump is not heard after it, and the gun comes up out of no sprint", () => {
+  it("a deploy starts the hands clean: the last gun's pump is not heard after it, the gun comes up out of no sprint, and no reload's pose is carried", () => {
     // With no tick between it and the last life's ticks (main.ts runs none in 'ready'): the next
     // match's deploy (equip, then respawn), a loadout taken in a pause (equip), or a life begun
     // afresh (respawn). Each starts the hands as a fresh pair's.
@@ -283,6 +283,22 @@ describe('the gun in the hands, in play', () => {
       s.tick();
       expect(s.handling.sprint, label).toBe(0);
       expect([s.handling.delta.yaw, s.handling.delta.pitch], label).toEqual([0, 0]);
+      // The AK part-way through its reload, tilted over, then the deploy: the first tick's pitch and
+      // roll carry none of the reload's pose, with nothing let go to ease back from (the gun in the
+      // hands after it, a fresh one or the same one rearmed, is not reloading).
+      const r = stand(bare('ak74'));
+      r.weapon.rounds = 10;
+      r.intent = { ...idleIntent(), reload: true };
+      r.tick();
+      r.intent = idleIntent();
+      for (let k = 0; k < 40; k++) r.tick();
+      expect(r.weapon.reloading, label).toBe(true);
+      expect(r.handling.delta.roll, label).toBeGreaterThan(20);
+      expect(r.handling.delta.pitch, label).toBeGreaterThan(5);
+      take(r, bare('ak74'));
+      r.tick();
+      expect(r.weapon.reloading, label).toBe(false);
+      expect([r.handling.delta.pitch, r.handling.delta.roll], label).toEqual([0, 0]);
     }
   });
 
@@ -418,39 +434,45 @@ describe('the gun in the hands, in play', () => {
     }
   });
 
-  it('mid-climb the sights stay down, but the trigger is taken: it alone has never waited out a climb', () => {
-    // The gun-up rule lives once (session.ts gunInHand, and gunUp, which adds the climb): the sights,
-    // and either button's drop of the sprint, wait out a climb; the trigger, as before the rule was
-    // gathered up, does not. A timber tread, a bench 1 m over it at z 3.0–3.5 m and a clay parapet
-    // behind: walked into, the bench is climbed.
+  it('mid-climb neither the trigger nor the sights are taken: both wait out the climb, and a press held through it fires as it ends', () => {
+    // The gun-up rule lives once (session.ts gunUp): the trigger, the sights, and either button's drop
+    // of the sprint wait out a climb, the hands on the parapet. A timber tread, a bench 1 m over it at
+    // z 3.0–3.5 m and a clay parapet behind: walked into, the bench is climbed. The trigger held: the AK
+    // (automatic) and the SVD (a shot a press, so the press must still be one when the climb ends).
     const map = new BrickMap({ x: 64, y: 64, z: 64 });
     map.fillBox(0, 0, 0, 64, 4, 64, P.TIMBER);
     map.fillBox(0, 4, 30, 64, 14, 35, P.TIMBER);
     map.fillBox(0, 13, 30, 64, 14, 35, P.BENCH);
     map.fillBox(0, 4, 35, 64, 28, 64, P.CLAY);
-    for (const button of ['fire', 'aim'] as const) {
+    const cases: [string, 'fire' | 'aim', Loadout | null][] = [
+      ['the AK, fire held', 'fire', null],
+      ['the SVD, fire held', 'fire', bare('svd')],
+      ['the sights held', 'aim', null],
+    ];
+    for (const [label, button, loadout] of cases) {
       const s = Session.create({ map, plan: null, spawn: { position: [3.2, 0.4, 1.5] } }, tun, 7, 0);
+      if (loadout) s.equip(loadout);
       for (let k = 0; k < 40; k++) s.tick();
       s.intent = { ...idleIntent(), forward: 1 };
       for (let k = 0; k < 240 && s.player.climbTo === null; k++) s.tick();
-      expect(s.player.climbTo, button).not.toBeNull();
-      // The button held from the climb's first tick: shots leave, the sights do not rise.
+      expect(s.player.climbTo, label).not.toBeNull();
+      // The button held from the climb's first tick: no shot leaves, and the sights do not rise.
       s.intent = { ...idleIntent(), forward: 1, [button]: true };
       let climbing = 0;
-      let shots = 0;
       for (let k = 0; k < 240; k++) {
         s.tick();
         if (s.player.climbTo === null) break;
         climbing++;
-        shots += s.shots.length;
-        expect(s.aimed, `${button}, ${climbing} ticks into the climb`).toBe(0);
+        expect(s.shots, `${label}, ${climbing} ticks into the climb`).toHaveLength(0);
+        expect(s.aimed, `${label}, ${climbing} ticks into the climb`).toBe(0);
       }
-      expect(s.player.climbTo, button).toBeNull();
-      expect(s.player.position.y, button).toBeCloseTo(1.4, 6);
-      expect(climbing, button).toBeGreaterThan(10);
-      if (button === 'fire') expect(shots).toBeGreaterThan(0);
-      // On the bench, the climb over (its last tick), the sights begin to come up.
-      else expect([shots, s.aimed > 0]).toEqual([0, true]);
+      expect(s.player.climbTo, label).toBeNull();
+      expect(s.player.position.y, label).toBeCloseTo(1.4, 6);
+      expect(climbing, label).toBeGreaterThan(10);
+      // On the bench, the climb over (the first tick whose combat finds none under way): the press
+      // held through it fires there, its first shot, and the sights begin to come up.
+      if (button === 'fire') expect([s.shots.length, s.weapon.shotsFired], label).toEqual([1, 1]);
+      else expect([s.shots.length, s.aimed > 0], label).toEqual([0, true]);
     }
   });
 
@@ -613,6 +635,55 @@ describe('the gun in the hands, in play', () => {
     expect(froms[0].length).toBeGreaterThan(0);
     for (const f of froms[0]) expect(a.map((e) => e.muzzle)).toContainEqual(f);
     for (const f of froms[1]) expect(b.map((e) => e.muzzle)).toContainEqual(f);
+  });
+
+  it("after a jump the drawn muzzle carries the eye's landing dip, and no round does: the shots are a dipless session's", () => {
+    // Two sessions alike but that one has no landing dip at all ([camera] landing_dip 0: the muzzle as
+    // it was placed before it carried one). Both stand firing the AK, jump, and fire on through the
+    // landing and the dip's recovery. Every round leaves the undipped eye along the same line and
+    // strikes where the other's does; the drawn muzzle and port (the flash, the tracer's start, the
+    // brass, the cues) are carried down with the eye, by the camera's dip for the tick's landing
+    // (landing_dip by landingImpact / 8, held to 8, as camera-rig.ts draws it), along the world's up.
+    const raw = tun.raw();
+    (raw.camera as Record<string, unknown>).landing_dip = 0;
+    const dipped = stand();
+    const flat = stand(undefined, 0, 7, new Tunables(raw));
+    const dipOf = (s: Session) => (-Math.min(s.player.landingImpact, 8) / 8) * tun.f('camera.landing_dip');
+    let landed = -1;
+    let landedDip = 0;
+    let deep = 0;
+    for (let k = 0; k < 90; k++) {
+      for (const s of [dipped, flat]) {
+        s.intent = { ...idleIntent(), fire: true, jump: k === 10 };
+        s.tick();
+      }
+      // The bodies are the same: only where the gun is drawn differs.
+      expect(dipped.player.position, `tick ${k}`).toEqual(flat.player.position);
+      expect(dipped.player.landingImpact, `tick ${k}`).toBe(flat.player.landingImpact);
+      const dip = dipOf(dipped);
+      if (landed < 0 && k > 10 && dipped.player.onGround) [landed, landedDip] = [k, dip];
+      for (const [a, b] of [[dipped.muzzle(), flat.muzzle()], [dipped.port(), flat.port()]]) {
+        expect(a[0], `tick ${k}`).toBe(b[0]);
+        expect(a[1] - b[1], `tick ${k}`).toBeCloseTo(dip, 12);
+        expect(a[2], `tick ${k}`).toBe(b[2]);
+      }
+      // Where the rounds leave and go: the undipped eye and the view's line, the same in each.
+      expect(dipped.shots, `tick ${k}`).toEqual(flat.shots);
+      for (const shot of dipped.shots) expect(shot.origin, `tick ${k}`).toEqual(eyeOf(dipped));
+      expect(struck(dipped), `tick ${k}`).toEqual(struck(flat));
+      expect(dipped.rounds.count, `tick ${k}`).toBe(flat.rounds.count);
+      for (let i = 0; i < dipped.rounds.count; i++) expect(dipped.rounds.position(i), `tick ${k}`).toEqual(flat.rounds.position(i));
+      // Each shot's event: the same round, its flash and tracer at its own session's muzzle.
+      const [ea, eb] = [dipped.drainEvents().shots, flat.drainEvents().shots];
+      expect(ea.map((e) => [e.origin, e.dir, e.tracer]), `tick ${k}`).toEqual(eb.map((e) => [e.origin, e.dir, e.tracer]));
+      ea.forEach((e, i) => expect(e.muzzle[1] - eb[i].muzzle[1], `tick ${k}`).toBeCloseTo(dip, 12));
+      if (dip < -0.01) deep += ea.length;
+    }
+    // It came down off its jump with the eye dipped most of 6 cm, and rounds left while it was still
+    // dipped over a centimetre.
+    expect(landed).toBeGreaterThan(20);
+    expect(landedDip).toBeLessThan(-0.04);
+    expect(deep).toBeGreaterThanOrEqual(2);
   });
 
   it('aimed, breathing still moves the drawn gun, a third of it, and never the round', () => {

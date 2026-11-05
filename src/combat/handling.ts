@@ -325,35 +325,38 @@ export class Handling {
   private readonly swayOmega: number;
   private readonly landOmega: number;
   private readonly curves: Record<Exclude<GunClass, 'pump'>, Curve>;
+  // The hands' state. Each field starts in one place, reset(), which the constructor calls too: a
+  // fresh pair and a pair reset are made alike, and cannot drift apart.
   /** The sprint's blend, 0 to 1: in over sprint_in_s, out over sprint_out_s. */
-  private blend = 0;
+  private blend!: number;
   /** The sway's springs, aside, up and in roll: each where it is and how fast it moves. */
-  private swaySide: [number, number] = [0, 0];
-  private swayUp: [number, number] = [0, 0];
-  private swayRoll: [number, number] = [0, 0];
-  /** The landing's dip, as a share of a full one, and its spring's speed. */
-  private land = 0;
-  private landSpeed = 0;
-  private wasOnGround = true;
+  private swaySide!: [number, number];
+  private swayUp!: [number, number];
+  private swayRoll!: [number, number];
+  /** The landing's dip, as a share of a full one, and its spring's speed; and whether the body was on the ground last tick. */
+  private land!: number;
+  private landSpeed!: number;
+  private wasOnGround!: boolean;
   /**
    * The aim's blend last tick; the overshoot under way, how long since the sights arrived and the
    * pitch it carries on from (null once it is back at the aim); and the pitch it drew last tick.
    */
-  private lastAimed = 0;
-  private overshoot: { t: number; from: number } | null = null;
-  private overshot = 0;
+  private lastAimed!: number;
+  private overshoot!: { t: number; from: number } | null;
+  private overshot!: number;
   /** The stride's last phase, and whether this is the second of a pair (the swing across runs over two). */
-  private lastBob = 0;
-  private secondStride = false;
+  private lastBob!: number;
+  private secondStride!: boolean;
   /** The reload drawn last tick (with the shells it counted as it began), and its pose; one let go, easing back from where it was. */
-  private lastReload: { phase: number; gun: GunClass; shells: number } | null = null;
-  private lastCurve: HandsDelta = zero();
-  private release: { from: HandsDelta; t: number } | null = null;
-  private lastSinceShot = Number.POSITIVE_INFINITY;
-  private lastGun: GunClass | null = null;
+  private lastReload!: { phase: number; gun: GunClass; shells: number } | null;
+  private lastCurve!: HandsDelta;
+  private release!: { from: HandsDelta; t: number } | null;
+  /** The last tick's shot clock and gun, for the pump's cue. */
+  private lastSinceShot!: number;
+  private lastGun!: GunClass | null;
   /** The last two ticks' deltas. */
-  private prev: HandsDelta = zero();
-  private cur: HandsDelta = zero();
+  private prev!: HandsDelta;
+  private cur!: HandsDelta;
 
   constructor(readonly t: HandlingTunables) {
     this.swayOmega = SETTLE_CONSTANT / Math.max(1e-3, t.swaySettleS);
@@ -363,6 +366,7 @@ export class Handling {
       mg: magazineCurve(t, t.reloadTiltRollDeg, t.reloadMagOutAt, t.reloadMagInAt, t.reloadBoltAt, t.mgDepth, [{ at: t.mgCoverAt, cue: 'cover' }]),
       pistol: magazineCurve(t, t.pistolTiltRollDeg, t.pistolMagOutAt, t.pistolMagInAt, t.pistolSlideAt, 1, []),
     };
+    this.reset();
   }
 
   /** The sprint's blend now (0 to 1): no shot leaves while it is at or over `sprintBlocksFire`. */
@@ -371,9 +375,10 @@ export class Handling {
   }
 
   /**
-   * The hands as a fresh pair's, for a deploy (the session's equip and respawn): no sprint, the sway
-   * and the landing at rest, no reload drawn or easing back, no overshoot, the stride's pair and the
-   * last gun's shot forgotten (so no pump is to come), and both ticks' deltas none.
+   * The hands as a fresh pair's, as the constructor makes them and for a deploy (the session's equip
+   * and respawn): no sprint, the sway and the landing at rest (on the ground), no reload drawn or
+   * easing back, no overshoot, the stride's pair and the last gun's shot forgotten (so no pump is to
+   * come), and both ticks' deltas none. Every field of the state starts here, and only here.
    */
   reset(): void {
     this.blend = 0;

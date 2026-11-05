@@ -135,6 +135,9 @@ describe('the viewmodel', () => {
     map.fillBox(0, 0, 0, 64, 4, 64, P.SOD);
     const s = Session.create({ map, plan: null, spawn: { position: [3.2, 0.4, 3.2] } }, tun, 7, 0);
     for (let k = 0; k < 20; k++) s.tick();
+    // Settling from the spawn is itself a small landing, which dips the eye and so the muzzle (the
+    // camera's landing dip); this test wants none.
+    s.player.landingImpact = 0;
     const m = rifleModel();
     const { muzzle, port: portAt } = s.arm.spec;
     // Where the session holds a model point: the held pose at rest (no kick, raise, aim or dip) with

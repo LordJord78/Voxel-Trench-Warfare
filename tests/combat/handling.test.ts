@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Handling, ZERO_HANDS, gunClass, handlingTunables, type GunClass, type HandlingCue, type HandlingInput, type HandsDelta } from '../../src/combat/handling';
 import { weaponSpec } from '../../src/combat/weapon';
 import { TAU } from '../../src/core/dmath';
@@ -566,28 +566,59 @@ describe('handling', () => {
     expect(ZERO_HANDS).toEqual({ offset: [0, 0, 0], pitch: 0, yaw: 0, roll: 0 });
   });
 
-  it('reset() leaves the hands as a fresh pair: no sprint, the springs and the landing at rest, no reload, and no pump to come', () => {
-    // A deploy starts the hands clean (the session's equip and respawn). Worked first, sprinting and
-    // turning fast the whole while: strides, a hard landing as the sights arrive, a reload part-way,
-    // and the shotgun just fired, its pump still to come.
+  it('reset() leaves the hands as a fresh pair from any state: a reload under way and one easing back, the overshoot running, in the air, and the pump to come', () => {
+    // A deploy starts the hands clean (the session's equip and respawn). Worked first so that every
+    // field of their state differs from a fresh pair's as reset() is called: sprinting and turning
+    // fast throughout, striding (in the second stride of a pair); down hard, then in the air again;
+    // the sights arriving, their overshoot running; a long gun's reload part-way, let go as the
+    // shotgun is taken (easing back), whose own reload is under way (a shell being pushed) and whose
+    // shot was 4 ticks ago (its pump to come).
     const h = new Handling(t);
-    const hard: Partial<HandlingInput> = { sprinting: true, yawRate: 300, pitchRate: -200 };
-    run(h, 30, (k) => ({ ...hard, speedRatio: 1, bobPhase: (k * 0.3) % TAU }));
-    run(h, 5, () => ({ ...hard, onGround: false }));
-    run(h, 1, () => ({ ...hard, landingImpact: 9, aimed: 1 }));
-    run(h, 20, (k) => ({ ...hard, aimed: 1, reload: { phase: k / 40, shells: 0 } }));
-    run(h, 2, (k) => ({ ...hard, gun: 'pump', sinceShot: (k + 1) * TICK }));
-    expect(h.sprint).toBe(1);
-    expect(h.at(0)).not.toEqual(ZERO_HANDS);
+    const work = (g: number): Partial<HandlingInput> => ({
+      time: g * TICK,
+      sprinting: true,
+      yawRate: 300,
+      pitchRate: -200,
+      speedRatio: 1,
+      bobPhase: (g * 0.2) % TAU,
+      onGround: g < 30 || (g >= 35 && g < 44),
+      landingImpact: g === 35 ? 9 : 0,
+      aimed: Math.min(1, Math.max(0, (g - 37) / 5)),
+      gun: g < 44 ? 'long' : 'pump',
+      reload: g < 10 ? null : g < 44 ? { phase: (g - 10) / 60, shells: 0 } : { phase: 0.4, shells: 3 },
+      sinceShot: g < 44 ? 10 : (g - 43) * TICK,
+    });
+    run(h, 48, work);
+    // Each of the 19 fields of the state (the tunables and what the constructor makes of them aside)
+    // differs from a fresh pair's, so reset() is held to every one.
+    const fresh = new Handling(t);
+    const made = ['t', 'swayOmega', 'landOmega', 'curves'];
+    const state = Object.keys(fresh).filter((k) => !made.includes(k));
+    const field = (x: Handling, k: string) => (x as unknown as Record<string, unknown>)[k];
+    expect(state).toHaveLength(19);
+    for (const k of state) expect(field(h, k), k).not.toEqual(field(fresh, k));
     h.reset();
     // Every field as a fresh pair's, and drawn at rest between ticks.
     expect(h).toEqual(new Handling(t));
     expect(h.sprint).toBe(0);
     for (const alpha of [0, 0.5, 1]) expect(h.at(alpha)).toEqual(ZERO_HANDS);
-    // From there it moves as a fresh pair does, tick for tick. A fresh gun's shot clock (long since a
-    // shot) is no pump: the last gun's shot is forgotten.
-    const fresh = new Handling(t);
+    // From there it moves as a fresh pair does, tick for tick, and is one 60 ticks on. A fresh gun's
+    // shot clock (long since a shot) is no pump: the last gun's shot is forgotten.
+    const twin = new Handling(t);
     const script = (k: number): Partial<HandlingInput> => ({ gun: 'pump', sinceShot: 1 + k * TICK, time: k * TICK, yawRate: k < 10 ? 120 : 0, onGround: k !== 20, landingImpact: k === 21 ? 4 : 0 });
-    for (let k = 0; k < 60; k++) expect(h.tick({ ...REST, ...script(k) }), `tick ${k}`).toEqual(fresh.tick({ ...REST, ...script(k) }));
+    for (let k = 0; k < 60; k++) expect(h.tick({ ...REST, ...script(k) }), `tick ${k}`).toEqual(twin.tick({ ...REST, ...script(k) }));
+    expect(h).toEqual(twin);
+  });
+
+  it("the hands' state is declared once: the constructor makes a fresh pair by reset(), so the two cannot drift", () => {
+    const reset = vi.spyOn(Handling.prototype, 'reset');
+    try {
+      const h = new Handling(t);
+      expect(reset).toHaveBeenCalledTimes(1);
+      expect(h.delta).toEqual(ZERO_HANDS);
+      expect(h.sprint).toBe(0);
+    } finally {
+      reset.mockRestore();
+    }
   });
 });

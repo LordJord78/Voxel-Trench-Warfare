@@ -48,6 +48,8 @@ const P_KHAKI = P.SOLDIER_KHAKI;
 const METAL = new Set<number>([K.PICKET, K.HULL, K.CORRUGATE, K.WIRE]);
 /** Voxels a body buried by the world's edits is lifted, at most, to stand on what came down (4 m at 10 cm). */
 const LIFT_VOXELS = 40;
+/** A landing this fast (m/s) or faster dips the eye by all of [camera] landing_dip (the gun's [handling] landing_hard_mps is as the eye's). */
+const HARD_LANDING_MPS = 8;
 /** The shot's particles are anchored to the rifle's muzzle and port, which the renderer draws elsewhere (Particles.billboards). */
 export const MUZZLE_ANCHOR = 1;
 export const PORT_ANCHOR = 2;
@@ -195,10 +197,14 @@ export class Session {
   intent: MoveIntent = idleIntent();
   /** The player's foot before the last tick. */
   prevPosition: Vec3;
+  /** The player's landing speed (m/s) before the last tick: the eye's dip is drawn between it and the latest (landingDipAt). */
+  prevLandingImpact = 0;
   /** The view's offsets before the last tick. */
   private prevView: ViewOffsets;
   /** The view's roll, from every source, is held within this (degrees; [camera] roll_max_deg). */
   private readonly rollMaxDeg: number;
+  /** The eye's dip on a hard landing (metres; [camera] landing_dip): the camera's, which carries the drawn gun, and so the muzzle. */
+  private readonly landingDip: number;
   /** Where the rifle is held, and the view kick's channels before the last tick. */
   readonly viewmodel: ViewmodelTunables;
   private prevKick: ViewmodelKick;
@@ -365,6 +371,7 @@ export class Session {
     const plan = world.plan;
     this.front = new Front(front, world.front ?? (plan ? planSource(plan, front.reachM) : () => null), this.streams.derive('front'));
     this.rollMaxDeg = tun.f('camera.roll_max_deg');
+    this.landingDip = tun.f('camera.landing_dip');
     this.prevView = this.view();
     this.viewmodel = viewmodelTunables(tun);
     this.prevKick = this.kick();
@@ -595,8 +602,9 @@ export class Session {
     const p = this.player;
     // Firing (a press waiting for the gun to come up out of a sprint as well), aiming or aimed down
     // the sights the player does not sprint. The trigger and the sights are a gun's: a button drops
-    // the sprint only while a gun is up to take it (gunUp, as the sights have it: the shovel out,
-    // digging, the periscope up or a climb under way, it does not), the hands as the last tick left them.
+    // the sprint only while a gun is up to take it (gunUp, as the trigger and the sights have it: the
+    // shovel out, digging, the periscope up or a climb under way, it does not), the hands as the last
+    // tick left them.
     if ((((this.acting.fire || this.acting.aim === true) && this.gunUp(p)) || this.pressWaiting || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
     // Suppression as the last tick left it slows the feet and pins the player off the step; what
     // is in the hands, and the sights up, slow them too.
@@ -605,6 +613,7 @@ export class Session {
     p.pinned = this.suppression.pinned;
     const wasOnStep = p.stance === Stance.FIRING_STEP;
     this.prevPosition = p.position;
+    this.prevLandingImpact = p.landingImpact;
     this.prevView = this.view();
     this.prevKick = this.kick();
     this.prevRaised = this.raised;
@@ -680,21 +689,13 @@ export class Session {
   }
 
   /**
-   * A gun up to take the trigger: one in the hands (not the shovel), raised, not put down to dig,
-   * and not at the periscope, whose holder holds that rather than the gun. The gun-up rule's terms,
-   * read as the hands stand when it is asked.
-   */
-  private gunInHand(p: CharacterState): boolean {
-    return this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE;
-  }
-
-  /**
-   * A gun up to take the sights, and either button to drop the sprint: in hand, with no climb under
-   * way. The trigger alone has never waited out a climb (combat() reads gunInHand): a shot leaves
-   * mid-climb.
+   * A gun up to take the trigger and the sights, and either button to drop the sprint: one in the
+   * hands (not the shovel), raised, not put down to dig, not at the periscope (whose holder holds that
+   * rather than the gun), and no climb under way (the hands are on the parapet). The gun-up rule, in
+   * one place, read as the hands stand when it is asked.
    */
   private gunUp(p: CharacterState): boolean {
-    return this.gunInHand(p) && p.climbTo === null;
+    return this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && p.climbTo === null;
   }
 
   /**
@@ -789,13 +790,14 @@ export class Session {
     this.blastShake.tick(dt);
     if (this.acting.reload && this.held !== SHOVEL_HELD) w.beginReload();
     const eye: [number, number, number] = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
-    // No shot with the shovel in the hands, a gun not yet up, through the periscope, or the gun still
-    // swung low from a sprint (its blend at or over sprint_blocks_fire); an empty one clicks. The
-    // sprint delays a press and does not lose it: one it alone holds back waits, the sprint dropped
-    // meanwhile (tick()), so the blend falls a tick's share each tick and the press pulls the trigger
-    // as it passes under, a tap out of a sprint as a held press would. Killed, nothing waits.
+    // No shot with the shovel in the hands, a gun not yet up, through the periscope, mid-climb (the
+    // hands on the parapet: a press held through it fires as it ends), or the gun still swung low
+    // from a sprint (its blend at or over sprint_blocks_fire); an empty one clicks. The sprint delays
+    // a press and does not lose it: one it alone holds back waits, the sprint dropped meanwhile
+    // (tick()), so the blend falls a tick's share each tick and the press pulls the trigger as it
+    // passes under, a tap out of a sprint as a held press would. Killed, nothing waits.
     const low = this.handling.sprint >= this.handling.t.sprintBlocksFire;
-    const pulled = (this.acting.fire || (this.pressWaiting && this.alive)) && this.gunInHand(p);
+    const pulled = (this.acting.fire || (this.pressWaiting && this.alive)) && this.gunUp(p);
     const trigger = pulled && !low;
     this.pressWaiting = pulled && low;
     this.dryTrigger(w, trigger);
@@ -1055,6 +1057,21 @@ export class Session {
     return this.prevPosition.lerp(this.player.position, alpha);
   }
 
+  /**
+   * The eye's dip on a landing (metres, down negative) between the last two ticks' dips, `alpha` of
+   * the way to the latest, as the foot is: the camera's (camera-rig.ts), which the drawn gun is held in.
+   * The muzzle placed on a tick (rifleToWorld) carries that tick's.
+   */
+  landingDipAt(alpha = this.clock.alpha): number {
+    const from = this.landingDipOf(this.prevLandingImpact);
+    return from + (this.landingDipOf(this.player.landingImpact) - from) * alpha;
+  }
+
+  /** The eye's dip (metres, down negative) for a landing at `impact` m/s: [camera] landing_dip by its share of a hard one. */
+  private landingDipOf(impact: number): number {
+    return (-Math.min(impact, HARD_LANDING_MPS) / HARD_LANDING_MPS) * this.landingDip;
+  }
+
   /** The view's offsets between the last two ticks, `alpha` of the way to the latest. */
   viewAt(alpha = this.clock.alpha): ViewOffsets {
     const a = this.prevView;
@@ -1102,7 +1119,7 @@ export class Session {
     return aimRangeM(this.map, this.voxel, eye, dir, this.tracerConverge[0], this.tracerConverge[1], (u, m) => this.rounds.bodies?.(owner, eye, u, m)?.t ?? null);
   }
 
-  /** The gun's muzzle in world metres, as the last tick left the view, the kick and the hands: where the flash and the tracers start. */
+  /** The gun's muzzle in world metres, as the last tick left the view, the eye's landing dip, the kick and the hands: where the flash and the tracers start. */
   muzzle(): [number, number, number] {
     return this.rifleToWorld(this.arm.spec.muzzle);
   }
@@ -1114,8 +1131,11 @@ export class Session {
 
   /**
    * A rifle point (model metres) in the world, from the eye along the view with its offsets and the
-   * hands' as the last tick left them: the gun is held in the view, so a shot's shake, which moves the
-   * eye, carries it too. The walk's sway and dip (a centimetre) are the camera's.
+   * hands' as the last tick left them: the gun is held in the view, so a shot's shake and a landing's
+   * dip (the tick's own; the frames between ticks ease it, landingDipAt), which move the eye, carry it
+   * too. No round leaves from here: they leave the undipped eye (combat()). The stride's motion (the
+   * eye's bob and lean, the gun's run dip, a centimetre or so) and the eye's easing over steps are
+   * the camera's alone.
    */
   private rifleToWorld(point: readonly number[]): [number, number, number] {
     const p = this.player;
@@ -1123,7 +1143,7 @@ export class Session {
     const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
     const hands = this.handsStill ? ZERO_HANDS : this.handling.delta;
     const v = modelToView(heldPose(this.viewmodel, this.holding(), this.kick(), 0, 0, this.raised, this.aimed, this.ready, this.stroke, hands), point);
-    const eye = [p.position.x + view.shake[0], p.position.y + this.controller.eyeHeight(p) + view.shake[1], p.position.z + view.shake[2]];
+    const eye = [p.position.x + view.shake[0], p.position.y + this.controller.eyeHeight(p) + this.landingDipOf(p.landingImpact) + view.shake[1], p.position.z + view.shake[2]];
     return [0, 1, 2].map((k) => eye[k] + right[k] * v[0] + up[k] * v[1] + forward[k] * v[2]) as [number, number, number];
   }
 
@@ -1168,6 +1188,8 @@ export class Session {
     p.embedded = 0;
     p.bobPhase = 0;
     this.prevPosition = p.position;
+    // Nor a landing where it was for the eye to dip by between ticks.
+    this.prevLandingImpact = 0;
     // Put there facing the way given: no turn of the view for the hands to trail.
     this.look = [yaw, pitch];
   }
