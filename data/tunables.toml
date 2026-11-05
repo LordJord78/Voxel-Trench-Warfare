@@ -981,6 +981,15 @@ laser_size_m        = 0.024    # a laser's dot where it strikes, emissive
 laser_glow          = 40.0
 laser_colour        = [1.0, 0.12, 0.06]
 tracer_tail_alpha   = 0.16     # the reference's 40 of 255 at the tail, 255 at the head
+tracer_cover        = 0.95     # while the sun is up a tracer's light covers this much of what is
+tracer_cover_deg    = [-6.0, 2.0]  # behind it where it shows its colour at the tone curve's top
+                               # (less as it shows less, none where it is white-hot), rising 0 to
+                               # all of it (a smoothstep) as the sun climbs between these elevations.
+                               # Added alone, over the low sun's haze its brightest channel clipped
+                               # while the others stayed the haze's: at 17:35 a red tracer's glow
+                               # showed 23 degrees (orange; red's own is 5) and a blue one's lavender.
+                               # From dusk on the sky behind it is dark, and its light added alone
+                               # reads brighter, as approved
 tracer_converge_min_m = 8.0    # a tracer leaves the shooter's muzzle and joins its round's
 tracer_converge_max_m = 150.0  # path (from the eye) where the shot was aimed: the first thing on
                                # the line of sight, within these (the sky: the farthest)

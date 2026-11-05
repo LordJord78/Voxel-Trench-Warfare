@@ -382,8 +382,11 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
   // colour; and a round passing the eye is drawn no wider than tracer_glow_max_px (10), not the
   // bar across the screen its 0.22 m of glow would be there (some 280 px half a metre out), nor
   // the fat wedge 28 px drew; its core no wider than 0.45 of the glow drawn, so the glow's colour
-  // shows round it.
+  // shows round it. Its light alone, read as the image with it less the image without: at 17:35 the
+  // sun is up, and a tracer's light covers the haze behind it ([effects] tracer_cover, its own test
+  // below), so the look's cover is held at none while it is read here, as a tunable would set it.
   const errors = await openGame(page);
+  type Look = { renderer: { effects: { look: { tracerCover: number } } } };
   const at = await hooks(
     page,
     async (h, hours) => {
@@ -391,13 +394,17 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
       h.setTimeOfDay(hours as number);
       h.jitter(false);
       h.setQuality({ dynres: false, scale: 1 });
+      const look = (h as unknown as Look).renderer.effects.look;
+      const cover = look.tracerCover;
+      look.tracerCover = 0;
       h.freeze();
       await h.stepFrames(40);
       const c = h.camera();
-      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res, exposure: await h.exposure(), sharp: 1 - h.bloomWeight() };
+      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90, res: h.stats().res, exposure: await h.exposure(), sharp: 1 - h.bloomWeight(), cover };
     },
     DUSK,
   );
+  expect(at.cover).toBeGreaterThan(0);
   const RAD = Math.PI / 180;
   const y = at.yaw * RAD;
   const along = (up: number, m: number) => [Math.sin(y) * Math.cos(up * RAD), Math.sin(up * RAD), Math.cos(y) * Math.cos(up * RAD)].map((v, k) => at.position[k] + v * m);
@@ -483,6 +490,13 @@ test('a tracer is a white-hot core in a coloured glow, its glow held near the ey
   expect(whiter[brightest], nearSeen).toBeGreaterThan(0);
   expect(coreRows, nearSeen).toBeGreaterThanOrEqual(1);
   expect(coreRows, nearSeen).toBeLessThanOrEqual(0.45 * width);
+  await hooks(
+    page,
+    (h, cover) => {
+      (h as unknown as Look).renderer.effects.look.tracerCover = cover as number;
+    },
+    at.cover,
+  );
   expect(errors).toEqual([]);
 });
 
@@ -657,6 +671,130 @@ test("a far red tracer at night shows red on the screen, not white, under fire a
     h.session.suppression.level = 0;
     h.suppressionLook(false);
   });
+  expect(errors).toEqual([]);
+});
+
+/** A screenshot as decoded: its size and its RGBA. */
+type Shot = { width: number; height: number; data: Buffer };
+
+/**
+ * The pixels a tracer changed on the canvas (any channel by `least` or more) whose centres lie `band`
+ * ([inner, outer] pixels) off the row `rowAt` (a line across the view), in columns `cols`: their
+ * colour's mean saturation and hue (a circular mean, each weighted by its chroma).
+ */
+function changedColour(without: Shot, withIt: Shot, rowAt: number, band: [number, number], cols: [number, number], least: number) {
+  const RAD = Math.PI / 180;
+  let n = 0;
+  let saturation = 0;
+  let sx = 0;
+  let sy = 0;
+  const w = withIt.width;
+  for (let y = Math.max(0, Math.floor(rowAt - band[1])); y <= Math.min(withIt.height - 1, Math.ceil(rowAt + band[1])); y++) {
+    const off = Math.abs(y + 0.5 - rowAt);
+    if (off < band[0] || off > band[1]) continue;
+    for (let x = Math.max(0, Math.floor(cols[0])); x <= Math.min(w - 1, Math.ceil(cols[1])); x++) {
+      const i = (y * w + x) * 4;
+      const [r, g, b] = [withIt.data[i], withIt.data[i + 1], withIt.data[i + 2]];
+      if (Math.max(Math.abs(r - without.data[i]), Math.abs(g - without.data[i + 1]), Math.abs(b - without.data[i + 2])) < least) continue;
+      const top = Math.max(r, g, b);
+      const c = top - Math.min(r, g, b);
+      let h = c > 0 ? (top === r ? ((g - b) / c) % 6 : top === g ? (b - r) / c + 2 : (r - g) / c + 4) * 60 : 0;
+      h = (h + 360) % 360;
+      n++;
+      saturation += top > 0 ? c / top : 0;
+      sx += c * Math.cos(h * RAD);
+      sy += c * Math.sin(h * RAD);
+    }
+  }
+  return { n, saturation: saturation / Math.max(1, n), hue: ((Math.atan2(sy, sx) / RAD) + 360) % 360 };
+}
+
+/** How far apart two hues are (degrees, 0 to 180). */
+const hueOff = (a: number, b: number) => Math.abs(((a - b + 540) % 360) - 180);
+
+test("a tracer over the low sun's haze shows its team's colour: red, not orange; blue, not lavender; and red apart from amber", async ({ page }) => {
+  // At 17:35, the hour solo opens at, the shooter faces the low sun through a bright haze, some (220,
+  // 190, 150) as shown. A tracer's light only added to it: its brightest channel clipped at the
+  // display's top while the others stayed the haze's, so a red tracer showed the haze's hue pulled a
+  // little toward red (orange-peach, some 23 degrees, halfway to the enemy's amber at 42), a blue one
+  // lavender-white, and the amber pale. While the sun is up its light covers what is behind it as much
+  // as it shows its colour ([effects] tracer_cover), so each shows its own over the haze, as over the
+  // night. Read on the displayed canvas, as a player sees it.
+  const errors = await openGame(page);
+  const at = await hooks(
+    page,
+    async (h, hours) => {
+      h.view('step');
+      h.setTimeOfDay(hours as number);
+      h.jitter(false);
+      h.setQuality({ dynres: false, scale: 1 });
+      h.freeze();
+      await h.stepFrames(40);
+      const c = h.camera();
+      return { position: c.position, yaw: c.yaw, pitch: c.pitch, fov: c.fov ?? 90 };
+    },
+    DUSK,
+  );
+  // 30 m out, 15° over the view against the haze over the low sun, 10 m across it.
+  const RAD = Math.PI / 180;
+  const y = at.yaw * RAD;
+  const p = (at.pitch + 15) * RAD;
+  const centre = [0, 1, 2].map((k) => at.position[k] + [Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p)][k] * 30);
+  const right = [Math.cos(y), 0, -Math.sin(y)];
+  const tail = centre.map((v, k) => v - right[k] * 5) as [number, number, number];
+  const head = centre.map((v, k) => v + right[k] * 5) as [number, number, number];
+  const shot = async (kind: number | null) => {
+    await hooks(
+      page,
+      async (h, arg) => {
+        const { tail, head, kind } = arg as { tail: [number, number, number]; head: [number, number, number]; kind: number | null };
+        h.debugTracer(kind === null ? null : { tail, head, kind });
+        await h.stepFrames(2);
+      },
+      { tail, head, kind },
+    );
+    return PNG.sync.read(await page.screenshot());
+  };
+  // Each kind's colour as shown at its kept hue: red (255, 59, 41), 5°; blue (65, 152, 255), 213°; the
+  // enemy line's and the battle's amber (255, 177, 0), 42°.
+  const teams = [
+    { name: 'red', kind: 2, hue: 5 },
+    { name: 'blue', kind: 3, hue: 213 },
+    { name: 'amber', kind: 1, hue: 42 },
+  ];
+  const without = await shot(null);
+  const measured = [];
+  for (const team of teams) {
+    const withIt = await shot(team.kind);
+    // Where it lies on the canvas: 15° over its middle, 5 m either side 30 m out. Its glow as drawn
+    // (0.22 m, some 5 px there, held between 4 and 10), clear of its ends and of its core's middle
+    // (white-hot by day, as it is meant to be), and of it the pixels it changed by a step of 32 or
+    // more: its glow, not its bloom round it (over the haze a blue one's lifts the blue all round, as
+    // any bright light's does).
+    const w = withIt.width;
+    const tanHalf = Math.tan((at.fov * RAD) / 2);
+    const rowAt = withIt.height / 2 - (Math.tan(15 * RAD) / tanHalf) * (w / 2);
+    const halfLength = (5 / 30 / tanHalf) * (w / 2);
+    const pixelM = (2 * 30 * Math.cos(15 * RAD) * tanHalf) / w;
+    const glowPx = Math.min(10, Math.max(4, 0.22 / pixelM));
+    const seen = changedColour(without, withIt, rowAt, [0.75, glowPx / 2 + 0.5], [w / 2 - halfLength + 16, w / 2 + halfLength - 16], 32);
+    measured.push({ ...team, ...seen, off: hueOff(seen.hue, team.hue) });
+  }
+  const report = JSON.stringify(measured);
+  console.log(report);
+  for (const seen of measured) {
+    expect(seen.n, report).toBeGreaterThan(300);
+    // Its team's hue, within 12° (a third of the way from red to the battle's amber), and coloured, not
+    // the haze's pastel (added alone, red's glow showed 0.33 and blue's 0.15). The bloom's own share of
+    // the picture (render.bloom_weight) is the haze's all round, so over it a thin glow shows a little
+    // of it whatever it covers: blue, whose own colour shows at 0.75 to red's 0.84, the more.
+    expect(seen.off, report).toBeLessThan(12);
+    expect(seen.saturation, report).toBeGreaterThan(0.4);
+  }
+  // Friend from foe at a glance: red's glow and amber's at least 25° apart (added alone, 20°).
+  const [red, , amber] = measured;
+  expect(hueOff(red.hue, amber.hue), report).toBeGreaterThan(25);
+  await hooks(page, (h) => h.debugTracer(null));
   expect(errors).toEqual([]);
 });
 

@@ -69,7 +69,7 @@ import { copyRegion, type RegionCopy } from '../world/region-copy';
 import { CameraRig, rigTunables } from './camera-rig';
 import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
-import { daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type DebugEmber, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
+import { coverAt, daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type DebugEmber, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
@@ -948,8 +948,10 @@ async function start(): Promise<void> {
     const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
     renderer.setSoldiers(draws);
     together.after(session, events, draws, performance.now());
-    // The tracers burn brighter by day, by the sun the frame is lit with.
-    const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares, draws, daylightAt(skyNow().sunElevationDeg, effects.t));
+    // The tracers burn brighter by day, by the sun the frame is lit with, and while it is up their light
+    // covers the haze behind them.
+    const sun = skyNow().sunElevationDeg;
+    const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares, draws, daylightAt(sun, effects.t), coverAt(sun, effects.t));
     audio.listen(pose);
     // The battle's events from the last frame's lights (light() below runs the battle's clock).
     audio.play(planVoices(hearing, events, pose.position, battleEvents));

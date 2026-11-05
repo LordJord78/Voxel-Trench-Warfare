@@ -105,6 +105,8 @@ export interface EffectsTunables {
   /** By day, 1 + this × daylight as bright; daylight rising 0 to 1 as the sun climbs between these elevations (degrees). */
   tracerDayBoost: number;
   tracerDaylightDeg: [number, number];
+  /** Its light covering what is behind it (effects.wgsl tracerLight) rising 0 to all of `tracer_cover` as the sun climbs between these elevations (degrees): coverAt. */
+  tracerCoverDeg: [number, number];
   /** A weapon light: how far its beam reaches, the light where it strikes (its radius near and far, its intensity, colour). */
   light: { rangeM: number; radiusM: [number, number]; intensity: number; colour: V3 };
   /** A laser's dot: its size, glow and colour. */
@@ -171,6 +173,7 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     tracerHeadFromM: f('tracer_head_from_m'),
     tracerDayBoost: f('tracer_day_boost'),
     tracerDaylightDeg: tun.pair('effects.tracer_daylight_deg'),
+    tracerCoverDeg: tun.pair('effects.tracer_cover_deg'),
     light: { rangeM: f('light_range_m'), radiusM: tun.pair('effects.light_radius_m'), intensity: f('light_intensity'), colour: rgb(tun, 'effects.light_colour') },
     laser: { sizeM: f('laser_size_m'), glow: f('laser_glow'), colour: rgb(tun, 'effects.laser_colour') },
     tracerTailAlpha: f('tracer_tail_alpha'),
@@ -257,6 +260,17 @@ export function daylightAt(sunElevationDeg: number, t: EffectsTunables): number 
   return smoothstep(low, high, sunElevationDeg);
 }
 
+/**
+ * How much of `tracer_cover` a tracer's light covers what is behind it, by the sun (a smoothstep over
+ * `tracer_cover_deg`): all of it while the sun is up, the haze behind a tracer bright (at 17:35 its
+ * light added alone showed the haze's hue, a red tracer orange); none from dusk on, the sky behind it
+ * dark and its light added alone brighter, as approved.
+ */
+export function coverAt(sunElevationDeg: number, t: EffectsTunables): number {
+  const [low, high] = t.tracerCoverDeg;
+  return smoothstep(low, high, sunElevationDeg);
+}
+
 /** How near the eye a tracer is for its whiteness, `metres` off: 1 within tracer_white_near_m, falling to 0 at tracer_white_far_m (effects.wgsl takes a ribbon's so, at its middle). */
 export function tracerNearAt(metres: number, t: EffectsTunables): number {
   return 1 - smoothstep(t.tracerWhiteNearM, t.tracerWhiteFarM, metres);
@@ -315,9 +329,10 @@ export class EffectsFrameBuilder {
    * (metres), the player's eye if not given; `battle`, the battle seen, its flares dimmed by the
    * sky's flares key `flareKey` as their light is; `others`, the other players as drawn, for their
    * lights and lasers; `daylight`, the day's share of the light (daylightAt), the tracers burning
-   * brighter by it.
+   * brighter by it; `cover`, the sun's share of how much a tracer's light covers what is behind it
+   * (coverAt).
    */
-  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battle: ShownBattle = NO_BATTLE, flareKey = 1, others: readonly SoldierDraw[] = [], daylight = 0): BuiltEffects {
+  build(session: Session, events: CombatEvents, rifle: RiflePose | null = null, eye?: readonly number[], battle: ShownBattle = NO_BATTLE, flareKey = 1, others: readonly SoldierDraw[] = [], daylight = 0, cover = 0): BuiltEffects {
     const t = this.t;
     // Flashes age with the world's time as the frame shows it: none while paused.
     const shown = (session.ticks + session.clock.alpha) * session.clock.dt;
@@ -393,6 +408,9 @@ export class EffectsFrameBuilder {
       billboards++;
       flames++;
     }
+    // From here the billboards are the tracers' own (their heads and embers) and other emissive ones:
+    // drawn over the ribbons (effects.ts), a tracer's light covering what is behind it.
+    const tracerBillboardsFrom = billboards;
 
     let ribbons = 0;
     /** A ribbon, `look` its style and a tracer's shares (effects.ts RIBBON_FLOATS): false once they are full. */
@@ -651,7 +669,7 @@ export class EffectsFrameBuilder {
     const smoke = [...this.debugSmoke, ...puffs.sort((a, b) => far(a) - far(b))].slice(0, MAX_PUFFS);
 
     return {
-      frame: { billboards: this.billboards, billboardCount: billboards, ribbons: this.ribbons, ribbonCount: ribbons, whiteFloor },
+      frame: { billboards: this.billboards, billboardCount: billboards, ribbons: this.ribbons, ribbonCount: ribbons, whiteFloor, cover, tracerBillboardsFrom },
       lights,
       blasts,
       smoke,

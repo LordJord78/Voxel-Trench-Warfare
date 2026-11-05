@@ -4,7 +4,8 @@
 // a line rather than breaking into dashes between pixel centres (this is after TAA). Projected
 // through the frame's camera without jitter (this is after TAA), each fragment is dropped where
 // the G-buffer's depth along its pixel's ray is nearer, so walls hide what is behind them, and
-// blended premultiplied: the emissive add their light (alpha 0), dust covers what is behind it.
+// blended premultiplied: the emissive add their light (alpha 0), dust covers what is behind it, and
+// the tracers' light covers it as much as it shows its colour (tracerLight).
 // A ribbon's style is how it is lit across: a flash star's one soft term (0), or a tracer's two (1),
 // a core mixed toward white in a glow of its colour. A tracer's glow is drawn no narrower than
 // glowMinPx, its light kept, so far off its colour shows round its core, nor wider than glowMaxPx,
@@ -20,6 +21,11 @@
 // keep its hue through the present pass's per-channel tone curve (keepHue): far off and in its glow a
 // tracer shows its team's colour, where the curve alone would take a bright red to white; as white as
 // its core is near the eye (or by day, whiteFloor), it shows as the curve alone shows it, white-hot.
+// And while the sun is up it covers what is behind it as much as it shows its colour (tracerLight,
+// draw.cover): added alone, its brightest channel clipped at the display's top while the others stayed
+// the haze's, so over the low sun's it showed the haze's hue pulled toward its own, a red tracer orange
+// and a blue one lavender. From dusk on draw.cover is none: over the night's dark sky its light added
+// alone reads brighter, as approved.
 #include "tone.wgsl"
 
 struct Lit {
@@ -60,7 +66,9 @@ struct EffectsDraw {
   sharpShare: f32,
   // The least a tracer's core is as white as it is near the eye: by day it reads white-hot as before.
   whiteFloor: f32,
-  pad0: f32,
+  // How much of what is behind it a tracer's light covers where it shows its colour at the curve's
+  // top: [effects] tracer_cover while the sun is up, none from dusk on (tracerLight).
+  cover: f32,
   pad1: f32,
 }
 
@@ -143,6 +151,19 @@ fn keepHue(c: vec3f, white: f32) -> vec3f {
   let shown = mix(aces(vec3f(m)) * x / m, aces(x), clamp(white, 0.0, 1.0));
   let keep = (shown >= vec3f(TONE_TOP)) | (x >= vec3f(m));
   return select(acesInverse(shown) / e, c, keep);
+}
+
+// A tracer's light `c` as keepHue shows it, premultiplied over what is behind it: covering it by
+// draw.cover where it shows its colour at the curve's top, as much less as it shows less (its brightest
+// channel through the curve), and none of it as white as it is (`white`, as keepHue's): where it is
+// white-hot it only adds light, brighter than anything behind it. So by day its colour is its team's
+// over a bright haze as it is over the night, its glow's and its head's alike, and a fading ember or
+// ricochet covers no more than it shows.
+fn tracerLight(c: vec3f, white: f32) -> vec4f {
+  let e = presentedScale();
+  let m = max(c.r, max(c.g, c.b)) * e;
+  let shows = select(0.0, aces(vec3f(m)).r, e > 0.0 && m > 0.0);
+  return vec4f(keepHue(c, white), draw.cover * shows * (1.0 - clamp(white, 0.0, 1.0)));
 }
 
 fn luma(c: vec3f) -> f32 {
@@ -256,13 +277,13 @@ fn fs(f: Fragment) -> @location(0) vec4f {
     if (f.glow.a > 0.0) {
       // A tracer: its core, its share of the width drawn, in its glow; both fading to the tail. As
       // white as its core's share of its light where the core is white (near the eye, or by day); its
-      // glow keeps its hue.
+      // glow keeps its hue, and covers what is behind it.
       let u2 = f.across * f.across;
       let fade = mix(f.alphas.x, f.alphas.y, f.uv.y);
       let core = f.colour.rgb * (exp(-3.0 * u2 / (f.glow.a * f.glow.a)) * fade);
       let glow = f.glow.rgb * (exp(-3.0 * u2) * fade);
       let share = luma(core) / max(luma(core + glow), 1e-9);
-      return vec4f(keepHue(core + glow, f.tone.y * share), 0.0);
+      return tracerLight(core + glow, f.tone.y * share);
     }
     // Soft across, fading from the head back to the tail.
     let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.uv.x * f.uv.x);
@@ -273,8 +294,9 @@ fn fs(f: Fragment) -> @location(0) vec4f {
   }
   let disc = f.colour * (1.0 - smoothstep(0.5, 1.0, length(f.uv)));
   if (f.tone.x > 0.5) {
-    // A tracer's head or ember: as white as the core it burns as (near the eye, or by day).
-    return vec4f(keepHue(disc.rgb, f.tone.y), 0.0);
+    // A tracer's head or ember: as white as the core it burns as (near the eye, or by day), covering
+    // what is behind it as a tracer's glow does.
+    return tracerLight(disc.rgb, f.tone.y);
   }
   return disc;
 }

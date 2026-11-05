@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, tracerWhiteAt } from '../../src/app/effects-frame';
+import { coverAt, daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, tracerWhiteAt } from '../../src/app/effects-frame';
 import type { TracerState } from '../../src/battle/tracers';
 import { projectileSpec, type ProjectileSpec } from '../../src/combat/ballistics';
 import { pose, toWorld } from '../../src/combat/soldier-rig';
@@ -7,7 +7,7 @@ import { BILLBOARD_FLOATS } from '../../src/combat/particles';
 import { TICK_HZ } from '../../src/core/clock';
 import { loadTunables } from '../../src/core/tunables';
 import { TRACER_KIND } from '../../src/net/gear';
-import { MAX_BILLBOARDS, MAX_RIBBONS } from '../../src/render/effects';
+import { HEAD_BILLBOARD, MAX_BILLBOARDS, MAX_RIBBONS } from '../../src/render/effects';
 import { Session, type CombatEvents } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
 import { P } from '../../src/world/materials';
@@ -556,6 +556,41 @@ describe("a tracer's look", () => {
     expect(daylightAt(35, t)).toBe(1);
     // Dusk's sun, 4.5° up: (8.5 / 24)² (3 − 2 · 8.5 / 24).
     expect(daylightAt(4.5, t)).toBeCloseTo(0.2875, 3);
+  });
+
+  it("a tracer's light covers what is behind it while the sun is up, all of it by 17:35, none from dusk on", () => {
+    // tracer_cover_deg [-6, 2]: the sun at noon (32.8°) and at 17:35, solo's opening hour (4.5°), is
+    // up, the haze behind a tracer bright; at 19:30 (13.8° down) and at night the sky is dark behind
+    // it, and its light added alone reads brighter, as approved.
+    expect(t.tracerCoverDeg).toEqual([-6, 2]);
+    expect(coverAt(32.8, t)).toBe(1);
+    expect(coverAt(4.5, t)).toBe(1);
+    expect(coverAt(2, t)).toBe(1);
+    expect(coverAt(-13.8, t)).toBe(0);
+    expect(coverAt(-39.4, t)).toBe(0);
+    expect(coverAt(-6, t)).toBe(0);
+    // At the sunset, 0°: (6 / 8)² (3 − 2 · 6 / 8).
+    expect(coverAt(0, t)).toBeCloseTo(0.84375, 6);
+  });
+
+  it("the frame carries the sun's share of the cover (none if not given), and where the tracers' own billboards start, to be drawn over the ribbons", () => {
+    const s = stand();
+    shoot(s);
+    s.rounds.step(1 / 60);
+    const battle = { ...NO_BATTLE, flames: [{ centre: [5, 1, 30] as V3, sizeM: 0.5, glow: 1, ember: false }], tracers: [{ id: 1, position: [50, 30, 80] as V3, velocity: [0, 0, 820] as V3, flown: 100 }] };
+    const b = new EffectsFrameBuilder(t);
+    const night = b.build(s, none(), null, undefined, battle, 1, [], 0);
+    expect(night.frame.cover).toBe(0);
+    const day = b.build(s, none(), null, undefined, battle, 1, [], 1, 1);
+    expect(day.frame.cover).toBe(1);
+    expect(b.build(s, none(), null, undefined, battle, 1, [], 0.29, 0.5).frame.cover).toBe(0.5);
+    // Every billboard from there on is a tracer's head or another emissive one; the flame before it.
+    const from = day.frame.tracerBillboardsFrom ?? -1;
+    const all = billboards(day);
+    expect(day.counts.heads).toBe(2);
+    expect(from).toBe(all.length - day.counts.heads);
+    expect(all.slice(from).every((q) => q[8] === HEAD_BILLBOARD)).toBe(true);
+    expect(all.slice(0, from).some((q) => q[8] === HEAD_BILLBOARD)).toBe(false);
   });
 
   it('256 pool tracers and 2000 battle tracers give at most MAX_RIBBONS ribbons and MAX_BILLBOARDS billboards, max_drawn (900) of the battle drawn, without throwing', () => {

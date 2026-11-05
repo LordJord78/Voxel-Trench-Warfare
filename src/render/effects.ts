@@ -11,8 +11,10 @@
  * haze before it as shade sees the world (froxels.ts `group`). Then one
  * render pass draws billboards and ribbons into `sharp`, each fragment dropped
  * where the G-buffer's depth is nearer, blended premultiplied: light adds,
- * dust covers. Neither runs in a frame with nothing to draw, so the standard
- * views are as they were.
+ * dust covers, and a tracer's light covers what is behind it as much as it
+ * shows its colour (effects.wgsl tracerLight), its heads and embers drawn
+ * over its ribbons. Neither runs in a frame with nothing to draw, so the
+ * standard views are as they were.
  */
 
 import type { Tunables } from '../core/tunables';
@@ -42,7 +44,7 @@ export const EMBER_BILLBOARD = 4;
 const BILLBOARD_FLOATS = 9;
 /** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4). */
 const LIT_BYTES = 32;
-/** effects.wgsl's EffectsDraw: two counts and eight floats, padded to 16 bytes. */
+/** effects.wgsl's EffectsDraw: two counts and nine floats, padded to 16 bytes. */
 const DRAW_PARAMS_BYTES = 48;
 /** The particle pool, room for test quads, the battle's allowance (its flares, far shells' flashes and smoke, and fires' flames, embers and smoke), and a head for each tracer drawn. */
 export const MAX_BILLBOARDS = 4096 + 64 + 1024 + 2048;
@@ -56,6 +58,14 @@ export interface EffectsFrame {
   ribbonCount: number;
   /** The least a tracer's core is as white as near the eye (0 to 1): by day, white-hot as before. */
   whiteFloor?: number;
+  /** The sun's share (0 to 1) of how much a tracer's light covers what is behind it (EffectsLook's tracerCover): none if not given. */
+  cover?: number;
+  /**
+   * The first of the tracers' own billboards (their heads and embers, emissive all after them), drawn
+   * after the ribbons: a tracer's light covers what is behind it, and a head is not to be covered by
+   * its own ribbon. All the billboards before the ribbons if not given.
+   */
+  tracerBillboardsFrom?: number;
 }
 
 /** The present pass's scale on the sharpened image, as the effects keep the tracers' hue through it: the hour's bias over the exposure, and the image's share beside its bloom. */
@@ -83,8 +93,10 @@ export interface SmokePuff {
  * How the billboards are lit: the emissive's glow, and how much of the key's and the sky's light the
  * rest take; the narrowest and the widest a tracer's glow is drawn, in pixels, and the widest its head
  * is (its share of that, as its width is of the glow's; effects.wgsl never caps it under its
- * MIN_HEAD_PX floor); and the distances (m) over which a tracer's core goes from its whiteness near
- * the eye to none.
+ * MIN_HEAD_PX floor); the distances (m) over which a tracer's core goes from its whiteness near
+ * the eye to none; and how much of what is behind it a tracer's light covers where it shows its colour
+ * at the tone curve's top while the sun is up ([effects] tracer_cover; the frame's `cover` is its share
+ * by the sun).
  */
 export interface EffectsLook {
   glow: number;
@@ -95,6 +107,7 @@ export interface EffectsLook {
   tracerHeadMaxPx: number;
   tracerWhiteNearM: number;
   tracerWhiteFarM: number;
+  tracerCover: number;
 }
 
 export function effectsLook(tun: Tunables): EffectsLook {
@@ -108,6 +121,7 @@ export function effectsLook(tun: Tunables): EffectsLook {
     tracerHeadMaxPx: (glowMaxPx * tun.f('effects.tracer_head_m')) / tun.f('effects.tracer_glow_width_m'),
     tracerWhiteNearM: tun.f('effects.tracer_white_near_m'),
     tracerWhiteFarM: tun.f('effects.tracer_white_far_m'),
+    tracerCover: tun.f('effects.tracer_cover'),
   };
 }
 
@@ -131,6 +145,8 @@ export class Effects {
   private target: GPUTextureView | null = null;
   private billboardCount = 0;
   private ribbonCount = 0;
+  /** The first of the tracers' own billboards, drawn after the ribbons. */
+  private tracerBillboardsFrom = 0;
   /** The draw's parameters (effects.wgsl EffectsDraw), written when the frame is encoded. */
   private readonly draw = new ArrayBuffer(DRAW_PARAMS_BYTES);
 
@@ -256,6 +272,7 @@ export class Effects {
   set(frame: EffectsFrame): void {
     this.billboardCount = Math.min(frame.billboardCount, MAX_BILLBOARDS);
     this.ribbonCount = Math.min(frame.ribbonCount, MAX_RIBBONS);
+    this.tracerBillboardsFrom = Math.max(0, Math.min(frame.tracerBillboardsFrom ?? this.billboardCount, this.billboardCount));
     const queue = this.device.queue;
     if (this.billboardCount > 0) queue.writeBuffer(this.billboards, 0, frame.billboards, 0, this.billboardCount * BILLBOARD_FLOATS);
     if (this.ribbonCount > 0) queue.writeBuffer(this.ribbons, 0, frame.ribbons, 0, this.ribbonCount * RIBBON_FLOATS);
@@ -265,10 +282,10 @@ export class Effects {
     queue.writeBuffer(this.lightParams, 0, light);
     // effects.wgsl's EffectsDraw: the counts; the widest a tracer's glow and its head are drawn, and
     // the narrowest its glow is; where its core's whiteness starts to fall and where it is gone; the
-    // tone's (encode's), and how white a tracer's core is at least.
+    // tone's (encode's), how white a tracer's core is at least, and how much its light covers.
     new Uint32Array(this.draw, 0, 2).set([this.billboardCount, this.ribbonCount]);
     new Float32Array(this.draw, 8, 5).set([this.look.tracerGlowMaxPx, this.look.tracerHeadMaxPx, this.look.tracerGlowMinPx, this.look.tracerWhiteNearM, this.look.tracerWhiteFarM]);
-    new Float32Array(this.draw, 36, 1)[0] = frame.whiteFloor ?? 0;
+    new Float32Array(this.draw, 36, 2).set([frame.whiteFloor ?? 0, this.look.tracerCover * Math.min(1, Math.max(0, frame.cover ?? 0))]);
   }
 
   /**
@@ -299,7 +316,12 @@ export class Effects {
     p.setScissorRect(0, 0, res[0], res[1]);
     p.setPipeline(this.pipelines.draw);
     p.setBindGroup(0, this.drawGroup);
-    p.draw(6, this.billboardCount + this.ribbonCount);
+    // The billboards before the tracers' own, then the ribbons, then the tracers' heads and embers over
+    // them (the shader tells a billboard from a ribbon by its instance, so each range keeps its own).
+    const from = this.tracerBillboardsFrom;
+    if (from > 0) p.draw(6, from, 0, 0);
+    if (this.ribbonCount > 0) p.draw(6, this.ribbonCount, 0, this.billboardCount);
+    if (this.billboardCount > from) p.draw(6, this.billboardCount - from, 0, from);
     p.end();
   }
 
