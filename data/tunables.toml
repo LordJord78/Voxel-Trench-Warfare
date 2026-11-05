@@ -971,8 +971,13 @@ tracer_ignite_hip_m = 1.0      # out, and full past it: the shooter's own aimed 
                                # drawn as two ribbons, the ramp up to it and the rest
 tracer_head_from_m  = 1.5      # its head drawn from here
 tracer_day_boost    = 3.0      # by day it burns 1 + this × daylight as bright, to read against
-tracer_daylight_deg = [-4.0, 20.0]  # sunlit ground as at dusk against dusk; daylight rises 0 to 1
-                               # (a smoothstep) as the sun climbs between these elevations
+tracer_daylight_deg = [2.0, 20.0]  # sunlit ground as at dusk against dusk; daylight rises 0 to 1
+                               # (a smoothstep) as the sun climbs between these elevations. At 17:35
+                               # (the sun 4.5 degrees up) a twentieth: from -4, 0.29, a far head was
+                               # 0.29 white-hot (tracer_white_by_day) over the low sun's haze, pastel
+                               # pink (255, 196, 186) where from 2 it shows red (255, 107, 94); its
+                               # light covering the haze (tracer_cover) shows its colour, not its
+                               # brightness
 light_range_m       = 45.0     # a weapon light's beam: where it strikes within this,
 light_radius_m      = [2.4, 7.0]   # a light that reaches this far about it (near, far),
 light_intensity     = 2.4      # this bright up close and falling off with the beam's

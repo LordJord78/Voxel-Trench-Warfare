@@ -549,13 +549,15 @@ describe("a tracer's look", () => {
     close(ribbon(built().frame.ribbons, 0).rgb, ribbon(night.frame.ribbons, 0).rgb, 6, 'default');
   });
 
-  it('daylight comes up with the sun: none 4° below the horizon, all of it from 20° up, a little at dusk', () => {
+  it('daylight comes up with the sun: none until it is 2° up, all of it from 20° up, a little at 17:35', () => {
     expect(daylightAt(-10, t)).toBe(0);
     expect(daylightAt(-4, t)).toBe(0);
+    expect(daylightAt(2, t)).toBe(0);
     expect(daylightAt(20, t)).toBe(1);
     expect(daylightAt(35, t)).toBe(1);
-    // Dusk's sun, 4.5° up: (8.5 / 24)² (3 − 2 · 8.5 / 24).
-    expect(daylightAt(4.5, t)).toBeCloseTo(0.2875, 3);
+    // 17:35's sun, 4.5° up: (2.5 / 18)² (3 − 2 · 2.5 / 18). A twentieth: its tracers' far heads their
+    // team's colour, not as white as by day (tracer_white_by_day × daylight) over the low sun's haze.
+    expect(daylightAt(4.5, t)).toBeCloseTo(0.0525, 4);
   });
 
   it("a tracer's light covers what is behind it while the sun is up, all of it by 17:35, none from dusk on", () => {
