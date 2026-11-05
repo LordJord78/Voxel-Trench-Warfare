@@ -191,6 +191,10 @@ describe('the rifle as the rig draws it', () => {
 
   it("its muzzle is drawn where the session fires from", () => {
     const s = standing();
+    // The hands held still: no tick runs between these, so the rig draws the last tick but one (alpha
+    // 0) and the session fires from the last, and a still gun breathes between the two. A shot's own
+    // muzzle is carried to the drawn gun's in effects-frame (its drift), as in play.
+    s.handsStill = true;
     const rig = new CameraRig(rigTunables(tun));
     const drawn = through(rig.rifle(s, rig.pose(s, 1 / 60)).toWorld, rifleModel().muzzle);
     const fired = s.muzzle();

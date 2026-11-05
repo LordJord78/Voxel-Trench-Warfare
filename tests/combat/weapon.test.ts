@@ -122,6 +122,101 @@ describe('the rifle', () => {
     expect(burst(6)).not.toEqual(burst(5));
   });
 
+  it('the shotgun reloads 1 shell in 1.0 s and 7 in 4.0 s', () => {
+    // Shell by shell ([weapon.m870] reload_base_s 0.5, then reload_per_round_s 0.5 a shell missing),
+    // but the tube fills only at the end, as every gun's magazine does: no shell is kept early.
+    const M870 = weaponSpec(tun, 'm870');
+    expect(M870).toMatchObject({ magazine: 7, reloadS: 4, reloadBaseS: 0.5, reloadPerRoundS: 0.5 });
+    const takes = (missing: number) => {
+      const w = new Weapon(M870);
+      w.rounds = M870.magazine - missing;
+      expect(w.beginReload()).toBe(true);
+      expect(w.reloadShells).toBe(missing);
+      let ticks = 0;
+      while (w.reloading) {
+        expect(w.rounds).toBe(M870.magazine - missing);
+        w.tick(TICK);
+        ticks++;
+      }
+      expect(w.rounds).toBe(M870.magazine);
+      return ticks;
+    };
+    expect(takes(1)).toBe(60);
+    expect(takes(4)).toBe(150);
+    expect(takes(7)).toBe(240);
+    // Every other gun reloads a magazine at a time: its reload_time_s, however many are missing.
+    expect(RIFLE).toMatchObject({ reloadBaseS: 0, reloadPerRoundS: 0 });
+    for (const missing of [1, 30]) {
+      const w = new Weapon(RIFLE);
+      w.rounds = 30 - missing;
+      w.beginReload();
+      let ticks = 0;
+      for (; w.reloading; ticks++) w.tick(TICK);
+      expect(ticks).toBe(144);
+    }
+  });
+
+  it('reloadPhase runs 0 → 1 over the reload and is null otherwise', () => {
+    for (const [spec, missing, seconds] of [[RIFLE, 12, 2.4], [weaponSpec(tun, 'm870'), 3, 2]] as const) {
+      const w = new Weapon(spec);
+      // Full, or empty with none begun: no reload, no phase.
+      expect(w.reloadPhase).toBeNull();
+      expect(w.reloadShells).toBe(0);
+      w.rounds = spec.magazine - missing;
+      w.tick(TICK);
+      expect(w.reloadPhase).toBeNull();
+      w.beginReload();
+      expect(w.reloadPhase).toBe(0);
+      const phases: number[] = [];
+      while (w.reloading) {
+        w.tick(TICK);
+        if (w.reloadPhase !== null) phases.push(w.reloadPhase);
+      }
+      // A tick's share of the reload each tick, up to the last tick's before its end; then none.
+      const n = Math.round(seconds / TICK);
+      expect(phases).toHaveLength(n - 1);
+      phases.forEach((p, k) => expect(p).toBeCloseTo((k + 1) / n, 12));
+      expect(w.reloadPhase).toBeNull();
+      expect(w.reloadShells).toBe(0);
+      // Put away mid-reload: none, and the magazine as it was.
+      w.rounds = spec.magazine - missing;
+      w.beginReload();
+      for (let k = 0; k < 30; k++) w.tick(TICK);
+      expect(w.reloadPhase).toBeCloseTo(30 / n, 12);
+      expect(w.reloadShells).toBe(missing);
+      w.cancelReload();
+      expect(w.reloadPhase).toBeNull();
+      expect(w.reloadShells).toBe(0);
+      expect(w.rounds).toBe(spec.magazine - missing);
+    }
+  });
+
+  it("sinceShot is the shot's clock: from the last shot, held at one interval while the trigger rests", () => {
+    const w = new Weapon(weaponSpec(tun, 'm870'));
+    const interval = 60 / 75;
+    expect(w.sinceShot).toBe(interval);
+    w.tick(TICK);
+    expect(w.wants(true)).toBe(true);
+    w.shot();
+    // The pull's tick carried in it: a tick on from the interval it waited for.
+    expect(w.sinceShot).toBeCloseTo(TICK, 12);
+    for (let k = 0; k < 12; k++) {
+      w.tick(TICK);
+      w.wants(true);
+    }
+    expect(w.sinceShot).toBeCloseTo(13 * TICK, 12);
+    // Let go, it is held at the interval: a fresh pull fires at once.
+    for (let k = 0; k < 90; k++) {
+      w.tick(TICK);
+      w.wants(false);
+    }
+    expect(w.sinceShot).toBe(interval);
+    // Read only.
+    expect(() => {
+      (w as unknown as { sinceShot: number }).sinceShot = 0;
+    }).toThrow(TypeError);
+  });
+
   it('every shot of every gun is a tracer', () => {
     for (const key of Object.keys(GUN_DEFS) as GunKey[]) {
       const w = new Weapon(weaponSpec(tun, GUN_DEFS[key].table));

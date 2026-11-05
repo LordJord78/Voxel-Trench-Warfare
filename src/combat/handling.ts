@@ -113,6 +113,8 @@ export interface HandlingTunables {
   pumpStrokeS: number;
   /** Empty: how long after the dry click a reload begins (the session's). */
   dryReloadS: number;
+  /** A run's speed (m/s): the session's share of a run is the body's speed over this. */
+  runMps: number;
 }
 
 export function handlingTunables(tun: Tunables): HandlingTunables {
@@ -176,6 +178,7 @@ export function handlingTunables(tun: Tunables): HandlingTunables {
     pumpBackM: f('pump_back_m'),
     pumpStrokeS: f('pump_stroke_s'),
     dryReloadS: f('dry_reload_s'),
+    runMps: f('run_mps'),
   };
 }
 
@@ -203,7 +206,7 @@ export interface HandlingInput {
   /** This tick's turn of the view (°/s): to the right, and up. */
   yawRate: number;
   pitchRate: number;
-  /** The run's share of full speed (0 to 1), the stride's phase (radians, wrapping at a turn), on the ground or not, and the speed (m/s) the body last landed at. */
+  /** The run's share of full speed (held to 0 to 1), the stride's phase (radians, wrapping at a turn), on the ground or not, and the speed (m/s) the body last landed at. */
   speedRatio: number;
   bobPhase: number;
   onGround: boolean;
@@ -211,7 +214,7 @@ export interface HandlingInput {
   /** Sprinting (the session's rule), and how far aimed (0 to 1). */
   sprinting: boolean;
   aimed: number;
-  /** A reload under way: its phase (0 to 1) and, for the shotgun, the shells it loads. */
+  /** A reload under way: its phase (0 to 1) and, for the shotgun, the shells it loads (counted as it begins). */
   reload: { phase: number; shells: number } | null;
   /** Seconds since the last shot. */
   sinceShot: number;
@@ -219,12 +222,8 @@ export interface HandlingInput {
 }
 
 /** A key of a reload's curve: where in its phase, and the pose there (from rest). */
-interface Key {
+interface Key extends HandsDelta {
   at: number;
-  o: V3;
-  pitch: number;
-  yaw: number;
-  roll: number;
 }
 
 /** Where in a reload's phase a cue is heard. */
@@ -246,6 +245,21 @@ const zero = (): HandsDelta => ({ offset: [0, 0, 0], pitch: 0, yaw: 0, roll: 0 }
 const copy = (d: HandsDelta): HandsDelta => ({ offset: [d.offset[0], d.offset[1], d.offset[2]], pitch: d.pitch, yaw: d.yaw, roll: d.roll });
 const byPhase = (a: { at: number }, b: { at: number }) => a.at - b.at;
 
+/** `d` × `k` summed into `to`, which is returned. */
+function addScaled(to: HandsDelta, d: HandsDelta, k: number): HandsDelta {
+  for (let a = 0; a < 3; a++) to.offset[a] += d.offset[a] * k;
+  to.pitch += d.pitch * k;
+  to.yaw += d.yaw * k;
+  to.roll += d.roll * k;
+  return to;
+}
+
+/** From `a` toward `b`, `u` of the way: a fresh delta. */
+function lerpHands(a: HandsDelta, b: HandsDelta, u: number): HandsDelta {
+  const lerp = (from: number, to: number) => from + (to - from) * u;
+  return { offset: [lerp(a.offset[0], b.offset[0]), lerp(a.offset[1], b.offset[1]), lerp(a.offset[2], b.offset[2])], pitch: lerp(a.pitch, b.pitch), yaw: lerp(a.yaw, b.yaw), roll: lerp(a.roll, b.roll) };
+}
+
 /**
  * A magazine gun's reload, laid out as the long guns' is: tilted; the magazine out, a jolt down;
  * held tilted; the magazine in, a jolt up and the muzzle up; the bolt, drawn back and turned
@@ -254,7 +268,7 @@ const byPhase = (a: { at: number }, b: { at: number }) => a.at - b.at;
 function magazineCurve(t: HandlingTunables, tiltRoll: number, magOutAt: number, magInAt: number, boltAt: number, depth: number, marks: readonly Mark[]): Curve {
   const [x, y, z] = t.reloadTiltM;
   const pitch = t.reloadTiltPitchDeg;
-  const key = (at: number, o: V3, keyPitch: number, roll: number): Key => ({ at, o: [o[0] * depth, o[1] * depth, o[2] * depth], pitch: keyPitch * depth, yaw: 0, roll: roll * depth });
+  const key = (at: number, o: V3, keyPitch: number, roll: number): Key => ({ at, offset: [o[0] * depth, o[1] * depth, o[2] * depth], pitch: keyPitch * depth, yaw: 0, roll: roll * depth });
   const keys = [
     key(0, [0, 0, 0], 0, 0),
     key(t.reloadTiltAt, [x, y, z], pitch, tiltRoll),
@@ -276,9 +290,7 @@ function keyedAt(keys: readonly Key[], phase: number): HandsDelta {
   const a = keys[i];
   const b = keys[i + 1];
   const span = b.at - a.at;
-  const u = span > 0 ? smooth(Math.min(1, Math.max(0, (p - a.at) / span))) : 1;
-  const lerp = (from: number, to: number) => from + (to - from) * u;
-  return { offset: [lerp(a.o[0], b.o[0]), lerp(a.o[1], b.o[1]), lerp(a.o[2], b.o[2])], pitch: lerp(a.pitch, b.pitch), yaw: lerp(a.yaw, b.yaw), roll: lerp(a.roll, b.roll) };
+  return lerpHands(a, b, span > 0 ? smooth(Math.min(1, Math.max(0, (p - a.at) / span))) : 1);
 }
 
 /**
@@ -319,8 +331,8 @@ export class Handling {
   /** The stride's last phase, and whether this is the second of a pair (the swing across runs over two). */
   private lastBob = 0;
   private secondStride = false;
-  /** The reload drawn last tick, and its pose; one let go, easing back from where it was. */
-  private lastReload: { phase: number; gun: GunClass } | null = null;
+  /** The reload drawn last tick (with the shells it counted as it began), and its pose; one let go, easing back from where it was. */
+  private lastReload: { phase: number; gun: GunClass; shells: number } | null = null;
   private lastCurve: HandsDelta = zero();
   private release: { from: HandsDelta; t: number } | null = null;
   private lastSinceShot = Number.POSITIVE_INFINITY;
@@ -351,10 +363,7 @@ export class Handling {
 
   /** The delta between the last two ticks, `alpha` of the way. */
   at(alpha: number): HandsDelta {
-    const a = this.prev;
-    const b = this.cur;
-    const lerp = (from: number, to: number) => from + (to - from) * alpha;
-    return { offset: [lerp(a.offset[0], b.offset[0]), lerp(a.offset[1], b.offset[1]), lerp(a.offset[2], b.offset[2])], pitch: lerp(a.pitch, b.pitch), yaw: lerp(a.yaw, b.yaw), roll: lerp(a.roll, b.roll) };
+    return lerpHands(this.prev, this.cur, alpha);
   }
 
   /** One tick: the delta now, the sprint blend, and the cues crossed this tick (a curve's marks passed between its last phase and this). */
@@ -362,18 +371,9 @@ export class Handling {
     const t = this.t;
     const cues: HandlingCue[] = [];
     const aimed = Math.min(1, Math.max(0, i.aimed));
-    const o: V3 = [0, 0, 0];
-    let pitch = 0;
-    let yaw = 0;
-    let roll = 0;
-    const add = (d: HandsDelta) => {
-      o[0] += d.offset[0];
-      o[1] += d.offset[1];
-      o[2] += d.offset[2];
-      pitch += d.pitch;
-      yaw += d.yaw;
-      roll += d.roll;
-    };
+    const speed = Math.min(1, Math.max(0, i.speedRatio));
+    const d = zero();
+    const o = d.offset;
 
     this.blend = i.sprinting ? Math.min(1, this.blend + i.dt / t.sprintInS) : Math.max(0, this.blend - i.dt / t.sprintOutS);
     const sprint = smooth(this.blend);
@@ -383,10 +383,10 @@ export class Handling {
     if (i.bobPhase < this.lastBob - PI) this.secondStride = !this.secondStride;
     this.lastBob = i.bobPhase;
     const across = sin((i.bobPhase + (this.secondStride ? TAU : 0)) / 2);
-    const bob = i.speedRatio * mix(1, t.bobAimed, aimed) * mix(1, t.bobSprint, sprint);
+    const bob = speed * mix(1, t.bobAimed, aimed) * mix(1, t.bobSprint, sprint);
     o[0] += t.bobSideM * across * bob;
     o[1] += t.bobUpM * sin(i.bobPhase) * bob;
-    roll += t.bobRollDeg * across * bob;
+    d.roll += t.bobRollDeg * across * bob;
 
     // The look's sway: trailing the turn, aside and up, and banking into it, as a gun hung from the hands.
     this.swaySide = this.follow(this.swaySide, hold(-t.swayMPerDps * i.yawRate, t.swayMaxM), i.dt);
@@ -395,10 +395,10 @@ export class Handling {
     const sway = mix(1, t.swayAimed, aimed);
     o[0] += hold(this.swaySide[0], t.swayMaxM) * sway;
     o[1] += hold(this.swayUp[0], t.swayMaxM) * sway;
-    roll += hold(this.swayRoll[0], t.swayMaxDeg) * sway;
+    d.roll += hold(this.swayRoll[0], t.swayMaxDeg) * sway;
 
     // Breathing, at rest: gone at a run.
-    const breath = Math.max(0, 1 - i.speedRatio) * mix(1, t.breathAimed, aimed);
+    const breath = Math.max(0, 1 - speed) * mix(1, t.breathAimed, aimed);
     o[0] += t.breathSideM * sin(TAU * t.breathSideHz * i.time) * breath;
     o[1] += t.breathUpM * sin(TAU * t.breathUpHz * i.time) * breath;
 
@@ -406,9 +406,9 @@ export class Handling {
     o[0] += t.sprintOffsetM[0] * sprint;
     o[1] += t.sprintOffsetM[1] * sprint;
     o[2] += t.sprintOffsetM[2] * sprint;
-    pitch += t.sprintPitchDeg * sprint;
-    yaw += t.sprintYawDeg * sprint;
-    roll += t.sprintRollDeg * sprint;
+    d.pitch += t.sprintPitchDeg * sprint;
+    d.yaw += t.sprintYawDeg * sprint;
+    d.roll += t.sprintRollDeg * sprint;
 
     // A landing: dipped on the tick it lands by its share of a hard one (the deeper, if one is
     // still settling), then settling back.
@@ -422,9 +422,9 @@ export class Handling {
     }
     this.wasOnGround = i.onGround;
     o[1] -= t.landingDropM * this.land;
-    pitch += t.landingPitchDeg * this.land;
+    d.pitch += t.landingPitchDeg * this.land;
 
-    add(this.reloadPose(i, cues));
+    addScaled(d, this.reloadPose(i, cues), 1);
 
     // The pump, after a shot: back over its stroke, forward over as long again.
     if (i.gun === 'pump') {
@@ -437,7 +437,7 @@ export class Handling {
     this.lastGun = i.gun;
 
     this.prev = this.cur;
-    this.cur = { offset: o, pitch, yaw, roll };
+    this.cur = d;
     return { delta: copy(this.cur), sprint: this.blend, cues };
   }
 
@@ -450,7 +450,8 @@ export class Handling {
   /**
    * The reload's curve at this tick's phase, the marks passed since the last heard, and what is
    * left of one let go: cut short, ended, or begun afresh over, it eases back to rest from where it
-   * was drawn over reload_cut_s, never snapping.
+   * was drawn over reload_cut_s, never snapping. The shotgun's shells are counted as its reload
+   * begins and kept for the whole of it, so a count read differently part-way moves no push or mark.
    */
   private reloadPose(i: HandlingInput, cues: HandlingCue[]): HandsDelta {
     const r = i.reload;
@@ -458,28 +459,22 @@ export class Handling {
     const going = last !== null && r !== null && r.phase >= last.phase && i.gun === last.gun;
     if (last && !going) this.letGo();
     const out = zero();
-    const add = (d: HandsDelta, k: number) => {
-      for (let a = 0; a < 3; a++) out.offset[a] += d.offset[a] * k;
-      out.pitch += d.pitch * k;
-      out.yaw += d.yaw * k;
-      out.roll += d.roll * k;
-    };
     if (r) {
-      const shells = Math.max(0, Math.floor(r.shells));
+      const shells = going ? last.shells : Math.max(0, Math.floor(r.shells));
       const curve = i.gun === 'pump' ? null : this.curves[i.gun];
       const marks = curve ? curve.marks : shellMarks(this.t, shells);
       const from = going ? last.phase : 0;
       for (const m of marks) if (from < m.at && m.at <= r.phase) cues.push(m.cue);
       this.lastCurve = curve ? keyedAt(curve.keys, r.phase) : shellsAt(this.t, r.phase, shells);
-      this.lastReload = { phase: r.phase, gun: i.gun };
-      add(this.lastCurve, 1);
+      this.lastReload = { phase: r.phase, gun: i.gun, shells };
+      addScaled(out, this.lastCurve, 1);
     } else {
       this.lastReload = null;
     }
     if (this.release) {
       this.release.t += i.dt;
       const left = this.left(this.release);
-      add(this.release.from, left);
+      addScaled(out, this.release.from, left);
       if (left <= 0) this.release = null;
     }
     return out;
@@ -488,13 +483,7 @@ export class Handling {
   /** Let the curve drawn last go, with whatever is still left of one let go before it. */
   private letGo(): void {
     const from = copy(this.lastCurve);
-    if (this.release) {
-      const left = this.left(this.release);
-      for (let a = 0; a < 3; a++) from.offset[a] += this.release.from.offset[a] * left;
-      from.pitch += this.release.from.pitch * left;
-      from.yaw += this.release.from.yaw * left;
-      from.roll += this.release.from.roll * left;
-    }
+    if (this.release) addScaled(from, this.release.from, this.left(this.release));
     this.release = { from, t: 0 };
     this.lastCurve = zero();
   }

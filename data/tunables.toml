@@ -1193,6 +1193,9 @@ pump_stroke_s       = 0.12
 # Empty: a press on an empty magazine clicks (dry), and a reload begins this
 # long after (the session's).
 dry_reload_s        = 0.25
+# A run's speed (m/s), as the camera's stride has it: the session's share of a
+# run (the bob's, and what is left of breathing) is the body's speed over this.
+run_mps             = 5.0
 
 # The trench periscope. Elevation is the payoff — this is the only way to look
 # at no-man's-land from behind the parapet rather than over it — and the costs

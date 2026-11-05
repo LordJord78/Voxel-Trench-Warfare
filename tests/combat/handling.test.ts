@@ -81,7 +81,7 @@ describe('handling', () => {
     expect(body.match(/(?<![\w.])\d+\.\d+/g) ?? []).toEqual([]);
   });
 
-  it('at rest, still and unaimed, the delta is zero', () => {
+  it("at rest, still and unaimed, at breathing's zero (time 0), the delta is zero", () => {
     // At the session's start: breathing, the one thing that moves a gun at rest, is at its zero.
     for (const gun of ['long', 'mg', 'pistol', 'pump'] as const) {
       const h = new Handling(t);
@@ -368,6 +368,83 @@ describe('handling', () => {
     for (const gun of ['long', 'mg', 'pistol'] as const) {
       for (const r of run(new Handling(t), 40, (k) => ({ gun, sinceShot: k * TICK }))) expect(r).toEqual({ delta: ZERO_HANDS, sprint: 0, cues: [] });
     }
+  });
+
+  it("the shotgun's marks are heard on the tick they land on, as are a long gun's: the last phase under, this one at", () => {
+    // Four shells, 2.5 s, 150 ticks: the marks 0.3, 0.5, 0.7 and 0.9 fall on ticks 45, 75, 105 and 135.
+    const shells = reloadCues('pump', t.shellBaseS + 4 * t.shellEachS, 4);
+    expect(shells.map((c) => c.cue)).toEqual(['shell', 'shell', 'shell', 'shell']);
+    [0.3, 0.5, 0.7, 0.9].forEach((mark, j) => expect(shells[j].phase).toBe(mark));
+    // A long gun's 2.5 s, likewise: 0.28, 0.62 and 0.82 fall on ticks 42, 93 and 123.
+    const long = reloadCues('long', 2.5);
+    expect(long).toEqual([
+      { cue: 'mag-out', phase: 0.28 },
+      { cue: 'mag-in', phase: 0.62 },
+      { cue: 'bolt', phase: 0.82 },
+    ]);
+  });
+
+  it('uneven steps hear each mark once and in order, all of them in one tick if it crosses them all', () => {
+    const cues = (gun: GunClass, phases: number[], shells = 0) => {
+      const h = new Handling(t);
+      const heard = run(h, phases.length, (k) => ({ gun, reload: { phase: phases[k], shells } })).flatMap((r) => r.cues);
+      expect(run(h, 20, () => ({ gun })).flatMap((r) => r.cues)).toEqual([]);
+      return heard;
+    };
+    expect(cues('long', [0, 0.05, 0.13, 0.279, 0.2801, 0.6, 0.6, 0.83, 0.99])).toEqual(['mag-out', 'mag-in', 'bolt']);
+    expect(cues('long', [0, 0.999])).toEqual(['mag-out', 'mag-in', 'bolt']);
+    expect(cues('mg', [0, 0.3, 1])).toEqual(['mag-out', 'cover', 'mag-in', 'bolt']);
+    expect(cues('mg', [0, 1])).toEqual(['mag-out', 'cover', 'mag-in', 'bolt']);
+    expect(cues('pistol', [0.1, 0.95])).toEqual(['mag-out', 'mag-in', 'bolt']);
+    expect(cues('pump', [0, 0.31, 0.32, 0.99], 4)).toEqual(['shell', 'shell', 'shell', 'shell']);
+    expect(cues('pump', [0, 0.01, 1], 7)).toEqual(Array(7).fill('shell'));
+  });
+
+  it('a phase past either end (−0.2, 1.3) is at rest, finite, and hears no mark more', () => {
+    const marks: Record<GunClass, number> = { long: 3, mg: 4, pistol: 3, pump: 3 };
+    for (const gun of ['long', 'mg', 'pistol', 'pump'] as const) {
+      const phases = [-0.2, 0, 0.5, 1, 1.3];
+      const got = run(new Handling(t), phases.length, (k) => ({ gun, reload: { phase: phases[k], shells: 3 } }));
+      for (const r of got) for (const v of [...r.delta.offset, r.delta.pitch, r.delta.yaw, r.delta.roll]) expect(Number.isFinite(v), gun).toBe(true);
+      expectPose(got[0].delta, ZERO_HANDS);
+      expectPose(got[4].delta, ZERO_HANDS);
+      expect(got[0].cues).toEqual([]);
+      expect(got[4].cues).toEqual([]);
+      expect(got.flatMap((r) => r.cues), gun).toHaveLength(marks[gun]);
+      // Begun at either end on its own: at rest, and nothing heard before 0.
+      for (const phase of [-0.2, 1.3]) {
+        const one = new Handling(t).tick({ ...REST, gun, reload: { phase, shells: 3 } });
+        for (const v of [...one.delta.offset, one.delta.pitch, one.delta.yaw, one.delta.roll]) expect(Number.isFinite(v)).toBe(true);
+        expectPose(one.delta, ZERO_HANDS);
+        if (phase < 0) expect(one.cues).toEqual([]);
+      }
+    }
+  });
+
+  it("the shotgun's shells are counted as its reload begins: a count changed mid-reload moves no push or mark", () => {
+    const total = t.shellBaseS + 4 * t.shellEachS;
+    const n = Math.round(total / TICK);
+    const steady = run(new Handling(t), n + 1, (k) => ({ gun: 'pump', reload: { phase: k / n, shells: 4 } }));
+    // Read as 2 a third of the way in, then 6: the pushes and their marks stay the four it began with.
+    const changing = run(new Handling(t), n + 1, (k) => ({ gun: 'pump', reload: { phase: k / n, shells: k < n / 3 ? 4 : k < (2 * n) / 3 ? 2 : 6 } }));
+    expect(changing).toEqual(steady);
+    expect(steady.flatMap((r) => r.cues)).toHaveLength(4);
+    // A reload begun afresh counts afresh.
+    const h = new Handling(t);
+    run(h, n + 1, (k) => ({ gun: 'pump', reload: { phase: k / n, shells: 4 } }));
+    run(h, 2);
+    const two = t.shellBaseS + 2 * t.shellEachS;
+    const m = Math.round(two / TICK);
+    expect(run(h, m + 1, (k) => ({ gun: 'pump', reload: { phase: k / m, shells: 2 } })).flatMap((r) => r.cues)).toEqual(['shell', 'shell']);
+  });
+
+  it("the run's share is held to 0–1, as the aim's is", () => {
+    const strides = (speedRatio: number) =>
+      run(new Handling(t), 120, (k) => ({ speedRatio, bobPhase: ((k * TAU) / 60) % TAU, time: k * TICK })).map((r) => r.delta);
+    // Faster than a run (a sprint's 6.4 m/s of a run's 5) bobs as a run does, and breathes none.
+    expect(strides(1.28)).toEqual(strides(1));
+    // Below none (no such speed, but held all the same): no bob, the whole of breathing.
+    expect(strides(-0.5)).toEqual(strides(0));
   });
 
   it('a reload cut short eases back to rest over 0.15 s', () => {

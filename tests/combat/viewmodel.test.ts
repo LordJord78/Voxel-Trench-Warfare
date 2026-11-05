@@ -135,16 +135,41 @@ describe('the viewmodel', () => {
     map.fillBox(0, 0, 0, 64, 4, 64, P.SOD);
     const s = Session.create({ map, plan: null, spawn: { position: [3.2, 0.4, 3.2] } }, tun, 7, 0);
     for (let k = 0; k < 20; k++) s.tick();
+    const m = rifleModel();
+    const { muzzle, port: portAt } = s.arm.spec;
+    // Where the session holds a model point: the held pose at rest (no kick, raise, aim or dip) with
+    // the hands' delta, from the eye along the view as the last tick left it, to the last bit.
+    const held = (point: readonly number[], hands: HandsDelta) => {
+      const p = s.player;
+      expect(s.viewAt(1)).toEqual({ yaw: 0, pitch: 0, roll: 0, fov: 0 });
+      const { forward, right, up } = viewBasis(p.yaw, p.pitch);
+      const v = modelToView(heldPose(t, s.holding(), still, 0, 0, 0, 0, 1, null, hands), point);
+      const eye = [p.position.x, p.position.y + s.controller.eyeHeight(p), p.position.z];
+      return [0, 1, 2].map((k) => eye[k] + right[k] * v[0] + up[k] * v[1] + forward[k] * v[2]);
+    };
+    // A still gun breathes: the muzzle is today's pose with the hands' delta, exactly.
+    expect(s.handling.delta).not.toEqual(ZERO_HANDS);
+    expect(s.muzzle()).toEqual(held(muzzle, s.handling.delta));
+    expect(s.port()).toEqual(held(portAt, s.handling.delta));
+    // Held still, it is today's pose: 0.175 m right, 0.205 m down, and out along the view.
     const p = s.player.position;
     const eye = [p.x, p.y + s.controller.eyeHeight(s.player), p.z];
-    const m = rifleModel();
     const out = 0.44 + m.muzzle[2];
+    s.handsStill = true;
     const ahead = s.muzzle();
+    expect(ahead).toEqual(held(muzzle, ZERO_HANDS));
     expect(ahead[0] - eye[0]).toBeCloseTo(0.175, 9);
     expect(ahead[1] - eye[1]).toBeCloseTo(-0.205, 9);
     expect(ahead[2] - eye[2]).toBeCloseTo(out, 9);
+    s.handsStill = false;
+    // Turned 90° in a tick: the gun trails the turn (to its left), and the muzzle and port are the
+    // pose with that delta, turned with the view.
     s.player.yaw = 90;
     s.tick();
+    expect(s.handling.delta.offset[0]).toBeLessThan(-0.001);
+    expect(s.muzzle()).toEqual(held(muzzle, s.handling.delta));
+    expect(s.port()).toEqual(held(portAt, s.handling.delta));
+    s.handsStill = true;
     const turned = s.muzzle();
     expect(turned[0] - eye[0]).toBeCloseTo(out, 9);
     expect(turned[2] - eye[2]).toBeCloseTo(-0.175, 9);
