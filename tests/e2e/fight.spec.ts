@@ -18,6 +18,8 @@ type H = {
   trigger(held: boolean): void;
   player(): { position: [number, number, number] };
   waitFrames(n: number): Promise<void>;
+  range(on: boolean): void;
+  rangeState(): { up: boolean; dummies: unknown[]; plates: unknown[]; readout: string | null };
 };
 
 const h = <T>(page: Page, fn: (h: H, arg: unknown) => T | Promise<T>, arg?: unknown): Promise<T> =>
@@ -56,6 +58,29 @@ async function match(browser: Browser, friendTeam: 'red' | 'blue', respawnS: num
   for (const p of [host.page, friend.page]) {
     await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.begun(), null, { timeout: 15_000 });
     await p.locator('#go').click();
+  }
+  // The range never stands in a room (G2): not from the click that goes in, as solo's would, nor
+  // asked for by hand on either page, at once or a few frames on.
+  const down = { up: false, dummies: [], plates: [], readout: null };
+  for (const [p, ask] of [[host.page, false], [friend.page, true]] as const) {
+    const seen = await h(
+      p,
+      async (x, a) => {
+        await x.waitFrames(3);
+        const gone = x.rangeState();
+        if (!a) return { gone, asked: null, later: null };
+        x.range(true);
+        const asked = x.rangeState();
+        await x.waitFrames(3);
+        return { gone, asked, later: x.rangeState() };
+      },
+      ask,
+    );
+    expect(seen.gone, 'the range in a room, gone in').toEqual(down);
+    if (ask) {
+      expect(seen.asked, 'the range in a room, asked for').toEqual(down);
+      expect(seen.later, 'the range in a room, asked for, frames on').toEqual(down);
+    }
   }
   return { host, friend };
 }
