@@ -40,14 +40,31 @@ export interface Picture {
   h: number;
 }
 
+/** Each kind's size across and high, metres. */
+export type Sizes = Record<Kind, [number, number]>;
+
+/** A target as measured: its kind, its distance out as laid (null if the layout did not list it), and what `shows` read of it. */
+export interface Measured {
+  kind: Kind;
+  distanceM: number | null;
+  shows: boolean;
+  pixels: number;
+  area: number;
+  peak: number;
+}
+
 export const CAPTURES: Capture[];
-export const SIZE_M: Record<Kind, [number, number]>;
 export const MARGIN_PX: number;
 export const DELTA: number;
 export const SHOW_PIXELS: number;
+export const LOOK: { capture: string; withinM: number; kinds: Kind[] };
+export const USAGE: string;
+export function parseOnly(argv: readonly string[], names: readonly string[]): { only: string[] | null } | { error: string };
+export function sizesOf(t: { torsoPlateM: readonly [number, number] | readonly number[]; headPlateM: readonly [number, number] | readonly number[]; standingM: number }): Sizes;
 export function laidOf(spots: readonly { kind: string }[]): Laid;
 export function countFailures(laid: Laid, seen: Seen): string[];
-export function targetBox(target: Target, pose: Pose, res: readonly [number, number] | readonly number[], margin?: number): [number, number, number, number] | null;
+export function lookFailures(c: Capture, measured: readonly Measured[]): string[];
+export function targetBox(target: Target, pose: Pose, res: readonly [number, number] | readonly number[], sizes: Sizes, margin?: number): [number, number, number, number] | null;
 export function shows(up: Image, down: Image, box: Box, delta?: number): { pixels: number; peak: number; area: number };
 export function noiseFloor(up: Image, down: Image, boxes: readonly Box[]): number;
 export function marked(img: Picture, boxes: readonly Box[]): Picture;

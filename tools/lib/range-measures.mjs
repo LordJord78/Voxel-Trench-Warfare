@@ -14,14 +14,47 @@ export const CAPTURES = [
   ...HOURS.map(([name, hours]) => ({ name: `corridor-${name}`, map: 'corridor', hours })),
 ];
 
-/** A target's size across and high, metres: a dummy's as it stands (feet to the top of its head, its shoulders), a plate's steel ([range]'s torso_plate_m and head_plate_m). */
-export const SIZE_M = { dummy: [0.6, 1.85], mover: [0.6, 1.85], torso: [0.45, 0.6], head: [0.25, 0.3] };
+/** A dummy's width, metres: its shoulders, as a man's. Its height, and the plates' sizes, are the page's tunables (sizesOf). */
+const DUMMY_ACROSS_M = 0.6;
+/** A target shows when the range changes this many of its box's pixels by DELTA. */
+export const SHOW_PIXELS = 4;
+/**
+ * The look's gate (G2's ruling on the 17:35 look): at solo's opening hour on its map (the Ravine's
+ * 17:35, the capture named so), from the step view at 1×, every dummy (a mover too) and torso plate
+ * laid within this far out must show. The rest, and the other captures, are for the eye.
+ */
+export const LOOK = { capture: '1735', withinM: 60, kinds: ['dummy', 'mover', 'torso'] };
+/** The usage: what the run takes. */
+export const USAGE = `usage: npm run range-captures [-- --only <names>]   (or --only=<names>; names comma-separated, of ${CAPTURES.map((c) => c.name).join(', ')})`;
+
+/**
+ * The captures asked for in `argv` (the run's arguments): `--only a,b` or `--only=a,b`, each one of
+ * `names`; none asked, null (every capture). A missing list or a name that is none of them is an
+ * error, for the run to print with the usage.
+ */
+export function parseOnly(argv, names) {
+  const at = argv.findIndex((a) => a === '--only' || a.startsWith('--only='));
+  if (at < 0) return { only: null };
+  const value = argv[at] === '--only' ? argv[at + 1] : argv[at].slice('--only='.length);
+  if (value === undefined || value === '' || value.startsWith('--')) return { error: '--only: no list of captures' };
+  const only = value.split(',');
+  const unknown = only.find((n) => !names.includes(n));
+  if (unknown !== undefined) return { error: `--only: no capture ${unknown}` };
+  return { only };
+}
+
+/**
+ * Each target's size across and high, metres, by kind: a dummy's (and a mover's) shoulders and the
+ * height the player stands ([stance.standing] height: the dummies stand as tall), feet to the top of
+ * its head; a plate's steel ([range] torso_plate_m and head_plate_m). Read from the page's tunables.
+ */
+export function sizesOf({ torsoPlateM, headPlateM, standingM }) {
+  return { dummy: [DUMMY_ACROSS_M, standingM], mover: [DUMMY_ACROSS_M, standingM], torso: [torsoPlateM[0], torsoPlateM[1]], head: [headPlateM[0], headPlateM[1]] };
+}
 /** Pixels round a target's projected box: its outline, and room for the frame's jitter. */
 export const MARGIN_PX = 3;
 /** A pixel the range changes: by this much or more in some channel (0-255, as displayed), its frame up against its frame down. */
 export const DELTA = 24;
-/** A target shows when the range changes this many of its box's pixels by DELTA. Reported, not gated: the eye judges. */
-export const SHOW_PIXELS = 4;
 /** A projection this near a whole pixel is that pixel (a box's edge is not moved by floating point). */
 const EPS_PX = 1e-6;
 
@@ -37,34 +70,54 @@ export function laidOf(spots) {
 }
 
 /**
- * What is short of the layout (`laid`, laidOf rangeLayout's spots) in what the hooks say is up (`seen`):
- * the range not up; a layout of no dummies or no plates; fewer dummies listed, standing or drawn, or
- * fewer plates listed or with their steel in the world, than it lays. None: the range is all up.
+ * What differs from the layout (`laid`, laidOf rangeLayout's spots) in what the hooks say is up (`seen`):
+ * the range not up; a layout of no dummies or no plates; other than as many dummies or plates listed
+ * as it lays (more is as wrong as fewer: a raise that lays what the step does not see); fewer dummies
+ * standing or drawn, or fewer plates with their steel in the world, than it lays. None: the range is
+ * up as laid.
  */
 export function countFailures(laid, seen) {
   const out = [];
   if (!seen.up) out.push('the range is not up');
   if (laid.dummies === 0) out.push('rangeLayout lays no dummies');
   if (laid.plates === 0) out.push('rangeLayout lays no plates');
+  const listed = (n, of, what) => {
+    if (n !== of) out.push(`${n} ${what} of the ${of} laid`);
+  };
   const short = (n, of, what) => {
     if (n < of) out.push(`${n} ${what} of the ${of} laid`);
   };
-  short(seen.dummies, laid.dummies, 'dummies listed');
+  listed(seen.dummies, laid.dummies, 'dummies listed');
   short(seen.standing, laid.dummies, 'dummies standing');
   short(seen.drawn, laid.dummies, 'dummies drawn');
-  short(seen.plates, laid.plates, 'plates listed');
+  listed(seen.plates, laid.plates, 'plates listed');
   short(seen.steel, laid.plates, "plates' steel in the world");
   return out;
 }
 
+const KIND_NAME = { dummy: 'dummy', mover: 'mover', torso: 'torso plate', head: 'head plate' };
+
+/**
+ * The look's gate on capture `c` (LOOK): at its capture, each dummy, mover or torso plate laid within
+ * LOOK.withinM (`measured`: its kind, its distance out as laid, and what shows read of it) that does
+ * not show, with what was read. Any other capture, none.
+ */
+export function lookFailures(c, measured) {
+  if (c.name !== LOOK.capture) return [];
+  return measured
+    .filter((t) => LOOK.kinds.includes(t.kind) && t.distanceM !== null && t.distanceM <= LOOK.withinM && !t.shows)
+    .map((t) => `the ${KIND_NAME[t.kind]} at ${t.distanceM} m does not show at 17:35: ${t.pixels} of its ${t.area} px changed by ${DELTA} or more (peak ${t.peak}), not ${SHOW_PIXELS}`);
+}
+
 /**
  * A target's box on a `res` picture drawn from `pose` (the game's camera: tools/lib/camera.mjs), [x0, y0,
- * x1, y1) in pixels with MARGIN_PX round it; null if any of it is behind the camera. A dummy's (or a
- * mover's) `at` is its feet, its box from them to its head; a plate's is its steel's middle. Its width
- * is taken along the camera's right: the range faces the step, as the camera on it does.
+ * x1, y1) in pixels with MARGIN_PX round it, its size by kind from `sizes` (sizesOf); null if any of it
+ * is behind the camera. A dummy's (or a mover's) `at` is its feet, its box from them to its head; a
+ * plate's is its steel's middle. Its width is taken along the camera's right: the range faces the step,
+ * as the camera on it does.
  */
-export function targetBox(target, pose, res, margin = MARGIN_PX) {
-  const [across, high] = SIZE_M[target.kind];
+export function targetBox(target, pose, res, sizes, margin = MARGIN_PX) {
+  const [across, high] = sizes[target.kind];
   const { right } = basis(pose);
   const plate = target.kind === 'torso' || target.kind === 'head';
   const base = plate ? target.at[1] - high / 2 : target.at[1];

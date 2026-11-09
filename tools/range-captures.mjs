@@ -12,7 +12,7 @@
 // it, so what the range changes is read pixel by pixel in each target's box (its projection by the
 // camera the frame was drawn from), against the noise between two frames of a still scene.
 //
-//   npm run range-captures [-- --only dusk,corridor-night]
+//   npm run range-captures [-- --only dusk,corridor-night]   (or --only=dusk,corridor-night)
 //
 // Writes artifacts/sp7/range/<name>.png (the range up, as displayed), <name>-down.png (the same frame
 // with it down), <name>-marked.png (a 1 px magenta box round each target), <name>-targets.png (each
@@ -21,17 +21,20 @@
 // entry stamped with the commit and the time it was taken). A capture that fails to finish leaves its
 // failure as its entry and none of its pictures.
 //
-// Exits 1 if the hooks report fewer dummies (listed, standing, drawn) or plates (listed, their steel in
-// the world) up than rangeLayout lays for the map, or a layout of none: the layout called in the page
-// with the app's own eye (views.step.position) before the range goes up; or if a capture does not
-// finish, the range does not go down for its second frame, a page error is seen, or a hook is missing.
-// Whether a target shows (SHOW_PIXELS pixels of its box changed by DELTA) is reported, not gated: the
-// pictures are for the eye.
+// Exits 1 if the hooks report other than as many dummies and plates listed up as rangeLayout lays for
+// the map (more is as wrong as fewer), fewer dummies standing or drawn or plates with their steel in
+// the world, or a layout of none: the layout called in the page with the app's own eye
+// (views.step.position) before the range goes up; if, at solo's opening hour on its map (the Ravine's
+// 17:35, LOOK), a dummy or torso plate laid within 60 m does not show (SHOW_PIXELS pixels of its box
+// changed by DELTA); or if a capture does not finish, the range does not go down for its second frame
+// (no dummy drawn, and no steel left where its plates stood), a page error is seen, or a hook is
+// missing. Whether the rest show is reported, not gated: the pictures are for the eye. Exits 2, with
+// the usage, if --only has no list or names no capture.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { decode, encode } from './lib/image.mjs';
-import { CAPTURES, countFailures, DELTA, laidOf, MARGIN_PX, marked, noiseFloor, sheet, shows, SHOW_PIXELS, targetBox } from './lib/range-measures.mjs';
+import { CAPTURES, countFailures, DELTA, laidOf, lookFailures, MARGIN_PX, marked, noiseFloor, parseOnly, sheet, shows, SHOW_PIXELS, sizesOf, targetBox, USAGE } from './lib/range-measures.mjs';
 import { failedEntry, readReport, removePictures, stamp, writeReport } from './lib/report.mjs';
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
@@ -46,7 +49,7 @@ const SETTLE_FRAMES = 180;
 /** The maps' pages. */
 const PAGES = { ravine: '/', corridor: '/?map=corridor' };
 /** The hooks the run needs. */
-const HOOKS = ['range', 'rangeState', 'flyTo', 'camera', 'soldiersDrawn', 'holdLights', 'setTimeOfDay', 'waitFrames', 'setIntensity', 'setShelling'];
+const HOOKS = ['range', 'rangeState', 'flyTo', 'camera', 'soldiersDrawn', 'holdLights', 'setTimeOfDay', 'waitFrames', 'setIntensity', 'setShelling', 'setQuality', 'play', 'mode', 'sunElevation', 'exposure', 'gpuErrors'];
 /** A capture's four pictures. */
 const picturesOf = (name) => ['', '-down', '-marked', '-targets'].map((s) => `${OUT}/${name}${s}.png`);
 /** A target's letter on the sheet. */
@@ -59,8 +62,8 @@ const round2 = (x) => Math.round(x * 100) / 100;
 
 /**
  * The map's page opened, its range laid out as the app lays it, then stood up in a still scene at the
- * step view: what rangeLayout lays (called in the page, before the range is up, with the app's eye) and
- * the steel's palette ids.
+ * step view: what rangeLayout lays (called in the page, before the range is up, with the app's eye),
+ * the steel's palette ids, and the targets' sizes as the page's tunables give them (sizesOf).
  */
 async function openMap(page, map) {
   await page.goto(`http://localhost:${PORT}${PAGES[map]}`);
@@ -78,13 +81,18 @@ async function openMap(page, map) {
       const { P } = await import('/src/world/materials.ts');
       const eye = [...h.views.step.position];
       const up = h.rangeState().up;
-      const spots = rangeLayout(h.session.map, h.session.voxel, h.world.spawn, rangeTunables(loadTunables()), h.session.plan, eye);
-      return { map: h.map, eye, upBefore: up, spots: spots.map((s) => ({ kind: s.kind, distanceM: s.distanceM, at: s.at })), steel: [P.TARGET_STEEL, P.TARGET_STEEL_HIT] };
+      const tun = loadTunables();
+      const t = rangeTunables(tun);
+      const spots = rangeLayout(h.session.map, h.session.voxel, h.world.spawn, t, h.session.plan, eye);
+      // The plates' steel, and the dummies as tall as the player stands (app/range.ts raise).
+      const sizes = { torsoPlateM: t.torsoPlateM, headPlateM: t.headPlateM, standingM: tun.f('stance.standing.height') };
+      return { map: h.map, eye, upBefore: up, spots: spots.map((s) => ({ kind: s.kind, distanceM: s.distanceM, at: s.at })), steel: [P.TARGET_STEEL, P.TARGET_STEEL_HIT], sizes };
     }),
     `${map}: laying out the range`,
   );
   if (layout.map !== map) throw new Error(`the page is the ${layout.map}, not the ${map}`);
   if (layout.upBefore) throw new Error(`${map}: the range stood before play: the layout would see its own plates`);
+  layout.sizes = sizesOf(layout.sizes);
   await page.evaluate(() => {
     const h = window.__trenchline;
     h.setQuality({ preset: 'high', dynres: false });
@@ -103,11 +111,15 @@ async function openMap(page, map) {
   return layout;
 }
 
-/** The hour set and the range up or down, settled: what the hooks say of it, and the camera the frame is drawn from. */
-const settle = (page, c, up, steel) =>
+/**
+ * The hour set and the range up or down, settled: what the hooks say of it, and the camera the frame is
+ * drawn from. Its steel is counted at the plates the range lists, or, given `plates` (the up frame's
+ * centres, metres), there: the range down lists none, and must leave no steel where they stood.
+ */
+const settle = (page, c, up, steel, plates = null) =>
   withTimeout(
     page.evaluate(
-      async ({ hours, up, frames, steel }) => {
+      async ({ hours, up, frames, steel, plates }) => {
         const h = window.__trenchline;
         h.setTimeOfDay(hours);
         h.range(up);
@@ -115,9 +127,9 @@ const settle = (page, c, up, steel) =>
         const s = h.rangeState();
         const v = h.session.voxel;
         const map = h.world.map;
-        const steelAt = (p) => steel.includes(map.get(Math.floor(p.at[0] / v), Math.floor(p.at[1] / v), Math.floor(p.at[2] / v)));
+        const steelAt = (at) => steel.includes(map.get(Math.floor(at[0] / v), Math.floor(at[1] / v), Math.floor(at[2] / v)));
         return {
-          seen: { up: s.up, dummies: s.dummies.length, standing: s.dummies.filter((d) => !d.down).length, drawn: h.soldiersDrawn().length, plates: s.plates.length, steel: s.plates.filter(steelAt).length },
+          seen: { up: s.up, dummies: s.dummies.length, standing: s.dummies.filter((d) => !d.down).length, drawn: h.soldiersDrawn().length, plates: s.plates.length, steel: (plates ?? s.plates.map((p) => p.at)).filter(steelAt).length },
           dummies: s.dummies,
           plates: s.plates,
           pose: h.camera(),
@@ -127,7 +139,7 @@ const settle = (page, c, up, steel) =>
           gpuErrors: h.gpuErrors(),
         };
       },
-      { hours: c.hours, up, frames: SETTLE_FRAMES, steel },
+      { hours: c.hours, up, frames: SETTLE_FRAMES, steel, plates },
     ),
     `${c.name}: settling with the range ${up ? 'up' : 'down'}`,
   );
@@ -148,7 +160,8 @@ async function captureAt(page, c, layout) {
   const laid = laidOf(layout.spots);
   const upState = await settle(page, c, true, layout.steel);
   const upPng = await withTimeout(page.screenshot(), `${c.name}: a screenshot, the range up`);
-  const downState = await settle(page, c, false, layout.steel);
+  // Down, its steel counted where the up frame's plates stood.
+  const downState = await settle(page, c, false, layout.steel, upState.plates.map((p) => p.at));
   const downPng = await withTimeout(page.screenshot(), `${c.name}: a screenshot, the range down`);
   const failures = countFailures(laid, upState.seen).map((f) => `the range up: ${f}`);
   if (downState.seen.up || downState.seen.drawn > 0 || downState.seen.steel > 0) failures.push(`the range did not go down for the second frame: ${JSON.stringify(downState.seen)}`);
@@ -161,7 +174,7 @@ async function captureAt(page, c, layout) {
   const up = decode(upPng);
   const down = decode(downPng);
   const targets = targetsOf(layout, upState);
-  const boxes = targets.map((t) => targetBox(t, upState.pose, [up.w, up.h]));
+  const boxes = targets.map((t) => targetBox(t, upState.pose, [up.w, up.h], layout.sizes));
   const inFront = targets.filter((_, i) => boxes[i] !== null);
   if (inFront.length < targets.length) failures.push(`${targets.length - inFront.length} target(s) behind the camera`);
   const kept = boxes.filter((b) => b !== null);
@@ -170,6 +183,7 @@ async function captureAt(page, c, layout) {
     const m = shows(up, down, kept[i]);
     return { ...t, at: t.at.map(round2), box: kept[i], heightPx: kept[i][3] - kept[i][1] - 2 * MARGIN_PX, ...m, shows: m.pixels >= SHOW_PIXELS };
   });
+  failures.push(...lookFailures(c, measured));
   const labels = measured.map((t) => `${LETTER[t.kind]}${t.distanceM === null ? '' : Math.round(t.distanceM)}`);
   const frame = marked(up, kept);
   const pairs = sheet(up, down, kept, labels);
@@ -185,12 +199,13 @@ async function captureAt(page, c, layout) {
 
 // ---- run ---------------------------------------------------------------------------------------
 
-const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1].split(',') : null;
-const chosen = CAPTURES.filter((c) => !only || only.includes(c.name));
-if (chosen.length === 0) {
-  console.error(`--only: none of ${CAPTURES.map((c) => c.name).join(', ')}`);
+const asked = parseOnly(process.argv.slice(2), CAPTURES.map((c) => c.name));
+if ('error' in asked) {
+  console.error(asked.error);
+  console.error(USAGE);
   process.exit(2);
 }
+const chosen = CAPTURES.filter((c) => !asked.only || asked.only.includes(c.name));
 const failures = [];
 const pageErrors = [];
 mkdirSync(OUT, { recursive: true });

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { decode, encode, type Image } from '../../tools/lib/image.mjs';
 import { project } from '../../tools/lib/camera.mjs';
-import { CAPTURES, countFailures, DELTA, laidOf, marked, noiseFloor, sheet, shows, SHOW_PIXELS, SIZE_M, targetBox, type Target } from '../../tools/lib/range-measures.mjs';
+import { loadTunables } from '../../src/core/tunables';
+import { CAPTURES, countFailures, DELTA, laidOf, LOOK, lookFailures, marked, noiseFloor, parseOnly, sheet, shows, SHOW_PIXELS, sizesOf, targetBox, USAGE, type Target } from '../../tools/lib/range-measures.mjs';
 
 // G2's proof (tools/range-captures.mjs): the range photographed from the firing step, its counts held to
 // what rangeLayout lays, each target's box found by the camera, and what the range changes in it read
@@ -23,6 +24,19 @@ const POSE = { position: [0, 0, 0] as const, yaw: 0, pitch: 0, fov: 90 };
 const RES = [1600, 1000] as const;
 
 describe("G2's proof: what it photographs", () => {
+  it('--only takes a list of captures, as --only a,b or --only=a,b; with no list, or a name that is none of them, the usage', () => {
+    const names = CAPTURES.map((c) => c.name);
+    expect(parseOnly([], names)).toEqual({ only: null });
+    expect(parseOnly(['--only', 'dusk,corridor-night'], names)).toEqual({ only: ['dusk', 'corridor-night'] });
+    expect(parseOnly(['--only=1735,noon'], names)).toEqual({ only: ['1735', 'noon'] });
+    for (const argv of [['--only'], ['--only='], ['--only', '--other'], ['--only', '']]) expect(parseOnly(argv, names), argv.join(' ')).toEqual({ error: '--only: no list of captures' });
+    expect(parseOnly(['--only', 'dusk,dawn,noon'], names)).toEqual({ error: '--only: no capture dawn' });
+    expect(parseOnly(['--only=nite'], names)).toEqual({ error: '--only: no capture nite' });
+    // The usage names every capture.
+    for (const n of names) expect(USAGE).toContain(n);
+    expect(USAGE).toContain('--only');
+  });
+
   it('the Ravine at noon, 17:35, dusk (19:30) and night (22:30), as G1 photographed its tracers, and the Corridor at the same hours', () => {
     expect(CAPTURES.map((c) => [c.name, c.map, c.hours])).toEqual([
       ['noon', 'ravine', 12],
@@ -49,8 +63,14 @@ describe("G2's proof: the range up is what rangeLayout lays", () => {
 
   it('every dummy listed, standing and drawn, and every plate listed with its steel in the world: no failure', () => {
     expect(countFailures(laid, all)).toEqual([]);
-    // More than laid is no failure of the counts (a dummy drawn twice would be the renderer's).
+    // More drawn, standing or with steel than laid is no failure of the counts (a dummy drawn twice
+    // would be the renderer's).
     expect(countFailures(laid, { ...all, drawn: 6 })).toEqual([]);
+  });
+
+  it('more listed than laid fails too: the dummies and plates listed are what was laid, no more (an unsighted raise lays 7 and 5 on the Ravine)', () => {
+    expect(countFailures(laid, { up: true, dummies: 7, standing: 7, drawn: 7, plates: 5, steel: 5 })).toEqual(['7 dummies listed of the 5 laid', '5 plates listed of the 4 laid']);
+    expect(countFailures(laid, { ...all, plates: 5, steel: 5 })).toEqual(['5 plates listed of the 4 laid']);
   });
 
   it('fewer up than laid fails, by what is short: listed, standing, drawn, or a plate without its steel', () => {
@@ -75,24 +95,62 @@ describe("G2's proof: the range up is what rangeLayout lays", () => {
 });
 
 describe("G2's proof: where each target is on the picture", () => {
+  /** The sizes as the page's tunables give them ([range] torso_plate_m and head_plate_m, [stance.standing] height). */
+  const tun = loadTunables();
+  const SIZES = sizesOf({ torsoPlateM: tun.get('range.torso_plate_m') as [number, number], headPlateM: tun.get('range.head_plate_m') as [number, number], standingM: tun.f('stance.standing.height') });
+
+  it("the targets' sizes are the page's: a plate's steel by [range], a dummy as tall as the player stands and as wide as a man", () => {
+    expect(SIZES).toEqual({ dummy: [0.6, 1.8], mover: [0.6, 1.8], torso: [0.45, 0.6], head: [0.25, 0.3] });
+    expect(sizesOf({ torsoPlateM: [0.5, 0.7], headPlateM: [0.2, 0.2], standingM: 1.9 })).toEqual({ dummy: [0.6, 1.9], mover: [0.6, 1.9], torso: [0.5, 0.7], head: [0.2, 0.2] });
+  });
+
   it("a dummy's box runs from its feet to its head, as wide as a man, and a margin round it", () => {
-    // Its feet 1.62 m under the eye, 20 m out: 40 px a metre, so 0.6 m across is 24 px and 1.85 m high 74.
+    // Its feet 1.62 m under the eye, 20 m out: 40 px a metre, so 0.6 m across is 24 px and 1.8 m high 72.
     const t: Target = { kind: 'dummy', at: [0, -1.62, 20] };
     const feet = project(POSE, RES, t.at)!;
-    const head = project(POSE, RES, [0, -1.62 + SIZE_M.dummy[1], 20])!;
+    const head = project(POSE, RES, [0, -1.62 + 1.8, 20])!;
     expect(feet[0]).toBeCloseTo(800, 9);
     expect(feet[1]).toBeCloseTo(500 + 1.62 * 40, 9);
-    expect(targetBox(t, POSE, RES)).toEqual([800 - 12 - 3, Math.floor(head[1]) - 3, 800 + 12 + 3, Math.ceil(feet[1]) + 3]);
+    expect(targetBox(t, POSE, RES, SIZES)).toEqual([800 - 12 - 3, Math.floor(head[1]) - 3, 800 + 12 + 3, Math.ceil(feet[1]) + 3]);
     // A mover is a dummy walking: the same box.
-    expect(targetBox({ ...t, kind: 'mover' }, POSE, RES)).toEqual(targetBox(t, POSE, RES));
+    expect(targetBox({ ...t, kind: 'mover' }, POSE, RES, SIZES)).toEqual(targetBox(t, POSE, RES, SIZES));
+    // Taller, by the sizes it is given: its head 2 m over its feet.
+    const tall = targetBox(t, POSE, RES, { ...SIZES, dummy: [0.6, 2] })!;
+    expect(tall[1]).toBe(Math.floor(project(POSE, RES, [0, -1.62 + 2, 20])![1]) - 3);
+    expect(tall[1]).toBeLessThan(Math.floor(head[1]) - 3);
   });
 
   it("a plate's box is its steel's, about its centre, and a margin round it; behind the camera, none", () => {
     // A torso plate's centre 40 m out at the eye's height: 0.45 × 0.6 m is 9 × 12 px.
-    expect(targetBox({ kind: 'torso', at: [0, 0, 40] }, POSE, RES)).toEqual([800 - 5 - 3, 500 - 6 - 3, 800 + 5 + 3, 500 + 6 + 3]);
+    expect(targetBox({ kind: 'torso', at: [0, 0, 40] }, POSE, RES, SIZES)).toEqual([800 - 5 - 3, 500 - 6 - 3, 800 + 5 + 3, 500 + 6 + 3]);
     // A head plate 0.25 × 0.3 m at 20 m: 10 × 12 px.
-    expect(targetBox({ kind: 'head', at: [2, 0, 20] }, POSE, RES)).toEqual([880 - 5 - 3, 500 - 6 - 3, 880 + 5 + 3, 500 + 6 + 3]);
-    expect(targetBox({ kind: 'torso', at: [0, 0, -40] }, POSE, RES)).toBeNull();
+    expect(targetBox({ kind: 'head', at: [2, 0, 20] }, POSE, RES, SIZES)).toEqual([880 - 5 - 3, 500 - 6 - 3, 880 + 5 + 3, 500 + 6 + 3]);
+    expect(targetBox({ kind: 'torso', at: [0, 0, -40] }, POSE, RES, SIZES)).toBeNull();
+  });
+});
+
+describe("G2's proof: the range shows at 17:35, solo's opening hour, on the Ravine", () => {
+  const at = (name: string) => CAPTURES.find((c) => c.name === name)!;
+  /** A target as measured: its kind, its distance out as laid, whether it shows, and what was read. */
+  const target = (kind: Target['kind'], distanceM: number, shows: boolean) => ({ kind, distanceM, shows, pixels: shows ? 30 : 1, area: 400, peak: shows ? 60 : 20 });
+
+  it('every dummy (a mover too) and torso plate laid within 60 m must show; a head plate, or anything past 60 m, need not', () => {
+    expect(LOOK).toEqual({ capture: '1735', withinM: 60, kinds: ['dummy', 'mover', 'torso'] });
+    const shown = [target('dummy', 25, true), target('dummy', 40, true), target('dummy', 60, true), target('mover', 50, true), target('torso', 30, true), target('torso', 55, true)];
+    expect(lookFailures(at('1735'), shown)).toEqual([]);
+    // Faint past 60 m, or a head plate: no failure.
+    expect(lookFailures(at('1735'), [...shown, target('dummy', 80, false), target('head', 45, false), target('torso', 85, false)])).toEqual([]);
+    // Faint within it: each one named, with what was read.
+    expect(lookFailures(at('1735'), [target('dummy', 40, false), target('mover', 50, false), target('torso', 55, false), target('dummy', 25, true)])).toEqual([
+      "the dummy at 40 m does not show at 17:35: 1 of its 400 px changed by 24 or more (peak 20), not 4",
+      "the mover at 50 m does not show at 17:35: 1 of its 400 px changed by 24 or more (peak 20), not 4",
+      "the torso plate at 55 m does not show at 17:35: 1 of its 400 px changed by 24 or more (peak 20), not 4",
+    ]);
+  });
+
+  it("only the Ravine's 17:35 is held to it: the other hours, and the Corridor's, are for the eye", () => {
+    const faint = [target('dummy', 40, false), target('torso', 30, false)];
+    for (const name of ['noon', 'dusk', 'night', 'corridor-1735', 'corridor-noon']) expect(lookFailures(at(name), faint), name).toEqual([]);
   });
 });
 
