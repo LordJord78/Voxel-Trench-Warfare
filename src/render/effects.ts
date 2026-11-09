@@ -131,17 +131,6 @@ export interface EffectsLook {
   smokeFlashShare: number;
 }
 
-/**
- * A casing as effects.wgsl draws it: `lengthM` long (its billboard's size) along its way, its width
- * casing_width_share of that; where a pixel is `pixelM` metres across (its distance from the eye), its
- * length held to casing_max_px pixels and its width with it, so near the eye it is a small bright
- * sliver and not a soft disc across the view.
- */
-export function casingDrawn(lengthM: number, pixelM: number, look: Pick<EffectsLook, 'casingWidthShare' | 'casingMaxPx'>): { lengthM: number; widthM: number } {
-  const length = Math.min(lengthM, look.casingMaxPx * pixelM);
-  return { lengthM: length, widthM: length * look.casingWidthShare };
-}
-
 export function effectsLook(tun: Tunables): EffectsLook {
   const glowMaxPx = tun.f('effects.tracer_glow_max_px');
   return {

@@ -1,8 +1,12 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, CASING_BILLBOARD, particleSpec, Particles, SMOKE_BILLBOARD, type ParticleSpec } from '../../src/combat/particles';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
-import { casingDrawn, effectsLook } from '../../src/render/effects';
+import { effectsLook } from '../../src/render/effects';
+import { wgslFn } from '../support/wgsl-fn';
+
+const EFFECTS_WGSL = readFileSync('src/render/shaders/effects.wgsl', 'utf8');
 
 // The reference's particle pool (combat/particles.py): struct-of-arrays, per-second drag then
 // gravity then the move, removal in order at the end of life, and billboards whose size and
@@ -228,9 +232,21 @@ describe('particles', () => {
     expect(falling).toBe(true);
   });
 
-  it("a casing is drawn about 1 cm × 3 cm, its length held to casing_max_px pixels near the eye, its width with it (effects.wgsl)", () => {
+  it("a casing is drawn about 1 cm × 3 cm, its length held to casing_max_px pixels near the eye, its width with it (effects.wgsl's own casingDrawn)", () => {
     const look = effectsLook(tun);
     const brass = particleSpec(tun, 'brass');
+    // The shader's own sizing, run here: what the vertex shader draws a casing by, not a copy of it.
+    const shader = wgslFn(EFFECTS_WGSL, 'casingDrawn');
+    const casingDrawn = (lengthM: number, pixelM: number, l: typeof look) => {
+      const [drawn, across] = shader(lengthM, pixelM, l.casingMaxPx, l.casingWidthShare) as number[];
+      return { lengthM: drawn, widthM: across };
+    };
+    // The vertex shader lays a casing out by it, from its billboard (half its length) and a pixel's width
+    // where it is (metres), with the draw's casing_* (effects.ts); and nowhere sizes one by a copy.
+    const vs = EFFECTS_WGSL.slice(EFFECTS_WGSL.indexOf('fn vs(')).replace(/\s+/g, ' ');
+    expect(vs).toContain('let size = casingDrawn(2.0 * abs(b.half), pixelAt(b.centre * toVoxels) * frame.voxel, draw.casingMaxPx, draw.casingWidthShare);');
+    expect(vs).toContain('along * (corner.y * 0.5 * size.x) + across * (corner.x * 0.5 * size.y)');
+    expect(EFFECTS_WGSL.replace(/\/\/[^\n]*/g, '').match(/draw\.casingMaxPx/g)).toHaveLength(1);
     expect(brass.sizeStartM).toBeGreaterThanOrEqual(0.025);
     expect(brass.sizeStartM).toBeLessThanOrEqual(0.035);
     // Far enough off, as it is: about 3 cm along and 1 cm across.

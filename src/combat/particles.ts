@@ -113,7 +113,7 @@ export const BLOOD_BILLBOARD = 5;
 /**
  * A casing's kind of billboard (the brass): lit as a mote is, and drawn as a casing (effects.wgsl): its
  * half size half its length, along its way (the billboard's last three floats), [effects]
- * casing_width_share of it across, its length held to casing_max_px pixels (effects.ts casingDrawn).
+ * casing_width_share of it across, its length held to casing_max_px pixels (effects.wgsl casingDrawn).
  */
 export const CASING_BILLBOARD = 6;
 /**

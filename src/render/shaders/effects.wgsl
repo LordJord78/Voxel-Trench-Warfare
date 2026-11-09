@@ -20,7 +20,7 @@
 // effects-light.wgsl) is a firm disc, its edge only softened over its outer BLOOD_EDGE: a dust mote's
 // fades over its outer half, which at the 2 to 8 pixels blood is at 25 m left half of it unseen. A
 // casing (the brass, its way handed on with it) is laid along its way, draw.casingWidthShare of its
-// length across, its length held to draw.casingMaxPx pixels and its width with it (effects.ts
+// length across, its length held to draw.casingMaxPx pixels and its width with it (its own
 // casingDrawn): a small, firm sliver of brass near the eye, not a soft disc across the view. The
 // muzzle's smoke and a shot's flash's core (handed on soft, their way's w 2 and 3) fade from their
 // middles to nothing at their rims: smoke a broad puff, (1 - r²)², the core a peaked glow, (1 - r²)⁴,
@@ -197,6 +197,15 @@ fn pixelAt(p: vec3f) -> f32 {
   return 2.0 * max(dot(p - frame.cam.origin, frame.cam.forward), NEAR) * frame.cam.tanHalf / f32(frame.res.x);
 }
 
+// A casing as it is drawn (metres): its length, `lengthM` (its billboard's size), held to `maxPx` pixels
+// where a pixel is `pixelM` across, and its width, `widthShare` of the length drawn. Near the eye a
+// small sliver, not a soft disc across the view. It reads only what it is handed: the unit tests run it
+// (tests/combat/particles.test.ts).
+fn casingDrawn(lengthM: f32, pixelM: f32, maxPx: f32, widthShare: f32) -> vec2f {
+  let drawn = min(lengthM, maxPx * pixelM);
+  return vec2f(drawn, drawn * widthShare);
+}
+
 // How much of a tracer from tail to head (voxels) is shown: none seen end on, its ends within
 // END_ON_PX of each other on the screen, all from twice that, and all while an end is within NEAR.
 fn sideOn(tail: vec3f, head: vec3f) -> f32 {
@@ -218,13 +227,11 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
     let b = lit[i];
     if (b.way.w > 0.5 && b.way.w < 1.5) {
       // A casing: along its way (up, still), its length held to casingMaxPx pixels, its width a share of it.
-      let pixel = pixelAt(b.centre * toVoxels) * frame.voxel;
-      let lengthDrawn = min(2.0 * abs(b.half), draw.casingMaxPx * pixel);
-      let widthDrawn = lengthDrawn * draw.casingWidthShare;
+      let size = casingDrawn(2.0 * abs(b.half), pixelAt(b.centre * toVoxels) * frame.voxel, draw.casingMaxPx, draw.casingWidthShare);
       let along = select(frame.cam.up, normalize(b.way.xyz), dot(b.way.xyz, b.way.xyz) > 0.25);
       let side = cross(along, b.centre * toVoxels - frame.cam.origin);
       let across = select(frame.cam.right, normalize(side), dot(side, side) > 1e-12);
-      let p = (b.centre + along * (corner.y * 0.5 * lengthDrawn) + across * (corner.x * 0.5 * widthDrawn)) * toVoxels;
+      let p = (b.centre + along * (corner.y * 0.5 * size.x) + across * (corner.x * 0.5 * size.y)) * toVoxels;
       f.clip = toClip(p);
       f.world = p;
       f.uv = corner;
