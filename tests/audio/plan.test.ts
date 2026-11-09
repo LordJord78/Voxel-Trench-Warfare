@@ -198,7 +198,7 @@ describe('the sound of a frame', () => {
 
   it('a scoop is a scrape where it was dug, at scrape_gain', () => {
     expect(t.scrapeGain).toBe(0.5);
-    const scoop = { tick: 1, voxels: 24, at: [10.6, 1.4, 10.8] as [number, number, number] };
+    const scoop = { tick: 1, voxels: 24, at: [10.6, 1.4, 10.8] as [number, number, number], cells: [] };
     const v = planVoices(t, { ...none(), scoops: [scoop, { ...scoop, voxels: 3 }] }, ear);
     expect(v.map((x) => x.kind)).toEqual(['scrape', 'scrape']);
     expect(v[0].at).toEqual(scoop.at);

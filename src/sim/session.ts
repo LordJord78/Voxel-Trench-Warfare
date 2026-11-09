@@ -14,7 +14,7 @@ import { Artillery, artilleryTunables, planShellSource, type ShellSource } from 
 import { armSpec, attachmentTerms, GUN_DEFS, loadoutArms, type ArmSpec, type Loadout } from '../combat/arsenal';
 import { aimRangeM, ballisticsTunables, projectileSpec, Rounds, type BodyHit, type Impact, type ProjectileSpec } from '../combat/ballistics';
 import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
-import { Entrenching, entrenchingTunables, type Scoop } from '../combat/entrenching';
+import { applyScoop, Entrenching, entrenchingTunables, scoopBox, type Scoop } from '../combat/entrenching';
 import { Front, frontTunables, planSource, type FrontSight, type FrontSource } from '../combat/front';
 import { blastHarm, frontHarm, harmTunables, type HarmTunables } from '../combat/harm';
 import { gunClass, Handling, handlingTunables, ZERO_HANDS, type HandlingCue } from '../combat/handling';
@@ -38,8 +38,9 @@ import type { BrickMap } from '../world/bricks';
 import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, P, paletteData } from '../world/materials';
 import { groundTop, raycast } from '../world/raycast';
+import type { Box } from '../world/region';
 import { spatter, spatterTunables, type SpatterTunables } from '../world/spatter';
-import { BARE, decodeShotMark, encodeShotMark, GUNS, shareStep, SHOT_SHARES, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
+import { BARE, decodeShotMark, encodeShotMark, GUNS, stepShare, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
 import { sent, type Team } from '../net/protocol';
 import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from './destruction';
 
@@ -322,6 +323,12 @@ export class Session {
    */
   room = false;
   /**
+   * In a room, ground a shell heard and not yet landed would take (sim/room-battle.ts reserves, which
+   * its battle sets here): the player's own scoop waits while its box is, as while a crater is
+   * pending there. Nothing solo.
+   */
+  reserved: (box: Box) => boolean = () => false;
+  /**
    * The player's seat in the room's match (Together sets it each frame); −1 solo. With the tick it
    * left on it seeds a shot's pellets (combat/weapon.ts pelletSeed), as every other client seeds them
    * from the shot's owner.
@@ -519,7 +526,8 @@ export class Session {
     const round = !tracer ? TRACER_KIND.none : kind ?? (m ? m.kind : TRACER_KIND.amber);
     const from: [number, number, number] = [muzzle[0], muzzle[1], muzzle[2]];
     const reach = this.aimRange(owner, origin, dir);
-    // Lit in as the draw's own (a hip shot's): a shot mark carries no share aimed.
+    // Lit in as the draw's own (a hip shot's): a shot's word does not say how far its shooter had
+    // aimed, and a pellet gun's share in it is its pattern's, not the sights'.
     const drawn = { from, convergeM: reach };
     if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, drawn) < 0) return;
     for (const d of pelletDirs(dir, gun.pellets - 1, gun.coneDeg * (m ? m.share : 1), pelletSeed(owner - 2, tick))) {
@@ -609,14 +617,14 @@ export class Session {
   /**
    * The cone's half-angle now (degrees), as the next shot would be thrown: the gun's, times the
    * stance's, the sights', the laser's and suppression's share. A pellet gun's is its pattern's, the
-   * share put to the step its shot's word would carry (net/gear.ts SHOT_SHARES), as its pellets fly.
+   * share put to the step its shot's word would carry (net/gear.ts stepShare), as its pellets fly.
    */
   coneDeg(): number {
     const arm = this.arm;
     const stance = this.controller.t.stances[this.player.stance].swayScale;
     const hip = arm.spec.hipSpread * (this.lightOn && arm.spec.fit.side === 'laser' ? arm.spec.laserSpread : 1);
     const share = stance * (hip + (arm.spec.adsSpread - hip) * this.aimed) * this.suppression.swayScale;
-    return (arm.weapon.spec.dispersionMoa / 60) * (arm.weapon.spec.pellets > 1 ? SHOT_SHARES[shareStep(share)] : share);
+    return (arm.weapon.spec.dispersionMoa / 60) * (arm.weapon.spec.pellets > 1 ? stepShare(share) : share);
   }
 
   /** The sight's magnification, `alpha` of the way between the last two ticks: 1 from the hip. */
@@ -705,17 +713,34 @@ export class Session {
   /**
    * Shovel work (the reference's _tick_dig), after the player has moved: F held, on the ground, not
    * lying down and not at the periscope. A scoop waits, banked, while a crater's region it would
-   * touch is out (its bricks would undo it); the ground a scoop settles may slump into the body,
-   * which is lifted out as a crater's slump is.
+   * touch is out (its bricks would undo it); in a room, while one is pending at all, or a shell heard
+   * would take its ground (`reserved`), so it goes in after every crater there on every client (the
+   * shared-battle spec's note 9). The ground a scoop settles may slump into the body, which is lifted
+   * out as a crater's slump is.
    */
   private dig(dt: number): void {
     const p = this.player;
     this.digging = this.acting.dig && p.onGround && p.climbTo === null && p.stance !== Stance.PRONE && p.stance !== Stance.PERISCOPE;
     if (!this.digging) return;
-    const scoop = this.entrenching.work(p.position.toArray(), p.yaw, dt, (box) => !this.destruction.overlapsOut(box));
+    const free = this.room ? (box: Box) => !this.destruction.overlapsPending(box) && !this.reserved(box) : (box: Box) => !this.destruction.overlapsOut(box);
+    const scoop = this.entrenching.work(p.position.toArray(), p.yaw, dt, free);
     if (!scoop) return;
     this.events.scoops.push({ ...scoop, tick: this.ticks });
     this.liftOut();
+  }
+
+  /**
+   * Another's scoop of `cells` (combat/entrenching.ts packCell), dug in this world as its digger dug
+   * it: held (false) while a crater's region pending overlaps its box, which would undo it or be cut
+   * from the ground before it; else dug (applyScoop) and the body lifted out of anything it slumped
+   * into. It is no event: `events.scoops` stays the player's own, which the page sends every one of
+   * (as fireRemote's shots are remoteShots, never shots), and another's scoop makes no scrape here.
+   */
+  applyDig(cells: readonly number[]): boolean {
+    if (this.destruction.overlapsPending(scoopBox(this.map.dims, cells))) return false;
+    applyScoop(this.map, cells, this.entrenching.waterTable);
+    this.liftOut();
+    return true;
   }
 
   /**
@@ -888,7 +913,7 @@ export class Session {
       const cone = sway * this.suppression.swayScale;
       // A bullet is drawn within its cone. A pellet gun's pattern is about the aim: its first pellet
       // leaves along it (the stream still draws, as for any shot), and its word carries the cone's
-      // share, put to its step (net/gear.ts SHOT_SHARES), by which the others spread.
+      // share, put to its step (net/gear.ts stepShare), by which the others spread.
       const pellets = w.spec.pellets > 1;
       const aimed = w.aim(aim[0], aim[1], pellets ? 0 : cone, this.dispersion);
       const projectile = w.spec.projectile;
@@ -913,9 +938,9 @@ export class Session {
       // which pull it was, however long it flies (the range counts a kill's shots by them).
       if (this.rounds.fire(origin, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, drawn, this.ticks) >= 0) {
         // A shotgun's other pellets, about the first by the gun's cone times the share its word says
-        // (the step, not the share itself), from the shot's seed, its seat and tick: the pellets every
-        // other client draws for it (combat/weapon.ts pelletDirs).
-        for (const d of pelletDirs(dir, w.spec.pellets - 1, (w.spec.dispersionMoa / 60) * decodeShotMark(mark).share, pelletSeed(this.seat, this.ticks))) {
+        // (the step, stepShare, not the share itself), from the shot's seed, its seat and tick: the
+        // pellets every other client draws for it (combat/weapon.ts pelletDirs).
+        for (const d of pelletDirs(dir, w.spec.pellets - 1, (w.spec.dispersionMoa / 60) * stepShare(cone), pelletSeed(this.seat, this.ticks))) {
           this.rounds.fire(origin, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, drawn, this.ticks);
         }
         w.shot();

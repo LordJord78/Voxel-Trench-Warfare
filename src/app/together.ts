@@ -3,9 +3,9 @@
  * joining a room, the lobby, the way into a match; this player's state and shots sent twenty times
  * a second; the others posed, drawn and given to the session for rounds to strike, their shots
  * fired; this player's hits claimed (they decide what their rounds struck, as they saw it); the
- * room's shells landed on its clock (sim/room-battle.ts), and the battle's harm to this player told
- * the room; and the match over the view: health, deaths and the way back in, the feed, the board,
- * who won.
+ * room's shells landed on its clock and the others' scoops dug in order with them
+ * (sim/room-battle.ts), and the battle's harm to this player and their own scoops told the room; and
+ * the match over the view: health, deaths and the way back in, the feed, the board, who won.
  *
  * It is made with the page but does nothing until the player hosts or follows a link: solo play
  * never opens a socket or asks the relay anything.
@@ -14,7 +14,7 @@
 import { holdOf, muzzleOf } from '../combat/arsenal';
 import { hitParts, pose, toWorld, type Flinch } from '../combat/soldier-rig';
 import { decodeGear, encodeGear, teamTracer } from '../net/gear';
-import { encodeShot, MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type MatchInfo, type PlayerState, type RoomConfig, type Team, type Zone } from '../net/protocol';
+import { encodeShot, MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type Dig, type MatchInfo, type PlayerState, type RoomConfig, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
 import type { RoomBattle } from '../sim/room-battle';
@@ -198,6 +198,12 @@ export class Together {
   private session: Session | null = null;
   /** The match's shells on this page: made with its first frame, dropped as it starts and once it is over. */
   battle: RoomBattle | null = null;
+  /**
+   * The others' scoops the last match's battle still held when it ended (RoomBattle.finish), behind
+   * craters not yet in: the next match's battle is given them before its first tick. The world, and
+   * so they, are the page's until it is reloaded for another map or left.
+   */
+  private carried: Dig[] = [];
 
   /**
    * `hits`, the hit feedback (hit-feedback.ts): the others' flinches and falls come from it, and a
@@ -329,7 +335,7 @@ export class Together {
     session.seat = this.inMatch ? this.net!.you : -1;
     session.bodies = draws.filter((_, i) => figures[i].deadFor === null).map((d) => ({ id: d.seat, frames: d.frames, feet: d.feet }));
     if (this.net && this.inMatch) {
-      const battle = (this.battle ??= this.hooks.battle());
+      const battle = this.matchBattle();
       if (this.net.clock.synced) {
         const nowMs = this.net.serverNow();
         this.feed(battle, nowMs);
@@ -348,7 +354,8 @@ export class Together {
 
   /**
    * After the frame's ticks: this player's shots kept to send, their hits claimed (the hit feedback
-   * marks them), the battle's harm to them told the room while they are in and alive, and the match shown.
+   * marks them), the battle's harm to them and their scoops told the room while they are in and
+   * alive, and the match shown.
    */
   after(session: Session, events: CombatEvents, draws: readonly SoldierDraw[], now: number): void {
     const net = this.net;
@@ -360,7 +367,10 @@ export class Together {
       this.claimed++;
     }
     if (this.battle) {
-      for (const m of this.battle.outgoing(events, this.inPlay && this.begun && !this.fallen && session.alive)) if (m.t === 'hurt') net.hurt(m.a, m.c);
+      for (const m of this.battle.outgoing(events, this.inPlay && this.begun && !this.fallen && session.alive)) {
+        if (m.t === 'hurt') net.hurt(m.a, m.c);
+        else if (m.t === 'dig') net.dig(m.c);
+      }
     }
     const p = session.player;
     this.self = { position: p.position.toArray(), yaw: p.yaw };
@@ -530,12 +540,13 @@ export class Together {
 
   private ended(): void {
     // Every shell told, heard or still queued, lands now, quietly: the world is the same on every page
-    // for the next match. The match's shells told just before the end are still in the queue; heard
-    // as the match is over, they whistle for no time left.
+    // for the next match. The match's shells and scoops told just before the end are still in the
+    // queue; given as the match is over, the shells whistle for no time left, and those a scoop's
+    // stamp lands are overdue, so quiet. The scoops still held wait for the next match's battle.
     if (this.net) {
-      const battle = (this.battle ??= this.hooks.battle());
+      const battle = this.matchBattle();
       this.feed(battle, Number.POSITIVE_INFINITY);
-      battle.finish();
+      this.carried = battle.finish();
     }
     this.battle = null;
     this.inPlay = false;
@@ -549,9 +560,21 @@ export class Together {
     this.show();
   }
 
+  /** The match's battle; made if there is none, and given the scoops the last one held before anything else. */
+  private matchBattle(): RoomBattle {
+    if (this.battle) return this.battle;
+    const battle = (this.battle = this.hooks.battle());
+    const nowMs = this.net!.serverNow();
+    for (const d of this.carried.splice(0)) battle.dug(d, nowMs);
+    return battle;
+  }
+
   /** The room's edits heard since the last frame, to `battle` in the order they came, at `nowMs` on the room's clock (after every time: the match over). */
   private feed(battle: RoomBattle, nowMs: number): void {
-    for (const e of this.net!.takeEdits()) if (e.t === 'shell') battle.hear(e.shell, nowMs);
+    for (const e of this.net!.takeEdits()) {
+      if (e.t === 'shell') battle.hear(e.shell, nowMs);
+      else battle.dug(e.dig, nowMs);
+    }
   }
 
   private lost(why: string): void {

@@ -85,7 +85,7 @@ export const STATE = { ON_GROUND: 1, FIRING: 2, RELOADING: 4, DIGGING: 8, CLIMBI
 
 export type WireState = number[];
 
-/** A shot as others need it: the sender's tick, where it left (the eye) and which way, whether it is a tracer, and its word (net/gear.ts ShotMark: the gun, the tracer's colour, a suppressor). */
+/** A shot as others need it: the sender's tick, where it left (the eye) and which way, whether it is a tracer, and its word (net/gear.ts ShotMark: the gun, the tracer's colour, a suppressor, and a pellet gun's pattern's share). */
 export interface ShotState {
   tick: number;
   origin: [number, number, number];

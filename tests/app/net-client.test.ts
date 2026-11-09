@@ -107,6 +107,35 @@ describe("a player's line to the room", () => {
     expect(client.takeEdits()).toEqual([]);
   });
 
+  it("puts the room's digs in the edits queue with its shells, and sends its own", () => {
+    const client = joined();
+    page = 1040;
+    StubSocket.last!.say(welcome(5_000_000, { startAt: 4_990_000, seed: 3, config: defaultConfig() }));
+    StubSocket.last!.say({ t: 'shell', s: [7, 5_001_500, 12_800, 15_000, 3_000, 42] });
+    StubSocket.last!.say({ t: 'dig', d: [1, 5_000_100, 412_345, 412_346, 425_145] });
+    // Malformed: no cells, a seat past the eighth, a cell that is no integer.
+    StubSocket.last!.say({ t: 'dig', d: [1, 5_000_100] });
+    StubSocket.last!.say({ t: 'dig', d: [9, 5_000_100, 12] });
+    StubSocket.last!.say({ t: 'dig', d: [1, 5_000_100, 1.5] });
+    StubSocket.last!.say({ t: 'shell', s: [8, 5_004_000, -1_250, 20_000, 2_200, 43] });
+    StubSocket.last!.say({ t: 'dig', d: [2, 5_000_300, 99] });
+    expect(client.takeEdits()).toEqual([
+      { t: 'shell', shell: { id: 7, landAt: 5_001_500, at: [12.8, 15], radius: 3, seed: 42 } },
+      { t: 'dig', dig: { seat: 1, at: 5_000_100, cells: [412_345, 412_346, 425_145] } },
+      { t: 'shell', shell: { id: 8, landAt: 5_004_000, at: [-1.25, 20], radius: 2.2, seed: 43 } },
+      { t: 'dig', dig: { seat: 2, at: 5_000_300, cells: [99] } },
+    ]);
+    expect(client.takeEdits()).toEqual([]);
+    expect(client.digsHeard).toBe(2);
+    // Its own: each scoop's cells, as given.
+    expect(client.digsSent).toBe(0);
+    client.dig([412_345, 412_346]);
+    client.dig([7]);
+    expect(StubSocket.last!.sent.slice(-2)).toEqual([{ t: 'dig', c: [412_345, 412_346] }, { t: 'dig', c: [7] }]);
+    expect(client.digsSent).toBe(2);
+    expect(client.digsHeard).toBe(2);
+  });
+
   it('sends its shots as their words, as given', () => {
     const client = joined();
     page = 1040;

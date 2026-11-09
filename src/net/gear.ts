@@ -95,10 +95,14 @@ export function decodeGear(n: number): Gear {
  */
 export const SHOT_SHARES: readonly number[] = [1, 0.25, 0.35, 0.5, 0.7, 1.4, 2.0, 2.8];
 
-/** The step (an index into SHOT_SHARES) nearest `share` in proportion; past either end, that end. */
+/** The narrowest and widest steps' shares. */
+const SHARE_LEAST = Math.min(...SHOT_SHARES);
+const SHARE_MOST = Math.max(...SHOT_SHARES);
+
+/** The step (an index into SHOT_SHARES) nearest `share` in proportion; past either end (infinite too), that end; NaN, the hip's. */
 export function shareStep(share: number): number {
   if (Number.isNaN(share)) return 0;
-  const x = Math.max(share, 1e-9);
+  const x = Math.min(SHARE_MOST, Math.max(SHARE_LEAST, share));
   let best = 0;
   let bestRatio = Infinity;
   for (let k = 0; k < SHOT_SHARES.length; k++) {
@@ -110,6 +114,11 @@ export function shareStep(share: number): number {
     }
   }
   return best;
+}
+
+/** The share a pellet gun's pattern is thrown at: its step's (shareStep), the one value its shot's word carries. */
+export function stepShare(share: number): number {
+  return SHOT_SHARES[shareStep(share)];
 }
 
 /**

@@ -8,13 +8,13 @@ import { idleIntent, Session, SHOVEL_HELD } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
 import { runDetonation, type DetonationResult } from '../../src/world/detonation';
 import { isLoose, P } from '../../src/world/materials';
-import { sameWorld, trenchArena } from '../support/worlds';
+import { roomClient, sameWorld, trenchArena } from '../support/worlds';
 
 // Digging in the session (the spec's §5, "Digging"; the reference's session._tick_dig and exposure):
 // F held clears loose ground in front of the feet, a scoop at a time; never lying down, through the
 // periscope or off the ground; while digging the aim sways 1.6 times as much and the exposure shown
-// is 1.25 times; and a dig inside a crater's region that is out waits for it. The reference's
-// test_entrenching's session tests, ported.
+// is 1.25 times; and a dig inside a crater's region that is out waits for it (in a room, from when
+// the shell is heard until its crater is in). The reference's test_entrenching's session tests, ported.
 const tun = loadTunables();
 const t = entrenchingTunables(tun);
 const DIG: MoveIntent = { ...idleIntent(), dig: true };
@@ -226,6 +226,37 @@ describe('digging in the session', () => {
     const replay = new Entrenching(crater.map, t, 0.1, 42);
     while (replay.cleared < s.entrenching.cleared) replay.work(feet, 0, 1 / 60);
     expect(sameWorld(s.map, crater.map)).toBe(true);
+  });
+
+  it("in a room a scoop waits while a heard shell's ground would take it, and goes once its crater is in", () => {
+    // Review Focus: a dig and a crater. Digging at the heap, a shell heard landing 2 m ahead in 1.5 s:
+    // no scoop from then until its crater has settled, though the heap is in reach and the work
+    // banked (solo, where only a region out holds a scoop, they would go on until it landed).
+    const c = roomClient(yard(), [6.4, 0.4, 2.0]);
+    c.step(1_000);
+    c.session.intent = DIG;
+    let before = 0;
+    c.step(2_000, (e) => (before += e.scoops.length));
+    expect(before).toBeGreaterThanOrEqual(2);
+    c.battle.hear({ id: 1, landAt: 3_500, at: [6.4, 4.0], radius: 1.2, seed: 77 }, 2_000);
+    const order: string[] = [];
+    let frames = 0;
+    c.step(6_000, (e) => {
+      frames++;
+      if (e.blasts.length) order.push('blast');
+      if (e.craters.length) order.push('crater');
+      if (e.scoops.length) order.push('scoop');
+      // Held, not idle: a scoop's worth banked (within a scoop's time of the shell heard) and the heap in reach.
+      if (order.length === 0 && frames > 20) {
+        expect(c.session.entrenching.inReach).toBe(true);
+        expect(c.session.entrenching.fraction).toBe(1);
+      }
+    });
+    expect(order[0]).toBe('blast');
+    expect(order[1]).toBe('crater');
+    expect(order.slice(2).length).toBeGreaterThanOrEqual(5);
+    expect(new Set(order.slice(2))).toEqual(new Set(['scoop']));
+    expect(c.session.destruction.pending).toBe(0);
   });
 
   it('a scoop is an event, where it was dug', () => {

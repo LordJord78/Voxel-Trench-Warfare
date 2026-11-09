@@ -11,7 +11,7 @@
  */
 
 import type { Tunables } from '../core/tunables';
-import { BARE, GUNS, MUZZLES, OPTICS, shareStep, SHOT_SHARES, SIDES, UNDERS, type Fit, type Gear, type GunKey, type Muzzle, type Optic, type Side, type Under } from '../net/gear';
+import { BARE, GUNS, MUZZLES, OPTICS, SIDES, stepShare, UNDERS, type Fit, type Gear, type GunKey, type Muzzle, type Optic, type Side, type Under } from '../net/gear';
 import { recoilProfile, type RecoilProfile } from './recoil';
 import type { Hold } from './soldier-rig';
 import { viewKickProfile, type ViewKickProfile } from './viewkick';
@@ -331,11 +331,11 @@ export interface GunStats {
 /**
  * A gun's cone standing and aimed (minutes of arc): a bullet's, its cone times its share aimed; a
  * pellet gun's, the pattern its pellets fly about the aim, the share put to the step its shot's word
- * carries (net/gear.ts SHOT_SHARES), as the session throws it.
+ * carries (net/gear.ts stepShare), as the session throws it.
  */
 export function aimedMoa(a: ArmSpec): number {
   const w = a.weapon;
-  return w.dispersionMoa * (w.pellets > 1 ? SHOT_SHARES[shareStep(a.adsSpread)] : a.adsSpread);
+  return w.dispersionMoa * (w.pellets > 1 ? stepShare(a.adsSpread) : a.adsSpread);
 }
 
 export function gunStats(tun: Tunables, a: ArmSpec, damageScale: number): GunStats {

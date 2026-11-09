@@ -83,6 +83,7 @@ export function lateRunner(ticks: number): DetonationRunner {
 /** A client of the room: its session (set to a room), its battle, and how far its clock is off the room's (ms). */
 export interface RoomClient {
   session: Session;
+  /** The battle its frames tick: a test may put the next match's in its place. */
   battle: RoomBattle;
   offsetMs: number;
   /**
@@ -102,22 +103,22 @@ export function roomClient(map: BrickMap, spawn: [number, number, number], offse
   const session = Session.create({ map, plan: null, spawn: { position: spawn }, ...(runner ? { runner } : {}) }, tun, 7, 0);
   session.intent = idleIntent();
   session.room = true;
-  const battle = new RoomBattle(session, fireTunables(tun));
   let frames = 0;
-  return {
+  const client: RoomClient = {
     session,
-    battle,
+    battle: new RoomBattle(session, fireTunables(tun)),
     offsetMs,
     step(roomMs, each) {
       while ((frames + 1) * frameS * 1000 <= roomMs) {
         frames++;
-        battle.tick(frames * frameS * 1000 + offsetMs);
+        client.battle.tick(frames * frameS * 1000 + offsetMs);
         session.advance(frameS);
         const events = session.drainEvents();
         each?.(events);
       }
     },
   };
+  return client;
 }
 
 /**

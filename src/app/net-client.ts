@@ -1,14 +1,14 @@
 /**
  * One player's line to their room: the WebSocket, the room's clock (pings twice a second, five
  * quick ones on joining and on coming back to the tab), what the room last said of its seats,
- * settings and match, the other players' states, and the room's edits to the world (its shells)
- * in the order they came.
+ * settings and match, the other players' states, and the room's edits to the world (its shells,
+ * and the others' scoops) in the order they came.
  *
  * Only made for a game with friends: solo play never loads this, and makes no request at all.
  */
 
 import { matchSeconds, ServerClock } from '../net/clock';
-import { decodeShell, decodeShot, defaultConfig, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type Dig, type MatchInfo, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type RoomShell, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
+import { decodeDig, decodeShell, decodeShot, defaultConfig, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type Dig, type MatchInfo, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type RoomShell, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
 import { RemotePlayers } from './net-players';
 
 export interface NetEvents {
@@ -71,6 +71,9 @@ export class NetClient {
   /** The match's score, and each player's kills and deaths, as the room last told them. */
   score = { red: 0, blue: 0 };
   tallies = new Map<number, { kills: number; deaths: number }>();
+  /** Scoops this player sent (`dig` calls), and the others' the room relayed to it, this visit (for the tests). */
+  digsSent = 0;
+  digsHeard = 0;
   /** Others' shots heard since the game last took them. */
   private shots: RemoteShot[] = [];
   /** The room's edits heard since the game last took them, in the order they came. */
@@ -168,6 +171,12 @@ export class NetClient {
   /** The battle hurt this player by `amount`. */
   hurt(amount: number, cause: Cause): void {
     this.send({ t: 'hurt', a: amount, c: cause });
+  }
+
+  /** A scoop this player dug: the cells it cleared (combat/entrenching.ts packCell), for the room to stamp and relay. */
+  dig(cells: readonly number[]): void {
+    this.digsSent++;
+    this.send({ t: 'dig', c: [...cells] });
   }
 
   /** Others' shots heard since the last call. */
@@ -274,6 +283,13 @@ export class NetClient {
       case 'shell': {
         const shell = decodeShell(m.s);
         if (shell) this.edits.push({ t: 'shell', shell });
+        return;
+      }
+      case 'dig': {
+        const dig = decodeDig(m.d);
+        if (!dig) return;
+        this.digsHeard++;
+        this.edits.push({ t: 'dig', dig });
         return;
       }
       case 'hurt':

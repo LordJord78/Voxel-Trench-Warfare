@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeGear, decodeShotMark, encodeGear, encodeShotMark, GUNS, gunDamage, MUZZLES, OPTICS, SHOT_SHARES, shareStep, SIDES, TRACER_KIND, teamTracer, UNDERS, type Gear } from '../../src/net/gear';
+import { decodeGear, decodeShotMark, encodeGear, encodeShotMark, GUNS, gunDamage, MUZZLES, OPTICS, SHOT_SHARES, shareStep, SIDES, stepShare, TRACER_KIND, teamTracer, UNDERS, type Gear } from '../../src/net/gear';
 import { decodeShot, decodeState, encodeShot, encodeState, parseClient } from '../../src/net/protocol';
 
 // What a player carries, as the others and the room know it (net/gear.ts): packed above the
@@ -83,6 +83,10 @@ describe('gear on the wire', () => {
     const put = (share: number) => SHOT_SHARES[shareStep(share)];
     expect([0.8, 0.72, 0.576, 0.38, 0.304, 0.2736, 1, 1.18, 1.426, 2.0016, 4.2].map(put)).toEqual([0.7, 0.7, 0.5, 0.35, 0.35, 0.25, 1, 1, 1.4, 2.0, 2.8]);
     expect([0.01, 100].map(put)).toEqual([0.25, 2.8]);
+    // Not finite: past either end, that end (no number at all, the hip's).
+    expect([1 / 0, Infinity, -Infinity, -1, 0, NaN].map(put)).toEqual([2.8, 2.8, 0.25, 0.25, 0.25, 1]);
+    // The value a share is thrown at, defined once: its step's.
+    for (const share of [0, 0.2736, 0.38, 0.8, 1, 1.18, 2.0016, 4.2, Infinity, NaN]) expect(stepShare(share)).toBe(put(share));
     expect(decodeShotMark(encodeShotMark({ tracer: false, kind: 0, suppressed: false, gun: 'm870', share: 0.8 })).share).toBe(0.7);
   });
 
