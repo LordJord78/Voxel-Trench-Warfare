@@ -56,6 +56,8 @@ export interface Figure {
   flags?: number;
   /** Their tape's palette id, whatever their team's (the range's dummies wear TAPE_RANGE); none, their team's. */
   tape?: number;
+  /** A vest's palette id, over their tunic's chest (the range's dummies wear one of their hunter-orange tape); none, the uniform's khaki. */
+  vest?: number;
   /** The round that last struck them, which leans them (soldier-rig.ts); none, unflinching. */
   flinch?: Flinch;
   /** Killed: the bearing they fall toward (degrees, world), and in how long (s); none, back from their feet in [hits] fall_s. */
@@ -101,6 +103,7 @@ export class Gaits {
         feet: f.position,
         gear: f.gear ?? 0,
         ...(f.tape === undefined ? {} : { tape: f.tape }),
+        ...(f.vest === undefined ? {} : { vest: f.vest }),
       };
     });
     for (const seat of [...this.phase.keys()]) if (!seen.has(seat)) this.phase.delete(seat);

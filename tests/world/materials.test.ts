@@ -46,10 +46,12 @@ describe('materials', () => {
   it('the range adds three palette entries after the guns', () => {
     expect([m.P.TARGET_STEEL, m.P.TARGET_STEEL_HIT, m.P.TAPE_RANGE]).toEqual([80, 81, 82]);
     // The plates' steel, painted and splashed, is hull, so a round sparks off it; the dummies' tape
-    // is cloth, lit a little as the teams' tapes are so it reads at night.
+    // (and the vest they wear of it) is cloth, lit half again as much as the teams' tapes, as blaze
+    // orange glows in low light, so it reads at 17:35 against the low sun's haze and at night.
     expect([m.P.TARGET_STEEL, m.P.TARGET_STEEL_HIT].map((p) => m.kindOf(p))).toEqual([m.K.HULL, m.K.HULL]);
     expect(m.kindOf(m.P.TAPE_RANGE)).toBe(m.K.CLOTH);
-    expect(m.PALETTE[m.P.TAPE_RANGE].emission).toBe(m.PALETTE[m.P.TAPE_RED].emission);
+    expect(m.PALETTE[m.P.TAPE_RED].emission).toBe(0.6);
+    expect(m.PALETTE[m.P.TAPE_RANGE].emission).toBeCloseTo(1.5 * m.PALETTE[m.P.TAPE_RED].emission, 9);
   });
   it("blood adds eight shades after the range's, each of the kind it marks; sod and mud take BLOOD_SOIL, clay, subsoil and spoil their own", () => {
     const blood = [

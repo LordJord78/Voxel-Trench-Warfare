@@ -3,7 +3,8 @@
  * posed by the rig (combat/soldier-rig.ts), traced and lit after shade and before the rifle
  * (soldiers.wgsl), seen through the haze, their depth then merged into the G-buffer's so the rifle,
  * the effects and TAA take them as the world. Their tape is their team's colour, unless they are
- * given one of their own (the range's dummies' hunter orange).
+ * given one of their own (the range's dummies' hunter orange); given a vest, their tunic's chest is
+ * drawn in it (the range's dummies wear one of their tape, so they read against the low sun's haze).
  *
  * Each frame the app hands over the soldiers to draw: their parts' frames now and (for the motion)
  * as last drawn, their team and seat. Each one's box on screen comes from its parts' boxes' corners;
@@ -41,7 +42,7 @@ const POSE: StructDef = {
   name: 'SoldierPose',
   fields: [['x', 'vec3f'], ['y', 'vec3f'], ['z', 'vec3f'], ['t', 'vec3f'], ['px', 'vec3f'], ['py', 'vec3f'], ['pz', 'vec3f'], ['pt', 'vec3f']],
 };
-const INFO: StructDef = { name: 'SoldierInfo', fields: [['feet', 'vec3f'], ['tape', 'u32'], ['slot', 'u32'], ['weapon', 'u32']] };
+const INFO: StructDef = { name: 'SoldierInfo', fields: [['feet', 'vec3f'], ['tape', 'u32'], ['slot', 'u32'], ['weapon', 'u32'], ['vest', 'u32']] };
 const SOLDIERS: StructDef = {
   name: 'Soldiers',
   fields: [
@@ -66,6 +67,8 @@ export interface SoldierDraw {
   gear?: number;
   /** Their tape's palette id, whatever their team's (the range's dummies wear TAPE_RANGE); none, their team's. */
   tape?: number;
+  /** A vest's palette id: the khaki of their torso drawn in it (the range's dummies wear TAPE_RANGE); none, the uniform's. */
+  vest?: number;
 }
 
 export interface SoldierPipelines {
@@ -82,7 +85,13 @@ type Writes = (name: 'soldiers') => GPUComputePassTimestampWrites | undefined;
 
 function header(): string {
   // The Soldiers struct brings its parts', poses' and infos' declarations with it.
-  return [structWgsl(SOLDIERS), structWgsl(DRAW), `const SOLDIER_PARTS: u32 = ${PART_COUNT}u;`].join('\n\n');
+  return [
+    structWgsl(SOLDIERS),
+    structWgsl(DRAW),
+    `const SOLDIER_PARTS: u32 = ${PART_COUNT}u;`,
+    // A vest is drawn over the torso part's khaki (combat/soldier-model.ts): its webbing and its skin stay.
+    `const SOLDIER_TORSO: u32 = ${PARTS.indexOf('torso')}u;\nconst SOLDIER_KHAKI: u32 = ${P.SOLDIER_KHAKI}u;\nconst SOLDIER_KHAKI_DARK: u32 = ${P.SOLDIER_KHAKI_DARK}u;`,
+  ].join('\n\n');
 }
 
 export class Soldiers {
@@ -324,6 +333,7 @@ export class Soldiers {
     order.forEach(({ s, box }, i) => {
       w.set(`info.${i}.feet`, s.feet);
       w.set(`info.${i}.tape`, s.tape ?? TAPE[s.team]);
+      w.set(`info.${i}.vest`, s.vest ?? 0);
       w.set(`info.${i}.slot`, s.seat % MAX_SOLDIERS);
       w.set(`info.${i}.weapon`, this.slotFor(s.gear ?? 0, taken));
       const was = this.before.get(s.seat) ?? s.frames;

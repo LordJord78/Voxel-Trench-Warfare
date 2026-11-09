@@ -132,9 +132,11 @@ const DEFS: readonly Def[] = [
   ['SHOVEL_EDGE', K.PICKET, 132, 128, 118, 0.35],
   // The range's (the shots spec's §5): its plates' white-painted steel and the lead-grey splash a
   // round leaves on it, hull so a round sparks off them, and left as they are (spoilOf); and the
-  // dummies' hunter-orange tape, never placed in the world, lifted as the teams' tapes are.
+  // dummies' hunter-orange tape and vest, never placed in the world, lifted half again as much as
+  // the teams' tapes, as blaze orange glows in low light: it reads at 17:35, the low sun's haze
+  // over a vest in shadow, and at night (G2's 17:35 look).
   ['TARGET_STEEL', K.HULL, 226, 222, 210, 0.45], ['TARGET_STEEL_HIT', K.HULL, 104, 104, 108, 0.6],
-  ['TAPE_RANGE', K.CLOTH, 255, 110, 20, 0.75, 0.6],
+  ['TAPE_RANGE', K.CLOTH, 255, 110, 20, 0.75, 0.9],
   // Blood (the shots spec's §4): what a critical hit leaves on what is behind the body and on the
   // ground behind it (world/spatter.ts), darker red-brown, each of the kind it marks so only its
   // colour changes, as a char's does. Sod and mud take BLOOD_SOIL, which is mud's, since their rules

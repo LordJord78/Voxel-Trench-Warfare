@@ -13,7 +13,7 @@
  * - **Down** (lower): every voxel the plates wrote put back as it was, whatever has struck them since.
  *   What the world did round them, blood on the ground or a crater, is the world's, and stays.
  * - **Each frame, before its ticks** (frame): the dummies posed as soldiers by the range's own gaits,
- *   in Blue's uniform with hunter-orange tape and the bare AK at rest, flinching and falling as the
+ *   in Blue's uniform with hunter-orange tape and a vest of it, and the bare AK at rest, flinching and falling as the
  *   hit feedback says, for the app to draw after any others in the renderer's eight slots. Their
  *   strides go on by the range's own time, the session's since the last frame, so a range whose
  *   session does not tick (paused, or flying) stands still.
@@ -132,9 +132,10 @@ export class RangeView {
     }
     this.now = Math.max(this.now, session.ticks * session.clock.dt);
     const range = new Range(spots, this.t, spawn.bay);
-    // Blue's, in hunter-orange tape, the bare AK at rest, as tall as the player stands.
+    // Blue's, in hunter-orange tape and a vest of it (so they read at 17:35, against the low sun's
+    // haze), the bare AK at rest, as tall as the player stands.
     const height = session.controller.t.stances[Stance.STANDING].height;
-    const figures = range.figures(this.now).map((f): Figure => ({ seat: f.id, team: 'blue', position: f.position, velocity: f.velocity, yaw: f.yaw, pitch: 0, height, deadFor: f.deadFor, gear: 0, tape: P.TAPE_RANGE }));
+    const figures = range.figures(this.now).map((f): Figure => ({ seat: f.id, team: 'blue', position: f.position, velocity: f.velocity, yaw: f.yaw, pitch: 0, height, deadFor: f.deadFor, gear: 0, tape: P.TAPE_RANGE, vest: P.TAPE_RANGE }));
     this.on = { map, range, plates, steel, written, figures, bodies: [], targets: [], posedAt: null };
     session.artillery.setExclusion(spots.map((s) => ({ x: s.at[0], z: s.at[2], r: this.shellClearM + (s.kind === 'mover' ? this.t.moverSpanM / 2 : 0) })));
   }
@@ -292,9 +293,6 @@ interface Fold {
   damage: Record<Zone, number>;
 }
 
-/** The zones, in the order a tie of damage goes: the torso before a limb (the head never ties: any pellet there is the pull's zone). */
-const ZONES: readonly Zone[] = ['head', 'torso', 'limb'];
-
 /**
  * A pull's event `was` (`f` its pull and its zones' damage) with another of its pellets, `e`, folded
  * in: the damage summed; the zone HEAD if any pellet struck the head, else the zone that took the
@@ -305,8 +303,7 @@ function fold(was: RangeEvent, f: Fold, e: Extract<RangeEvent, { kind: 'hit' | '
   // Only a hit takes more: a dummy killed is down, and Range.hit gives nothing more of its pull.
   if (was.kind !== 'hit') return was;
   f.damage[e.zone] += e.damage;
-  let zone: Zone = 'head';
-  if (f.damage.head === 0) for (const z of ZONES) if (f.damage[z] > f.damage[zone]) zone = z;
+  const zone: Zone = f.damage.head > 0 ? 'head' : f.damage.limb > f.damage.torso ? 'limb' : 'torso';
   const folded = { id: was.id, zone, damage: was.damage + e.damage, distanceM: e.distanceM };
   return e.kind === 'kill' ? { kind: 'kill', ...folded, shots: e.shots } : { kind: 'hit', ...folded };
 }

@@ -222,7 +222,11 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let p = eye + rd * best.t;
   let pv = p / frame.voxel;
   let n = pose.x * best.normal.x + pose.y * best.normal.y + pose.z * best.normal.z;
-  let palette = select(best.palette, info.tape, best.palette == TAPE_VOXEL);
+  var palette = select(best.palette, info.tape, best.palette == TAPE_VOXEL);
+  // A vest (the range's dummies' hunter orange): the torso's tunic drawn in it, its webbing as it is.
+  if (info.vest != 0u && bestPart == SOLDIER_TORSO && (palette == SOLDIER_KHAKI || palette == SOLDIER_KHAKI_DARK)) {
+    palette = info.vest;
+  }
 
   // The sky's openness at this height up the body, between the probe's points.
   let base = info.slot * PROBE_FLOATS;

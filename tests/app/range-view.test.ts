@@ -233,12 +233,13 @@ describe('the range in the app', () => {
     const view = new RangeView(tun);
     view.raise(s, SPAWN, EYE);
     const draws = view.frame(s, now(s));
-    // Six standing and two walking, as Blue's soldiers in TAPE_RANGE with the bare AK at rest.
+    // Six standing and two walking, as Blue's soldiers in TAPE_RANGE with the bare AK at rest, and
+    // a vest of it over the tunic, so they read at 17:35 against the low sun's haze.
     const ids = Array.from({ length: 8 }, (_, i) => FIRST_DUMMY + i);
     expect(draws.map((d) => d.seat)).toEqual(ids);
-    for (const d of draws) expect([d.team, d.tape, d.gear]).toEqual(['blue', P.TAPE_RANGE, 0]);
+    for (const d of draws) expect([d.team, d.tape, d.vest, d.gear]).toEqual(['blue', P.TAPE_RANGE, P.TAPE_RANGE, 0]);
     expect(s.targets.map((b) => b.id)).toEqual(ids);
-    expect(view.figures(now(s)).every((f) => f.team === 'blue' && f.tape === P.TAPE_RANGE && f.gear === 0 && f.height === 1.8)).toBe(true);
+    expect(view.figures(now(s)).every((f) => f.team === 'blue' && f.tape === P.TAPE_RANGE && f.vest === P.TAPE_RANGE && f.gear === 0 && f.height === 1.8)).toBe(true);
 
     // The 25 m dummy, standing first: an SVD round at its head (its feet + 1.62 m) kills it.
     const dummy = view.state().dummies[0];

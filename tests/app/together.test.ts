@@ -34,15 +34,17 @@ describe('which map a room is played on', () => {
 });
 
 describe('figures posed as soldiers', () => {
-  it("a figure's own tape goes to its soldier; without one, the soldier wears its team's", () => {
-    const figure = (seat: number, tape?: number): Figure => ({
+  it("a figure's own tape and vest go to its soldier; without them, the soldier wears its team's tape and the uniform's khaki", () => {
+    const figure = (seat: number, tape?: number, vest?: number): Figure => ({
       seat, team: 'blue', position: [12.8, 0.4, 30], velocity: [0, 0, 0], yaw: 180, pitch: 0, height: 1.8, deadFor: null,
       ...(tape === undefined ? {} : { tape }),
+      ...(vest === undefined ? {} : { vest }),
     });
-    const [dummy, soldier] = new Gaits().pose([figure(200, P.TAPE_RANGE), figure(3)], 1 / 60);
-    expect(dummy.tape).toBe(P.TAPE_RANGE);
+    const [dummy, soldier] = new Gaits().pose([figure(200, P.TAPE_RANGE, P.TAPE_RANGE), figure(3)], 1 / 60);
+    expect([dummy.tape, dummy.vest]).toEqual([P.TAPE_RANGE, P.TAPE_RANGE]);
     expect(dummy.team).toBe('blue');
     expect(soldier).not.toHaveProperty('tape');
+    expect(soldier).not.toHaveProperty('vest');
   });
 
   it("a figure's flinch and fall go into its pose, which is drawn and struck; the caller sets them each frame", () => {
