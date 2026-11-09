@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { noBattleEvents } from '../../src/battle/director';
-import { audioTunables, planVoices } from '../../src/audio/plan';
+import { audioTunables, planFeedback, planVoices } from '../../src/audio/plan';
 import type { Impact } from '../../src/combat/ballistics';
 import { loadTunables } from '../../src/core/tunables';
 import type { CombatEvents, ShotEvent } from '../../src/sim/session';
@@ -215,5 +215,28 @@ describe('the sound of a frame', () => {
     expect(v[1].lowpassHz).toBeLessThan(v[0].lowpassHz);
     expect(200).toBeGreaterThan(t.impactWithinM);
     expect(v[0].lengthS).toBe(t.blastRumbleS);
+  });
+
+  it("a round of the player's into a body is the hit feedback's to sound (app/hit-feedback.ts): planVoices knocks no more", () => {
+    const hit = { tick: 1, owner: 0, body: 3, zone: 'torso' as const, position: [12, 2, 20] as [number, number, number], dir: [0, 0, 1] as const, distance: 10 };
+    expect(planVoices(t, { ...none(), hits: [hit, { ...hit, body: 200, zone: 'head' }] }, ear)).toEqual([]);
+  });
+
+  it('planFeedback puts ear voices at the listener with no delay, and a ding 85 m off 0.25 s late and quieter', () => {
+    const plate: [number, number, number] = [ear[0], ear[1], ear[2] + 85];
+    const plans = planFeedback(t, [{ kind: 'hit', at: null, gain: 0.75 }, { kind: 'gush', at: null, gain: 0.8 }, { kind: 'ding', at: plate, gain: 1.5 }], ear);
+    expect(plans.map((v) => v.kind)).toEqual(['hit', 'gush', 'ding']);
+    const [hit, gush, ding] = plans;
+    // At the ear: where the listener is, at once, whole, undulled.
+    expect(hit).toEqual({ kind: 'hit', at: ear, delayS: 0, gain: 0.75, lowpassHz: t.openLowpassHz });
+    expect(gush).toEqual({ kind: 'gush', at: ear, delayS: 0, gain: 0.8, lowpassHz: t.openLowpassHz });
+    expect(hit.at).not.toBe(ear);
+    // At the plate: late by its distance at 343 m/s, quieter and duller with it, as any voice afar is.
+    expect(ding.at).toEqual(plate);
+    expect(ding.delayS).toBeCloseTo(0.25, 2);
+    expect(ding.delayS).toBeCloseTo(85 / 343, 9);
+    expect(ding.gain).toBeCloseTo(1.5 * Math.pow(t.referenceM / 85, t.rolloff), 9);
+    expect(ding.lowpassHz).toBeLessThan(t.openLowpassHz);
+    expect(planFeedback(t, [], ear)).toEqual([]);
   });
 });

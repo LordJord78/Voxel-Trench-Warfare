@@ -19,6 +19,7 @@ import type { CombatEvents, Session } from '../sim/session';
 import { Lobby } from '../ui/lobby';
 import { MatchHud, type BoardRow } from '../ui/match-hud';
 import { MAP_NAMES, isMapId, type MapId } from '../world/generation/params';
+import type { FigureOverlay, HitFeedback } from './hit-feedback';
 import { makeRoom, NetClient } from './net-client';
 import type { RemotePlayer } from './net-players';
 
@@ -188,13 +189,20 @@ export class Together {
   private made = false;
   /** Leaving for the room's map. */
   private leaving = false;
+  /** The session the frames run, as the last frame gave it: a death between frames bleeds in it. */
+  private session: Session | null = null;
 
+  /**
+   * `hits`, the hit feedback (hit-feedback.ts): the others' flinches and falls come from it, and a
+   * death in the room goes to it.
+   */
   constructor(
     private readonly doc: Document,
     readonly relay: string | null,
     private readonly build: string,
     private readonly storage: Storage | null,
     private readonly hooks: TogetherHooks,
+    private readonly hits: HitFeedback | null = null,
   ) {
     this.lobby = new Lobby(doc, {
       name: (name) => {
@@ -295,13 +303,16 @@ export class Together {
   }
 
   /**
-   * Before the frame's ticks: the others (and any `extra` a test stands in the world) posed; the
-   * living among them given to the session for rounds to strike; their shots fired, each from its
-   * shooter's eye, its tracer and flash at their soldier's muzzle, the tracer in their seat's team's
-   * colour (shotTracer). What to draw.
+   * Before the frame's ticks, at `now` (ms, the hit feedback's clock): the others (and any `extra` a
+   * test stands in the world) posed, each flinching and falling as its hits say; the living among
+   * them given to the session for rounds to strike; their shots fired, each from its shooter's eye,
+   * its tracer and flash at their soldier's muzzle, the tracer in their seat's team's colour
+   * (shotTracer). What to draw.
    */
-  prepare(session: Session, dt: number, extra: readonly Figure[] = []): SoldierDraw[] {
-    const figures = [...this.figures(), ...extra];
+  prepare(session: Session, dt: number, extra: readonly Figure[] = [], now = performance.now()): SoldierDraw[] {
+    this.session = session;
+    const hits = this.hits;
+    const figures = [...this.figures(), ...extra].map((f) => (hits ? overlaid(f, hits.figureOverlay(f.seat, now)) : f));
     const draws = this.gaits.pose(figures, dt);
     session.together = this.inMatch || extra.length > 0;
     session.bodies = draws.filter((_, i) => figures[i].deadFor === null).map((d) => ({ id: d.seat, frames: d.frames, feet: d.feet }));
@@ -317,7 +328,7 @@ export class Together {
     return draws;
   }
 
-  /** After the frame's ticks: this player's shots kept to send, their hits claimed, and the match shown. */
+  /** After the frame's ticks: this player's shots kept to send, their hits claimed (the hit feedback marks them), and the match shown. */
   after(session: Session, events: CombatEvents, draws: readonly SoldierDraw[], now: number): void {
     const net = this.net;
     if (!net || !this.inMatch) return;
@@ -326,7 +337,6 @@ export class Together {
       if (h.owner !== 0 || h.body < 0 || h.body >= MAX_PLAYERS) continue;
       net.hit(h.body, h.zone, h.gun);
       this.claimed++;
-      this.hud.marker('hit', now);
     }
     const p = session.player;
     this.self = { position: p.position.toArray(), yaw: p.yaw };
@@ -412,8 +422,11 @@ export class Together {
       this.hooks.killed();
     } else {
       this.deaths.set(victim, now);
+      // Another's death (hit-feedback.ts): this player's kill marked, popped and heard; the body's fall
+      // and, a round's, its critical burst where it was last struck. Not this player's own, whose view
+      // is in the head: its blood would be thrown into the eye.
+      if (this.session) this.hits?.kill(victim, killer === net.you, v, now, this.session, cause === 'round' ? zone : null);
     }
-    if (killer === net.you && victim !== net.you) this.hud.marker('kill', now);
   }
 
   private respawned(id: number, spawn: number): void {
@@ -486,6 +499,7 @@ export class Together {
     this.hurtAt = Number.NEGATIVE_INFINITY;
     this.shotsOut = [];
     this.hud.clear();
+    this.hits?.clear();
     this.hooks.deploy(team, Math.max(0, index), match);
   }
 
@@ -495,6 +509,7 @@ export class Together {
     this.fallen = null;
     this.winner = null;
     this.hud.clear();
+    this.hits?.clear();
     this.lobby.gather();
     this.hooks.ended();
     this.show();
@@ -549,6 +564,12 @@ export class Together {
       // Not kept: asked again next time.
     }
   }
+}
+
+/** `f` as its hits leave it (hit-feedback.ts's figureOverlay): its flinch and fall set, or none; `f` itself when it has neither, to set or to clear. */
+function overlaid(f: Figure, o: FigureOverlay): Figure {
+  if (o.flinch === undefined && o.fallYaw === undefined && o.fallS === undefined && f.flinch === undefined && f.fallYaw === undefined && f.fallS === undefined) return f;
+  return { ...f, flinch: o.flinch, fallYaw: o.fallYaw, fallS: o.fallS };
 }
 
 /** The player's body as the others need it. */

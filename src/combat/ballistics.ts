@@ -30,6 +30,8 @@ import type { Zone } from './soldier-rig';
 
 /** A round's ignite distance not given (TracerDraw.igniteM): the draw lights it in as its own. */
 const UNSET = -1;
+/** A round fired with no pull of the trigger said (Rounds.fire's `shot`): its hits carry none. */
+const NO_SHOT = -1;
 
 /** What flies, as opposed to what fired it. */
 export interface ProjectileSpec {
@@ -133,6 +135,12 @@ export interface BodyHit {
   distance: number;
   /** The gun it left (its spec's), if it says. */
   gun?: number;
+  /**
+   * The pull of the trigger it left on (Rounds.fire's `shot`; the player's: the tick it was fired
+   * on), if its shooter said: a shotgun's pellets share one, and a round still in the air as the
+   * next pull leaves keeps its own.
+   */
+  shot?: number;
   /** A tracer round's draw (StrikeDraw); none for a round that burns no tracer. */
   draw?: StrikeDraw;
 }
@@ -198,6 +206,8 @@ export class Rounds {
   private readonly converge: Float64Array;
   /** Over how far its tracer is lit in (m; 0 from the muzzle; −1 unset: the draw's own, [effects] tracer_ignite_hip_m): the shooter's, by how aimed the shot was. */
   private readonly ignite: Float64Array;
+  /** The pull of the trigger each left on, as its shooter numbers them (−1: not said), for its hits to carry. */
+  private readonly shot: Float64Array;
   /** Each round's nearest miss of the listener so far (m) and where, and whether its pass has been heard. */
   private readonly nearMiss: Float64Array;
   private readonly nearAt: Float64Array;
@@ -222,6 +232,7 @@ export class Rounds {
     this.from = new Float64Array(n * 3);
     this.converge = new Float64Array(n);
     this.ignite = new Float64Array(n);
+    this.shot = new Float64Array(n);
     this.nearMiss = new Float64Array(n);
     this.nearAt = new Float64Array(n * 3);
     this.heard = new Uint8Array(n);
@@ -232,9 +243,11 @@ export class Rounds {
    * A round leaving `origin` (m) at `velocity` (m/s), its tracer drawn as `drawn` says (TracerDraw:
    * from its origin, on its path, lit in as the draw's own, unless given): its slot, or −1 if the pool
    * is full or the velocity is zero. `tracer` is true (the battle's amber), false, or a kind
-   * (net/gear.ts TRACER_KIND: 0 none, 2 red, 3 blue).
+   * (net/gear.ts TRACER_KIND: 0 none, 2 red, 3 blue). `shot` numbers the pull of the trigger it
+   * leaves on (0 or more; a shotgun's pellets share one), for the body it strikes to say
+   * (BodyHit.shot); not given, its hit says none.
    */
-  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean | number, drawn: TracerDraw = {}): number {
+  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean | number, drawn: TracerDraw = {}, shot = NO_SHOT): number {
     if (velocity[0] === 0 && velocity[1] === 0 && velocity[2] === 0) return -1;
     if (this.count >= this.t.capacity) {
       this.dropped++;
@@ -254,6 +267,7 @@ export class Rounds {
     this.from.set(drawn.from ?? origin, i * 3);
     this.converge[i] = drawn.convergeM ?? 0;
     this.ignite[i] = drawn.igniteM ?? UNSET;
+    this.shot[i] = shot;
     this.nearMiss[i] = Infinity;
     this.heard[i] = 0;
     return i;
@@ -395,6 +409,7 @@ export class Rounds {
           dir,
           distance: this.distance[i] + body.t,
           ...(spec.gun === undefined ? {} : { gun: spec.gun }),
+          ...(this.shot[i] === NO_SHOT ? {} : { shot: this.shot[i] }),
           ...(this.tracer[i] ? { draw: this.strikeDraw(i, speed) } : {}),
         });
         this.hearPass(i);
@@ -476,6 +491,7 @@ export class Rounds {
     this.from.copyWithin(i * 3, last * 3, last * 3 + 3);
     this.converge[i] = this.converge[last];
     this.ignite[i] = this.ignite[last];
+    this.shot[i] = this.shot[last];
     this.nearMiss[i] = this.nearMiss[last];
     this.nearAt.copyWithin(i * 3, last * 3, last * 3 + 3);
     this.heard[i] = this.heard[last];

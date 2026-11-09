@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ballisticsTunables, projectileSpec, Rounds, type ProjectileSpec } from '../../src/combat/ballistics';
+import { ballisticsTunables, projectileSpec, Rounds, type BodyHit, type ProjectileSpec } from '../../src/combat/ballistics';
 import { loadTunables } from '../../src/core/tunables';
 import { BrickMap } from '../../src/world/bricks';
 import { P } from '../../src/world/materials';
@@ -237,6 +237,28 @@ describe('rounds in flight', () => {
     r.step(TICK);
     expect(r.count).toBe(1);
     expect(r.position(0)[0]).toBe(9.0);
+  });
+
+  it("a round carries the pull it left on to the body it strikes, through the pool's swaps; one fired with none carries none", () => {
+    const r = new Rounds(T, world(), VOXEL);
+    // A body across the range 20 m out: every round that crosses it stops in it.
+    r.bodies = (_owner, from, dir, length) => {
+      const t = dir[2] > 0 ? (20 - from[2]) / dir[2] : -1;
+      return t >= 0 && t <= length ? { t, body: 7, zone: 'torso' } : null;
+    };
+    // Into the floor at once: retired on the first substep, and the last round takes its slot.
+    r.fire([6.4, 0.6, 1], [0, -880, 0], RIFLE, 0, false, {}, 1);
+    r.fire([6.4, 3, 0.5], [0, 0, 880], RIFLE, 0, false, {}, 2);
+    r.fire([3.2, 3, 0.5], [0, 0, 880], RIFLE, 0, true, {}, 3);
+    r.fire([9.6, 3, 0.5], [0, 0, 880], RIFLE, 0, false);
+    const hits: BodyHit[] = [];
+    for (let k = 0; k < 4; k++) {
+      r.step(TICK);
+      hits.push(...r.bodyHits);
+    }
+    hits.sort((a, b) => a.position[0] - b.position[0]);
+    expect(hits.map((h) => [h.position[0], h.shot])).toEqual([[3.2, 3], [6.4, 2], [9.6, undefined]]);
+    expect(hits[2]).not.toHaveProperty('shot');
   });
 
   it('tracer segments trail behind the head, for tracer rounds only', () => {

@@ -12,6 +12,10 @@
  *   lands; its blast: a sub-bass thump, a rumble, and soil raining down.
  * - A scoop: the blade's scrape, a band of noise, and the shovelful landing.
  * - A flare fired: the pistol's pop, and the flare's hiss rising as it climbs.
+ * - A hit's feedback (the shots spec's §4): a body hit's thwack, a falling sine and a click; a
+ *   headshot's crack of two inharmonic partials, and its wet gush of swept, fluttering noise over a
+ *   low splat; a kill's thud and its low chime; a steel plate's ring of four partials, each dying
+ *   at its own rate; and being hit, a low thump and a high ring in the ears.
  */
 
 import type { VoicePlan } from './plan';
@@ -115,6 +119,44 @@ function tone(ctx: BaseAudioContext, into: AudioNode, when: number, type: Oscill
   osc.stop(when + decay + 0.05);
 }
 
+/** The gush's way in and out (s). */
+const GUSH_IN_S = 0.015;
+const GUSH_OUT_S = 0.5;
+
+/**
+ * A wet gush: noise through a bandpass sweeping 1.8 kHz down to 500 Hz over 0.45 s, its loudness
+ * fluttering at a rate drawn from 8 to 20 Hz, coming in over 15 ms and dying away over 0.5 s; under
+ * it, a splat of noise below 400 Hz for 80 ms.
+ */
+function gush(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, peak: number): void {
+  const length = GUSH_IN_S + GUSH_OUT_S + 0.05;
+  const source = new AudioBufferSourceNode(ctx, { buffer: noise });
+  const band = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: 1800, Q: 1.4 });
+  band.frequency.setValueAtTime(1800, when);
+  band.frequency.exponentialRampToValueAtTime(500, when + 0.45);
+  // The flutter: a gain swung between 0.25 and 1 by a sine at its rate.
+  const flutter = new GainNode(ctx, { gain: 0.625 });
+  const rate = new OscillatorNode(ctx, { type: 'sine', frequency: 8 + Math.random() * 12 });
+  rate.connect(new GainNode(ctx, { gain: 0.375 })).connect(flutter.gain);
+  const shape = new GainNode(ctx, { gain: 0 });
+  shape.gain.setValueAtTime(0, when);
+  shape.gain.linearRampToValueAtTime(peak, when + GUSH_IN_S);
+  shape.gain.exponentialRampToValueAtTime(1e-4, when + GUSH_IN_S + GUSH_OUT_S);
+  source.connect(band).connect(flutter).connect(shape).connect(into);
+  source.start(when, Math.random() * Math.max(0, noise.duration - length), length);
+  rate.start(when);
+  rate.stop(when + length);
+  burst(ctx, noise, into, when, { type: 'lowpass', frequency: 400 }, 0.7 * peak, 0.002, 0.08);
+}
+
+/** A steel plate struck: each partial (Hz), how long it rings (s), and its share of the voice. */
+const DING: readonly (readonly [number, number, number])[] = [
+  [690, 1.2, 0.3],
+  [1640, 0.7, 0.2],
+  [2780, 0.4, 0.12],
+  [4100, 0.25, 0.08],
+];
+
 /** A voice played: cut, it falls silent over 20 ms from `at` (seconds on its context's clock), whether sounding yet or not. */
 export interface VoiceHandle {
   cut(at: number): void;
@@ -150,6 +192,18 @@ export function voiceLength(v: VoicePlan, report: ReportShape): number {
       return 0.05;
     case 'splash':
       return (v.lengthS ?? 0.06) + 0.05;
+    case 'hit':
+      return 0.07;
+    case 'head':
+      return 0.13;
+    case 'gush':
+      return GUSH_IN_S + GUSH_OUT_S + 0.05;
+    case 'kill':
+      return 0.06 + 0.2 + 0.01;
+    case 'ding':
+      return 1.2 + 0.05;
+    case 'hurt':
+      return 0.6 + 0.05;
   }
 }
 
@@ -231,6 +285,35 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       // The blade into the earth, rising for 0.04 s and falling over 0.18 s; then the shovelful thrown, landing low.
       burst(ctx, noise, dull, when, { type: 'bandpass', frequency: 1200, Q: 2 }, 0.7 * g, 0.04, 0.18);
       burst(ctx, noise, dull, when + 0.24, { type: 'lowpass', frequency: 300 }, 0.5 * g, 0.004, 0.08);
+      break;
+    case 'hit':
+      // A thwack: a sine falling 160 to 90 Hz over 60 ms, and a 12 ms click of noise about 2.5 kHz.
+      tone(ctx, dull, when, 'sine', 160, 90, g, 0.06);
+      burst(ctx, noise, dull, when, { type: 'bandpass', frequency: 2500, Q: 1.2 }, 0.6 * g, 0.0005, 0.012);
+      break;
+    case 'head':
+      // A crack: two inharmonic partials, at 2.9 and 4.6 kHz, over 0.12 s.
+      tone(ctx, dull, when, 'sine', 2900, 2860, 0.6 * g, 0.12);
+      tone(ctx, dull, when, 'sine', 4600, 4540, 0.4 * g, 0.12);
+      break;
+    case 'gush':
+      gush(ctx, noise, dull, when, g);
+      break;
+    case 'kill':
+      // A thud, a sine falling 70 to 45 Hz over 0.25 s; and 60 ms on, a low chime of 880 and 1320 Hz over 0.2 s.
+      tone(ctx, dull, when, 'sine', 70, 45, g, 0.25);
+      tone(ctx, dull, when + 0.06, 'sine', 880, 878, 0.35 * g, 0.2);
+      tone(ctx, dull, when + 0.06, 'sine', 1320, 1317, 0.25 * g, 0.2);
+      break;
+    case 'ding':
+      // A steel plate: its partials, each ringing its own while.
+      for (const [hz, ringS, share] of DING) tone(ctx, dull, when, 'sine', hz, hz, share * g, ringS);
+      break;
+    case 'hurt':
+      // Being hit: a low thump, and a quiet 3 kHz ring in the ears fading over 0.6 s.
+      tone(ctx, dull, when, 'sine', 95, 50, g, 0.18);
+      burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 250 }, 0.6 * g, 0.003, 0.1);
+      tone(ctx, dull, when, 'sine', 3000, 2990, 0.12 * g, 0.6);
       break;
   }
   return {

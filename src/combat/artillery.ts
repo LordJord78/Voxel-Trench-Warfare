@@ -12,6 +12,10 @@
  * support line of either side, within `reach_m` along the front of them. On
  * light none lands nearer than the sector's 15 m, whichever it was drawn for;
  * heavy may land anywhere near.
+ *
+ * An exclusion (setExclusion) keeps shells out of circles: the range's spots while it stands. A
+ * shell drawn inside one is drawn again, up to TRIES draws, as a source draws again for a point it
+ * may not send, from the same stream, so the draws stay the seed's; with none, nothing changes.
  */
 
 import { cos, log, sin } from '../core/dmath';
@@ -109,6 +113,13 @@ export function planShellSource(plan: WorldPlan): ShellSource {
   };
 }
 
+/** A circle no shell lands in: its centre (x, z) and radius, in metres. */
+export interface ShellExclusion {
+  x: number;
+  z: number;
+  r: number;
+}
+
 export interface Shell {
   id: number;
   /** Where it lands, metres. */
@@ -127,12 +138,24 @@ export class Artillery {
   private nextId = 1;
   /** Shells announced and not yet down, oldest first, with the time each has left. */
   private readonly flying: { shell: Shell; left: number }[] = [];
+  /** Circles no shell lands in. */
+  private excluded: readonly ShellExclusion[] = [];
 
   constructor(
     readonly t: ArtilleryTunables,
     private readonly source: ShellSource,
     private readonly rng: Rng,
   ) {}
+
+  /** The circles no shell lands in now (none by default). */
+  get exclusion(): readonly ShellExclusion[] {
+    return this.excluded;
+  }
+
+  /** Keep shells out of `circles` from the next one drawn (none: anywhere their source puts them). Shells in the air land where they were drawn. */
+  setExclusion(circles: readonly ShellExclusion[]): void {
+    this.excluded = circles.map((c) => ({ x: c.x, z: c.z, r: c.r }));
+  }
 
   /** One tick: the shells announced now, aimed about `target` (metres), and those that land now. Shells in the air land whatever the intensity becomes. */
   tick(dt: number, target: readonly [number, number, number]): { announced: Shell[]; landed: Shell[] } {
@@ -150,7 +173,7 @@ export class Artillery {
     }
     while (this.wait <= 1e-9) {
       this.wait += this.interval();
-      const at = this.source(target, this.rng, this.intensity, this.t);
+      const at = this.draw(target);
       if (!at) continue;
       const shell: Shell = { id: this.nextId++, x: at[0], z: at[1], radiusM: this.rng.uniform(this.t.radiusM[0], this.t.radiusM[1]), seed: this.rng.nextU32() };
       this.flying.push({ shell, left: this.t.whistleS });
@@ -158,6 +181,19 @@ export class Artillery {
     }
     this.wait -= dt;
     return { announced, landed };
+  }
+
+  /**
+   * Where the next shell lands: its source's point, drawn again while it falls in an excluded
+   * circle, up to TRIES draws; null (none sent) for a source that sends none, or past the tries.
+   * With no exclusion, the source's first draw, as before there was one.
+   */
+  private draw(target: readonly [number, number, number]): [number, number] | null {
+    for (let k = 0; k < TRIES; k++) {
+      const at = this.source(target, this.rng, this.intensity, this.t);
+      if (!at || !this.excluded.some((c) => (at[0] - c.x) * (at[0] - c.x) + (at[1] - c.z) * (at[1] - c.z) < c.r * c.r)) return at;
+    }
+    return null;
   }
 
   /** The time to the next shell: the intensity's gap, and the rest drawn exponential about its mean. */

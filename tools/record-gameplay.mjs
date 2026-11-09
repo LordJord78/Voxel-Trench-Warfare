@@ -122,6 +122,9 @@ try {
   if (error) throw new Error(`the game stopped: ${error}`);
   await page.evaluate(() => {
     const h = window.__trenchline;
+    // No range: the takes are of the battle as they were made (the range goes up at the first play,
+    // as a visitor's does).
+    h.range(false);
     h.play();
     h.setQuality({ preset: 'high', dynres: false });
   });

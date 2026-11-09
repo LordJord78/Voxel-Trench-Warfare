@@ -1,9 +1,10 @@
 /**
  * The match over the view (the multiplayer spec's §4), beside the HUD's own reckoning: the
- * player's health as a tally, the kill feed at the top right, a marker at the crosshair when a
- * round of theirs strikes (red when it kills), an arc toward whoever hurt them, a teammate's name
- * when they are aimed at, "Killed by" and the count back in while dead, the board on Tab, and who
- * won. Plain DOM in the HUD's type, each part shown only when it has something to say.
+ * player's health as a tally, the kill feed at the top right, an arc toward whoever hurt them, a
+ * teammate's name when they are aimed at, "Killed by" and the count back in while dead, the board
+ * on Tab, and who won. Plain DOM in the HUD's type, each part shown only when it has something to
+ * say. The marker at the crosshair when a round of theirs strikes is the hit feedback's
+ * (ui/hit-marker.ts), in a match and out of one.
  */
 
 import type { Team } from '../net/protocol';
@@ -25,21 +26,18 @@ export interface BoardRow {
 
 const FEED_KEEP_MS = 7000;
 const FEED_MAX = 5;
-const MARKER_MS = { hit: 160, kill: 420 } as const;
 const HARM_MS = 900;
 
 export class MatchHud {
   private readonly root: HTMLElement;
   private readonly healthEl: HTMLElement;
   private readonly feedEl: HTMLElement;
-  private readonly markerEl: HTMLElement;
   private readonly harmEl: HTMLElement;
   private readonly aimedEl: HTMLElement;
   private readonly fallenEl: HTMLElement;
   private readonly wonEl: HTMLElement;
   private readonly boardEl: HTMLElement;
   private feedItems: { at: number; entry: FeedEntry }[] = [];
-  private markerUntil = 0;
   private harmUntil = 0;
   private shownHealth = '';
 
@@ -48,7 +46,6 @@ export class MatchHud {
     const part = (selector: string) => this.root.querySelector<HTMLElement>(selector)!;
     this.healthEl = part('.health');
     this.feedEl = part('.feed');
-    this.markerEl = part('.marker');
     this.harmEl = part('.harm');
     this.aimedEl = part('.aimed');
     this.fallenEl = part('.fallen');
@@ -83,13 +80,6 @@ export class MatchHud {
     this.feedItems.unshift({ at: now, entry });
     this.feedItems = this.feedItems.slice(0, FEED_MAX);
     this.drawFeed();
-  }
-
-  /** A round of the player's struck: the marker, red if it killed. */
-  marker(kind: 'hit' | 'kill', now: number): void {
-    this.markerUntil = now + MARKER_MS[kind];
-    this.markerEl.classList.toggle('kill', kind === 'kill');
-    this.markerEl.hidden = false;
   }
 
   /** The player was hurt from `bearing` degrees (clockwise from where they look); null, from no one in particular. */
@@ -155,9 +145,8 @@ export class MatchHud {
     this.boardEl.replaceChildren(title, sides);
   }
 
-  /** Each frame: the marker, the arc and old feed lines go when their time is up. */
+  /** Each frame: the arc and old feed lines go when their time is up. */
   tick(now: number): void {
-    if (!this.markerEl.hidden && now >= this.markerUntil) this.markerEl.hidden = true;
     if (!this.harmEl.hidden && now >= this.harmUntil) this.harmEl.hidden = true;
     const kept = this.feedItems.filter((f) => now - f.at < FEED_KEEP_MS);
     if (kept.length !== this.feedItems.length) {
@@ -175,7 +164,6 @@ export class MatchHud {
     this.fallen(undefined, null);
     this.won(null);
     this.board(false, [], { red: 0, blue: 0 }, 0);
-    this.markerEl.hidden = true;
     this.harmEl.hidden = true;
   }
 

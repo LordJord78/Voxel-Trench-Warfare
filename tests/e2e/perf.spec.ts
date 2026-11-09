@@ -716,3 +716,77 @@ test('seven soldiers stay within the frame budget', async ({ page }) => {
   console.log(`Seven soldiers, GPU ms: ${lines.join('; ')}`);
   expect(errors).toEqual([]);
 });
+
+// G2's range (the shots spec's §5) from the firing step, as a visitor's solo play stands it: its
+// dummies drawn as soldiers (the Ravine's five) and its plates in the world. The step view at its own
+// hour, 360 frames' GPU times with the range up, measured back to back against the same view with it
+// down, up and down twice in turn: what the range costs, read on the same machine at the same time
+// whatever its power state (the A/B, and the soldiers' pass's own time beside it). With the range up,
+// the frame within the budget at the 95th percentile.
+test('the step view holds 14 ms with the range up', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.setQuality({ preset: 'high', dynres: false }));
+  await hooks(page, (h) => {
+    h.range(true);
+    h.play();
+  });
+  const runs: { up: boolean; count: number; frames: number; p95: number; median: number; soldiers: number; drawn: number; dummies: number; plates: number }[] = [];
+  for (const up of [true, false, true, false]) {
+    const r = await hooks(
+      page,
+      async (h, arg) => {
+        const { up, settle, samples, hours } = arg as { up: boolean; settle: number; samples: number; hours: number };
+        const x = h as unknown as { soldiersDrawn(): unknown[]; stats(): { gpuLastMs: number | null; gpuSamples: number; ownLast?: Record<string, number> } };
+        h.range(up);
+        const v = h.views.step;
+        h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: 0 });
+        h.setTimeOfDay(hours);
+        await h.waitFrames(settle);
+        // Each frame's own GPU time, a new measure each (stats' gpuMs is smoothed), and the soldiers' pass's.
+        const gpu: number[] = [];
+        const own: number[] = [];
+        let drawn = 0;
+        let frames = 0;
+        let seen = x.stats().gpuSamples;
+        while (gpu.length < samples && frames < samples * 3) {
+          await h.waitFrames(1);
+          frames++;
+          const s = x.stats();
+          drawn = Math.max(drawn, x.soldiersDrawn().length);
+          if (s.gpuSamples > seen && s.gpuLastMs !== null) {
+            gpu.push(s.gpuLastMs);
+            own.push(s.ownLast?.soldiers ?? 0);
+          }
+          seen = s.gpuSamples;
+        }
+        const state = h.rangeState();
+        const at = (xs: number[], q: number) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(q * xs.length))];
+        return { count: gpu.length, frames, p95: at(gpu, 0.95), median: at(gpu, 0.5), soldiers: at(own, 0.5), drawn, dummies: state.dummies.length, plates: state.plates.length };
+      },
+      { up, settle: SETTLE, samples: 360, hours: TIMES.dusk },
+    );
+    if (r.count === 0) test.skip(true, 'no GPU timestamps');
+    runs.push({ up, ...r });
+  }
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const ups = runs.filter((r) => r.up);
+  const downs = runs.filter((r) => !r.up);
+  const rise = mean(ups.map((r) => r.p95)) - mean(downs.map((r) => r.p95));
+  const soldiersRise = mean(ups.map((r) => r.soldiers)) - mean(downs.map((r) => r.soldiers));
+  const line =
+    `The step view at dusk, GPU over ${runs.map((r) => r.count).join('/')} frames: ` +
+    runs.map((r) => `${r.up ? 'up' : 'down'} p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, the soldiers ${r.soldiers.toFixed(3)} (${r.drawn} drawn)`).join('; ') +
+    `; up less down: p95 ${rise >= 0 ? '+' : ''}${rise.toFixed(2)} ms, the soldiers ${soldiersRise >= 0 ? '+' : ''}${soldiersRise.toFixed(3)} ms`;
+  console.log(line);
+  // Each run a full 360 frames; up, every dummy it lays drawn and its plates up; down, none of either.
+  for (const r of runs) expect(r.count, line).toBe(360);
+  for (const r of ups) {
+    expect(r.dummies, line).toBeGreaterThanOrEqual(5);
+    expect(r.drawn, line).toBe(r.dummies);
+    expect(r.plates, line).toBeGreaterThanOrEqual(4);
+  }
+  for (const r of downs) expect([r.dummies, r.drawn, r.plates], line).toEqual([0, 0, 0]);
+  for (const r of ups) expect(r.p95, line).toBeLessThanOrEqual(BUDGET_MS);
+  expect(errors).toEqual([]);
+});

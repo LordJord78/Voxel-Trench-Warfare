@@ -4,7 +4,8 @@
  * The page asks for WebGPU first and says at once if there is none. The world
  * generates in workers while the loading screen inks a trench trace; it is
  * uploaded, and the player is drawn standing in the front-line bay behind a
- * "click to play" prompt. Playing, every frame turns the mouse, runs the
+ * "click to play" prompt; in solo play, the click raises the range out in front
+ * of the bay (range.ts). Playing, every frame turns the mouse, runs the
  * 60 Hz simulation over the frame's time, places the camera between the last
  * two ticks and draws. Esc (or losing the pointer lock) pauses to a menu with
  * the world still drawn behind it. Alt+Enter, or the menus' Fullscreen, takes
@@ -18,7 +19,7 @@ import { CLOCK_KEYS } from '../core/sky-clock';
 import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import { AudioEngine } from '../audio/engine';
-import { audioTunables, planVoices } from '../audio/plan';
+import { audioTunables, planFeedback, planVoices } from '../audio/plan';
 import { cleanLoadout, type Loadout } from '../combat/arsenal';
 import { gunModel, shovelModel } from '../combat/gun-models';
 import { traceRifle } from '../combat/rifle-model';
@@ -39,11 +40,15 @@ import { idleIntent, Session, SHOVEL_HELD, type CombatEvents } from '../sim/sess
 import { MAP_SEEDS, isMapId, type MapId } from '../world/generation/params';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
 import { relayUrl, Together, type Figure } from './together';
+import { rangeAllowed, RangeView } from './range';
+import { HitFeedback, hitFeedbackTunables } from './hit-feedback';
+import { HitMarker, markerTunables } from '../ui/hit-marker';
 import { Fullscreen, fullscreenButtons } from '../ui/fullscreen';
 import { LoadingScreen } from '../ui/loading';
 import { Overlay, placeName } from '../ui/overlay';
 import { PauseMenu } from '../ui/pause';
 import { Hud, type HudTag, type Reticle } from '../ui/hud';
+import { Readout } from '../ui/readout';
 import { kitSummary, loadLoadout, LoadoutMenu, saveLoadout } from '../ui/loadout';
 import { MapView } from '../ui/map-view';
 import type { SoldierDraw } from '../render/soldiers';
@@ -620,6 +625,11 @@ async function start(): Promise<void> {
     const spawns = pickSpawns(session.map, world.plan, team === 'red' ? 'front' : 'enemy_front', 4);
     return spawns[k % spawns.length];
   };
+  // Hit feedback (hit-feedback.ts): the marker at the crosshair, HEADSHOT and KILL under it, the red
+  // flash of being hit (hit-marker.ts), the voices of a hit, and bodies flinching and falling as they
+  // were shot; on the range and in a room alike.
+  const hitMarker = new HitMarker(document, markerTunables(tun));
+  const hits = new HitFeedback(hitFeedbackTunables(tun), hitMarker);
   // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
   const searchParams = new URLSearchParams(location.search);
   const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
@@ -667,13 +677,37 @@ async function start(): Promise<void> {
       session.respawn(at.position, facingYaw(at.bay));
       renderer.resetHistory();
     },
-  });
+  }, hits);
+
+  // The range (range.ts): solo play's dummies and steel plates in front of the spawn bay, from the
+  // click that starts play. Never in a room or a check run, nor with ?range=0; and a test's world has
+  // one only when it asks (hooks.range, which sets whether it may stand).
+  const range = new RangeView(tun);
+  const readout = new Readout(document.querySelector<HTMLElement>('#hud .readout'), range.t.readoutS);
+  let rangeOn = rangeAllowed({ room: together.net !== null, check: checkRun !== null, param: searchParams.get('range') });
+  /** Whether play has started: the range goes up with the first start. */
+  let played = false;
+  const raiseRange = () => {
+    // Sighted from the step view: the eye of a player standing on the spawn bay's firing step.
+    if (rangeOn && together.net === null) range.raise(session, world.spawn, views.step.position);
+  };
+  /** The soldiers given the renderer each frame: the others, then the range's dummies (one list, kept). */
+  const soldiers: SoldierDraw[] = [];
+  const lowerRange = () => {
+    range.lower(session);
+    readout.clear();
+  };
 
   const play = (lock: boolean) => {
     if (stopped) return;
     loading.hide();
     // From the backdrop to the spawn: a cut, so the image starts afresh.
     if (mode === 'ready') renderer.resetHistory();
+    // The range goes up with the click that starts play: until then the page's still holds.
+    if (!played) {
+      played = true;
+      raiseRange();
+    }
     mode = 'playing';
     // The click that starts play is where the browser lets the sound start.
     audio.start();
@@ -906,8 +940,13 @@ async function start(): Promise<void> {
     matchNow = together.inMatch ? together.net!.matchSeconds() : null;
     if (matchNow !== null) timeOfDay = matchHours(together.config!, matchNow);
     else if (lapse > 0 && mode !== 'loading') timeOfDay = (timeOfDay + (lapse * dt) / 60) % 24;
-    // The others posed, given to the session to strike, and their shots fired, before its ticks run.
-    const draws = together.prepare(session, dt, puppets);
+    // A room joined takes the range down: there is none in a room.
+    if (range.up && together.net !== null) lowerRange();
+    // The others posed, given to the session to strike, and their shots fired, before its ticks run;
+    // the range's dummies posed, the standing ones given to it as targets (the player's rounds alone);
+    // each flinching and falling as its hits say.
+    const draws = together.prepare(session, dt, puppets, now);
+    const dummies = range.frame(session, session.ticks * session.clock.dt, (id) => hits.figureOverlay(id, now));
     let pose: CameraPose;
     if (mode === 'fly') {
       fly.sensitivity = settings.sensitivity;
@@ -972,15 +1011,37 @@ async function start(): Promise<void> {
     }
     // The battle seen (its flares, flashes, smoke, tracers, and fires' flames and plumes) as the lights last showed it; none at rest.
     const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
-    renderer.setSoldiers(draws);
+    // The dummies after any others: the renderer has eight soldiers' slots.
+    if (dummies.length > 0) {
+      soldiers.length = 0;
+      for (const d of draws) soldiers.push(d);
+      for (const d of dummies) soldiers.push(d);
+      renderer.setSoldiers(soldiers);
+    } else renderer.setSoldiers(draws);
     together.after(session, events, draws, performance.now());
+    // What the frame's hits show and sound (hit-feedback.ts), with what a kill or a plate made since
+    // the last frame; the bodies drawn say where each chest is, for a kill.
+    const feedback = hits.frame(session, events, now, dummies.length > 0 ? soldiers : draws);
+    // The player's rounds on the range, read out under the marker; its kills and plates are fed back
+    // at once, their voices with the next frame's.
+    const ranged = range.after(events, session.ticks * session.clock.dt);
+    readout.show(ranged, now / 1000);
+    readout.tick(now / 1000);
+    for (const e of ranged) {
+      if (e.kind === 'kill') hits.kill(e.id, true, null, now, session, e.zone);
+      else if (e.kind === 'plate') {
+        const plate = range.state().plates[e.index];
+        if (plate) hits.plate(e, plate.at, now);
+      }
+    }
+    hitMarker.tick(now);
     // The tracers burn brighter by day, by the sun the frame is lit with, and while it is up their light
     // covers the haze behind them.
     const sun = skyNow().sunElevationDeg;
     const frameEffects = effects.build(session, events, rifle, pose.position, seen, skyNow().flares, draws, daylightAt(sun, effects.t), coverAt(sun, effects.t));
     audio.listen(pose);
-    // The battle's events from the last frame's lights (light() below runs the battle's clock).
-    audio.play(planVoices(hearing, events, pose.position, battleEvents));
+    // The battle's events from the last frame's lights (light() below runs the battle's clock); the hits' feedback.
+    audio.play([...planVoices(hearing, events, pose.position, battleEvents), ...planFeedback(hearing, feedback, pose.position)]);
     renderer.setEffects(frameEffects.frame);
     renderer.setTransientLights(frameEffects.lights);
     renderer.setBlasts(frameEffects.blasts);
@@ -1299,6 +1360,22 @@ async function start(): Promise<void> {
       puppets = list.map((p, i) => ({ seat: 100 + i, velocity: [0, 0, 0], deadFor: null, ...p }));
     },
     soldiersDrawn: () => renderer.soldiersDrawn(),
+    /**
+     * The range (range.ts) allowed or not, for this visit: up or down at once once play has started
+     * (the start screen left), or at the click that starts it; never in a room.
+     */
+    range(on: boolean) {
+      rangeOn = on;
+      if (!on) lowerRange();
+      else if (mode !== 'loading' && mode !== 'ready') raiseRange();
+    },
+    /** The range as it stands: its dummies (body ids 200 on), its plates, and the readout's words (null when none shows). */
+    rangeState: () => ({ ...range.state(), readout: readout.text }),
+    /**
+     * The hit feedback (hit-feedback.ts): the marker showing and the words under it (null, none);
+     * the voices it has made by kind, the red flashes, and the markers it has shown by kind.
+     */
+    hitFeedback: () => ({ ...hitMarker.state(), ...hits.state() }),
     /** The camera held at `pose` while the session runs (null: play again); peak-combat.ts's. */
     spectate(pose: CameraPose | null) {
       peakGame.spectate(pose);
