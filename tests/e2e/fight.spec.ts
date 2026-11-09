@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from '@playwright/test';
+import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
 // The fight (the multiplayer spec's §4), two players in two windows against the local relay: one
 // shoots the other in the open; the room hears the hits, the other dies, the feed and the score
@@ -27,8 +27,18 @@ type H = {
 const h = <T>(page: Page, fn: (h: H, arg: unknown) => T | Promise<T>, arg?: unknown): Promise<T> =>
   page.evaluate(([source, a]) => new Function('h', 'arg', `return (${source})(h, arg)`)((window as unknown as { __trenchline: H }).__trenchline, a), [fn.toString(), arg] as const) as Promise<T>;
 
+/**
+ * Each test's windows, closed as it ends, passed or failed: a game page left open goes on drawing, and
+ * the next spec in the worker waits on a GPU and a CPU it shares with them.
+ */
+const windows: BrowserContext[] = [];
+test.afterEach(async () => {
+  await Promise.all(windows.splice(0).map((c) => c.close()));
+});
+
 async function open(browser: Browser, path: string): Promise<{ page: Page; errors: string[] }> {
   const context = await browser.newContext({ viewport: { width: 800, height: 500 } });
+  windows.push(context);
   const page = await context.newPage();
   const errors: string[] = [];
   page.on('console', (m) => {

@@ -14,6 +14,24 @@ import { playVoice, voiceLength, type ReportShape, type VoiceHandle } from './vo
 
 const NOISE_S = 2;
 
+/**
+ * The mix every voice plays into: `masterGain`, through a compressor that keeps a burst's reports from
+ * clipping, into `out` (the context's output). The sounds' proof (tools/sounds) renders into the same.
+ */
+export function mixInto(ctx: BaseAudioContext, masterGain: number, out: AudioNode = ctx.destination): GainNode {
+  const mix = new GainNode(ctx, { gain: masterGain });
+  mix.connect(new DynamicsCompressorNode(ctx, { threshold: -14, knee: 12, ratio: 6, attack: 0.002, release: 0.15 })).connect(out);
+  return mix;
+}
+
+/** The noise every voice's noise is drawn from: NOISE_S seconds of it, white. */
+export function whiteNoise(ctx: BaseAudioContext): AudioBuffer {
+  const noise = ctx.createBuffer(1, Math.round(ctx.sampleRate * NOISE_S), ctx.sampleRate);
+  const data = noise.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  return noise;
+}
+
 export class AudioEngine {
   /** Voices started, for the tests. */
   voices = 0;
@@ -59,11 +77,8 @@ export class AudioEngine {
       let ctx: AudioContext | null = null;
       try {
         ctx = new AudioContext({ latencyHint: 'interactive' });
-        const mix = new GainNode(ctx, { gain: this.t.masterGain });
-        mix.connect(new DynamicsCompressorNode(ctx, { threshold: -14, knee: 12, ratio: 6, attack: 0.002, release: 0.15 })).connect(ctx.destination);
-        const noise = ctx.createBuffer(1, Math.round(ctx.sampleRate * NOISE_S), ctx.sampleRate);
-        const data = noise.getChannelData(0);
-        for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+        const mix = mixInto(ctx, this.t.masterGain);
+        const noise = whiteNoise(ctx);
         this.mix = mix;
         this.noise = noise;
         this.ctx = ctx;

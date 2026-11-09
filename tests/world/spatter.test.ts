@@ -219,6 +219,59 @@ describe('spatter', () => {
     expect(beyond).toBeGreaterThan(0);
   });
 
+  it("core is what packs the cone: on the same 20 seeds into the wall 1.5 m behind, core 2's median angle off the round is at least 1° under core 1's, and core 1's, its rays spread evenly over the cone's width, is above 11.5°", () => {
+    expect(T.core).toBe(2);
+    const make = () => wall(25, 40, P.MUD);
+    /** The median angle off the round (degrees) of the marks' middles over the seeds, with `core`. */
+    const medianOf = (core: number) => {
+      const angles: number[] = [];
+      for (let seed = 1; seed <= 20; seed++) for (const [x, y, z] of marked(make, seed, { ...CONE, core }).marks) angles.push((offAxis([x, y, z], FROM, DIR).angle * 180) / Math.PI);
+      expect(angles.length).toBeGreaterThan(20 * 8);
+      angles.sort((a, b) => a - b);
+      return angles[Math.floor(angles.length / 2)];
+    };
+    const packed = medianOf(2);
+    const even = medianOf(1);
+    expect(even).toBeGreaterThan(11.5);
+    expect(even - packed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('the falling cone is its own: falling alone, tilted 10° with a 20° cone, every mark is within 20° of the 10° axis, some ray went beyond 15° of it, and the marks centre on it, not on a 20° axis', () => {
+    // Sod 1.5 m under a level round: the falling rays alone, the tilt and the cone set apart.
+    const ground = () => {
+      const map = new BrickMap({ x: N, y: N, z: N });
+      map.fillBox(0, 0, 0, N, 20, N, P.SOD);
+      map.takeDirty();
+      return map;
+    };
+    const from = [32.37, 35, 32.61];
+    const t: SpatterTunables = { ...T, rays: 0, fallTiltDeg: 10, fallConeDeg: 20 };
+    const axis = fallAxis(DIR, 10);
+    const sum = [0, 0, 0];
+    let n = 0;
+    let beyond = 0;
+    for (let seed = 1; seed <= 20; seed++) {
+      for (const [x, y, z, , now] of marked(ground, seed, t, from, DIR).marks) {
+        expect([y, now]).toEqual([19, P.BLOOD_SOIL]);
+        expect(inCone([x, y, z], from, axis, 20)).toBe(true);
+        // Its middle beyond 15° of the axis by more than the half-diagonal it subtends: a ray went that far out.
+        const { angle, r } = offAxis([x, y, z], from, axis);
+        if (angle - Math.asin(Math.min(1, Math.sqrt(3) / 2 / r)) > (15 * Math.PI) / 180) beyond++;
+        const d = [x + 0.5 - from[0], y + 0.5 - from[1], z + 0.5 - from[2]];
+        const l = Math.hypot(d[0], d[1], d[2]);
+        for (let k = 0; k < 3; k++) sum[k] += d[k] / l;
+        n++;
+      }
+    }
+    expect(n).toBeGreaterThan(20 * 5);
+    expect(beyond).toBeGreaterThan(0);
+    // Their mean way is the 10° axis: a cone of 10° about a 20° axis (the two swapped) would also lie
+    // within 20° of the 10° axis, and reach past 15° of it, but centre 10° off it.
+    const mean = sum.map((c) => c / Math.hypot(sum[0], sum[1], sum[2]));
+    const off = (Math.acos(Math.min(1, mean[0] * axis[0] + mean[1] * axis[1] + mean[2] * axis[2])) * 180) / Math.PI;
+    expect(off).toBeLessThan(4);
+  });
+
   it("the falling rays never change the cone's marks: the same seed with fallRays 0 marks a subset of what it marks with 10", () => {
     // A wall of mud 1.4 m behind a head 1.65 m above sod: the cone marks the wall, the falling rays the ground.
     const make = () => open(25);

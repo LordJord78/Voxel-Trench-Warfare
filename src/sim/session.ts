@@ -187,6 +187,20 @@ function noEvents(): CombatEvents {
   return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [], harms: [] };
 }
 
+/**
+ * A tick's count of what each body has taken, letting `cap` a body through at most: whether `body`
+ * may take one more (and counted if so). The bleed's and the spatter's per-body caps.
+ */
+function capPerBody(cap: number): (body: number) => boolean {
+  const taken = new Map<number, number>();
+  return (body) => {
+    const n = taken.get(body) ?? 0;
+    if (n >= cap) return false;
+    taken.set(body, n + 1);
+    return true;
+  };
+}
+
 export interface SessionWorld {
   map: BrickMap;
   /** The trench network and landmarks; absent in small test worlds. */
@@ -1106,13 +1120,10 @@ export class Session {
    */
   private bleedHits(hits: readonly BodyHit[]): void {
     if (hits.length === 0) return;
-    const bled = new Map<number, number>();
+    const bleeds = capPerBody(this.bleeding.burstsPerTick);
     for (const head of [true, false]) {
       for (const hit of hits) {
-        if (hit.body === LOCAL_BODY || (hit.zone === 'head') !== head) continue;
-        const n = bled.get(hit.body) ?? 0;
-        if (n >= this.bleeding.burstsPerTick) continue;
-        bled.set(hit.body, n + 1);
+        if (hit.body === LOCAL_BODY || (hit.zone === 'head') !== head || !bleeds(hit.body)) continue;
         this.bleed(hit.position, hit.dir, head, head);
       }
     }
@@ -1140,12 +1151,9 @@ export class Session {
    */
   private spatterHits(hits: readonly BodyHit[]): void {
     if (hits.length === 0) return;
-    const spattered = new Map<number, number>();
+    const spatters = capPerBody(this.bleeding.burstsPerTick);
     for (const hit of hits) {
-      if (hit.body === LOCAL_BODY || hit.zone !== 'head') continue;
-      const n = spattered.get(hit.body) ?? 0;
-      if (n >= this.bleeding.burstsPerTick) continue;
-      spattered.set(hit.body, n + 1);
+      if (hit.body === LOCAL_BODY || hit.zone !== 'head' || !spatters(hit.body)) continue;
       const [x, y, z] = hit.position;
       this.spatterAt(hit.position, hit.dir, hash32(this.ticks, Math.round(x * 1e4), Math.round(y * 1e4), Math.round(z * 1e4)));
     }

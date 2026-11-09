@@ -16,7 +16,9 @@
     "video": "node tools/record-video.mjs",
     "gameplay": "node tools/record-gameplay.mjs",
     "tracers": "node tools/tracer-captures.mjs",
-    "range-captures": "node tools/range-captures.mjs"
+    "range-captures": "node tools/range-captures.mjs",
+    "hit-captures": "node tools/hit-captures.mjs",
+    "sounds": "node tools/render-sounds.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
