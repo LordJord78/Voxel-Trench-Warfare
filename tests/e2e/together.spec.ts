@@ -71,6 +71,10 @@ test('one hosts, a friend follows the link: one lobby, two teams, a match, and e
   await expect(friend.page.locator('#start')).toBeHidden();
   await expect(host.page.locator('#start')).toBeVisible();
 
+  // The room's front quiet (M6: in a room's match the front fires on its players, at the room's
+  // intensity), so the only rounds in the air are the players' own: its amber is no team's colour.
+  await host.page.locator('#match-settings select[name="intensity"]').selectOption('off');
+  await expect(friend.page.locator('#match-settings select[name="intensity"]')).toHaveValue('off');
   await friend.page.locator('#ready').click();
   await expect(host.page.locator('#blue-list')).toContainText('ready');
   await host.page.locator('#start').click();
