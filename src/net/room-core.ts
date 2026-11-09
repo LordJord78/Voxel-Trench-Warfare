@@ -33,7 +33,8 @@
  * ended reaches the room after it, and its digger has dug it: dropped, it would be in their world
  * alone, there for the rematch. Between matches each seat's are taken up to LOBBY_DIGS_MAX: every
  * page holds the lobby's scoops until the next match and digs them all in its first frames, so a
- * client gone wrong could otherwise stall them all.
+ * client gone wrong could otherwise stall them all. In every phase a seat's scoops are taken no faster
+ * than DIG_RATE a second (DIG_BURST at once), a little over twice the shovel's fastest.
  */
 
 import { MatchRules, type MatchEvent } from './match-rules';
@@ -64,11 +65,20 @@ export const MAP_SEEDS: Record<string, number> = { ravine: 7, corridor: 11 };
 export const LOG_CHARS_MAX = 900_000;
 /**
  * The most scoops the room takes from a seat between matches, the rest dropped (neither relayed nor
- * logged). An honest page sends only those it dug before the end reached it, a few; this is a
- * minute of the shovel's fastest work ([entrenching] scoop_voxels: a scoop each 0.26 s, 231), as if
- * its player dug all through a minute's lobby.
+ * logged): only scoops in flight when the end reached their digger arrive between matches; a few
+ * round trips of the fastest shovel ([entrenching] scoop_voxels: a scoop each 0.26 s). Counted by
+ * seat until the next match starts or the room empties, so a client that reconnects (to its own
+ * seat, the lowest free) does not start afresh.
  */
-export const LOBBY_DIGS_MAX = 240;
+export const LOBBY_DIGS_MAX = 16;
+/**
+ * The scoops a second a seat may send, in any phase, and how many at once: the shovel's fastest is
+ * about 3.9 a second. Past it a scoop is dropped (neither relayed nor logged) and the socket kept, so
+ * one seat cannot push every honest scoop out of the log (LOG_CHARS_MAX) or make every page dig sixty
+ * a second.
+ */
+export const DIG_RATE = 8;
+export const DIG_BURST = 16;
 
 /** The room's log of its world: the shells told and the scoops relayed, their characters, the next shell's id, and whether a match has begun on it (from then its scoops are taken). */
 interface RoomLog extends MatchLog {
@@ -93,6 +103,9 @@ interface Member {
   shots: number[][];
   tokens: number;
   tokensAt: number;
+  /** Its scoops' own bucket (DIG_RATE, DIG_BURST). */
+  digTokens: number;
+  digTokensAt: number;
 }
 
 export class RoomCore {
@@ -134,8 +147,13 @@ export class RoomCore {
     return this.members.size === 0;
   }
 
+  /** The scoops seat `seat` has had taken since the last match ended (LOBBY_DIGS_MAX; for the tests). */
+  lobbyDigsTaken(seat: number): number {
+    return this.lobbyDigs.get(seat) ?? 0;
+  }
+
   open(conn: Conn, now: number): void {
-    this.members.set(conn, { conn, seat: null, openedAt: now, joinedAt: now, heardAt: now, saysAway: false, state: null, shots: [], tokens: BURST, tokensAt: now });
+    this.members.set(conn, { conn, seat: null, openedAt: now, joinedAt: now, heardAt: now, saysAway: false, state: null, shots: [], tokens: BURST, tokensAt: now, digTokens: DIG_BURST, digTokensAt: now });
   }
 
   close(conn: Conn): void {
@@ -279,6 +297,11 @@ export class RoomCore {
         if (this.rules && this.match && now >= this.match.startAt) this.apply(this.rules.hurt(seat.id, msg.a, msg.c, now));
         return;
       case 'dig':
+        // No faster than a shovel, in any phase: past the seat's bucket, dropped.
+        m.digTokens = Math.min(DIG_BURST, m.digTokens + ((now - m.digTokensAt) / 1000) * DIG_RATE);
+        m.digTokensAt = now;
+        if (m.digTokens < 1) return;
+        m.digTokens -= 1;
         // In any phase once a match has begun on this world (a scoop sent before the end comes after
         // it); never one of a world the room has left (the map changed since, and no match yet).
         // Between matches, no more than LOBBY_DIGS_MAX a seat.

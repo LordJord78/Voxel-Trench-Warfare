@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { entrenchingTunables } from '../../src/combat/entrenching';
+import { loadTunables } from '../../src/core/tunables';
 import { DIG_CELLS_MAX, encodeShell, encodeShot, encodeState, parseRoom, PROTOCOL, WORLD_DIMS, type RoomMsg, type WireShell } from '../../src/net/protocol';
 import { PROTECT_MS } from '../../src/net/match-rules';
-import { AWAY_MS, COUNTDOWN_MS, LOBBY_DIGS_MAX, LOG_CHARS_MAX, OVER_MS, RoomCore, type Conn } from '../../src/net/room-core';
+import { AWAY_MS, COUNTDOWN_MS, DIG_BURST, DIG_RATE, LOBBY_DIGS_MAX, LOG_CHARS_MAX, OVER_MS, RoomCore, type Conn } from '../../src/net/room-core';
 import { SHELL_FIELDS } from '../../src/net/shell-fields';
 import { Shelling, shellingSeed } from '../../src/net/shelling';
 
@@ -49,6 +51,14 @@ const expected = (map: string, seed: number, startAt: number, throughS: number, 
   new Shelling(SHELL_FIELDS[map], shellingSeed(startAt, seed), intensity, firstId).between(0, throughS).map((s) => encodeShell(s, startAt));
 
 const state = { tick: 1, position: [1, 2, 3] as [number, number, number], velocity: [0, 0, 0] as [number, number, number], yaw: 90, pitch: 0, stance: 0, height: 1.8, flags: 1 };
+
+/** The shovel's fastest pace, seconds a scoop: [entrenching] scoop_voxels of [world] voxel_size, at m3_per_s. */
+const SCOOP_S = (() => {
+  const tun = loadTunables();
+  const t = entrenchingTunables(tun);
+  const v = tun.f('world.voxel_size');
+  return (t.scoopVoxels * v * v * v) / t.m3PerS;
+})();
 
 describe('a room', () => {
   it('seats players on alternating teams, the first as owner, and tells everyone', () => {
@@ -289,9 +299,10 @@ describe("a room's shelling and its log", () => {
   });
 
   it("caps each seat's digs between matches: past LOBBY_DIGS_MAX they are dropped, neither relayed nor logged, until the next match", () => {
-    // A minute of the shovel's fastest work (a scoop every 0.26 s): far above the few an honest page
-    // sends after the end, dug before the end reached it.
-    expect(LOBBY_DIGS_MAX).toBeGreaterThanOrEqual(Math.floor(60 / 0.26));
+    // An honest page sends only the scoops it dug before the end reached it: two seconds of the
+    // shovel's fastest work is a few round trips' worth, and the cap is more.
+    expect(LOBBY_DIGS_MAX).toBe(16);
+    expect(LOBBY_DIGS_MAX).toBeGreaterThanOrEqual(Math.ceil(2 / SCOOP_S));
     const room = new RoomCore('FLOOD');
     const a = join(room, 'a');
     const b = join(room, 'b');
@@ -310,13 +321,59 @@ describe("a room's shelling and its log", () => {
     expect(from(0)).toEqual([[0, now, 7]]);
     const log = join(room, 'd', (now += 20)).last('welcome')!.log;
     expect(log.digs.filter((d) => d[0] === 1)).toEqual(from(1));
-    // In a match there is no cap; and the next lobby counts afresh.
-    say(room, a, { t: 'start' }, (now += 1_000));
-    for (let k = 0; k < 40; k++) say(room, b, { t: 'dig', c: [k] }, (now += 20));
+    // In a match there is no such cap (a seat's pace is DIG_RATE, as in every phase); and the next lobby counts afresh.
+    say(room, a, { t: 'start' }, (now += 2_000));
+    for (let k = 0; k < 40; k++) say(room, b, { t: 'dig', c: [k] }, (now += Math.round(1_000 / DIG_RATE)));
     say(room, a, { t: 'end' }, (now += 1_000));
     say(room, b, { t: 'dig', c: [1] }, (now += 20));
     expect(from(1)).toHaveLength(LOBBY_DIGS_MAX + 41);
     expect(from(1).at(-1)).toEqual([1, now, 1]);
+  });
+
+  it("keeps a seat's lobby count when it reconnects (to the same seat), and clears every count when the room empties", () => {
+    const room = new RoomCore('AGAIN');
+    const a = join(room, 'a');
+    let b = join(room, 'b');
+    const c = join(room, 'c');
+    const from = (seat: number) => c.got.flatMap((m) => (m.t === 'dig' && m.d[0] === seat ? [m.d] : []));
+    say(room, a, { t: 'start' }, 1_000);
+    say(room, a, { t: 'end' }, 10_000);
+    let now = 10_000;
+    for (let k = 0; k < LOBBY_DIGS_MAX; k++) say(room, b, { t: 'dig', c: [k] }, (now += Math.round(1_000 / DIG_RATE)));
+    expect(from(1)).toHaveLength(LOBBY_DIGS_MAX);
+    expect(room.lobbyDigsTaken(1)).toBe(LOBBY_DIGS_MAX);
+    // B's line drops and it comes back, to the lowest free seat: its own. Its count is its seat's still.
+    room.close(b);
+    b = join(room, 'b', (now += 500));
+    expect(b.last('welcome')!.you).toBe(1);
+    say(room, b, { t: 'dig', c: [99] }, (now += 2_000));
+    expect(from(1)).toHaveLength(LOBBY_DIGS_MAX);
+    // Everyone gone: the counts go with the room's log.
+    for (const p of [a, b, c]) room.close(p);
+    expect(room.empty).toBe(true);
+    expect([0, 1, 2].map((seat) => room.lobbyDigsTaken(seat))).toEqual([0, 0, 0]);
+  });
+
+  it("takes a seat's scoops no faster than DIG_RATE a second, DIG_BURST at once, in a match too: past it they are dropped, neither relayed nor logged", () => {
+    // An honest shovel makes one each SCOOP_S (about 3.9 a second), well inside the bucket.
+    expect([DIG_RATE, DIG_BURST]).toEqual([8, 16]);
+    expect(1 / SCOOP_S).toBeLessThan(DIG_RATE / 2);
+    const room = new RoomCore('SPADE');
+    const a = join(room, 'a');
+    const b = join(room, 'b');
+    const c = join(room, 'c');
+    const from = (seat: number) => c.got.flatMap((m) => (m.t === 'dig' && m.d[0] === seat ? [m.d] : []));
+    say(room, a, { t: 'start' }, 1_000);
+    // B digs at the shovel's pace for 20 s: every scoop goes.
+    for (let k = 0; k < Math.floor(20 / SCOOP_S); k++) say(room, b, { t: 'dig', c: [k] }, 5_000 + Math.round(1000 * SCOOP_S * (k + 1)));
+    expect(from(1)).toHaveLength(Math.floor(20 / SCOOP_S));
+    // A sends sixty a second for 5 s, within the room's message rate: the burst, then DIG_RATE a second.
+    for (let k = 0; k < 300; k++) say(room, a, { t: 'dig', c: [k] }, 5_000 + Math.round((1000 * (k + 1)) / 60));
+    expect(a.closed).toBeNull();
+    expect(from(0).length).toBeGreaterThanOrEqual(DIG_BURST + 5 * DIG_RATE - 1);
+    expect(from(0).length).toBeLessThanOrEqual(DIG_BURST + 5 * DIG_RATE + 1);
+    const log = join(room, 'd', 30_000).last('welcome')!.log;
+    expect(log.digs.filter((d) => d[0] === 0)).toEqual(from(0));
   });
 
   it('welcomes a late joiner with the log so far, a shell still in the air among it', () => {
@@ -383,16 +440,17 @@ describe("a room's shelling and its log", () => {
     const cells = Array.from({ length: DIG_CELLS_MAX }, (_, i) => cell(WORLD_DIMS.x - 1 - (i % 8), WORLD_DIMS.y - 1 - Math.floor(i / 8), WORLD_DIMS.z - 1));
     const entry = JSON.stringify([0, 30_000, ...cells]).length + 1;
     const sent = Math.ceil(LOG_CHARS_MAX / entry) + 50;
-    // Fifty scoops a second, within the room's rate, and the shelling ticking on through them.
+    // Two seats at DIG_RATE a second each, and the shelling ticking on through them; C hears them all.
+    const c = join(room, 'c', 30_000);
     let now = 30_000;
     for (let k = 0; k < sent; k++) {
-      now += 20;
-      say(room, a, { t: 'dig', c: cells }, now);
+      now = 30_000 + Math.round((1000 * (k + 1)) / (2 * DIG_RATE));
+      say(room, k % 2 === 0 ? a : b, { t: 'dig', c: cells }, now);
       if (k % 3 === 2) room.tick(now);
     }
-    const relayed = b.got.flatMap((m) => (m.t === 'dig' ? [m.d] : []));
+    const relayed = c.got.flatMap((m) => (m.t === 'dig' ? [m.d] : []));
     expect(relayed).toHaveLength(sent);
-    const log = join(room, 'c', now + 10).last('welcome')!.log;
+    const log = join(room, 'e', now + 10).last('welcome')!.log;
     expect(log.shells).toEqual(shells(a));
     expect(log.shells.length).toBeGreaterThan(10);
     const chars = [...log.shells, ...log.digs].reduce((n, e) => n + JSON.stringify(e).length + 1, 0);
