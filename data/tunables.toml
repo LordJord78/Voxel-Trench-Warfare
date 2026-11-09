@@ -253,8 +253,8 @@ move_scale          = 1.0      # its carrier's speed
 # The loadout's other guns (src/combat/arsenal.ts holds their shapes and what fits them). Each is
 # its [weapon.<key>] as the AK's is (the AK-74 is assault_rifle), with the aim's terms: the cone's
 # share aimed (ads_spread), how long the sights take to come up (ads_time_s), how fast its carrier
-# moves (move_scale), and a shotgun's pellets, each of them the cone's own. What a round does to a
-# body is the room's (src/net/gear.ts), so no client can claim more.
+# moves (move_scale), and a shotgun's pellets: the first along the aim, the others about it within
+# the cone. What a round does to a body is the room's (src/net/gear.ts), so no client can claim more.
 [weapon.m4]
 name                = "5.56 carbine"
 muzzle_velocity     = 905.0    # M855 from a 14.5 in barrel
@@ -331,7 +331,7 @@ drag_coefficient    = 0.470    # a sphere
 cross_section_m2    = 0.0000554   # 8.4 mm
 rounds_per_minute   = 75.0     # pumped
 magazine            = 7        # the tube
-dispersion_moa      = 160.0    # each pellet's cone: a 0.9 m spread at 20 m
+dispersion_moa      = 160.0    # the pattern about the aim, × its share's step: 0.93 m out at 20 m from the hip
 reload_time_s       = 4.0      # a full tube's: reload_base_s + 7 × reload_per_round_s
 reload_base_s       = 0.5      # shell by shell: this long first, then
 reload_per_round_s  = 0.5      # this long a shell (the hands lay their pushes out by these)
@@ -339,7 +339,7 @@ automatic           = false
 tracer              = true
 tracer_every        = 1
 pellets             = 9
-ads_spread          = 0.80
+ads_spread          = 0.80     # aimed, put to the step 0.7 (src/net/gear.ts SHOT_SHARES)
 ads_time_s          = 0.22
 move_scale          = 0.96
 

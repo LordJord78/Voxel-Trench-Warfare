@@ -4,8 +4,8 @@
  * the zones' damage (match-rules.ts), and the gear a player shows, packed into an integer: the
  * gun in their hands (or the shovel), what is fitted to it and whether their light is on. It rides
  * above the eight bits of their state's flags, and a shot's own word says which gun fired it, its
- * tracer's colour and whether it was suppressed: the room relays both as they are, so none of this
- * changes what it is sent.
+ * tracer's colour, whether it was suppressed and a pellet gun's pattern: the room relays both as they
+ * are, so none of this changes what it is sent.
  *
  * Pure and small, because the room imports it.
  */
@@ -85,25 +85,71 @@ export function decodeGear(n: number): Gear {
   };
 }
 
-/** A shot's word: whether a tracer and its kind (TRACER_KIND), whether suppressed, and which gun. */
+/**
+ * A pellet gun's pattern, as a share of its gun's cone: the product the cone was always scaled by (the
+ * sights' share aimed or the hip's, the stance's sway, suppression's), put to the nearest of eight
+ * steps, which its shot's word carries (bits 9–11). The shooter spreads its pellets by the step, and
+ * so does every client that hears the shot, so they fly alike everywhere. Step 0 is the hip's 1, so a
+ * word without these bits (a bullet's, or one from before) reads as a hip shot; the other seven run
+ * from 0.25 to 2.8, each about √2 from the next.
+ */
+export const SHOT_SHARES: readonly number[] = [1, 0.25, 0.35, 0.5, 0.7, 1.4, 2.0, 2.8];
+
+/** The step (an index into SHOT_SHARES) nearest `share` in proportion; past either end, that end. */
+export function shareStep(share: number): number {
+  if (Number.isNaN(share)) return 0;
+  const x = Math.max(share, 1e-9);
+  let best = 0;
+  let bestRatio = Infinity;
+  for (let k = 0; k < SHOT_SHARES.length; k++) {
+    const s = SHOT_SHARES[k];
+    const ratio = x > s ? x / s : s / x;
+    if (ratio < bestRatio) {
+      best = k;
+      bestRatio = ratio;
+    }
+  }
+  return best;
+}
+
+/**
+ * A shot's word: whether a tracer and its kind (TRACER_KIND), whether suppressed, which gun, and a
+ * pellet gun's pattern's share (SHOT_SHARES: put to its step as it is written; none, the hip's 1).
+ */
 export interface ShotMark {
   tracer: boolean;
   kind: number;
   suppressed: boolean;
   gun: GunKey;
+  share?: number;
 }
 
-/** Bit 0 a tracer (as the word was before it said more), bits 1–2 its kind, bit 3 suppressed, bits 4–7 the gun. */
+/**
+ * Bit 0 a tracer (as the word was before it said more), bits 1–2 its kind, bit 3 suppressed, bits 4–7
+ * the gun, bit 8 kept for the compensator, bits 9–11 the share's step.
+ */
 export function encodeShotMark(m: ShotMark): number {
-  return (m.tracer ? 1 : 0) | ((m.kind & 3) << 1) | ((m.suppressed ? 1 : 0) << 3) | (Math.max(0, GUNS.indexOf(m.gun)) << 4);
+  return (
+    (m.tracer ? 1 : 0) |
+    ((m.kind & 3) << 1) |
+    ((m.suppressed ? 1 : 0) << 3) |
+    (Math.max(0, GUNS.indexOf(m.gun)) << 4) |
+    ((m.share === undefined ? 0 : shareStep(m.share)) << 9)
+  );
 }
 
-export function decodeShotMark(n: number): ShotMark {
+export function decodeShotMark(n: number): Required<ShotMark> {
   const bits = Number.isInteger(n) && n >= 0 ? n : 0;
   const tracer = (bits & 1) === 1;
   // A word from before kinds were sent says only "a tracer": the battle's amber.
   const kind = (bits >> 1) & 3;
-  return { tracer, kind: tracer && kind === 0 ? TRACER_KIND.amber : kind, suppressed: ((bits >> 3) & 1) === 1, gun: GUNS[(bits >> 4) & 15] ?? 'ak74' };
+  return {
+    tracer,
+    kind: tracer && kind === 0 ? TRACER_KIND.amber : kind,
+    suppressed: ((bits >> 3) & 1) === 1,
+    gun: GUNS[(bits >> 4) & 15] ?? 'ak74',
+    share: SHOT_SHARES[(bits >> 9) & 7],
+  };
 }
 
 /** A hit's damage: the zone's, times the gun's scale (none given: the zone's alone). */

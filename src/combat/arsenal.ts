@@ -11,7 +11,7 @@
  */
 
 import type { Tunables } from '../core/tunables';
-import { BARE, GUNS, MUZZLES, OPTICS, SIDES, UNDERS, type Fit, type Gear, type GunKey, type Muzzle, type Optic, type Side, type Under } from '../net/gear';
+import { BARE, GUNS, MUZZLES, OPTICS, shareStep, SHOT_SHARES, SIDES, UNDERS, type Fit, type Gear, type GunKey, type Muzzle, type Optic, type Side, type Under } from '../net/gear';
 import { recoilProfile, type RecoilProfile } from './recoil';
 import type { Hold } from './soldier-rig';
 import { viewKickProfile, type ViewKickProfile } from './viewkick';
@@ -328,14 +328,23 @@ export interface GunStats {
   mobility: number;
 }
 
+/**
+ * A gun's cone standing and aimed (minutes of arc): a bullet's, its cone times its share aimed; a
+ * pellet gun's, the pattern its pellets fly about the aim, the share put to the step its shot's word
+ * carries (net/gear.ts SHOT_SHARES), as the session throws it.
+ */
+export function aimedMoa(a: ArmSpec): number {
+  const w = a.weapon;
+  return w.dispersionMoa * (w.pellets > 1 ? SHOT_SHARES[shareStep(a.adsSpread)] : a.adsSpread);
+}
+
 export function gunStats(tun: Tunables, a: ArmSpec, damageScale: number): GunStats {
   const w = a.weapon;
   const clamp = (v: number) => Math.max(0.04, Math.min(1, v));
-  const aimedMoa = w.dispersionMoa * a.adsSpread * (w.pellets > 1 ? 0.25 : 1);
   return {
     damage: clamp((damageScale * w.pellets) / 2.2),
     rate: clamp(w.rpm / 900),
-    accuracy: clamp(1 - aimedMoa / 8),
+    accuracy: clamp(1 - aimedMoa(a) / 8),
     control: clamp(1 - (a.recoil.kickPitchDeg + a.recoil.climbPerShotDeg * 2) / tun.f('loadout.control_span')),
     range: clamp(w.projectile.muzzleVelocity / 950),
     handling: clamp(1 - (a.adsTimeS - 0.1) / 0.45 - (w.reloadS - 1.5) / 12),

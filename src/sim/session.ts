@@ -39,7 +39,7 @@ import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, P, paletteData } from '../world/materials';
 import { groundTop, raycast } from '../world/raycast';
 import { spatter, spatterTunables, type SpatterTunables } from '../world/spatter';
-import { BARE, decodeShotMark, encodeShotMark, GUNS, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
+import { BARE, decodeShotMark, encodeShotMark, GUNS, shareStep, SHOT_SHARES, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
 import { sent, type Team } from '../net/protocol';
 import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from './destruction';
 
@@ -130,7 +130,7 @@ export interface ShotEvent {
   tracer: boolean;
   /** The player's: the drawn rifle's (they leave from the eye); the front's: the origin. */
   muzzle: [number, number, number];
-  /** A player's shot's word (net/gear.ts ShotMark): its gun, its tracer's colour, whether suppressed. */
+  /** A player's shot's word (net/gear.ts ShotMark): its gun, its tracer's colour, whether suppressed, a pellet gun's pattern's share. */
   mark?: number;
   /** The muzzle's flash and report, as shares of a bare gun's. */
   flash?: number;
@@ -505,11 +505,11 @@ export class Session {
   /**
    * Another player's shot (owner 2 + their seat), from their eye along `dir`, its tracer and flash
    * at their rifle's `muzzle`; `mark`, its word (net/gear.ts): their gun's round, at a suppressor's
-   * velocity if it says so, its tracer's colour, and a shotgun's pellets, spread about the first from
-   * the shot's seed (combat/weapon.ts pelletSeed: their seat and `tick`, the tick it left on), as the
-   * shooter spread them. Without one, the AK's, amber. `kind`, where given, is the tracer's colour
-   * whatever the mark says (their seat's team); a shot that is not a tracer draws none. Every pellet
-   * takes the shot's kind.
+   * velocity if it says so, its tracer's colour, and a shotgun's pellets, spread about the first by
+   * the gun's cone times the share the word carries, from the shot's seed (combat/weapon.ts
+   * pelletSeed: their seat and `tick`, the tick it left on), as the shooter spread them. Without one,
+   * the AK's, amber. `kind`, where given, is the tracer's colour whatever the mark says (their seat's
+   * team); a shot that is not a tracer draws none. Every pellet takes the shot's kind.
    */
   fireRemote(owner: number, origin: readonly [number, number, number], dir: readonly [number, number, number], tracer: boolean, muzzle: readonly [number, number, number], mark?: number, kind?: number, tick = 0): void {
     const m = mark === undefined ? null : decodeShotMark(mark);
@@ -522,7 +522,7 @@ export class Session {
     // Lit in as the draw's own (a hip shot's): a shot mark carries no share aimed.
     const drawn = { from, convergeM: reach };
     if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, drawn) < 0) return;
-    for (const d of pelletDirs(dir, gun.pellets - 1, gun.coneDeg, pelletSeed(owner - 2, tick))) {
+    for (const d of pelletDirs(dir, gun.pellets - 1, gun.coneDeg * (m ? m.share : 1), pelletSeed(owner - 2, tick))) {
       this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, round, drawn);
     }
     const flashShare = m?.suppressed ? 0.12 : 1;
@@ -537,8 +537,9 @@ export class Session {
   /**
    * Another's gun as their shots need it: its round, at the suppressor's velocity when `suppressed`
    * (as the shooter's own flies: combat/arsenal.ts armSpec), its pellets and the gun's own cone
-   * (degrees), which they spread over about the first. Its rounds say which gun they left
-   * (BodyHit.gun), so a round of theirs into the player is felt by its damage.
+   * (degrees), which, times the share their shot's word carries, they spread over about the first.
+   * Its rounds say which gun they left (BodyHit.gun), so a round of theirs into the player is felt by
+   * its damage.
    */
   private remoteGun(key: GunKey, suppressed: boolean): { spec: ProjectileSpec; pellets: number; coneDeg: number } {
     const name = suppressed ? `${key}+suppressor` : key;
@@ -605,12 +606,17 @@ export class Session {
     return { kind: s.gun.slot === 'secondary' ? 'pistol' : 'rifle', sight: s.sight };
   }
 
-  /** The cone's half-angle now (degrees), as the next shot would be thrown: the stance's, the sights', the laser's and suppression's. */
+  /**
+   * The cone's half-angle now (degrees), as the next shot would be thrown: the gun's, times the
+   * stance's, the sights', the laser's and suppression's share. A pellet gun's is its pattern's, the
+   * share put to the step its shot's word would carry (net/gear.ts SHOT_SHARES), as its pellets fly.
+   */
   coneDeg(): number {
     const arm = this.arm;
     const stance = this.controller.t.stances[this.player.stance].swayScale;
     const hip = arm.spec.hipSpread * (this.lightOn && arm.spec.fit.side === 'laser' ? arm.spec.laserSpread : 1);
-    return (arm.weapon.spec.dispersionMoa / 60) * stance * (hip + (arm.spec.adsSpread - hip) * this.aimed) * this.suppression.swayScale;
+    const share = stance * (hip + (arm.spec.adsSpread - hip) * this.aimed) * this.suppression.swayScale;
+    return (arm.weapon.spec.dispersionMoa / 60) * (arm.weapon.spec.pellets > 1 ? SHOT_SHARES[shareStep(share)] : share);
   }
 
   /** The sight's magnification, `alpha` of the way between the last two ticks: 1 from the hip. */
@@ -824,11 +830,11 @@ export class Session {
   /**
    * The rifle after the player has moved, in the reference's order: the clocks (the weapon, the
    * recoil scaled by the stance, suppression, the view kick); a reload asked for; a shot from the
-   * eye along the view plus recoil and flinch, the cone widened by stance and suppression (none
-   * through the periscope: its holder is not holding the rifle), which kicks the recoil and then
-   * the view; every round's flight, with near misses heard at the eye; a mark wherever one struck,
-   * and suppression from the cracks and from others' impacts; and last the front's fire, whose
-   * rounds move from the next tick.
+   * eye along the view plus recoil and flinch, the cone widened by stance and suppression (a pellet
+   * gun's pattern about the aim; none through the periscope: its holder is not holding the rifle),
+   * which kicks the recoil and then the view; every round's flight, with near misses heard at the
+   * eye; a mark wherever one struck, and suppression from the cracks and from others' impacts; and
+   * last the front's fire, whose rounds move from the next tick.
    */
   private combat(dt: number): void {
     this.shots.length = 0;
@@ -880,12 +886,16 @@ export class Session {
     if (fires) {
       const aim: [number, number] = [p.yaw + this.recoil.yaw + this.suppression.flinchYaw, p.pitch + this.recoil.pitch + this.suppression.flinchPitch];
       const cone = sway * this.suppression.swayScale;
-      const aimed = w.aim(aim[0], aim[1], cone, this.dispersion);
+      // A bullet is drawn within its cone. A pellet gun's pattern is about the aim: its first pellet
+      // leaves along it (the stream still draws, as for any shot), and its word carries the cone's
+      // share, put to its step (net/gear.ts SHOT_SHARES), by which the others spread.
+      const pellets = w.spec.pellets > 1;
+      const aimed = w.aim(aim[0], aim[1], pellets ? 0 : cone, this.dispersion);
       const projectile = w.spec.projectile;
       const v = projectile.muzzleVelocity;
       const kind = w.tracer() ? teamTracer(this.team) : TRACER_KIND.none;
       const tracer = kind !== TRACER_KIND.none;
-      const mark = encodeShotMark({ tracer, kind, suppressed: arm.spec.suppressed, gun: arm.spec.gun.key });
+      const mark = encodeShotMark({ tracer, kind, suppressed: arm.spec.suppressed, gun: arm.spec.gun.key, ...(pellets ? { share: cone } : {}) });
       // In a room the shot flies as its words say (net/protocol.ts sent): from the eye to the
       // millimetre, along the aim to 1e-4, as every other client flies it from them.
       const words = this.room ? sent({ tick: this.ticks, origin: eye, dir: aimed, tracer, mark }) : null;
@@ -902,10 +912,10 @@ export class Session {
       // Every round of the pull carries it, as this tick (its shot event's): what it strikes says
       // which pull it was, however long it flies (the range counts a kill's shots by them).
       if (this.rounds.fire(origin, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, drawn, this.ticks) >= 0) {
-        // A shotgun's other pellets, about the first by the gun's own cone (the stance's widening is
-        // the first's alone), from the shot's seed, its seat and tick: the pellets every other client
-        // draws for it (combat/weapon.ts pelletDirs).
-        for (const d of pelletDirs(dir, w.spec.pellets - 1, w.spec.dispersionMoa / 60, pelletSeed(this.seat, this.ticks))) {
+        // A shotgun's other pellets, about the first by the gun's cone times the share its word says
+        // (the step, not the share itself), from the shot's seed, its seat and tick: the pellets every
+        // other client draws for it (combat/weapon.ts pelletDirs).
+        for (const d of pelletDirs(dir, w.spec.pellets - 1, (w.spec.dispersionMoa / 60) * decodeShotMark(mark).share, pelletSeed(this.seat, this.ticks))) {
           this.rounds.fire(origin, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, drawn, this.ticks);
         }
         w.shot();

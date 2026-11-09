@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { armSpec, cleanLoadout, defaultLoadout, fitOf, GUN_DEFS, gunStats, PRIMARY_GUNS, SECONDARY_GUNS } from '../../src/combat/arsenal';
+import { aimedMoa, armSpec, cleanLoadout, defaultLoadout, fitOf, GUN_DEFS, gunStats, PRIMARY_GUNS, SECONDARY_GUNS } from '../../src/combat/arsenal';
 import { gunModel, MODEL_VOXELS_MAX, shovelModel } from '../../src/combat/gun-models';
 import { rifleModel, type RifleModel } from '../../src/combat/rifle-model';
 import { loadTunables, Tunables } from '../../src/core/tunables';
-import { BARE, DAMAGE_SCALE, GUNS, type Fit, type GunKey } from '../../src/net/gear';
+import { BARE, DAMAGE_SCALE, GUNS, SHOT_SHARES, shareStep, type Fit, type GunKey } from '../../src/net/gear';
 
 // The loadout's guns (combat/arsenal.ts) and their voxels (combat/gun-models.ts).
 const tun = loadTunables();
@@ -87,6 +87,27 @@ describe('the arsenal', () => {
     expect(kitted.muzzle[2]).toBeGreaterThan(bare.muzzle[2]);
     expect(bare.weapon.tracerEvery).toBe(1);
     expect(armSpec(tun, 'm870', BARE).weapon.pellets).toBe(9);
+  });
+
+  it("gives a shotgun's aimed figure as its pattern: the gun's cone times its aimed share's step, as the session throws it", () => {
+    // A bullet's: its cone times its share aimed. A pellet gun's: the pattern its pellets fly about the
+    // aim, standing and aimed, the share put to the step its shot's word carries (net/gear.ts).
+    for (const gun of GUNS) {
+      for (const optic of GUN_DEFS[gun].fits.optic) {
+        const a = armSpec(tun, gun, { ...BARE, optic });
+        const share = a.weapon.pellets > 1 ? SHOT_SHARES[shareStep(a.adsSpread)] : a.adsSpread;
+        expect(aimedMoa(a), `${gun} ${optic}`).toBeCloseTo(a.weapon.dispersionMoa * share, 12);
+      }
+    }
+    // The M870's 160 MOA aimed through its irons (0.8), the holo or the red dot (0.72, 0.736): 0.7.
+    for (const optic of GUN_DEFS.m870.fits.optic) expect(aimedMoa(armSpec(tun, 'm870', { ...BARE, optic })), optic).toBeCloseTo(112, 9);
+    expect(aimedMoa(armSpec(tun, 'm4', BARE))).toBeCloseTo(3.0 * 0.38, 12);
+    // No bar moves. The old figure (a quarter of 160 × 0.8, 32 MOA) was four times the bar's 8 MOA span
+    // and the pattern's 112 is further past: the shotgun's accuracy was at the floor and stays there.
+    // The rifles' and pistols' figures are as they were.
+    for (const optic of GUN_DEFS.m870.fits.optic) expect(gunStats(tun, armSpec(tun, 'm870', { ...BARE, optic }), DAMAGE_SCALE.m870).accuracy).toBe(0.04);
+    const accuracy = (gun: GunKey) => gunStats(tun, armSpec(tun, gun, BARE), DAMAGE_SCALE[gun]).accuracy;
+    expect(GUNS.map((g) => accuracy(g).toFixed(4))).toEqual(GUNS.map((g) => Math.max(0.04, Math.min(1, 1 - (g === 'm870' ? 32 : armSpec(tun, g, BARE).weapon.dispersionMoa * armSpec(tun, g, BARE).adsSpread) / 8)).toFixed(4)));
   });
 
   it("keeps the loadout's control bars where they stood before the heavier recoil: each within 0.03, their spread kept", () => {

@@ -19,11 +19,12 @@
  * disc of the cone's half-angle (MOA / 60 degrees, times the caller's sway) in
  * yaw and pitch, drawn angle first, then radius, from the caller's stream.
  *
- * A shotgun's other pellets spread about its first by the gun's own cone (the
- * stance's widening of it is the shooter's, and the first pellet's alone),
- * drawn from the shot's own seed: its shooter's seat and the tick it left on
- * (pelletSeed). Every client that hears the shot draws the same pellets, so
- * they chip the same voxels everywhere (the shared-battle spec's "Edits").
+ * A shotgun's first pellet leaves along the aim, and its others spread about
+ * it by the gun's cone times the shot's share (aimed, the stance, suppression),
+ * put to the step its word carries (net/gear.ts SHOT_SHARES), drawn from the
+ * shot's own seed: its shooter's seat and the tick it left on (pelletSeed).
+ * Every client that hears the shot draws the same pellets, so they chip the
+ * same voxels everywhere (the shared-battle spec's "Edits").
  */
 
 import { cos, hypot, radians, sin, TAU } from '../core/dmath';
@@ -49,7 +50,7 @@ export interface WeaponSpec {
   /** Every n-th round is a tracer; 0, none. */
   tracerEvery: number;
   projectile: ProjectileSpec;
-  /** Rounds a shot throws, each the cone's own: a shotgun's pellets; 1 for a bullet. */
+  /** Rounds a shot throws: a shotgun's pellets, the first along the aim and the others about it; 1 for a bullet. */
   pellets: number;
   /** Aimed down the sights: the cone's share, and the seconds the sights take to come up. */
   adsSpread: number;
