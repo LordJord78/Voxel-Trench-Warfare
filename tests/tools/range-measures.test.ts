@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { decode, encode, type Image } from '../../tools/lib/image.mjs';
 import { project } from '../../tools/lib/camera.mjs';
 import { loadTunables } from '../../src/core/tunables';
-import { CAPTURES, countFailures, DELTA, laidOf, LOOK, lookFailures, marked, noiseFloor, parseOnly, sheet, shows, SHOW_PIXELS, sizesOf, targetBox, USAGE, type Target } from '../../tools/lib/range-measures.mjs';
+import { CAPTURES, countFailures, DELTA, laidOf, LOOK, lookFailures, marked, noiseFloor, sheet, shows, SHOW_PIXELS, sizesOf, targetBox, USAGE, type Target } from '../../tools/lib/range-measures.mjs';
 
 // G2's proof (tools/range-captures.mjs): the range photographed from the firing step, its counts held to
 // what rangeLayout lays, each target's box found by the camera, and what the range changes in it read
@@ -24,15 +24,8 @@ const POSE = { position: [0, 0, 0] as const, yaw: 0, pitch: 0, fov: 90 };
 const RES = [1600, 1000] as const;
 
 describe("G2's proof: what it photographs", () => {
-  it('--only takes a list of captures, as --only a,b or --only=a,b; with no list, or a name that is none of them, the usage', () => {
+  it('--only takes a list of captures (tools/lib/cli.mjs parseOnly, tests/tools/cli.test.ts); the usage names every capture', () => {
     const names = CAPTURES.map((c) => c.name);
-    expect(parseOnly([], names)).toEqual({ only: null });
-    expect(parseOnly(['--only', 'dusk,corridor-night'], names)).toEqual({ only: ['dusk', 'corridor-night'] });
-    expect(parseOnly(['--only=1735,noon'], names)).toEqual({ only: ['1735', 'noon'] });
-    for (const argv of [['--only'], ['--only='], ['--only', '--other'], ['--only', '']]) expect(parseOnly(argv, names), argv.join(' ')).toEqual({ error: '--only: no list of captures' });
-    expect(parseOnly(['--only', 'dusk,dawn,noon'], names)).toEqual({ error: '--only: no capture dawn' });
-    expect(parseOnly(['--only=nite'], names)).toEqual({ error: '--only: no capture nite' });
-    // The usage names every capture.
     for (const n of names) expect(USAGE).toContain(n);
     expect(USAGE).toContain('--only');
   });

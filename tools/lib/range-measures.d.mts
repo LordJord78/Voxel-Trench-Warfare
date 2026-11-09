@@ -59,7 +59,6 @@ export const DELTA: number;
 export const SHOW_PIXELS: number;
 export const LOOK: { capture: string; withinM: number; kinds: Kind[] };
 export const USAGE: string;
-export function parseOnly(argv: readonly string[], names: readonly string[]): { only: string[] | null } | { error: string };
 export function sizesOf(t: { torsoPlateM: readonly [number, number] | readonly number[]; headPlateM: readonly [number, number] | readonly number[]; standingM: number }): Sizes;
 export function laidOf(spots: readonly { kind: string }[]): Laid;
 export function countFailures(laid: Laid, seen: Seen): string[];

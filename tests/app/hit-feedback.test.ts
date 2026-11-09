@@ -127,7 +127,7 @@ const intoPlayer = (s: Session, owner: number, dir: V3 = [1, 0, 0]): BodyHit & {
 
 describe('hit feedback', () => {
   it("[hits] gives the feedback's numbers", () => {
-    expect(t.gains).toEqual({ hit: 0.75, head: 0.9, gush: 0.8, kill: 0.9, ding: 1.5, hurt: 0.7 });
+    expect(t.gains).toEqual({ hit: 0.85, head: 0.9, gush: 6, kill: 0.9, ding: 1.5, hurt: 0.7 });
     expect([t.killWindowS, t.hitHeardM, t.gushHeardM, t.flashMin, t.jolt]).toEqual([0.3, 30, 25, 0.25, [1.5, 1.5]]);
     expect([t.fallS, t.headFallS, t.flinchS, t.flinchSpan]).toEqual([0.7, 0.45, 0.25, 2]);
   });
@@ -144,7 +144,7 @@ describe('hit feedback', () => {
     const fb = new HitFeedback(t, marker);
     const voices = fb.frame(s, events, NOW, [drawn(them)]);
     expect(marker.calls).toEqual([['show', 'hit', NOW]]);
-    expect(voices).toEqual([{ kind: 'hit', at: null, gain: 0.75 }]);
+    expect(voices).toEqual([{ kind: 'hit', at: null, gain: 0.85 }]);
     // The body flinches along the round, kept by its id until it has settled.
     expect(fb.figureOverlay(3, NOW + 100)).toEqual({ flinch: { dir: events.hits[0].dir, age: 0.1, head: false } });
     expect(fb.figureOverlay(3, NOW + 1000 * t.flinchSpan * t.flinchS)).toEqual({});
@@ -170,7 +170,7 @@ describe('hit feedback', () => {
     ]);
     expect(voices).toEqual([
       { kind: 'head', at: null, gain: 0.9 },
-      { kind: 'gush', at: null, gain: 0.8 },
+      { kind: 'gush', at: null, gain: 6 },
     ]);
     // The head snaps.
     expect(fb.figureOverlay(200, NOW)).toEqual({ flinch: { dir: events.hits[0].dir, age: 0, head: true } });
@@ -188,7 +188,7 @@ describe('hit feedback', () => {
     expect(events.hits.every((h) => h.body === 200 && h.zone === 'torso')).toBe(true);
     const marker = new FakeMarker();
     const fb = new HitFeedback(t, marker);
-    expect(fb.frame(s, events, NOW, [drawn(them)])).toEqual([{ kind: 'hit', at: null, gain: 0.75 }]);
+    expect(fb.frame(s, events, NOW, [drawn(them)])).toEqual([{ kind: 'hit', at: null, gain: 0.85 }]);
     expect(marker.calls).toEqual([['show', 'hit', NOW]]);
     // A shotgun's pellets over two ticks in one frame are two of each: each tick its own.
     const later = strike(s, grid.slice(0, 3), [0, 0, 1]);
@@ -308,9 +308,9 @@ describe('hit feedback', () => {
     // Heard where each struck: within 30 m the thwack, within 25 m the gush; never the crack or the kill, which are the shooter's.
     const at = (v: FeedbackVoice) => v.at;
     expect(voices).toEqual([
-      { kind: 'hit', at: near10.position, gain: 0.75 },
-      { kind: 'gush', at: near10.position, gain: 0.8 },
-      { kind: 'hit', at: at27.position, gain: 0.75 },
+      { kind: 'hit', at: near10.position, gain: 0.85 },
+      { kind: 'gush', at: near10.position, gain: 6 },
+      { kind: 'hit', at: at27.position, gain: 0.85 },
     ]);
     expect(voices.map(at).every((a) => a !== null)).toBe(true);
     // Each body flinches, its head snapping.
@@ -509,7 +509,7 @@ describe('hit feedback', () => {
     const marker = new FakeMarker();
     const fb = new HitFeedback(t, marker);
     const dropped: Dropped[] = [{ id: 200, tick: lethal.tick, index: 4 }];
-    expect(fb.frame(s, events, NOW, [drawn(them)], dropped)).toEqual([{ kind: 'hit', at: null, gain: 0.75 }]);
+    expect(fb.frame(s, events, NOW, [drawn(them)], dropped)).toEqual([{ kind: 'hit', at: null, gain: 0.85 }]);
     expect(marker.calls).toEqual([['show', 'hit', NOW]]);
     expect(fb.state()).toMatchObject({ voices: { hit: 1 }, markers: { hit: 1, head: 0, kill: 0 } });
     // Its last hit is the round that killed it: it flinches along that, the head unsnapped ...
@@ -684,7 +684,7 @@ describe('hit feedback', () => {
     expect(events.hits.every((h) => h.owner === 4 && h.body === 3 && h.zone === 'torso' && h.tick === events.hits[0].tick)).toBe(true);
     const marker = new FakeMarker();
     const fb = new HitFeedback(t, marker);
-    expect(fb.frame(s, events, NOW, [drawn(them)])).toEqual([{ kind: 'hit', at: events.hits[0].position, gain: 0.75 }]);
+    expect(fb.frame(s, events, NOW, [drawn(them)])).toEqual([{ kind: 'hit', at: events.hits[0].position, gain: 0.85 }]);
     expect(marker.calls).toEqual([]);
     expect(fb.state().voices).toEqual({ hit: 1 });
   });
@@ -699,7 +699,7 @@ describe('hit feedback', () => {
     const marker = new FakeMarker();
     const fb = new HitFeedback(t, marker);
     marker.shows = false;
-    expect(fb.frame(s, events, NOW, [drawn(them)])).toEqual([{ kind: 'hit', at: null, gain: 0.75 }]);
+    expect(fb.frame(s, events, NOW, [drawn(them)])).toEqual([{ kind: 'hit', at: null, gain: 0.85 }]);
     expect(marker.calls).toEqual([['show', 'hit', NOW]]);
     expect(fb.state().markers).toEqual({ hit: 0, head: 0, kill: 0 });
     marker.shows = true;

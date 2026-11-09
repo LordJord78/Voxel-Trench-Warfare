@@ -20,6 +20,7 @@ import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import { AudioEngine } from '../audio/engine';
 import { audioTunables, planFeedback, planVoices } from '../audio/plan';
+import { reportShape } from '../audio/voices';
 import { cleanLoadout, type Loadout } from '../combat/arsenal';
 import { gunModel, shovelModel } from '../combat/gun-models';
 import { traceRifle } from '../combat/rifle-model';
@@ -307,7 +308,7 @@ async function start(): Promise<void> {
   const rig = new CameraRig(rigTunables(tun));
   const effects = new EffectsFrameBuilder(effectsTunables(tun));
   const hearing = audioTunables(tun);
-  const audio = new AudioEngine(hearing, { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') });
+  const audio = new AudioEngine(hearing, reportShape(tun));
   let builtDrawn: BuiltEffects['drawn'] = [];
   let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0, ricochets: 0, embers: 0, ricochetsByKind: [0, 0, 0, 0], embersByKind: [0, 0, 0, 0] };
   /** Whether the rifle is in hand (tests put it down to read the world behind it). */

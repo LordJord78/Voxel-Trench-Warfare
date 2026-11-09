@@ -1,16 +1,17 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { hitFeedbackTunables } from '../../src/app/hit-feedback';
 import { audioTunables, planFeedback } from '../../src/audio/plan';
-import { voiceLength } from '../../src/audio/voices';
+import { reportShape, voiceLength } from '../../src/audio/voices';
 import { rangeTunables } from '../../src/combat/range';
 import { loadTunables } from '../../src/core/tunables';
-import { LEAD_S, RATE, renders, reportShape, TAIL_S } from '../../tools/sounds/renders';
+import { FRAME_S, LEAD_S, RATE, renders, TAIL_S } from '../../tools/sounds/renders';
 
-// The sounds' proof (npm run sounds; the shots spec's §6): what is rendered. Each hit's voice at the
-// ear as the shooter hears it (planFeedback's placing, its [hits] gain), held to the peak range, the
-// gush to its band; and a steel plate's ring as heard from the spawn at the range's nearest and
-// farthest plates, and a headshot's kill as its shooter hears it (the crack, the gush and the kill at
-// once), reported, not held.
+// The sounds' proof (npm run sounds; the shots spec's §6, G3's Task 5): what is rendered, and what each
+// render is held to. Each hit's voice at the ear as the shooter hears it (planFeedback's placing, its
+// [hits] gain), held to the peak range and to the small speaker; the gush to its band and to the kill's
+// level; a steel plate's ring as heard from the spawn at the range's nearest and farthest plates, the
+// farthest to a floor; and a headshot's kill as its shooter hears it, to its band over its first 300 ms.
 
 const tun = loadTunables();
 const t = audioTunables(tun);
@@ -18,17 +19,23 @@ const gains = hitFeedbackTunables(tun).gains;
 const report = reportShape(tun);
 const list = renders(tun);
 const byName = (name: string) => list.find((r) => r.name === name)!;
+const EARS = ['hit', 'head', 'gush', 'kill', 'ding', 'hurt'] as const;
 
 describe("the sounds' proof: what it renders", () => {
-  it('48 kHz, a voice 10 ms in and its file 100 ms past its end; the report shape the engine is given', () => {
-    expect([RATE, LEAD_S, TAIL_S]).toEqual([48000, 0.01, 0.1]);
-    expect(report).toEqual({ lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') });
+  it('48 kHz, a voice 10 ms in and its file 100 ms past its end; a frame at 60 Hz', () => {
+    expect([RATE, LEAD_S, TAIL_S, FRAME_S]).toEqual([48000, 0.01, 0.1, 1 / 60]);
   });
 
-  it("each hit's voice, by its kind's name, at the ear: placed as planFeedback places it, whole and at once, at its [hits] gain; held to the peak range", () => {
-    const kinds = ['hit', 'head', 'gush', 'kill', 'ding', 'hurt'] as const;
-    expect(list.filter((r) => r.gated).map((r) => r.name)).toEqual([...kinds]);
-    for (const kind of kinds) {
+  it("one report shape, src/audio's, the engine is given (app/main.ts) and the renders read", () => {
+    expect(report).toEqual({ lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') });
+    const main = readFileSync('src/app/main.ts', 'utf8');
+    expect(main).toMatch(/new AudioEngine\(hearing, reportShape\(tun\)\)/);
+    expect(main).not.toContain('report_low_hz');
+    expect(readFileSync('tools/sounds/renders.ts', 'utf8')).not.toContain('report_low_hz');
+  });
+
+  it("each hit's voice, by its kind's name, at the ear: placed as planFeedback places it, whole and at once, at its [hits] gain", () => {
+    for (const kind of EARS) {
       const r = byName(kind);
       const placed = planFeedback(t, [{ kind, at: null, gain: gains[kind] }], [0, 0, 0]);
       expect(r.plans, kind).toEqual(placed);
@@ -37,38 +44,52 @@ describe("the sounds' proof: what it renders", () => {
     }
   });
 
-  it("the gush is held to 400 Hz–2 kHz, more than half its energy in it; no other voice is held to a band", () => {
-    expect(byName('gush').band).toEqual({ band: [400, 2000], share: 0.5 });
-    for (const r of list) if (r.name !== 'gush') expect(r.band, r.name).toBeUndefined();
+  it('every render is held, none only reported: the voices, the far rings and the headshot that kills', () => {
+    expect(list.map((r) => r.name)).toEqual([...EARS, 'ding-30m', 'ding-85m', 'headshot-kill']);
+    for (const r of list) expect(r.gated, r.name).toBe(true);
   });
 
-  it("a plate's ring heard from the spawn at the range's nearest and farthest plates, straight ahead: late, quieter and duller by its distance; reported, not held", () => {
+  it('every voice at the ear is held to the small speaker: at least a quarter of its energy over 400 Hz', () => {
+    for (const kind of EARS) expect(byName(kind).rules?.high, kind).toBe(0.25);
+    for (const name of ['ding-30m', 'ding-85m', 'headshot-kill']) expect(byName(name).rules?.high, name).toBeUndefined();
+  });
+
+  it("the gush gushes: at least 55% of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill's", () => {
+    expect(byName('gush').rules).toEqual({ high: 0.25, band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3 } });
+    // No other render is held to another's level, and only the gush and the headshot that kills to a band.
+    for (const r of list) if (r.name !== 'gush') expect(r.rules?.near, r.name).toBeUndefined();
+    expect(list.filter((r) => r.rules?.band).map((r) => r.name)).toEqual(['gush', 'headshot-kill']);
+  });
+
+  it("a plate's ring heard from the spawn at the range's nearest and farthest plates, straight ahead: late, quieter by the dings' own rolloff, duller; the farthest held to −24 dBFS", () => {
     const rt = rangeTunables(tun);
     const all = [...rt.torsoPlatesM, ...rt.headPlatesM];
     const [near, far] = [Math.min(...all), Math.max(...all)];
     expect([near, far]).toEqual([30, 85]);
-    const reported = list.filter((r) => !r.gated);
-    expect(reported.map((r) => r.name)).toEqual([`ding-${near}m`, `ding-${far}m`, 'headshot-kill']);
-    for (const [r, d] of [[reported[0], near], [reported[1], far]] as const) {
+    for (const [r, d] of [[byName(`ding-${near}m`), near], [byName(`ding-${far}m`), far]] as const) {
       const placed = planFeedback(t, [{ kind: 'ding', at: [0, 0, -d], gain: gains.ding }], [0, 0, 0]);
       expect(r.plans).toEqual(placed);
-      // As heard: late by the distance, at reference / distance of its gain.
+      // As heard: late by the distance, at (reference / distance)^ding_rolloff of its gain.
       expect(r.plans[0].delayS).toBeCloseTo(d / t.speedOfSound, 9);
-      expect(r.plans[0].gain).toBeCloseTo((gains.ding * t.referenceM) / d, 9);
+      expect(r.plans[0].gain).toBeCloseTo(gains.ding * Math.pow(t.referenceM / d, t.dingRolloff), 9);
       expect(r.plans[0].lowpassHz).toBeLessThan(t.openLowpassHz);
       expect(r.lengthS).toBeCloseTo(LEAD_S + r.plans[0].delayS + voiceLength(placed[0], report) + TAIL_S, 9);
     }
+    expect(byName(`ding-${near}m`).rules).toBeUndefined();
+    expect(byName(`ding-${far}m`).rules).toEqual({ floorDb: -24 });
   });
 
-  it("a headshot that kills as its shooter hears it, the crack, the gush and the kill's thud and chime at once at the ear: reported, not held", () => {
+  it("a headshot that kills as its shooter hears it on the range: the crack and the gush at the ear, the kill's thud and chime a frame later (its voice with the next frame's); at least 35% of its first 300 ms in 400 Hz–2 kHz", () => {
     const r = byName('headshot-kill');
-    const placed = planFeedback(t, (['head', 'gush', 'kill'] as const).map((kind) => ({ kind, at: null, gain: gains[kind] })), [0, 0, 0]);
-    expect(r.plans).toEqual(placed);
-    expect(r.gated).toBe(false);
-    expect(r.lengthS).toBeCloseTo(LEAD_S + Math.max(...placed.map((p) => voiceLength(p, report))) + TAIL_S, 9);
+    const now = planFeedback(t, (['head', 'gush'] as const).map((kind) => ({ kind, at: null, gain: gains[kind] })), [0, 0, 0]);
+    const [kill] = planFeedback(t, [{ kind: 'kill', at: null, gain: gains.kill }], [0, 0, 0]);
+    expect(r.plans).toEqual([...now, { ...kill, delayS: FRAME_S }]);
+    expect(r.rules).toEqual({ band: { hz: [400, 2000], share: 0.35, firstS: 0.3 } });
+    expect(r.lengthS).toBeCloseTo(LEAD_S + Math.max(...r.plans.map((p) => p.delayS + voiceLength(p, report))) + TAIL_S, 9);
   });
 
-  it('every name is its own (a file each)', () => {
+  it('every name is its own (a file each), and a render held to another names one rendered', () => {
     expect(new Set(list.map((r) => r.name)).size).toBe(list.length);
+    for (const r of list) if (r.rules?.near) expect(list.map((x) => x.name), r.name).toContain(r.rules.near.of);
   });
 });

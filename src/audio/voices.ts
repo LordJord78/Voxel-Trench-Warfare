@@ -18,6 +18,7 @@
  *   at its own rate; and being hit, a low thump and a high ring in the ears.
  */
 
+import type { Tunables } from '../core/tunables';
 import type { VoicePlan } from './plan';
 
 /** The report's body, from the reference's WeaponReport. */
@@ -26,13 +27,34 @@ export interface ReportShape {
   lengthS: number;
 }
 
-/** Noise filtered and shaped: up to `peak` in `attack` seconds, then down by `decay`. */
-function burst(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, filter: BiquadFilterOptions, peak: number, attack: number, decay: number): void {
+/** The report's body the engine is given (app/main.ts), and the sounds' proof renders with (tools/sounds). */
+export function reportShape(tun: Tunables): ReportShape {
+  return { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') };
+}
+
+/** A voice that falls to a share of its peak (`fall`) fades from there to nothing over this (s). */
+const FALL_FADE_S = 0.004;
+
+/**
+ * A gain at `peak` falling away by `to`: to 1e-4 (inaudible), or, given `fall`, to `fall` × `peak` and
+ * then to nothing over FALL_FADE_S: a gentler fall, heard to its end.
+ */
+function fallAway(gain: AudioParam, peak: number, to: number, fall?: number): void {
+  if (fall === undefined) {
+    gain.exponentialRampToValueAtTime(1e-4, to);
+    return;
+  }
+  gain.exponentialRampToValueAtTime(peak * fall, to);
+  gain.linearRampToValueAtTime(0, to + FALL_FADE_S);
+}
+
+/** Noise filtered and shaped: up to `peak` in `attack` seconds, then down by `decay` (to `fall` × `peak` and away, if given). */
+function burst(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, filter: BiquadFilterOptions, peak: number, attack: number, decay: number, fall?: number): void {
   const source = new AudioBufferSourceNode(ctx, { buffer: noise });
   const shape = new GainNode(ctx, { gain: 0 });
   shape.gain.setValueAtTime(0, when);
   shape.gain.linearRampToValueAtTime(peak, when + attack);
-  shape.gain.exponentialRampToValueAtTime(1e-4, when + attack + decay);
+  fallAway(shape.gain, peak, when + attack + decay, fall);
   source.connect(new BiquadFilterNode(ctx, filter)).connect(shape).connect(into);
   const length = attack + decay + 0.05;
   source.start(when, Math.random() * Math.max(0, noise.duration - length), length);
@@ -105,43 +127,51 @@ function hiss(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: 
   air.stop(end + 0.01);
 }
 
-/** A tone gliding from `from` to `to` Hz as it dies away over `decay` seconds. */
-function tone(ctx: BaseAudioContext, into: AudioNode, when: number, type: OscillatorType, from: number, to: number, peak: number, decay: number): void {
+/** A tone gliding from `from` to `to` Hz as it dies away over `decay` seconds (to `fall` × `peak` and away, if given). */
+function tone(ctx: BaseAudioContext, into: AudioNode, when: number, type: OscillatorType, from: number, to: number, peak: number, decay: number, fall?: number): void {
   const osc = new OscillatorNode(ctx, { type, frequency: from });
   osc.frequency.setValueAtTime(from, when);
   osc.frequency.exponentialRampToValueAtTime(to, when + decay);
   const shape = new GainNode(ctx, { gain: 0 });
   shape.gain.setValueAtTime(0, when);
   shape.gain.linearRampToValueAtTime(peak, when + 0.002);
-  shape.gain.exponentialRampToValueAtTime(1e-4, when + decay);
+  fallAway(shape.gain, peak, when + decay, fall);
   osc.connect(shape).connect(into);
   osc.start(when);
   osc.stop(when + decay + 0.05);
 }
 
-/** The gush's way in and out (s). */
+/** The gush's way in and out (s), and how far it falls over its way out: to a hundredth of its peak, so its flutter is heard to the end. */
 const GUSH_IN_S = 0.015;
 const GUSH_OUT_S = 0.5;
+const GUSH_FALL = 1e-2;
+/** Its bandpass's Q: narrow enough that most of it stays in 400 Hz–2 kHz as it sweeps (npm run sounds holds 55% there). */
+const GUSH_Q = 3;
+/** Its last fade to nothing (s), before its noise stops. */
+const GUSH_END_S = 0.05;
 
 /**
  * A wet gush: noise through a bandpass sweeping 1.8 kHz down to 500 Hz over 0.45 s, its loudness
- * fluttering at a rate drawn from 8 to 20 Hz, coming in over 15 ms and dying away over 0.5 s; under
- * it, a splat of noise below 400 Hz for 80 ms.
+ * fluttering at a rate drawn from 8 to 20 Hz, coming in over 15 ms and dying away over 0.5 s to a
+ * hundredth of its peak, then to nothing; under it, a splat of noise below 400 Hz for 80 ms.
  */
 function gush(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, peak: number): void {
-  const length = GUSH_IN_S + GUSH_OUT_S + 0.05;
+  const length = GUSH_IN_S + GUSH_OUT_S + GUSH_END_S;
   const source = new AudioBufferSourceNode(ctx, { buffer: noise });
-  const band = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: 1800, Q: 1.4 });
+  const band = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: 1800, Q: GUSH_Q });
   band.frequency.setValueAtTime(1800, when);
   band.frequency.exponentialRampToValueAtTime(500, when + 0.45);
-  // The flutter: a gain swung between 0.25 and 1 by a sine at its rate.
+  // The flutter: a gain swung between 0.25 and 1 at its rate, from 1 (a cosine), so every gush comes in
+  // whole whatever its rate: a sine from its middle came in at anywhere from half to all of its peak.
   const flutter = new GainNode(ctx, { gain: 0.625 });
-  const rate = new OscillatorNode(ctx, { type: 'sine', frequency: 8 + Math.random() * 12 });
+  const cosine = new PeriodicWave(ctx, { real: [0, 1], imag: [0, 0], disableNormalization: true });
+  const rate = new OscillatorNode(ctx, { type: 'custom', frequency: 8 + Math.random() * 12, periodicWave: cosine });
   rate.connect(new GainNode(ctx, { gain: 0.375 })).connect(flutter.gain);
   const shape = new GainNode(ctx, { gain: 0 });
   shape.gain.setValueAtTime(0, when);
   shape.gain.linearRampToValueAtTime(peak, when + GUSH_IN_S);
-  shape.gain.exponentialRampToValueAtTime(1e-4, when + GUSH_IN_S + GUSH_OUT_S);
+  shape.gain.exponentialRampToValueAtTime(peak * GUSH_FALL, when + GUSH_IN_S + GUSH_OUT_S);
+  shape.gain.linearRampToValueAtTime(0, when + length);
   source.connect(band).connect(flutter).connect(shape).connect(into);
   source.start(when, Math.random() * Math.max(0, noise.duration - length), length);
   rate.start(when);
@@ -197,7 +227,7 @@ export function voiceLength(v: VoicePlan, report: ReportShape): number {
     case 'head':
       return 0.13;
     case 'gush':
-      return GUSH_IN_S + GUSH_OUT_S + 0.05;
+      return GUSH_IN_S + GUSH_OUT_S + GUSH_END_S;
     case 'kill':
       return 0.06 + 0.2 + 0.01;
     case 'ding':
@@ -287,9 +317,11 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       burst(ctx, noise, dull, when + 0.24, { type: 'lowpass', frequency: 300 }, 0.5 * g, 0.004, 0.08);
       break;
     case 'hit':
-      // A thwack: a sine falling 160 to 90 Hz over 60 ms, and a 12 ms click of noise about 2.5 kHz.
-      tone(ctx, dull, when, 'sine', 160, 90, g, 0.06);
-      burst(ctx, noise, dull, when, { type: 'bandpass', frequency: 2500, Q: 1.2 }, 0.6 * g, 0.0005, 0.012);
+      // A thwack: a sine falling 160 to 90 Hz over 60 ms, and a 12 ms click of noise about 2.5 kHz. A
+      // laptop's speakers barely play the sine, so the click carries the hit there: wide, held near its
+      // peak through its 12 ms, and louder than the sine (npm run sounds holds a quarter of it over 400 Hz).
+      tone(ctx, dull, when, 'sine', 160, 90, 0.65 * g, 0.06);
+      burst(ctx, noise, dull, when, { type: 'bandpass', frequency: 2500, Q: 0.6 }, 2.6 * g, 0.0005, 0.012, 0.25);
       break;
     case 'head':
       // A crack: two inharmonic partials, at 2.9 and 4.6 kHz, over 0.12 s.
@@ -300,20 +332,22 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       gush(ctx, noise, dull, when, g);
       break;
     case 'kill':
-      // A thud, a sine falling 70 to 45 Hz over 0.25 s; and 60 ms on, a low chime of 880 and 1320 Hz over 0.2 s.
+      // A thud, a sine falling 70 to 45 Hz over 0.25 s; and 60 ms on, a low chime of 880 and 1320 Hz over
+      // 0.2 s, ringing over the thud's tail: on a laptop's speakers the chime is the kill.
       tone(ctx, dull, when, 'sine', 70, 45, g, 0.25);
-      tone(ctx, dull, when + 0.06, 'sine', 880, 878, 0.35 * g, 0.2);
-      tone(ctx, dull, when + 0.06, 'sine', 1320, 1317, 0.25 * g, 0.2);
+      tone(ctx, dull, when + 0.06, 'sine', 880, 878, 0.7 * g, 0.2);
+      tone(ctx, dull, when + 0.06, 'sine', 1320, 1317, 0.5 * g, 0.2);
       break;
     case 'ding':
       // A steel plate: its partials, each ringing its own while.
       for (const [hz, ringS, share] of DING) tone(ctx, dull, when, 'sine', hz, hz, share * g, ringS);
       break;
     case 'hurt':
-      // Being hit: a low thump, and a quiet 3 kHz ring in the ears fading over 0.6 s.
-      tone(ctx, dull, when, 'sine', 95, 50, g, 0.18);
+      // Being hit: a low thump, and a 3 kHz ring in the ears fading over 0.6 s to a hundredth: on a
+      // laptop's speakers the ring is what is heard of it.
+      tone(ctx, dull, when, 'sine', 95, 50, 0.85 * g, 0.18);
       burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 250 }, 0.6 * g, 0.003, 0.1);
-      tone(ctx, dull, when, 'sine', 3000, 2990, 0.12 * g, 0.6);
+      tone(ctx, dull, when, 'sine', 3000, 2990, 0.25 * g, 0.6, 1e-2);
       break;
   }
   return {

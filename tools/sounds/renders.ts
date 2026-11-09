@@ -1,23 +1,28 @@
 /**
- * What the sounds' proof renders (npm run sounds; the shots spec's §6), each to its own WAV: a list of
- * renders, each the voices it plays as the game plans them (audio/plan.ts) for a listener at the origin
- * facing −z, how long its file is, whether its peak is held to the range (tools/lib/sound-measures.mjs),
- * and any band its energy must lie mostly in. The page (page.ts) plays each through audio/voices.ts's
- * own playVoice into the engine's own mix (audio/engine.ts mixInto), offline.
+ * What the sounds' proof renders (npm run sounds; the shots spec's §6, G3's Task 5), each to its own
+ * stereo WAV: a list of renders, each the voices it plays as the game plans them (audio/plan.ts) for a
+ * listener at the origin facing −z, how long its file is, whether a failure of it fails the run
+ * (`gated`), and what it is held to besides its peak's range (tools/lib/sound-measures.mjs checkSound).
+ * The page (page.ts) plays each through audio/voices.ts's own playVoice into the engine's own mix
+ * (audio/engine.ts mixInto), offline.
  *
- * The hits' voices (the shots spec's §4): each at the ear, as the shooter hears it, at its [hits] gain,
- * held to the range; the gush held to 400 Hz–2 kHz. A steel plate rings at the plate, so it is heard
- * from the spawn at the range's nearest and farthest plates too; and a headshot that kills as its
- * shooter hears it, the crack, the gush and the kill at once. Those are reported (what distance leaves
- * of a ring; how the gush stands in the mix), not held. More kinds (the reports, the hands' cues) join
- * the list as theirs are made.
+ * The hits' voices (the shots spec's §4), each at the ear as the shooter hears it, at its [hits] gain,
+ * and each held to the small speaker: a laptop barely plays what is under 400 Hz, so at least a quarter
+ * of a voice's energy lies over it. The gush gushes: most of it in 400 Hz–2 kHz, and as loud over its
+ * loudest 50 ms as the kill's, within 3 dB. A steel plate rings at the plate, so it is heard from the
+ * spawn at the range's nearest and farthest plates too, the farthest held to a floor: its ring is the
+ * shooter's only word of a hit there. And a headshot that kills, as its shooter hears it on the range,
+ * the crack and the gush and a frame later the kill: the gush is not lost in it, a good share of its
+ * first 300 ms in 400 Hz–2 kHz. More kinds (the reports, the hands' cues) join the list as theirs are
+ * made; one only reported (`gated` false) says what fails of it and does not fail the run.
  */
 
 import { hitFeedbackTunables } from '../../src/app/hit-feedback';
 import { audioTunables, planFeedback, type FeedbackKind, type VoicePlan } from '../../src/audio/plan';
-import { voiceLength, type ReportShape } from '../../src/audio/voices';
+import { reportShape, voiceLength } from '../../src/audio/voices';
 import { rangeTunables } from '../../src/combat/range';
 import type { Tunables } from '../../src/core/tunables';
+import type { SoundRules } from '../lib/sound-measures.mjs';
 
 /** Every file's rate (Hz). */
 export const RATE = 48000;
@@ -25,6 +30,12 @@ export const RATE = 48000;
 export const LEAD_S = 0.01;
 /** A file runs this far past its last voice's end (s). */
 export const TAIL_S = 0.1;
+/**
+ * A frame at 60 Hz (s): the range's kill is fed back after the frame's hits, and its voice plays with
+ * the next frame's (app/main.ts), a frame after the headshot's crack and gush. A room's kill comes later
+ * still, by the round trip; the range's is the nearest, where the kill's thud masks the gush the most.
+ */
+export const FRAME_S = 1 / 60;
 
 export interface Render {
   /** Its file's name, `<name>.wav`. */
@@ -33,42 +44,44 @@ export interface Render {
   plans: VoicePlan[];
   /** Its file's length (s). */
   lengthS: number;
-  /** Its peak held to the range (a failure fails the run), or only reported. */
+  /** A failure of it fails the run, or it is only reported. */
   gated: boolean;
-  /** A band (Hz) more than `share` of its energy must lie in. */
-  band?: { band: [number, number]; share: number };
+  /** What it is held to besides its peak's range: a band, the small speaker, a floor, another render's level. */
+  rules?: SoundRules;
 }
 
-/** The report's body the engine is given (app/main.ts): voiceLength needs it, and the reports will. */
-export function reportShape(tun: Tunables): ReportShape {
-  return { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') };
-}
-
-const FEEDBACK: readonly FeedbackKind[] = ['hit', 'head', 'gush', 'kill', 'ding', 'hurt'];
-/** What the shooter hears of a headshot that kills (app/hit-feedback.ts), all at once at the ear. */
-const HEADSHOT_KILL: readonly FeedbackKind[] = ['head', 'gush', 'kill'];
-/** The gush's band, and the share of its energy that must lie in it (the spec's "mostly"). */
-const GUSH_BAND = { band: [400, 2000] as [number, number], share: 0.5 };
+const EARS: readonly FeedbackKind[] = ['hit', 'head', 'gush', 'kill', 'ding', 'hurt'];
+/** The small speaker: at least this share of a voice's energy over 400 Hz. */
+const SMALL_SPEAKER = 0.25;
+/** The gush gushes: at least this share of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill's. */
+const GUSH: SoundRules = { band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3 } };
+/** A headshot that kills: at least this share of its first 300 ms's energy in 400 Hz–2 kHz, the gush not lost under the kill. */
+const HEADSHOT_KILL: SoundRules = { band: { hz: [400, 2000], share: 0.35, firstS: 0.3 } };
+/** The farthest plate's ring heard from the spawn: its peak at least this (dBFS). */
+const FAR_DING_DB = -24;
 
 export function renders(tun: Tunables): Render[] {
   const t = audioTunables(tun);
   const gains = hitFeedbackTunables(tun).gains;
   const report = reportShape(tun);
   const ear: [number, number, number] = [0, 0, 0];
-  /** A render of `plans`: as long as the last of them sounds, from its delay, and the tail. */
-  const of = (name: string, plans: VoicePlan[], gated: boolean, band?: Render['band']): Render => ({
+  /** A render of `plans`, held: as long as the last of them sounds, from its delay, and the tail. */
+  const of = (name: string, plans: VoicePlan[], rules?: SoundRules): Render => ({
     name,
     plans,
     lengthS: LEAD_S + Math.max(...plans.map((p) => p.delayS + voiceLength(p, report))) + TAIL_S,
-    gated,
-    ...(band ? { band } : {}),
+    gated: true,
+    ...(rules ? { rules } : {}),
   });
-  const out = FEEDBACK.map((kind) => of(kind, planFeedback(t, [{ kind, at: null, gain: gains[kind] }], ear), true, kind === 'gush' ? GUSH_BAND : undefined));
+  const atEar = (kinds: readonly FeedbackKind[]) => planFeedback(t, kinds.map((kind) => ({ kind, at: null, gain: gains[kind] })), ear);
+  const out = EARS.map((kind) => of(kind, atEar([kind]), { high: SMALL_SPEAKER, ...(kind === 'gush' ? GUSH : {}) }));
   // A plate's ring heard from the spawn, straight ahead, at the nearest and farthest plates.
   const r = rangeTunables(tun);
   const plates = [...r.torsoPlatesM, ...r.headPlatesM];
-  for (const d of [Math.min(...plates), Math.max(...plates)]) out.push(of(`ding-${d}m`, planFeedback(t, [{ kind: 'ding', at: [0, 0, -d], gain: gains.ding }], ear), false));
-  // A headshot that kills, as its shooter hears it: the crack, the gush, and the kill's thud and chime at once.
-  out.push(of('headshot-kill', planFeedback(t, HEADSHOT_KILL.map((kind) => ({ kind, at: null, gain: gains[kind] })), ear), false));
+  const [near, far] = [Math.min(...plates), Math.max(...plates)];
+  for (const d of [near, far]) out.push(of(`ding-${d}m`, planFeedback(t, [{ kind: 'ding', at: [0, 0, -d], gain: gains.ding }], ear), d === far ? { floorDb: FAR_DING_DB } : undefined));
+  // A headshot that kills, as its shooter hears it on the range: the crack and the gush, and a frame later the kill's thud and chime.
+  const [kill] = atEar(['kill']);
+  out.push(of('headshot-kill', [...atEar(['head', 'gush']), { ...kill, delayS: FRAME_S }], HEADSHOT_KILL));
   return out;
 }

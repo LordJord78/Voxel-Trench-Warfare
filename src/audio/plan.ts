@@ -58,6 +58,8 @@ export interface AudioTunables {
   masterGain: number;
   referenceM: number;
   rolloff: number;
+  /** A steel plate's ring falls off as (reference / distance)^this: gentler than rolloff, as steel rings far. */
+  dingRolloff: number;
   farM: number;
   farLowpassHz: number;
   openLowpassHz: number;
@@ -103,6 +105,7 @@ export function audioTunables(tun: Tunables): AudioTunables {
     masterGain: f('master_gain'),
     referenceM: f('reference_m'),
     rolloff: f('rolloff'),
+    dingRolloff: f('ding_rolloff'),
     farM: f('far_m'),
     farLowpassHz: f('far_lowpass_hz'),
     openLowpassHz: f('open_lowpass_hz'),
@@ -143,28 +146,32 @@ function struck(material: number): VoiceKind {
 
 /**
  * A voice of `kind` at `at` heard from `listener`: late by the distance, quieter as
- * (reference / distance)^rolloff past the reference, and duller toward far_lowpass_hz by far_m.
+ * (reference / distance)^rolloff past the reference (`rolloff`, [audio]'s unless told another), and
+ * duller toward far_lowpass_hz by far_m.
  */
-function heardAfar(t: AudioTunables, listener: readonly number[], at: [number, number, number], gain: number, kind: VoiceKind): VoicePlan {
+function heardAfar(t: AudioTunables, listener: readonly number[], at: [number, number, number], gain: number, kind: VoiceKind, rolloff = t.rolloff): VoicePlan {
   const d = Math.hypot(at[0] - listener[0], at[1] - listener[1], at[2] - listener[2]);
   const share = Math.min(1, Math.max(0, (d - t.referenceM) / (t.farM - t.referenceM)));
   return {
     kind,
     at,
     delayS: d / t.speedOfSound,
-    gain: gain * Math.min(1, Math.pow(t.referenceM / Math.max(t.referenceM, d), t.rolloff)),
+    gain: gain * Math.min(1, Math.pow(t.referenceM / Math.max(t.referenceM, d), rolloff)),
     lowpassHz: t.openLowpassHz * Math.pow(t.farLowpassHz / t.openLowpassHz, share),
   };
 }
 
 /**
  * A hit's feedback placed (the shots spec's §4): a voice at the ear (`at` null) where the listener
- * is, at once, whole and undulled, as the player's own report is; one where something was struck, or
- * a plate that rings, heard from afar as any voice there is.
+ * is, at once, whole and undulled, as the player's own report is; one where something was struck heard
+ * from afar as any voice there is, and a plate that rings likewise but falling off by ding_rolloff:
+ * steel rings far, and at the range's far plates its ring is the shooter's only word of a hit.
  */
 export function planFeedback(t: AudioTunables, voices: readonly FeedbackVoice[], listener: readonly number[]): VoicePlan[] {
   return voices.map((v) =>
-    v.at === null ? { kind: v.kind, at: [listener[0], listener[1], listener[2]], delayS: 0, gain: v.gain, lowpassHz: t.openLowpassHz } : heardAfar(t, listener, v.at, v.gain, v.kind),
+    v.at === null
+      ? { kind: v.kind, at: [listener[0], listener[1], listener[2]], delayS: 0, gain: v.gain, lowpassHz: t.openLowpassHz }
+      : heardAfar(t, listener, v.at, v.gain, v.kind, v.kind === 'ding' ? t.dingRolloff : t.rolloff),
   );
 }
 

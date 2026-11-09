@@ -33,8 +33,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
+import { parseOnly } from './lib/cli.mjs';
 import { decode, encode } from './lib/image.mjs';
-import { CAPTURES, countFailures, DELTA, laidOf, lookFailures, MARGIN_PX, marked, noiseFloor, parseOnly, sheet, shows, SHOW_PIXELS, sizesOf, targetBox, USAGE } from './lib/range-measures.mjs';
+import { CAPTURES, countFailures, DELTA, laidOf, lookFailures, MARGIN_PX, marked, noiseFloor, sheet, shows, SHOW_PIXELS, sizesOf, targetBox, USAGE } from './lib/range-measures.mjs';
 import { failedEntry, readReport, removePictures, stamp, writeReport } from './lib/report.mjs';
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
@@ -199,7 +200,7 @@ async function captureAt(page, c, layout) {
 
 // ---- run ---------------------------------------------------------------------------------------
 
-const asked = parseOnly(process.argv.slice(2), CAPTURES.map((c) => c.name));
+const asked = parseOnly(process.argv.slice(2), CAPTURES.map((c) => c.name), 'capture');
 if ('error' in asked) {
   console.error(asked.error);
   console.error(USAGE);

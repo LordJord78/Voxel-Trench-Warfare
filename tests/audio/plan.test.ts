@@ -236,8 +236,25 @@ describe('the sound of a frame', () => {
     expect(ding.at).toEqual(plate);
     expect(ding.delayS).toBeCloseTo(0.25, 2);
     expect(ding.delayS).toBeCloseTo(85 / 343, 9);
-    expect(ding.gain).toBeCloseTo(1.5 * Math.pow(t.referenceM / 85, t.rolloff), 9);
+    expect(ding.gain).toBeCloseTo(1.5 * Math.pow(t.referenceM / 85, t.dingRolloff), 9);
     expect(ding.lowpassHz).toBeLessThan(t.openLowpassHz);
     expect(planFeedback(t, [], ear)).toEqual([]);
+  });
+
+  it("a plate's ring falls off more gently than any other voice (steel rings far): by ding_rolloff, a body's hit afar by rolloff", () => {
+    const tun = loadTunables();
+    expect(t.dingRolloff).toBe(tun.f('audio.ding_rolloff'));
+    expect(t.dingRolloff).toBeGreaterThan(0);
+    expect(t.dingRolloff).toBeLessThan(t.rolloff);
+    const at = (d: number): [number, number, number] => [ear[0], ear[1], ear[2] + d];
+    const [ding, hit, gush] = planFeedback(t, [{ kind: 'ding', at: at(85), gain: 1.5 }, { kind: 'hit', at: at(20), gain: 0.75 }, { kind: 'gush', at: at(20), gain: 0.8 }], ear);
+    expect(ding.gain).toBeCloseTo(1.5 * Math.pow(t.referenceM / 85, t.dingRolloff), 9);
+    expect(ding.gain).toBeGreaterThan(1.5 * Math.pow(t.referenceM / 85, t.rolloff));
+    expect(hit.gain).toBeCloseTo(0.75 * Math.pow(t.referenceM / 20, t.rolloff), 9);
+    expect(gush.gain).toBeCloseTo(0.8 * Math.pow(t.referenceM / 20, t.rolloff), 9);
+    // Within the reference, whole, as any voice is; its delay and dulling as any voice afar's.
+    expect(planFeedback(t, [{ kind: 'ding', at: at(1.5), gain: 1.5 }], ear)[0].gain).toBe(1.5);
+    expect(ding.delayS).toBeCloseTo(85 / t.speedOfSound, 9);
+    expect(ding.lowpassHz).toBeCloseTo(planFeedback(t, [{ kind: 'hit', at: at(85), gain: 0.75 }], ear)[0].lowpassHz, 9);
   });
 });

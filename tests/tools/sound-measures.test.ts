@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { bandShare, checkSound, dbfs, measure, PEAK_DB, SILENT_DB, table, wav } from '../../tools/lib/sound-measures.mjs';
+import { BAND, bandShare, checkSound, dbfs, LOUDEST_S, loudest, measure, ONSET_DB, onset, PEAK_DB, ruleShare, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
 
-// The sounds' proof (tools/render-sounds.mjs, npm run sounds; the shots spec's §6): each voice rendered
-// to WAV, its peak held between −30 and −1 dBFS, nothing silent, and the gush's energy mostly in
-// 400 Hz–2 kHz. Read on synthetic signals.
+// The sounds' proof (tools/render-sounds.mjs, npm run sounds; the shots spec's §6, G3's Task 5): each
+// voice rendered to a stereo WAV, its peak held between −30 and −1 dBFS, nothing silent; a voice held
+// to a band, to a small speaker (its share over 400 Hz), to a floor, or to another render's loudest
+// 50 ms. Read on synthetic signals, both ears together.
 
 const RATE = 48000;
 
@@ -39,6 +40,20 @@ describe("the sounds' measures", () => {
     expect([r.text(36, 4), r.u32(40)]).toEqual(['data', samples.length * 2]);
     const read = Array.from(samples, (_, i) => r.i16(44 + i * 2));
     expect(read).toEqual([0, 16384, -16384, 32767, -32767, 32767, -32767, 8192]);
+    // A list of one channel is the same file.
+    expect(wav([samples], RATE)).toEqual(bytes);
+  });
+
+  it('a stereo WAV: two channels, four bytes a frame, the left and right samples interleaved', () => {
+    const left = Float32Array.from([0, 0.5, 1, -2]);
+    const right = Float32Array.from([0.25, -0.5, 0, 0.75]);
+    const bytes = wav([left, right], RATE);
+    const r = reader(bytes);
+    expect(bytes.length).toBe(44 + 4 * 4);
+    expect([r.u32(4), r.u16(20), r.u16(22), r.u32(24), r.u32(28), r.u16(32), r.u16(34)]).toEqual([bytes.length - 8, 1, 2, RATE, RATE * 4, 4, 16]);
+    expect([r.text(36, 4), r.u32(40)]).toEqual(['data', 16]);
+    expect(Array.from({ length: 8 }, (_, i) => r.i16(44 + i * 2))).toEqual([0, 8192, 16384, -16384, 32767, 0, -32767, 24575]);
+    expect(() => wav([left, right.subarray(1)], RATE)).toThrow(/length/);
   });
 
   it('dBFS: full scale is 0, half is about −6, silence is −Infinity', () => {
@@ -58,10 +73,23 @@ describe("the sounds' measures", () => {
     expect(measure(spike, RATE).peakDb).toBeCloseTo(dbfs(0.9), 5);
     // Silence.
     const quiet = measure(new Float32Array(4800), RATE);
-    expect([quiet.peakDb, quiet.rmsDb, quiet.bandShare]).toEqual([-Infinity, -Infinity, 0]);
+    expect([quiet.peakDb, quiet.rmsDb, quiet.loudestDb, quiet.bandShare, quiet.highShare]).toEqual([-Infinity, -Infinity, -Infinity, 0, 0]);
+  });
+
+  it('both ears together: the peak the louder ear\'s, the RMS over both, a list of one channel the same as the channel', () => {
+    const left = signal(0.5, sine(1000, 0.5));
+    const right = signal(0.5, sine(1000, 0.25));
+    const m = measure([left, right], RATE);
+    expect(m.peakDb).toBeCloseTo(dbfs(0.5), 2);
+    // Mean power (0.125 + 0.03125) / 2.
+    expect(m.rmsDb).toBeCloseTo(10 * Math.log10((0.125 + 0.03125) / 2), 2);
+    expect(measure([left], RATE)).toEqual(measure(left, RATE));
+    // Either ear may be the louder.
+    expect(measure([right, left], RATE).peakDb).toBeCloseTo(dbfs(0.5), 2);
   });
 
   it("the share of a signal's energy in a band, by an FFT: all of a sine inside it, none of one outside, half of two equal sines either side of its edge", () => {
+    expect(BAND).toEqual([400, 2000]);
     expect(bandShare(signal(0.5, sine(1000)), RATE, 400, 2000)).toBeGreaterThan(0.99);
     expect(bandShare(signal(0.5, sine(100)), RATE, 400, 2000)).toBeLessThan(0.01);
     expect(bandShare(signal(0.5, sine(5000)), RATE, 400, 2000)).toBeLessThan(0.01);
@@ -77,41 +105,124 @@ describe("the sounds' measures", () => {
     // middle (no window over the whole file to weigh its middle over its ends).
     const early = signal(0.4, (t) => (t >= 0.01 && t < 0.05 ? sine(100)(t) : t >= 0.2 && t < 0.24 ? sine(1000)(t) : 0));
     expect(bandShare(early, RATE, 400, 2000)).toBeCloseTo(0.5, 1);
-    // measure() reads it for 400 Hz–2 kHz unless told another band.
+    // Both ears' energy summed: a chime in one ear and a thud as loud in the other is half in the band.
+    expect(bandShare([signal(0.5, sine(1000)), signal(0.5, sine(100))], RATE, 400, 2000)).toBeCloseTo(0.5, 2);
+    // measure() reads it for BAND, always.
     expect(measure(signal(0.5, sine(1000)), RATE).bandShare).toBeGreaterThan(0.99);
-    expect(measure(signal(0.5, sine(1000)), RATE, [2000, 8000]).bandShare).toBeLessThan(0.01);
+    expect(measure(signal(0.5, sine(5000)), RATE).bandShare).toBeLessThan(0.01);
   });
+
+  it("the small speaker's share: a voice's energy over 400 Hz, which a laptop plays, both ears together", () => {
+    expect(SMALL_SPEAKER_HZ).toBe(400);
+    expect(measure(signal(0.5, sine(100)), RATE).highShare).toBeLessThan(0.01);
+    expect(measure(signal(0.5, sine(5000)), RATE).highShare).toBeGreaterThan(0.99);
+    // A thud with a chime a quarter as loud in power (half the amplitude): a fifth over 400 Hz.
+    expect(measure(signal(0.5, (t) => sine(80)(t) + sine(1500, 0.5)(t)), RATE).highShare).toBeCloseTo(0.2, 2);
+    expect(measure([signal(0.5, sine(80)), signal(0.5, sine(9000))], RATE).highShare).toBeCloseTo(0.5, 2);
+  });
+
+  it('the loudest 50 ms: the RMS of the loudest window, both ears together, and where it starts', () => {
+    expect(LOUDEST_S).toBe(0.05);
+    // 50 ms of a half-scale sine 0.2 s in, quiet elsewhere.
+    const burst = signal(0.5, (t) => (t >= 0.2 && t < 0.25 ? sine(1000, 0.5)(t) : 0.001 * sine(1000)(t)));
+    const l = loudest(burst, RATE);
+    expect(l.db).toBeCloseTo(dbfs(0.5) - 3.01, 1);
+    expect(l.atS).toBeCloseTo(0.2, 2);
+    expect(measure(burst, RATE).loudestDb).toBeCloseTo(l.db, 9);
+    expect(measure(burst, RATE).loudestAtS).toBeCloseTo(l.atS, 9);
+    // A thud of 30 ms at full scale is louder over 50 ms than its peak's 3 dB under: 30/50 of its power.
+    const thud = signal(0.3, (t) => (t < 0.03 ? sine(100)(t) : 0));
+    expect(loudest(thud, RATE).db).toBeCloseTo(10 * Math.log10(0.5 * 0.6), 1);
+    // Both ears: the window's mean power over them.
+    expect(loudest([burst, new Float32Array(burst.length)], RATE).db).toBeCloseTo(dbfs(0.5) - 3.01 - 3.01, 1);
+    // A file shorter than the window is read whole.
+    expect(loudest(signal(0.02, sine(1000, 0.5)), RATE).db).toBeCloseTo(dbfs(0.5) - 3.01, 1);
+    expect(loudest(new Float32Array(100), RATE).db).toBe(-Infinity);
+  });
+
+  it("a rule's own band, measured apart from the table's: over the whole file, or its first seconds from its onset", () => {
+    expect(ONSET_DB).toBe(-60);
+    // A chime for 0.3 s after 22 ms of silence (a render's lead, the compressor's look-ahead and the HRTF's delay), then a thud as loud for 0.3 s.
+    const lead = 0.022;
+    const s = signal(0.65, (t) => (t >= lead && t < lead + 0.3 ? sine(1000)(t) : t >= lead + 0.3 && t < lead + 0.6 ? sine(100)(t) : 0));
+    expect(onset(s, RATE)).toBeCloseTo(lead, 3);
+    expect(ruleShare(s, RATE, { hz: [400, 2000], share: 0.5 })).toBeCloseTo(0.5, 1);
+    expect(ruleShare(s, RATE, { hz: [400, 2000], share: 0.5, firstS: 0.3 })).toBeGreaterThan(0.95);
+    expect(ruleShare(s, RATE, { hz: [50, 200], share: 0.5, firstS: 0.3 })).toBeLessThan(0.05);
+    // Either ear's onset, the earlier: a sound in the right ear first starts the window there.
+    const late = signal(0.65, (t) => (t >= 0.1 && t < 0.4 ? sine(100)(t) : 0));
+    expect(onset([late, s], RATE)).toBeCloseTo(lead, 3);
+    expect(ruleShare([s, s], RATE, { hz: [400, 2000], share: 0.5, firstS: 0.3 })).toBeCloseTo(ruleShare(s, RATE, { hz: [400, 2000], share: 0.5, firstS: 0.3 }), 9);
+    // Under −60 dBFS is not yet the sound; silence has no onset (and no share).
+    const faint = signal(0.65, (t) => (t < lead ? sine(1000, 0.0005)(t) : sine(1000)(t)));
+    expect(onset(faint, RATE)).toBeCloseTo(lead, 3);
+    expect(onset(new Float32Array(480), RATE)).toBe(null);
+    expect(ruleShare(new Float32Array(480), RATE, { hz: [400, 2000], share: 0.5, firstS: 0.3 })).toBe(0);
+  });
+
+  /** A file read, ok by every rule but those a test changes. */
+  const read = (m: Partial<Parameters<typeof checkSound>[0]> = {}) => ({ peakDb: -6, rmsDb: -18, loudestDb: -12, loudestAtS: 0.01, bandShare: 0.2, highShare: 0.6, ...m });
 
   it('a file passes with its peak between −30 and −1 dBFS; over −1 it may clip, under −30 it is too quiet, and nothing at all is silent', () => {
     expect(PEAK_DB).toEqual([-30, -1]);
     expect(SILENT_DB).toBe(-90);
-    const ok = { peakDb: -6, rmsDb: -18, bandShare: 0.2 };
-    expect(checkSound(ok)).toEqual([]);
-    expect(checkSound({ ...ok, peakDb: -1 })).toEqual([]);
-    expect(checkSound({ ...ok, peakDb: -30 })).toEqual([]);
-    expect(checkSound({ ...ok, peakDb: -0.4 })).toEqual(['its peak, -0.4 dBFS, is over -1 dBFS: it may clip']);
-    expect(checkSound({ ...ok, peakDb: -34.26 })).toEqual(['its peak, -34.3 dBFS, is under -30 dBFS: too quiet']);
-    expect(checkSound({ peakDb: -Infinity, rmsDb: -Infinity, bandShare: 0 })).toEqual(['it is silent']);
-    expect(checkSound({ peakDb: -95, rmsDb: -110, bandShare: 0.1 })).toEqual(['it is silent']);
+    expect(checkSound(read())).toEqual([]);
+    expect(checkSound(read({ peakDb: -1 }))).toEqual([]);
+    expect(checkSound(read({ peakDb: -30 }))).toEqual([]);
+    expect(checkSound(read({ peakDb: -0.4 }))).toEqual(['its peak, -0.4 dBFS, is over -1 dBFS: it may clip']);
+    expect(checkSound(read({ peakDb: -34.26 }))).toEqual(['its peak, -34.3 dBFS, is under -30 dBFS: too quiet']);
+    expect(checkSound(read({ peakDb: -Infinity, rmsDb: -Infinity, bandShare: 0 }))).toEqual(['it is silent']);
+    expect(checkSound(read({ peakDb: -95, rmsDb: -110, bandShare: 0.1 }), { high: 0.25 })).toEqual(['it is silent']);
   });
 
-  it("a voice held to a band (the gush's 400 Hz–2 kHz) passes with more than the share asked of its energy in it", () => {
-    const ok = { peakDb: -6, rmsDb: -18, bandShare: 0.62 };
-    expect(checkSound(ok, { band: [400, 2000], share: 0.5 })).toEqual([]);
-    expect(checkSound({ ...ok, bandShare: 0.5 }, { band: [400, 2000], share: 0.5 })).toEqual(['only 50% of its energy is in 400-2000 Hz, not over 50%']);
-    expect(checkSound({ ...ok, peakDb: 0.2, bandShare: 0.31 }, { band: [400, 2000], share: 0.5 })).toEqual(['its peak, 0.2 dBFS, is over -1 dBFS: it may clip', 'only 31% of its energy is in 400-2000 Hz, not over 50%']);
+  it("a voice held to a band passes with at least its share there, read on the rule's own band; the share comes with the band, or is half", () => {
+    const rule = { hz: [400, 2000] as [number, number], share: 0.55 };
+    expect(checkSound(read({ ruleShare: 0.62 }), { band: rule })).toEqual([]);
+    expect(checkSound(read({ ruleShare: 0.55 }), { band: rule })).toEqual([]);
+    // The table's band column is not the rule's: a rule is read on its own measure.
+    expect(checkSound(read({ bandShare: 0.9, ruleShare: 0.45 }), { band: rule })).toEqual(['only 45.0% of its energy is in 400-2000 Hz, not 55% or more']);
+    expect(checkSound(read({ bandShare: 0.1, ruleShare: 0.6 }), { band: rule })).toEqual([]);
+    expect(checkSound(read({ ruleShare: 0.549 }), { band: rule })).toEqual(['only 54.9% of its energy is in 400-2000 Hz, not 55% or more']);
+    expect(checkSound(read({ peakDb: 0.2, ruleShare: 0.31 }), { band: rule })).toEqual(['its peak, 0.2 dBFS, is over -1 dBFS: it may clip', 'only 31.0% of its energy is in 400-2000 Hz, not 55% or more']);
+    // Over its first seconds, said so.
+    expect(checkSound(read({ ruleShare: 0.3 }), { band: { ...rule, share: 0.35, firstS: 0.3 } })).toEqual(['only 30.0% of its first 300 ms\'s energy is in 400-2000 Hz, not 35% or more']);
+    // A band with no share asked is held to half: never "NaN%".
+    expect(checkSound(read({ ruleShare: 0.4 }), { band: { hz: [400, 2000] } as never })).toEqual(['only 40.0% of its energy is in 400-2000 Hz, not 50% or more']);
+    // Unmeasured is a failure, not a pass.
+    expect(checkSound(read(), { band: rule })).toEqual(["its energy's share in 400-2000 Hz was not measured"]);
   });
 
-  it('a table of each file: its name, peak, RMS and band share, and what failed of it', () => {
+  it("a voice held to the small speaker passes with at least its share over 400 Hz", () => {
+    expect(checkSound(read({ highShare: 0.25 }), { high: 0.25 })).toEqual([]);
+    expect(checkSound(read({ highShare: 0.031 }), { high: 0.25 })).toEqual(['only 3.1% of its energy is over 400 Hz, not 25% or more: a small speaker barely plays it']);
+  });
+
+  it('a voice held to a floor passes with its peak at it or over it', () => {
+    expect(checkSound(read({ peakDb: -24 }), { floorDb: -24 })).toEqual([]);
+    expect(checkSound(read({ peakDb: -27.36 }), { floorDb: -24 })).toEqual(['its peak, -27.4 dBFS, is under its floor of -24 dBFS']);
+  });
+
+  it("a voice held to another's level passes with its loudest 50 ms within so many dB of the other's, either way", () => {
+    const near = { of: 'kill', withinDb: 3 };
+    const kill = read({ loudestDb: -16.2 });
+    expect(checkSound(read({ loudestDb: -18.9 }), { near }, { kill })).toEqual([]);
+    expect(checkSound(read({ loudestDb: -13.5 }), { near }, { kill })).toEqual([]);
+    expect(checkSound(read({ loudestDb: -27.2 }), { near }, { kill })).toEqual(["its loudest 50 ms, -27.2 dBFS, is 11.0 dB under kill's (-16.2 dBFS), not within 3 dB"]);
+    expect(checkSound(read({ loudestDb: -12.0 }), { near }, { kill })).toEqual(["its loudest 50 ms, -12.0 dBFS, is 4.2 dB over kill's (-16.2 dBFS), not within 3 dB"]);
+    expect(checkSound(read({ loudestDb: -18 }), { near }, {})).toEqual(["its level is held to kill's, which was not rendered"]);
+  });
+
+  it('a table of each file: its name, peak, RMS, loudest 50 ms, its share in BAND and over 400 Hz, and what failed of it', () => {
     const out = table([
-      { name: 'hit', peakDb: -3.14159, rmsDb: -17.5, bandShare: 0.123, failures: [] },
-      { name: 'ding-85m', peakDb: -38.04, rmsDb: -52.25, bandShare: 0.4, failures: ['its peak, -38.0 dBFS, is under -30 dBFS: too quiet'], gated: false },
-      { name: 'gush', peakDb: -Infinity, rmsDb: -Infinity, bandShare: 0, failures: ['it is silent'] },
+      { ...read({ peakDb: -3.14159, rmsDb: -17.5, loudestDb: -11.04, bandShare: 0.123, highShare: 0.456, ruleShare: 0.9 }), name: 'hit', failures: [] },
+      { ...read({ peakDb: -38.04, rmsDb: -52.25, loudestDb: -44.4, bandShare: 0.4, highShare: 0.99 }), name: 'ding-85m', failures: ['its peak, -38.0 dBFS, is under -30 dBFS: too quiet'], gated: false },
+      { ...read({ peakDb: -Infinity, rmsDb: -Infinity, loudestDb: -Infinity, bandShare: 0, highShare: 0 }), name: 'gush', failures: ['it is silent'] },
     ]);
     const lines = out.split('\n');
-    expect(lines[0]).toMatch(/^name\s+peak dBFS\s+RMS dBFS\s+400-2000 Hz\s+$/);
-    expect(lines[1]).toMatch(/^hit\s+-3\.1\s+-17\.5\s+12%\s+ok$/);
-    expect(lines[2]).toMatch(/^ding-85m\s+-38\.0\s+-52\.3\s+40%\s+\(reported\) its peak, -38\.0 dBFS, is under -30 dBFS: too quiet$/);
-    expect(lines[3]).toMatch(/^gush\s+-inf\s+-inf\s+0%\s+FAIL it is silent$/);
+    expect(lines[0]).toMatch(/^name\s+peak dBFS\s+RMS dBFS\s+loudest 50 ms\s+400-2000 Hz\s+over 400 Hz\s+$/);
+    // The band column is BAND's, never a rule's.
+    expect(lines[1]).toMatch(/^hit\s+-3\.1\s+-17\.5\s+-11\.0\s+12%\s+46%\s+ok$/);
+    expect(lines[2]).toMatch(/^ding-85m\s+-38\.0\s+-52\.3\s+-44\.4\s+40%\s+99%\s+\(reported\) its peak, -38\.0 dBFS, is under -30 dBFS: too quiet$/);
+    expect(lines[3]).toMatch(/^gush\s+-inf\s+-inf\s+-inf\s+0%\s+0%\s+FAIL it is silent$/);
   });
 });

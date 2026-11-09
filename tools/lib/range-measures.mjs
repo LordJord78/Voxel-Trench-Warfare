@@ -28,22 +28,6 @@ export const LOOK = { capture: '1735', withinM: 60, kinds: ['dummy', 'mover', 't
 export const USAGE = `usage: npm run range-captures [-- --only <names>]   (or --only=<names>; names comma-separated, of ${CAPTURES.map((c) => c.name).join(', ')})`;
 
 /**
- * The captures asked for in `argv` (the run's arguments): `--only a,b` or `--only=a,b`, each one of
- * `names`; none asked, null (every capture). A missing list or a name that is none of them is an
- * error, for the run to print with the usage.
- */
-export function parseOnly(argv, names) {
-  const at = argv.findIndex((a) => a === '--only' || a.startsWith('--only='));
-  if (at < 0) return { only: null };
-  const value = argv[at] === '--only' ? argv[at + 1] : argv[at].slice('--only='.length);
-  if (value === undefined || value === '' || value.startsWith('--')) return { error: '--only: no list of captures' };
-  const only = value.split(',');
-  const unknown = only.find((n) => !names.includes(n));
-  if (unknown !== undefined) return { error: `--only: no capture ${unknown}` };
-  return { only };
-}
-
-/**
  * Each target's size across and high, metres, by kind: a dummy's (and a mover's) shoulders and the
  * height the player stands ([stance.standing] height: the dummies stand as tall), feet to the top of
  * its head; a plate's steel ([range] torso_plate_m and head_plate_m). Read from the page's tunables.

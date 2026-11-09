@@ -1,9 +1,10 @@
 /**
  * The sounds' proof's page (tools/render-sounds.mjs serves it through Vite): each render of renders.ts
  * played through audio/voices.ts's own playVoice into the engine's own mix (audio/engine.ts mixInto:
- * the master gain and the compressor) in an OfflineAudioContext, mono at RATE, and read there
- * (tools/lib/sound-measures.mjs: its peak, RMS and band share, by an FFT). Each render's channel 0 is
- * what the game puts out, its channel 1 the mix before the compressor: how hard the voice drives it.
+ * the master gain and the compressor) in an OfflineAudioContext at RATE, and read there with both ears
+ * together (tools/lib/sound-measures.mjs: its peak, RMS and loudest 50 ms, its shares by an FFT, and a
+ * band rule's own share). The context has four channels: 0 and 1 are what the game puts out, left and
+ * right; 2 and 3 the mix before the compressor, left and right: how hard the voice drives it.
  *
  * Its noise and its draws (a noise's offset, the gush's flutter) come from Math.random, seeded here for
  * each render by its name, so a file renders the same every run.
@@ -11,23 +12,24 @@
 
 import { audioTunables } from '../../src/audio/plan';
 import { mixInto, whiteNoise } from '../../src/audio/engine';
-import { playVoice } from '../../src/audio/voices';
+import { playVoice, reportShape } from '../../src/audio/voices';
 import { loadTunables } from '../../src/core/tunables';
-import { measure, type Measured } from '../lib/sound-measures.mjs';
-import { LEAD_S, RATE, renders, reportShape, type Render } from './renders';
+import { measure, ruleShare, type Measured } from '../lib/sound-measures.mjs';
+import { LEAD_S, RATE, renders, type Render } from './renders';
 
-/** A render done: its file's samples (base64 of float32), and both channels read. */
+/** A render done: its file's samples (base64 of float32, left and right), and both mixes read. */
 export interface Rendered {
   name: string;
   rate: number;
   lengthS: number;
   gated: boolean;
-  band: Render['band'] | null;
+  rules: Render['rules'] | null;
   plans: Render['plans'];
-  /** What the game puts out: base64 of its float32 samples. */
-  samples: string;
+  /** What the game puts out: base64 of each ear's float32 samples, left then right. */
+  samples: [string, string];
+  /** What the game puts out, read; with the band rule's own share if it has one. */
   heard: Measured;
-  /** The mix before the compressor. */
+  /** The mix before the compressor, read. */
   into: Measured;
 }
 
@@ -68,18 +70,33 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
     for (const r of renders(tun)) {
       if (only && !only.includes(r.name)) continue;
       Math.random = seeded(seedOf(r.name));
-      const ctx = new OfflineAudioContext({ numberOfChannels: 2, length: Math.ceil(r.lengthS * RATE), sampleRate: RATE });
-      // Channel 0, what the game puts out; channel 1, the mix before the compressor (each down to mono).
-      const merger = new ChannelMergerNode(ctx, { numberOfInputs: 2 });
+      const ctx = new OfflineAudioContext({ numberOfChannels: 4, length: Math.ceil(r.lengthS * RATE), sampleRate: RATE });
+      ctx.destination.channelInterpretation = 'discrete';
+      // Channels 0 and 1, what the game puts out (left, right); 2 and 3, the mix before the compressor.
+      const merger = new ChannelMergerNode(ctx, { numberOfInputs: 4 });
       merger.connect(ctx.destination);
-      const mix = mixInto(ctx, t.masterGain, merger);
-      mix.connect(merger, 0, 1);
+      const heardEars = new ChannelSplitterNode(ctx, { numberOfOutputs: 2 });
+      const intoEars = new ChannelSplitterNode(ctx, { numberOfOutputs: 2 });
+      for (const [ears, first] of [[heardEars, 0], [intoEars, 2]] as const) for (const ear of [0, 1]) ears.connect(merger, ear, first + ear);
+      const mix = mixInto(ctx, t.masterGain, heardEars);
+      mix.connect(intoEars);
       const noise = whiteNoise(ctx);
       for (const v of r.plans) playVoice(ctx, mix, noise, v, LEAD_S + v.delayS, report);
       const buffer = await ctx.startRendering();
-      const heard = buffer.getChannelData(0);
-      const band = r.band?.band;
-      out.push({ name: r.name, rate: RATE, lengthS: r.lengthS, gated: r.gated, band: r.band ?? null, plans: r.plans, samples: base64(heard), heard: measure(heard, RATE, band), into: measure(buffer.getChannelData(1), RATE, band) });
+      const heard = [buffer.getChannelData(0), buffer.getChannelData(1)];
+      const into = [buffer.getChannelData(2), buffer.getChannelData(3)];
+      const band = r.rules?.band;
+      out.push({
+        name: r.name,
+        rate: RATE,
+        lengthS: r.lengthS,
+        gated: r.gated,
+        rules: r.rules ?? null,
+        plans: r.plans,
+        samples: [base64(heard[0]), base64(heard[1])],
+        heard: { ...measure(heard, RATE), ...(band ? { ruleShare: ruleShare(heard, RATE, band) } : {}) },
+        into: measure(into, RATE),
+      });
     }
   } finally {
     Math.random = random;
@@ -87,7 +104,7 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
   return out;
 }
 
-/** The renders' names, in order. */
-const names = (): string[] => renders(loadTunables()).map((r) => r.name);
+/** The renders, in order: each one's name, and the render its level is held to, if any (for --only). */
+const list = (): { name: string; near: string | null }[] => renders(loadTunables()).map((r) => ({ name: r.name, near: r.rules?.near?.of ?? null }));
 
-(window as unknown as { sounds: { render: typeof render; names: typeof names; ready: boolean } }).sounds = { render, names, ready: true };
+(window as unknown as { sounds: { render: typeof render; list: typeof list; ready: boolean } }).sounds = { render, list, ready: true };
