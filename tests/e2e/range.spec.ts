@@ -154,9 +154,11 @@ test("an SVD round to the 25 m dummy's head drops it; the readout says HEAD; it 
     const at = now();
     const el = document.querySelector<HTMLElement>('#hud .readout');
     const shown = el && !el.hidden ? el.textContent : null;
+    const look = el ? getComputedStyle(el) : null;
+    const backing = look ? { background: look.backgroundColor, radius: look.borderRadius, padding: [look.paddingTop, look.paddingLeft].map((p) => Math.round(parseFloat(p) / parseFloat(look.fontSize) * 100) / 100) } : null;
     // From the next frame, before its ticks, it is no target.
     await h.waitFrames(1);
-    return { at, dummy: state.dummies[0], readout: state.readout, shown, targets: s.targets.map((b) => b.id) };
+    return { at, dummy: state.dummies[0], readout: state.readout, shown, backing, targets: s.targets.map((b) => b.id) };
   });
   const said = JSON.stringify(fell);
   expect(fell.dummy, said).toMatchObject({ id: 200, hp: 0, down: true });
@@ -164,16 +166,19 @@ test("an SVD round to the 25 m dummy's head drops it; the readout says HEAD; it 
   expect(fell.readout, said).toContain('HEAD');
   expect(fell.readout, said).toMatch(/^HEAD 190 · 2\d m\nDOWN IN 1 · 2\d m$/);
   expect(fell.shown, said).toBe(fell.readout);
+  // On the page's note backing, a little lighter (#note's), so it reads over the haze at 17:35.
+  expect(fell.backing, said).toEqual({ background: 'rgba(23, 20, 31, 0.6)', radius: '2px', padding: [0.1, 0.6] });
   // Down, it is no target: a dead body is not hit.
   expect(fell.targets, said).not.toContain(200);
-  // Lying still at 3.8 s of the game's time; up at full health by 4.2 s.
+  // Lying still at 3.5 s of the game's time (half a second for the fall's time to be read late, and
+  // still short of 4 s from any real fall); up at full health by 4.2 s.
   const stood = await ranged(
     page,
     async (h, arg) => {
       const at = arg as number;
       const s = h.session;
       const now = () => s.ticks * s.clock.dt;
-      while (now() < at + 3.8) await h.waitFrames(1);
+      while (now() < at + 3.5) await h.waitFrames(1);
       const lying = h.rangeState().dummies[0];
       while (now() < at + 4.2) await h.waitFrames(1);
       return { lying, up: h.rangeState().dummies[0], targets: s.targets.map((b) => b.id), gpuErrors: h.gpuErrors() };
