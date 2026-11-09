@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Gaits, howKilled, mapAction, relayUrl, shotTracer, Together, type Figure, type TogetherHooks } from '../../src/app/together';
 import { fireTunables } from '../../src/battle/fires';
 import { holdOf } from '../../src/combat/arsenal';
+import { packCell } from '../../src/combat/entrenching';
 import { pose, type PoseInput, type V3 } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
 import { decodeGear, TRACER_KIND } from '../../src/net/gear';
-import { defaultConfig, type RoomShell, type Seat } from '../../src/net/protocol';
+import { defaultConfig, type Dig, type RoomShell, type Seat } from '../../src/net/protocol';
 import { RoomBattle } from '../../src/sim/room-battle';
 import { P } from '../../src/world/materials';
 import { roomClient, sameWorld, trenchArena } from '../support/worlds';
@@ -191,17 +192,25 @@ describe("a page catching up on the room's log while the room plays on", () => {
   const S3 = shell(3, 9_500, 11.8, 15.4, 863);
   const S4 = shell(4, 10_600, 12.0, 14.8, 864);
 
-  /** The world of a page that was there all along, the match over at 10 000 and every crater in. */
-  function stayed() {
+  /**
+   * The world of a page that was there all along, the match over at 10 000 and every crater in: its
+   * fourth shell `last` (S4 unless said), and `dig`, if any, relayed to it 40 ms after its stamp.
+   */
+  function stayed(last: RoomShell = S4, dig?: Dig) {
     const a = roomClient(trenchArena(), PLAYER);
-    for (const [s, told] of [[S1, 1_500], [S2, 3_500], [S3, 8_000], [S4, 9_100]] as const) {
+    for (const [s, told] of [[S1, 1_500], [S2, 3_500], [S3, 8_000], [last, 9_100]] as const) {
       a.step(told);
       a.battle.hear(s, told);
+    }
+    if (dig) {
+      a.step(dig.at + 40);
+      a.battle.dug(dig, dig.at + 40);
     }
     a.step(10_000);
     a.battle.finish();
     a.step(14_000);
-    expect(a.battle.landed).toEqual([S1, S2, S3, S4]);
+    expect(a.battle.landed).toEqual([S1, S2, S3, last]);
+    expect(a.battle.held).toEqual([]);
     expect(a.session.destruction.pending).toBe(0);
     return a;
   }
@@ -325,5 +334,31 @@ describe("a page catching up on the room's log while the room plays on", () => {
     expect([made[1].landed, made[1].waiting]).toEqual([[], [S5]]);
     // S5 whistles for its time, as any shell heard live does.
     expect(b.session.drainEvents().incoming).toHaveLength(1);
+  }, 30_000);
+
+  it("a scoop the room relays before the end, stamped after two shells in the air, lands them on the room's ground, though the page's frames have set it off the room", async () => {
+    // S4 lands at 9 800 this time, before the end, and S3's crater is under its centre. Another
+    // player scoops the parapet's crest 11 m along it, stamped 9 900: on the page that was there S3
+    // and S4 land live, each centred on the ground as it is when its crater goes out. Here the end
+    // waits for the catch-up, by when the lobby's frames have set the session off the room; the
+    // scoop, given at the end, lands S3 and S4 together, before S3's crater is cut.
+    const S4e = shell(4, 9_800, 12.0, 14.8, 864);
+    const dims = trenchArena().dims;
+    const D: Dig = { seat: 1, at: 9_900, cells: [[230, 75, 150], [231, 75, 150], [230, 74, 150], [231, 74, 150]].map(([x, y, z]) => packCell(dims, x, y, z)) };
+    const a = stayed(S4e, D);
+    const { b, together, made } = await joining((room) => {
+      room.say({ t: 'shell', s: wire(S4e) });
+      room.say({ t: 'dig', d: [D.seat, D.at, ...D.cells] });
+      room.say({ t: 'end' });
+    });
+    expect(together.caughtUp).toBe(true);
+    expect(made).toHaveLength(1);
+    expect([made[0].landed, made[0].waiting, made[0].held]).toEqual([[S1, S2, S3, S4e], [], []]);
+    expect(b.session.drainEvents().blasts).toEqual([]);
+    settled(b);
+    expect(b.session.destruction.lastId).toBe(4);
+    // The scoop went in, here as there.
+    expect(b.session.map.get(230, 75, 150)).toBe(P.AIR);
+    expect(sameWorld(a.session.map, b.session.map)).toBe(true);
   }, 30_000);
 });

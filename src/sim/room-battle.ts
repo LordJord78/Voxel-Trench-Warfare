@@ -262,13 +262,12 @@ export class RoomBattle {
   /**
    * The match over: each held scoop that can be is dug, before the shells after it; then every shell
    * still in the air lands at once, quietly. They are the room's, cut on the ground as every other
-   * client cuts them, though no frame of the match ran here to set the session to the room (a tab
-   * hidden throughout); the next frame's Together sets it as it is. The scoops still held, which it
-   * hands on: the next match's battle is given them (`dug`) before its first tick, and digs them once
-   * the craters they wait for are in (the lobby ticks nothing).
+   * client cuts them (`land`), though no frame of the match ran here to set the session to the room
+   * (a tab hidden throughout). The scoops still held, which it hands on: the next match's battle is
+   * given them (`dug`) before its first tick, and digs them once the craters they wait for are in
+   * (the lobby ticks nothing).
    */
   finish(): Dig[] {
-    this.session.room = true;
     this.dig();
     const all = this.air;
     this.air = [];
@@ -321,7 +320,16 @@ export class RoomBattle {
     this.digs = held;
   }
 
+  /**
+   * One of its shells landed, on the room's ground whatever the session was last set to: its shells are
+   * always the room's, and a match's end, given after the page's frames have set the session off the
+   * room (a catch-up the end waited for: together.ts ended), lands those a scoop's stamp is after here
+   * (`dug`), before `finish`. Landed off the room, a crater is centred on the ground as it was at its
+   * landing, not as it is when it goes out (sim/destruction.ts), so one over another still being cut
+   * would sit above the other's hole. The next frame's Together sets the session as the room is.
+   */
   private land(s: RoomShell, quiet: boolean): void {
+    this.session.room = true;
     const id = this.session.land(s.at[0], s.at[1], s.radius, s.seed, quiet);
     if (id !== null) this.seeds.set(id, s.seed);
     this.down.push(s);

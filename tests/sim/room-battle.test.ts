@@ -898,6 +898,38 @@ describe("the room's log caught up on a page that joins or reloads", () => {
     expect(spy.calls).toEqual([[1, 0], [1, 1], [2.5, 0], [2.5, 1], [3, 0]]);
   });
 
+  it("a logged scoop stamped after the catch-up began, given once the match is over, lands the shells before it on the room's ground, though a frame set the session off it", async () => {
+    // The page reckons the room's clock 9 000 at the welcome, a little behind it: the log already
+    // holds a scoop stamped 9 250, after two overlapping shells in the air. The match ends during
+    // S1's settle (the catch-up's clock then after every time), and the page's frame sets the session
+    // off the room. The scoop lands S2 and S3 together; S3's crater must still be centred on the
+    // ground after S2's, as on the page that landed them live.
+    const S1 = shell(1, 3_000, 11.0, 15.0, 2.0, 881);
+    const S2 = shell(2, 9_100, 11.8, 15.4, 2.0, 882);
+    const S3 = shell(3, 9_200, 12.0, 14.8, 2.0, 883);
+    const dims = trenchArena().dims;
+    const D: Dig = { seat: 1, at: 9_250, cells: [packCell(dims, 230, 75, 150), packCell(dims, 230, 74, 150)] };
+    const stayed = client(1_000);
+    for (const s of [S1, S2, S3]) stayed.battle.hear(s, s.landAt - 1_500);
+    stayed.step(9_290);
+    stayed.battle.dug(D, 9_290);
+    stayed.step(12_000);
+    expect([stayed.battle.landed, stayed.battle.held]).toEqual([[S1, S2, S3], []]);
+    const j = client(1_000);
+    let over = false;
+    await j.battle.catchUp(logOf([S1, S2, S3], [D]), 1_000, () => (over ? Number.POSITIVE_INFINITY : 9_000), null, async () => {
+      over = true;
+      j.session.room = false;
+    });
+    expect(over).toBe(true);
+    expect([j.battle.landed, j.battle.waiting, j.battle.held]).toEqual([[S1, S2, S3], [], [D]]);
+    j.battle.finish();
+    j.step(4_000);
+    expect(j.battle.held).toEqual([]);
+    expect(j.session.destruction.pending).toBe(0);
+    expect(sameWorld(stayed.session.map, j.session.map)).toBe(true);
+  });
+
   it('a catch-up whose crater never comes back fails loudly, naming it, rather than waiting for ever', async () => {
     const lost: DetonationRunner = { post: () => {}, take: () => [] };
     const j = roomClient(trenchArena(), PLAYER, 0, 1 / 60, lost);
