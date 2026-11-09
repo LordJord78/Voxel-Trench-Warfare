@@ -6,7 +6,7 @@
  * Only made for a game with friends: solo play never loads this, and makes no request at all.
  */
 
-import { ServerClock } from '../net/clock';
+import { matchSeconds, ServerClock } from '../net/clock';
 import { decodeShot, defaultConfig, encodeShot, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type MatchInfo, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
 import { RemotePlayers } from './net-players';
 
@@ -72,6 +72,8 @@ export class NetClient {
   private readonly ws: WebSocket;
   private pinger: ReturnType<typeof setInterval> | null = null;
   private closedByUs = false;
+  /** The page's time the hello went: the welcome is its reply, so the clock's first sample. */
+  private helloAt = 0;
 
   constructor(
     relay: string,
@@ -83,6 +85,7 @@ export class NetClient {
   ) {
     this.ws = new WebSocket(`${relay.replace(/^http/, 'ws')}/room/${room}`);
     this.ws.addEventListener('open', () => {
+      this.helloAt = this.now();
       this.send({ t: 'hello', v: PROTOCOL, build, name: this.name });
       this.burst();
       this.pinger = setInterval(() => this.ping(), PING_MS);
@@ -105,6 +108,11 @@ export class NetClient {
   /** The room's clock now, in ms. */
   serverNow(): number {
     return this.clock.serverAt(this.now());
+  }
+
+  /** The match's seconds on the room's clock, from its start; 0 with no match. */
+  matchSeconds(): number {
+    return this.match ? matchSeconds(this.serverNow(), this.match.startAt) : 0;
   }
 
   setName(name: string): void {
@@ -186,6 +194,8 @@ export class NetClient {
   private handle(m: RoomMsg): void {
     switch (m.t) {
       case 'welcome':
+        // The hello's reply: the room's time before anything is reckoned by it (a late joiner's match seconds).
+        this.clock.sample(this.helloAt, m.now, this.now());
         this.joined = true;
         this.you = m.you;
         this.players.you = m.you;
