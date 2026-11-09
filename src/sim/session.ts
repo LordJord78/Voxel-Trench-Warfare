@@ -323,9 +323,10 @@ export class Session {
    */
   room = false;
   /**
-   * In a room, ground a shell heard and not yet landed would take (sim/room-battle.ts reserves, which
-   * its battle sets here): the player's own scoop waits while its box is, as while a crater is
-   * pending there. Nothing solo.
+   * In a room, ground spoken for before the player's own scoop there (sim/room-battle.ts reserves,
+   * which its battle sets here): ground a shell heard and not yet landed would take, or ground a held
+   * scoop of another's will dig (the room stamped it first, so it goes in first on every page). The
+   * player's own scoop waits while its box is, as while a crater is pending there. Nothing solo.
    */
   reserved: (box: Box) => boolean = () => false;
   /**

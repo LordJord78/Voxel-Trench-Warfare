@@ -33,7 +33,7 @@ import { chip, type DetonateOptions } from '../world/destruction';
 import { detonationRegion, runDetonation, type DetonationRequest, type DetonationResult } from '../world/detonation';
 import { P } from '../world/materials';
 import { groundTop } from '../world/raycast';
-import { overlapXZ as overlap, type Box } from '../world/region';
+import { overlapXZ, type Box } from '../world/region';
 import { applyPatch, copyRegion, type BrickPatch } from '../world/region-copy';
 
 /** Where a crater's job runs: post it, and take what has come back since. */
@@ -157,12 +157,12 @@ export class Destruction {
 
   /** Whether `box` reaches into a region out now: an edit there would be undone when its bricks come back. */
   overlapsOut(box: Box): boolean {
-    return this.jobs.some((j) => j.state !== 'queued' && overlap(j.box, box));
+    return this.jobs.some((j) => j.state !== 'queued' && overlapXZ(j.box, box));
   }
 
   /** Whether `box` reaches into the region of a shell queued, out or landing: ground a crater is still to be cut from. */
   overlapsPending(box: Box): boolean {
-    return this.jobs.some((j) => overlap(j.box, box));
+    return this.jobs.some((j) => overlapXZ(j.box, box));
   }
 
   /**
@@ -172,7 +172,7 @@ export class Destruction {
    * it so, while the edit is held there).
    */
   overlapsPendingBy(box: Box, upTo: number): boolean {
-    return this.jobs.some((j) => (j.id <= upTo || j.state !== 'queued') && overlap(j.box, box));
+    return this.jobs.some((j) => (j.id <= upTo || j.state !== 'queued') && overlapXZ(j.box, box));
   }
 
   /**
@@ -205,7 +205,7 @@ export class Destruction {
       if (!j || j.state !== 'out') continue;
       if ('wider' in r) {
         j.box = r.wider;
-        if (this.waits(j.id, j.box) || this.jobs.some((o) => o !== j && o.state !== 'queued' && overlap(o.box, j.box))) {
+        if (this.waits(j.id, j.box) || this.jobs.some((o) => o !== j && o.state !== 'queued' && overlapXZ(o.box, j.box))) {
           j.state = 'queued';
           this.makeHeld(j);
         } else this.post(j);
@@ -238,7 +238,7 @@ export class Destruction {
     // In order: the first that would overlap a region out, or that `waits` holds, waits, and every one behind it.
     for (const j of this.jobs) {
       if (j.state !== 'queued') continue;
-      if (this.waits(j.id, j.box) || this.jobs.some((o) => o !== j && o.state !== 'queued' && overlap(o.box, j.box))) break;
+      if (this.waits(j.id, j.box) || this.jobs.some((o) => o !== j && o.state !== 'queued' && overlapXZ(o.box, j.box))) break;
       this.post(j);
     }
     return landed;

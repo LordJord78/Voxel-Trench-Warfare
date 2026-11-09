@@ -29,7 +29,7 @@
 
 import type { FeedbackKind, FeedbackVoice } from '../audio/plan';
 import type { RangeEvent } from '../combat/range';
-import { PART_BOX, toWorld, type Flinch, type V3 } from '../combat/soldier-rig';
+import { CHEST, toWorld, type Flinch, type V3 } from '../combat/soldier-rig';
 import { viewBasis } from '../combat/viewmodel';
 import { hash32 } from '../core/hash';
 import type { Tunables } from '../core/tunables';
@@ -95,8 +95,6 @@ interface Struck {
 
 const NONE: FigureOverlay = Object.freeze({});
 const DEG = 180 / Math.PI;
-/** A body's chest: the middle of its torso's box, in the torso's frame. */
-const CHEST: V3 = [0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2) as V3;
 /** A flinch is given for this many times flinch_s: settled to 2% at one, to nothing that shows at two. */
 const FLINCH_SPAN = 2;
 
