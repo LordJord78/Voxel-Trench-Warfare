@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { HitFeedback, hitFeedbackTunables, type Dropped, type FeedbackMarker } from '../../src/app/hit-feedback';
 import type { FeedbackVoice } from '../../src/audio/plan';
 import { projectileSpec, type BodyHit } from '../../src/combat/ballistics';
@@ -396,7 +396,7 @@ describe('hit feedback', () => {
     expect(fb.frame(s, none(), NOW + 116)).toEqual([]);
     expect(marker.calls).toEqual([['flash', 1, NOW]]);
     expect(fb.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
-    // Past kill_window_s from the blast, the room's word is felt.
+    // Past half of hurt_flash_s from the blast, its flash faded below half, the room's word is felt.
     fb.died(NOW + 400);
     expect(marker.calls.at(-1)).toEqual(['flash', 1, NOW + 400]);
     expect(fb.frame(s, none(), NOW + 416)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
@@ -636,40 +636,63 @@ describe('hit feedback', () => {
     expect(fb.frame(s, none(), NOW + 16)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
     expect(fb.frame(s, none(), NOW + 32)).toEqual([]);
     expect(fb.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
-    // The round felt as it struck, and the room's word 0.1 s on: the round's flash and voice alone.
+    // A round felt as it struck, a head's (100: its flash at full), and the room's word 0.1 s on: its
+    // flash still shows at 0.71, so the round's flash and voice alone.
     const felt = new FakeMarker();
     const after = new HitFeedback(t, felt);
-    expect(after.frame(s, { ...none(), hits: [intoPlayer(s, 4)] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(after.frame(s, { ...none(), hits: [{ ...intoPlayer(s, 4), zone: 'head' }] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
     after.died(NOW + 100);
     expect(after.frame(s, none(), NOW + 116)).toEqual([]);
-    expect(felt.calls).toEqual([['flash', 0.55, NOW]]);
+    expect(felt.calls).toEqual([['flash', 1, NOW]]);
     expect(after.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
-    // Past kill_window_s, the room's word is felt.
+    // Past half of hurt_flash_s, its flash faded below half, the room's word is felt: 0.2 s on (within
+    // kill_window_s, which no longer decides it), and again 0.4 s on.
+    const again = new FakeMarker();
+    const later = new HitFeedback(t, again);
+    later.frame(s, { ...none(), hits: [{ ...intoPlayer(s, 4), zone: 'head' }] }, NOW);
+    later.died(NOW + 200);
+    expect(again.calls.at(-1)).toEqual(['flash', 1, NOW + 200]);
+    expect(later.frame(s, none(), NOW + 216)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
     after.died(NOW + 400);
     expect(felt.calls.at(-1)).toEqual(['flash', 1, NOW + 400]);
     expect(after.frame(s, none(), NOW + 416)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
   });
 
-  it("the player killed after a round felt within kill_window_s, its red flash faded below half (past half of hurt_flash_s): the death flashes again at full strength, with its hurt voice, so it reads; before that, nothing more", () => {
+  it("the player killed after a round or a blast felt: unless its red flash still shows at half or more (its strength, fading over hurt_flash_s), the death flashes again at full strength, so it reads; with its hurt voice only once half of hurt_flash_s has passed, so a felt round is not followed at once by a second", () => {
     const s = field();
     s.together = true;
+    s.room = true;
     // fight.spec's headshot runs: the victim felt a round some 300 ms before the room's word, and its
-    // flash, 0.55 fading over 0.35 s, showed at 0.10 to 0.19 as they died.
-    for (const [ago, again] of [[100, false], [170, false], [180, true], [200, true], [300, true]] as const) {
-      const felt = new FakeMarker();
-      const fb = new HitFeedback(t, felt);
-      expect(fb.frame(s, { ...none(), hits: [intoPlayer(s, 4)] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    // flash, 0.55 fading over 0.35 s, showed at 0.10 to 0.19 as they died. A limb's round or a light
+    // blast flashes at the least, 0.25: shown at 0.18 100 ms on.
+    const felt = {
+      0.25: () => ({ ...none(), harms: [{ tick: s.ticks, amount: 25, cause: 'shell' as const }] }),
+      0.55: () => ({ ...none(), hits: [intoPlayer(s, 4)] }),
+      1: () => ({ ...none(), hits: [{ ...intoPlayer(s, 4), zone: 'head' as const }] }),
+    };
+    // [strength felt, ms before the death, flashed again, its voice].
+    const rows = [
+      [0.25, 100, true, false],
+      [0.55, 100, true, false],
+      [0.55, 170, true, false],
+      [0.55, 180, true, true],
+      [0.55, 200, true, true],
+      [0.55, 300, true, true],
+      [1, 100, false, false],
+      [1, 170, false, false],
+      [1, 180, true, true],
+    ] as const;
+    for (const [strength, ago, again, voiced] of rows) {
+      const label = `${strength} ${ago} ms before`;
+      const marker = new FakeMarker();
+      const fb = new HitFeedback(t, marker);
+      expect(fb.frame(s, felt[strength](), NOW), label).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+      expect(marker.calls, label).toEqual([['flash', strength, NOW]]);
       fb.died(NOW + ago);
       const voices = fb.frame(s, none(), NOW + ago + 16);
-      if (again) {
-        expect(felt.calls, `${ago}`).toEqual([['flash', 0.55, NOW], ['flash', 1, NOW + ago]]);
-        expect(voices, `${ago}`).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
-        expect(fb.state(), `${ago}`).toMatchObject({ voices: { hurt: 2 }, flashes: 2 });
-      } else {
-        expect(felt.calls, `${ago}`).toEqual([['flash', 0.55, NOW]]);
-        expect(voices, `${ago}`).toEqual([]);
-        expect(fb.state(), `${ago}`).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
-      }
+      expect(marker.calls, label).toEqual(again ? [['flash', strength, NOW], ['flash', 1, NOW + ago]] : [['flash', strength, NOW]]);
+      expect(voices, label).toEqual(voiced ? [{ kind: 'hurt', at: null, gain: 0.7 }] : []);
+      expect(fb.state(), label).toMatchObject({ voices: { hurt: voiced ? 2 : 1 }, flashes: again ? 2 : 1 });
     }
   });
 
@@ -757,5 +780,145 @@ describe('hit feedback', () => {
     marker.shows = true;
     fb.kill(3, true, null, NOW + 100, s, 'torso');
     expect(fb.state().markers).toEqual({ hit: 0, head: 0, kill: 1 });
+  });
+
+  it("the room's word that another player's round hurt the player (harmed: a moving player's, whose page never struck that round on their body): the red flash at its share and the hurt voice, no jolt; felt once with a round struck here, whichever came first", () => {
+    const s = field();
+    s.together = true;
+    s.room = true;
+    const hurt = { kind: 'hurt', at: null, gain: 0.7 };
+    const flinch = () => [s.suppression.flinchYaw, s.suppression.flinchPitch];
+    // The word alone: the flash at 0.58, its voice with the next frame's; no jolt (it comes 100–250 ms
+    // late, and a late jolt would read as the input lagging).
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const was = flinch();
+    fb.harmed(58, NOW);
+    expect(marker.calls).toEqual([['flash', 0.58, NOW]]);
+    expect(fb.frame(s, none(), NOW + 16)).toEqual([hurt]);
+    expect(fb.frame(s, none(), NOW + 32)).toEqual([]);
+    expect(flinch()).toEqual(was);
+    expect(fb.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
+    // A light word flashes at the least, 0.25.
+    const light = new FakeMarker();
+    new HitFeedback(t, light).harmed(13, NOW);
+    expect(light.calls).toEqual([['flash', 0.25, NOW]]);
+    // A shotgun's pellets, the room's words one a pellet between two frames: one flash, at their sum's
+    // share as it grows, and one voice.
+    const pellets = new FakeMarker();
+    const fp = new HitFeedback(t, pellets);
+    for (let k = 0; k < 3; k++) fp.harmed(23, NOW);
+    expect(pellets.calls).toEqual([['flash', 0.25, NOW], ['flash', 0.46, NOW], ['flash', 0.69, NOW]]);
+    expect(fp.frame(s, none(), NOW + 16)).toEqual([hurt]);
+    expect(fp.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
+    // The next frame's word is another hit's.
+    fp.harmed(23, NOW + 16);
+    expect(fp.frame(s, none(), NOW + 32)).toEqual([hurt]);
+    expect(fp.state()).toMatchObject({ voices: { hurt: 2 }, flashes: 2 });
+    // The round struck here first, the word 100 ms on: the round's flash, jolt and voice alone.
+    const m2 = new FakeMarker();
+    const f2 = new HitFeedback(t, m2);
+    expect(f2.frame(s, { ...none(), hits: [intoPlayer(s, 4)] }, NOW)).toEqual([hurt]);
+    f2.harmed(55, NOW + 100);
+    expect(f2.frame(s, none(), NOW + 116)).toEqual([]);
+    expect(m2.calls).toEqual([['flash', 0.55, NOW]]);
+    expect(f2.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
+    // Past kill_window_s, a word is another hit's.
+    f2.harmed(55, NOW + 400);
+    expect(m2.calls.at(-1)).toEqual(['flash', 0.55, NOW + 400]);
+    expect(f2.frame(s, none(), NOW + 416)).toEqual([hurt]);
+    // The word first, the round struck here 100 ms on: the word's voice alone; the round still flashes and jolts.
+    const m3 = new FakeMarker();
+    const f3 = new HitFeedback(t, m3);
+    f3.harmed(55, NOW);
+    expect(f3.frame(s, none(), NOW + 16)).toEqual([hurt]);
+    const before = flinch();
+    expect(f3.frame(s, { ...none(), hits: [intoPlayer(s, 4)] }, NOW + 100)).toEqual([]);
+    expect(m3.calls).toEqual([['flash', 0.55, NOW], ['flash', 0.55, NOW + 100]]);
+    expect(s.suppression.flinchYaw - before[0]).toBeCloseTo(1.5 + 1.5 * 0.55, 3);
+    expect(f3.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 2 });
+    // A blast felt counts as felt for the word as well: one voice.
+    const m4 = new FakeMarker();
+    const f4 = new HitFeedback(t, m4);
+    expect(f4.frame(s, { ...none(), harms: [{ tick: s.ticks, amount: 40, cause: 'shell' }] }, NOW)).toEqual([hurt]);
+    f4.harmed(30, NOW + 100);
+    expect(f4.frame(s, none(), NOW + 116)).toEqual([]);
+    expect(f4.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
+    // And a word is felt for the room's word of the death: a strong one 0.1 s before keeps it quiet.
+    const m5 = new FakeMarker();
+    const f5 = new HitFeedback(t, m5);
+    f5.harmed(100, NOW);
+    f5.died(NOW + 100);
+    expect(m5.calls).toEqual([['flash', 1, NOW]]);
+  });
+
+  it("on the deploy screen (felt false: main's mode 'ready', a match on and its world running), nothing into the player is felt: no round's flash, jolt or voice, nor a shell's; gone in, the same is", () => {
+    const s = field();
+    s.together = true;
+    s.room = true;
+    const flinch = () => [s.suppression.flinchYaw, s.suppression.flinchPitch];
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const was = flinch();
+    const events = { ...none(), hits: [intoPlayer(s, 4)], harms: [{ tick: s.ticks, amount: 80, cause: 'shell' as const }] };
+    expect(fb.frame(s, events, NOW, [], [], false)).toEqual([]);
+    expect(fb.frame(s, { ...none(), harms: events.harms }, NOW + 16, [], [], false)).toEqual([]);
+    expect(marker.calls).toEqual([]);
+    expect(flinch()).toEqual(was);
+    expect(fb.state()).toMatchObject({ voices: {}, flashes: 0 });
+    // Gone in: one flash at the blast's 0.8, the round's jolt, one voice.
+    expect(fb.frame(s, events, NOW + 32)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(marker.calls).toEqual([['flash', 0.8, NOW + 32]]);
+    expect(flinch()).not.toEqual(was);
+  });
+
+  it("a shotgun's pellets on one plate in a frame ring it once: one ding and one hit marker; two plates, a ding each; the next frame's ring again", () => {
+    const s = field();
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const a: [number, number, number] = [12.8, 1.3, 35];
+    const b: [number, number, number] = [14.8, 1.3, 45];
+    const plate = (index: number) => ({ kind: 'plate' as const, index, distanceM: 30 });
+    fb.frame(s, none(), NOW);
+    for (let k = 0; k < 3; k++) fb.plate(plate(0), a, NOW);
+    expect(marker.calls).toEqual([['show', 'hit', NOW]]);
+    expect(fb.frame(s, none(), NOW + 16)).toEqual([{ kind: 'ding', at: a, gain: 1.5 }]);
+    expect(fb.state()).toMatchObject({ voices: { ding: 1 }, markers: { hit: 1, head: 0, kill: 0 } });
+    // Two plates in a frame: each rung once.
+    for (const [index, at] of [[0, a], [1, b], [1, b], [0, a]] as const) fb.plate(plate(index), at, NOW + 16);
+    expect(fb.frame(s, none(), NOW + 32)).toEqual([
+      { kind: 'ding', at: a, gain: 1.5 },
+      { kind: 'ding', at: b, gain: 1.5 },
+    ]);
+    expect(fb.state()).toMatchObject({ voices: { ding: 3 }, markers: { hit: 3, head: 0, kill: 0 } });
+  });
+
+  it("a match's kill of a body that has moved on since its last hit (the room's word a round trip later): the burst where that round went in, carried on as its chest has moved; the spatter from where the round passed", () => {
+    const s = field();
+    const them = body(3);
+    s.together = true;
+    s.bodies = [them];
+    const chest = chestOf(them);
+    const events = strike(s, [[chest[0], chest[1], chest[2] - 5]], [0, 0, 1]);
+    const [hit] = events.hits;
+    const fb = new HitFeedback(t, new FakeMarker());
+    fb.frame(s, events, NOW, [drawn(them)]);
+    // 150 ms on, the runner is drawn 0.5 m to the right of where the round struck it.
+    const ran = body(3, 25, 12.8 + 0.5);
+    fb.frame(s, none(), NOW + 150, [drawn(ran)]);
+    const bleed = vi.spyOn(s, 'bleed');
+    const spatter = vi.spyOn(s, 'spatterAt');
+    const before = bloodOf(s).droplets.length;
+    fb.kill(3, true, null, NOW + 150, s, 'torso');
+    const on: V3 = [hit.position[0] + 0.5, hit.position[1], hit.position[2]];
+    const thrown = bloodOf(s).droplets;
+    expect(thrown.length - before).toBe(18);
+    expect(thrown.filter((d) => near(d, on) < 1e-4)).toHaveLength(18);
+    expect(bleed).toHaveBeenCalledTimes(1);
+    expect(near(bleed.mock.calls[0][0], on)).toBeLessThan(1e-9);
+    expect(spatter).toHaveBeenCalledTimes(1);
+    expect(spatter.mock.calls[0][0]).toEqual(hit.position);
+    // Its fall is along the round, as before.
+    expect(fb.figureOverlay(3, NOW + 150).fallYaw).toBeCloseTo(0, 6);
   });
 });

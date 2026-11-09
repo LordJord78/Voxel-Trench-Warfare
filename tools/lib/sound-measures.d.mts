@@ -17,6 +17,8 @@ export interface Measured {
   highShare: number;
   /** A band rule's own share (ruleShare), measured apart from BAND's. */
   ruleShare?: number;
+  /** An `over` rule's reading (ruleEnergyDb, dB): of a render held over another, and of that other, read alike. */
+  overDb?: number;
 }
 
 /** A band rule: at least `share` of its energy in `hz` (Hz), over its first `firstS` seconds from its onset if given. */
@@ -35,6 +37,16 @@ export interface SoundRules {
   floorDb?: number;
   /** Its loudest 50 ms within `withinDb` of render `of`'s; with `low`, of `of`'s body's, under SMALL_SPEAKER_HZ alone (the kill's thud, never its chime). */
   near?: { of: string; withinDb: number; low?: boolean };
+  /** Its energy in `band` (Hz), over its first `firstS` seconds from its onset if given, at least `db` dB over render `of`'s, read alike. */
+  over?: OverRule;
+}
+
+/** A render held over another: its energy in `band`, over its first `firstS` seconds if given, at least `db` dB over render `of`'s. */
+export interface OverRule {
+  of: string;
+  band: readonly [number, number];
+  firstS?: number;
+  db: number;
 }
 
 /** A file's row in the table: what it measured, what failed of it, and whether a failure fails the run (default true). */
@@ -58,5 +70,6 @@ export function loudestUnder(x: Channels, rate: number, hz: number, windowS?: nu
 export function measure(x: Channels, rate: number): Measured;
 export function onset(x: Channels, rate: number): number | null;
 export function ruleShare(x: Channels, rate: number, rule: BandRule): number;
+export function ruleEnergyDb(x: Channels, rate: number, rule: { hz: readonly [number, number]; firstS?: number }): number;
 export function checkSound(m: Measured, rules?: SoundRules, others?: Readonly<Record<string, Measured>>): string[];
 export function table(rows: readonly Row[]): string;

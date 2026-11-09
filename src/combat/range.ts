@@ -554,6 +554,20 @@ export class Range {
     return { kind: 'kill', id, zone, damage, distanceM, shots: d.shots.length };
   }
 
+  /**
+   * A test's, never the game's (the page's rangeHp hook): dummy `id` stands at `hp` (held to 1 to
+   * full health) from `nowS`, as if just hit then, its shots counted afresh. One down, or none, is
+   * left as it is.
+   */
+  setHealth(id: number, hp: number, nowS: number): void {
+    this.step(nowS);
+    const d = this.dummy(id);
+    if (!d || d.downAt !== null) return;
+    d.hp = Math.min(HP, Math.max(1, hp));
+    d.hitAt = nowS;
+    d.shots = [];
+  }
+
   /** A round of the player's into plate `index` (of the spots' plates, as the caller numbers them). */
   plate(index: number, distanceM: number): RangeEvent {
     return { kind: 'plate', index, distanceM };

@@ -1141,8 +1141,10 @@ async function start(): Promise<void> {
     const ranged = range.after(events, session.ticks * session.clock.dt);
     // What the frame's hits show and sound (hit-feedback.ts), with what a kill, a plate or the player's
     // death made since the last frame; the bodies drawn say where each chest is, for a kill. In a room's
-    // match (session.room, as Together.prepare set it) the front's rounds and the shells hurt the player too.
-    const feedback = hits.frame(session, events, now, dummies.length > 0 ? soldiers : draws, range.killed());
+    // match (session.room, as Together.prepare set it) the front's rounds and the shells hurt the player too,
+    // but not on the deploy screen: the match's world runs there and its shells land, but the player is
+    // not in it (and the room is never told of that harm).
+    const feedback = hits.frame(session, events, now, dummies.length > 0 ? soldiers : draws, range.killed(), mode !== 'ready');
     // The range's events read out under the marker; its kills and plates fed back at once, their
     // voices with the next frame's.
     readout.show(ranged, now / 1000);
@@ -1499,6 +1501,10 @@ async function start(): Promise<void> {
     },
     /** The range as it stands: its dummies (body ids 200 on), its plates, and the readout's words (null when none shows). */
     rangeState: () => ({ ...range.state(), readout: readout.text }),
+    /** A dummy's health set (1 to 100), as if just hit: a test's, so a pull starts from a known health (Range.setHealth). Never the game's. */
+    rangeHp(id: number, hp: number) {
+      range.setHealth(id, hp);
+    },
     /**
      * The hit feedback (hit-feedback.ts): the marker showing and the words under it (null, none);
      * the voices it has made by kind, the red flashes, and the markers shown by kind (not those a

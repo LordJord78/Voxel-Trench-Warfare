@@ -711,6 +711,29 @@ describe("the range's dummies", () => {
     expect(r.hit(200, 'torso', gun('ak74'), 40, 5, 14.2)).toMatchObject({ kind: 'kill', shots: 2 });
   });
 
+  it("a dummy's health set by hand (a test's: the page's rangeHp hook, never the game's): it stands at that health from then, as if just hit, its shots counted afresh; a down dummy, or none, is left as it is", () => {
+    const r = new Range([dummy(40)], t, BAY);
+    r.hit(200, 'torso', gun('ak74'), 40, 1, 0);
+    r.setHealth(200, 10, 2);
+    expect(r.health(200, 2)).toBe(10);
+    // As if hit then: nothing back until 6 s on.
+    expect(r.health(200, 7.9)).toBe(10);
+    expect(r.health(200, 9)).toBeCloseTo(20, 9);
+    // An M870's limb pellet (13) of the next pull takes it down from 10: one shot, the pull's.
+    expect(r.hit(200, 'limb', gun('m870'), 40, 7, 3)).toEqual({ kind: 'kill', id: 200, zone: 'limb', damage: 13, distanceM: 40, shots: 1 });
+    // Down, it is left down; and no dummy, nothing.
+    r.setHealth(200, 50, 3.5);
+    expect(r.health(200, 3.5)).toBe(0);
+    expect(r.figures(3.5)[0].deadFor).toBeCloseTo(0.5, 9);
+    r.setHealth(201, 50, 3.5);
+    // Held to a dummy's health: at least 1, at most 100.
+    const q = new Range([dummy(40)], t, BAY);
+    q.setHealth(200, 0, 0);
+    expect(q.health(200, 0)).toBe(1);
+    q.setHealth(200, 250, 0);
+    expect(q.health(200, 0)).toBe(100);
+  });
+
   it('health comes back 10 a second from 6 s after the last hit', () => {
     const r = new Range([dummy(40)], t, BAY);
     r.hit(200, 'torso', gun('ak74'), 40, 1, 0);

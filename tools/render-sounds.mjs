@@ -4,7 +4,7 @@
 // through audio/voices.ts's own playVoice into the engine's own mix (the master gain and its
 // compressor), and reads it there with both ears together: its peak, RMS and loudest 50 ms, its body's
 // loudest 50 ms (under 400 Hz alone), its energy's share in 400 Hz–2 kHz and over 400 Hz by an FFT,
-// and a band rule's own share (tools/lib/sound-measures.mjs).
+// a band rule's own share, and an `over` rule's energy in its band (tools/lib/sound-measures.mjs).
 //
 //   npm run sounds [-- --only gush,ding]   (or --only=gush,ding)
 //
@@ -12,8 +12,9 @@
 // of a few left, each entry stamped with the commit and the time it was rendered), and prints a table of
 // each file's peak, RMS and loudest 50 ms (dBFS) and its shares. Exits 1 if a held file fails: its peak
 // outside −30 to −1 dBFS, or silent; or, by its rules, under its floor, too little in its band or over
-// 400 Hz (the small speaker), or its loudest 50 ms too far from another render's or its body's (the
-// kill's thud; the other rendered too, if --only left it out); or if the page fails. Exits 2, with the
+// 400 Hz (the small speaker), its loudest 50 ms too far from another render's or its body's (the
+// kill's thud), or its energy in a band too little over another's (a headshot's kill over the same
+// without its gush); the other rendered too, if --only left it out; or if the page fails. Exits 2, with the
 // usage, if --only has no list or names no render. A render reported and not held says what fails of
 // it, and does not fail the run.
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -41,6 +42,7 @@ const read = (m) => ({
   bandShare: round3(m.bandShare),
   highShare: round3(m.highShare),
   ...(m.ruleShare !== undefined ? { ruleShare: round3(m.ruleShare) } : {}),
+  ...(m.overDb !== undefined ? { overDb: round2(m.overDb) } : {}),
 });
 const samplesOf = (b64) => new Float32Array(Uint8Array.from(Buffer.from(b64, 'base64')).buffer);
 
@@ -68,8 +70,8 @@ try {
     console.error(USAGE);
     process.exitCode = 2;
   } else {
-    // A render held to another's level needs the other rendered too.
-    const only = asked.only && [...new Set([...asked.only, ...known.filter((k) => asked.only.includes(k.name) && k.near).map((k) => k.near)])];
+    // A render held to another's level, or over its energy, needs the other rendered too.
+    const only = asked.only && [...new Set([...asked.only, ...known.filter((k) => asked.only.includes(k.name)).flatMap((k) => [k.near, k.over].filter((x) => x !== null))])];
     const rendered = await page.evaluate((o) => window.sounds.render(o), only);
     const heard = Object.fromEntries(rendered.map((r) => [r.name, r.heard]));
     const rows = [];
@@ -96,7 +98,7 @@ try {
     }
     console.log(table(rows));
     console.log('');
-    for (const r of rendered) console.log(`${r.name}: into the compressor ${round2(r.into.peakDb)} dBFS peak, ${round2(r.into.rmsDb)} RMS; out of it, the peak ${report[r.name].compressorDb ?? '-'} dB; its loudest 50 ms from ${Math.round(r.heard.loudestAtS * 1000)} ms; its loudest 50 ms under 400 Hz alone ${round2(r.heard.lowLoudestDb)} dBFS${r.heard.ruleShare !== undefined ? `; its band rule's share ${Math.round(r.heard.ruleShare * 1000) / 10}%` : ''}`);
+    for (const r of rendered) console.log(`${r.name}: into the compressor ${round2(r.into.peakDb)} dBFS peak, ${round2(r.into.rmsDb)} RMS; out of it, the peak ${report[r.name].compressorDb ?? '-'} dB; its loudest 50 ms from ${Math.round(r.heard.loudestAtS * 1000)} ms; its loudest 50 ms under 400 Hz alone ${round2(r.heard.lowLoudestDb)} dBFS${r.heard.ruleShare !== undefined ? `; its band rule's share ${Math.round(r.heard.ruleShare * 1000) / 10}%` : ''}${r.heard.overDb !== undefined ? `; its energy in its over rule's band ${round2(r.heard.overDb)} dB` : ''}`);
   }
 } catch (e) {
   failures.push(`run: ${e.message}`);

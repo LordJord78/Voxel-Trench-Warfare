@@ -326,9 +326,10 @@
     <img id="still" src="./stills/dusk.webp" alt="" width="1920" height="1440" fetchpriority="high" decoding="async" elementtiming="still" />
     <div id="periscope" hidden><div class="mirror"></div></div>
     <div id="hud" hidden>
-      <div id="hurt-flash" aria-hidden="true" hidden></div>
       <p class="roomline" id="roomline" hidden></p>
       <div id="scope" aria-hidden="true" hidden><div class="glass"><i class="h"></i><i class="v"></i><i class="post"></i></div></div>
+      <!-- Being hit: over the scope's mask (its glass blacks out the ring where the flash is strongest), under the marker and its words. -->
+      <div id="hurt-flash" aria-hidden="true" hidden></div>
       <div class="crosshair" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
       <div class="reticle dot" aria-hidden="true" hidden><i class="ring"></i><i class="dot"></i></div>
       <div class="compass" aria-hidden="true"><div class="strip"></div><i class="needle"></i></div>

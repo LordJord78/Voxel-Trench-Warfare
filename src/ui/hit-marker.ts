@@ -147,11 +147,18 @@ export class HitMarker {
     this.popped = this.start(was, el, { word: text, name: name?.name ?? null }, now, total, this.popIn(this.t.textScale, total, total - ms(this.t.fadeS)));
   }
 
-  /** Being hit, at `now` (ms): the red flash over the view at `strength` (0 to 1), fading out. */
+  /**
+   * Being hit, at `now` (ms): the red flash over the view at `strength` (0 to 1), fading out; or on
+   * from what still shows of one fading, if that is more (an M870's blast split over two ticks, a
+   * shell after a round: the red would drop from near full to a quarter in a frame).
+   */
   flash(strength: number, now: number): void {
     const total = ms(this.t.flashS);
+    const was = this.flashed;
+    const shown = was && now < was.until ? was.what * (1 - (now - was.at) / (was.until - was.at)) : 0;
+    const from = Math.max(strength, shown);
     if (this.flashEl) this.flashEl.hidden = false;
-    this.flashed = this.start(this.flashed, this.flashEl, strength, now, total, [{ opacity: strength }, { opacity: 0 }]);
+    this.flashed = this.start(was, this.flashEl, from, now, total, [{ opacity: from }, { opacity: 0 }]);
   }
 
   /** Every frame, at `now` (ms): each shown as its time since says, and gone once done. */

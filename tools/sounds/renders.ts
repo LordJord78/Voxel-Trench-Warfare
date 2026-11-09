@@ -13,8 +13,9 @@
  * not the thud). A steel plate rings at the plate, so it is heard from the
  * spawn at the range's nearest and farthest plates too, the farthest held to a floor: its ring is the
  * shooter's only word of a hit there. And a headshot that kills, as its shooter hears it on the range,
- * the crack and the gush and a frame later the kill: the gush is not lost in it, a good share of its
- * first 300 ms in 400 Hz–2 kHz. The hands' cues (combat/handling.ts), each at the ear as planVoices
+ * the crack and the gush and a frame later the kill: a good share of its first 300 ms in 400 Hz–2 kHz
+ * (which the kill's chime alone gives it), and its energy there over the same kill without the gush
+ * (rendered as well, held to its peak alone), so the gush is not lost in the mix. The hands' cues (combat/handling.ts), each at the ear as planVoices
  * places it, at hands_gain, held to the peak range and the small speaker. More kinds (the reports) join
  * the list as theirs are made; one only reported (`gated` false) says what fails of it and does not
  * fail the run.
@@ -50,7 +51,7 @@ export interface Render {
   lengthS: number;
   /** A failure of it fails the run, or it is only reported. */
   gated: boolean;
-  /** What it is held to besides its peak's range: a band, the small speaker, a floor, another render's level. */
+  /** What it is held to besides its peak's range: a band, the small speaker, a floor, another render's level, or over another's energy in a band. */
   rules?: SoundRules;
 }
 
@@ -61,8 +62,13 @@ const CUES: readonly HandlingCue[] = ['mag-out', 'mag-in', 'bolt', 'cover', 'she
 const SMALL_SPEAKER = 0.25;
 /** The gush gushes: at least this share of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill thud's (the kill's part under 400 Hz, apart from its chime). */
 const GUSH: SoundRules = { band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3, low: true } };
-/** A headshot that kills: at least this share of its first 300 ms's energy in 400 Hz–2 kHz, the gush not lost under the kill. */
-const HEADSHOT_KILL: SoundRules = { band: { hz: [400, 2000], share: 0.35, firstS: 0.3 } };
+/**
+ * A headshot that kills: at least this share of its first 300 ms's energy in 400 Hz–2 kHz; and its
+ * energy there at least 1.5 dB over the same kill's without the gush, read alike, so the gush is not
+ * lost under the kill. The share alone can't tell: the kill's chime (880 and 1320 Hz) fills the band
+ * (0.527 without the gush, 0.532 with it).
+ */
+const HEADSHOT_KILL: SoundRules = { band: { hz: [400, 2000], share: 0.35, firstS: 0.3 }, over: { of: 'headshot-kill-dry', band: [400, 2000], firstS: 0.3, db: 1.5 } };
 /** The farthest plate's ring heard from the spawn: its peak at least this (dBFS). */
 const FAR_DING_DB = -24;
 
@@ -89,6 +95,8 @@ export function renders(tun: Tunables): Render[] {
   // A headshot that kills, as its shooter hears it on the range: the crack and the gush, and a frame later the kill's thud and chime.
   const [kill] = atEar(['kill']);
   out.push(of('headshot-kill', [...atEar(['head', 'gush']), { ...kill, delayS: FRAME_S }], HEADSHOT_KILL));
+  // The same without the gush: what headshot-kill is held over.
+  out.push(of('headshot-kill-dry', [...atEar(['head']), { ...kill, delayS: FRAME_S }]));
   // The hands' cues, each as planVoices places it (at the ear, whatever the muzzle it came from).
   for (const cue of CUES) {
     const events = { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [{ tick: 1, cue, at: [0.2, -0.1, -0.5] as [number, number, number] }], harms: [] };

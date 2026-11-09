@@ -103,6 +103,27 @@ describe('a body struck', () => {
     expect(degreesBetween(onNeck(shot(0.25)), onNeck(rest))).toBeLessThan(25 * 0.021);
   });
 
+  it("a killed body struck as it falls leans its torso with the round, its rifle left lying as it fell (a dead body's rifle takes no flinch)", () => {
+    const dead = { deadFor: 0.01, fallYaw: 180 };
+    const still = pose(at(dead));
+    const struck = pose(at({ ...dead, flinch: { dir, age: 0, head: false } }));
+    expect(degreesBetween(struck.torso.y, still.torso.y)).toBeCloseTo(12, 6);
+    expect(struck.rifle).toEqual(still.rifle);
+    // Alive, the rifle goes with the torso as it sits on it.
+    const alive = pose(at({ flinch: { dir, age: 0, head: false } }));
+    expect(alive.rifle).not.toEqual(pose(at()).rifle);
+  });
+
+  it('a flinch leans a body by how far from lying it is: crouched, the whole 12°; halfway down to prone, half; lying, none', () => {
+    const lean = (height: number) => degreesBetween(pose(at({ height, flinch: { dir, age: 0, head: true } })).torso.y, pose(at({ height })).torso.y);
+    expect(lean(1.25)).toBeCloseTo(12, 6);
+    // Halfway from crouched (1.25) to prone (0.55): prone 0.5, so 6°.
+    expect(lean(0.9)).toBeCloseTo(6, 6);
+    expect(lean(0.725)).toBeCloseTo(3, 6);
+    // Lying, the same pose as unstruck: it would be leaned into the ground.
+    expect(pose(at({ height: 0.55, flinch: { dir, age: 0, head: true } }))).toEqual(pose(at({ height: 0.55 })));
+  });
+
   it('a killed body falls toward fallYaw, and in fallS', () => {
     expect([tun.f('hits.fall_s'), tun.f('hits.head_fall_s')]).toEqual([0.7, 0.45]);
     const { centre, radius } = bodySphere([10, 2, 20]);

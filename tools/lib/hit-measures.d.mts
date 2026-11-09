@@ -26,7 +26,9 @@ export interface Rgba {
 export const SHOTS: Shot[];
 export const BACKSTOP: Wall;
 export const NEAR_BACKSTOP: Wall;
-export const BURST: { frame: { torso: number; head: number }; threshold: number; margin: number; px: { torso: number; head: number } };
+export const BURST: { frame: { torso: number; head: number }; threshold: number; margin: number; px: { torso: number; head: number }; overNoise: { torso: number } };
+/** What fails of shot `name`'s burst (its pixels drawn with its blood, drawn again, and the redraws' noise), or null. */
+export function burstFailure(name: string, burst: { px: number; againPx: number; noise: number } | null): string | null;
 export const GATES: { ringFrame: number; cluster: number; nearCluster: number };
 export const DUMMY: { halfWidthM: number; heightM: number };
 export const ZOOM: { w: number; h: number; below: number; scale: number };

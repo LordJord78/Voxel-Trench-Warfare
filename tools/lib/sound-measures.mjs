@@ -3,8 +3,9 @@
 // louder ear's), RMS and loudest 50 ms (dBFS), its body's loudest 50 ms (its part under 400 Hz alone),
 // the share of its energy in 400 Hz–2 kHz and over 400 Hz (an FFT of each ear, their energy summed).
 // Each file's peak is held between −30 and −1 dBFS and none may be silent; a render may be held besides
-// to a band, to the small speaker (its share over 400 Hz), to a floor under its peak, or to another
-// render's loudest 50 ms, or its body's (a kill's thud, apart from its chime). Plain JS, so the render page
+// to a band, to the small speaker (its share over 400 Hz), to a floor under its peak, to another
+// render's loudest 50 ms, or its body's (a kill's thud, apart from its chime), or over another render's
+// energy in a band (a headshot's kill over the same kill without its gush). Plain JS, so the render page
 // (tools/sounds/page.ts, which runs the FFT where it renders) and the tests read the same code.
 
 /** A file's peak must lie in this range (dBFS): over the top it may clip, under the bottom it is too quiet. */
@@ -127,7 +128,11 @@ function under(samples, rate, hz) {
   return out;
 }
 
-/** One channel's energy (its power spectrum's sum, Parseval's) all told, and between `lo` and `hi` Hz. */
+/**
+ * One channel's energy (its power spectrum's sum, Parseval's) all told, and between `lo` and `hi` Hz,
+ * one-sided; and that in-band part as the sum of squares of the samples it stands for (`squares`: each
+ * bin but the ends counted for its mirror too, over the FFT's length).
+ */
 function energy(samples, rate, lo, hi) {
   let n = 1;
   while (n < samples.length) n <<= 1;
@@ -137,13 +142,17 @@ function energy(samples, rate, lo, hi) {
   fft(re, im);
   let all = 0;
   let inBand = 0;
+  let squares = 0;
   for (let k = 0; k <= n / 2; k++) {
     const p = re[k] * re[k] + im[k] * im[k];
     const hz = (k * rate) / n;
     all += p;
-    if (hz >= lo && hz <= hi) inBand += p;
+    if (hz >= lo && hz <= hi) {
+      inBand += p;
+      squares += (k === 0 || 2 * k === n ? 1 : 2) * p;
+    }
   }
-  return { all, inBand };
+  return { all, inBand, squares: squares / n };
 }
 
 /**
@@ -246,20 +255,38 @@ export function onset(x, rate) {
   return first === Infinity ? null : first / rate;
 }
 
+/** `x`'s channels (one or a list, at `rate`), whole, or their first `firstS` seconds from its onset; null for silence cut so. */
+function firstOf(x, rate, firstS) {
+  const channels = channelsOf(x);
+  if (firstS === undefined) return channels;
+  const at = onset(channels, rate);
+  if (at === null) return null;
+  const from = Math.round(at * rate);
+  const to = from + Math.round(firstS * rate);
+  return channels.map((c) => (c.subarray ? c.subarray(from, to) : Array.prototype.slice.call(c, from, to)));
+}
+
 /**
  * A band rule's own share of `x` (one channel or a list, at `rate`): its energy in `rule.hz`, over the
  * whole file, or over its first `rule.firstS` seconds from its onset.
  */
 export function ruleShare(x, rate, rule) {
-  let channels = channelsOf(x);
-  if (rule.firstS !== undefined) {
-    const at = onset(channels, rate);
-    if (at === null) return 0;
-    const from = Math.round(at * rate);
-    const to = from + Math.round(rule.firstS * rate);
-    channels = channels.map((c) => (c.subarray ? c.subarray(from, to) : Array.prototype.slice.call(c, from, to)));
-  }
-  return bandShare(channels, rate, rule.hz[0], rule.hz[1]);
+  const channels = firstOf(x, rate, rule.firstS);
+  return channels === null ? 0 : bandShare(channels, rate, rule.hz[0], rule.hz[1]);
+}
+
+/**
+ * An `over` rule's own reading of `x` (one channel or a list, at `rate`): its energy in `rule.hz` (the
+ * sum of the squares of its samples there, by Parseval's; both ears' summed), over the whole file, or
+ * over its first `rule.firstS` seconds from its onset, in dB; −Infinity for silence. Two files read
+ * alike differ by as many dB as their energy there does.
+ */
+export function ruleEnergyDb(x, rate, rule) {
+  const channels = firstOf(x, rate, rule.firstS);
+  if (channels === null) return -Infinity;
+  let sum = 0;
+  for (const c of channels) sum += energy(c, rate, rule.hz[0], rule.hz[1]).squares;
+  return sum > 0 ? 10 * Math.log10(sum) : -Infinity;
 }
 
 const db1 = (x) => (x === -Infinity ? '-inf' : x.toFixed(1));
@@ -267,13 +294,17 @@ const pct1 = (x) => `${(x * 100).toFixed(1)}%`;
 const pct = (x) => `${Math.round(x * 100)}%`;
 
 /**
- * What fails of a file read by measure() (with its rule's share, `ruleShare`, if it has a band rule):
+ * What fails of a file read by measure() (with its rule's share, `ruleShare`, if it has a band rule, and
+ * its `over` rule's reading, `overDb`, if it has one or another's names it):
  * its peak over −1 dBFS or under −30, or silent (under SILENT_DB, which says only that); and, by
  * `rules`, under its floor (`floorDb`), too little of its energy in its band (`band`: at least `share`
  * of it in `hz`, over its first `firstS` seconds if given; half, if it asks no share), too little over
- * 400 Hz for a small speaker (`high`), or its loudest 50 ms further than `near.withinDb` from render
+ * 400 Hz for a small speaker (`high`), its loudest 50 ms further than `near.withinDb` from render
  * `near.of`'s, read in `others` (each render's measure by its name): from its loudest 50 ms, or with
- * `near.low` from its body's, under SMALL_SPEAKER_HZ alone (the kill's thud, never its louder chime).
+ * `near.low` from its body's, under SMALL_SPEAKER_HZ alone (the kill's thud, never its louder chime);
+ * or its energy in `over.band` (over its first `over.firstS` seconds if given) less than `over.db` dB
+ * over render `over.of`'s, read alike (`overDb`, each): a headshot's kill over the same without its
+ * gush, as the kill's chime alone fills the band a share can ask of it.
  */
 export function checkSound(m, rules = {}, others = {}) {
   if (!(m.peakDb >= SILENT_DB)) return ['it is silent'];
@@ -299,6 +330,17 @@ export function checkSound(m, rules = {}, others = {}) {
     else {
       const gap = m.loudestDb - level;
       if (!(Math.abs(gap) <= withinDb)) out.push(`its loudest 50 ms, ${db1(m.loudestDb)} dBFS, is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'under' : 'over'} ${whose} (${db1(level)} dBFS), not within ${withinDb} dB`);
+    }
+  }
+  if (rules.over) {
+    const { of, band, firstS, db } = rules.over;
+    const other = others[of];
+    const whose = `${firstS === undefined ? 'its energy' : `its first ${Math.round(firstS * 1000)} ms's energy`} in ${band[0]}-${band[1]} Hz`;
+    if (!other) out.push(`its energy is held over ${of}'s, which was not rendered`);
+    else if (typeof m.overDb !== 'number' || typeof other.overDb !== 'number') out.push(`${whose} over ${of}'s was not measured`);
+    else {
+      const gap = m.overDb - other.overDb;
+      if (!(gap >= db)) out.push(`${whose} is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'under' : 'over'} ${of}'s, not ${db} dB or more over it`);
     }
   }
   return out;

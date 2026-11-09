@@ -288,6 +288,11 @@ export class RangeView {
     return this.kills;
   }
 
+  /** A test's, never the game's (the rangeHp hook): dummy `id` at `hp` from the range's time now, as if just hit (Range.setHealth); nothing with the range down. */
+  setHealth(id: number, hp: number): void {
+    this.on?.range.setHealth(id, hp, this.now);
+  }
+
   /** The range as it stands, at the time it was last brought to. */
   state(): RangeState {
     const on = this.on;

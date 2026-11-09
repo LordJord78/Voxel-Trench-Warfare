@@ -165,6 +165,21 @@ describe('blood', () => {
     for (const b of census(s).droplets) expect(near(b, at)).toBeLessThan(1e-5);
   });
 
+  it("a critical burst's mist goes on along the round, as its droplets do; its sparks come back off the helmet, toward the shooter", () => {
+    const s = field();
+    const at = [12.8, 1.6, 25];
+    // Twenty bursts, so the means are the throws' and not their spread's.
+    for (let k = 0; k < 20; k++) s.bleed(at, dir, true, true);
+    s.tick();
+    const c = census(s);
+    expect([c.droplets.length, c.mists.length, c.sparks.length]).toEqual([20 * 18, 20 * 3, 20 * 4]);
+    const mean = (bs: number[][]) => bs.reduce((a, b) => a + onward(b, at, dir), 0) / bs.length;
+    // A tick on, each kind's mean along the round is its throw's: the mist on at about its speed, the sparks back at theirs.
+    expect(mean(c.mists)).toBeGreaterThan(0.5 * mist.speed * s.clock.dt);
+    expect(mean(c.droplets)).toBeGreaterThan(0.5 * blood.speed * s.clock.dt);
+    expect(mean(c.sparks)).toBeLessThan(-0.5 * particleSpec(tun, 'spark').speed * s.clock.dt);
+  });
+
   it('bleeding is deterministic: two sessions, same hits, same particles', () => {
     const run = () => {
       const s = field();

@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { BAND, bandShare, checkSound, dbfs, LOUDEST_S, loudest, loudestUnder, measure, ONSET_DB, onset, PEAK_DB, ruleShare, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
+import { BAND, bandShare, checkSound, dbfs, LOUDEST_S, loudest, loudestUnder, measure, ONSET_DB, onset, PEAK_DB, ruleEnergyDb, ruleShare, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
 
 // The sounds' proof (tools/render-sounds.mjs, npm run sounds; the shots spec's §6, G3's Task 5): each
 // voice rendered to a stereo WAV, its peak held between −30 and −1 dBFS, nothing silent; a voice held
-// to a band, to a small speaker (its share over 400 Hz), to a floor, or to another render's loudest
-// 50 ms. Read on synthetic signals, both ears together.
+// to a band, to a small speaker (its share over 400 Hz), to a floor, to another render's loudest
+// 50 ms, or over another render's energy in a band (a headshot's kill over the same without its
+// gush). Read on synthetic signals, both ears together.
 
 const RATE = 48000;
 
@@ -179,6 +180,23 @@ describe("the sounds' measures", () => {
     expect(ruleShare(new Float32Array(480), RATE, { hz: [400, 2000], share: 0.5, firstS: 0.3 })).toBe(0);
   });
 
+  it("an `over` rule's own reading: a file's energy in a band (the sum of its squares there, both ears together), over its first seconds from its onset if asked, in dB", () => {
+    const lead = 0.022;
+    // A chime at full scale for 0.3 s after the lead, then a thud as loud for 0.3 s.
+    const of = (amp: number) => signal(0.65, (t) => (t >= lead && t < lead + 0.3 ? sine(1000, amp)(t) : t >= lead + 0.3 && t < lead + 0.6 ? sine(100)(t) : 0));
+    const first = { hz: [400, 2000] as [number, number], firstS: 0.3 };
+    // 0.3 s of a full-scale sine: 14,400 samples of mean square 1/2, so 7,200: 38.6 dB.
+    expect(ruleEnergyDb(of(1), RATE, first)).toBeCloseTo(10 * Math.log10(7200), 1);
+    // Half as loud, 6 dB under; both ears, 3 dB over one; the thud after it is outside the band.
+    expect(ruleEnergyDb(of(1), RATE, first) - ruleEnergyDb(of(0.5), RATE, first)).toBeCloseTo(20 * Math.log10(2), 2);
+    expect(ruleEnergyDb([of(1), of(1)], RATE, first) - ruleEnergyDb(of(1), RATE, first)).toBeCloseTo(10 * Math.log10(2), 6);
+    expect(ruleEnergyDb(of(1), RATE, { hz: [50, 200], firstS: 0.3 })).toBeLessThan(ruleEnergyDb(of(1), RATE, first) - 30);
+    // Over the whole file, the thud's in its band.
+    expect(ruleEnergyDb(of(1), RATE, { hz: [50, 200] })).toBeCloseTo(10 * Math.log10(7200), 1);
+    // Silence: nothing.
+    expect(ruleEnergyDb(new Float32Array(480), RATE, first)).toBe(-Infinity);
+  });
+
   /** A file read, ok by every rule but those a test changes. */
   const read = (m: Partial<Parameters<typeof checkSound>[0]> = {}) => ({ peakDb: -6, rmsDb: -18, loudestDb: -12, loudestAtS: 0.01, lowLoudestDb: -20, bandShare: 0.2, highShare: 0.6, ...m });
 
@@ -247,6 +265,22 @@ describe("the sounds' measures", () => {
     expect(checkSound(read({ loudestDb: -16.9 }), { near }, { kill: unread as never })).toEqual(["its level is held to kill's under 400 Hz, which was not measured"]);
     // Without `low`, the whole kill as before.
     expect(checkSound(read({ loudestDb: -12.5 }), { near: { of: 'kill', withinDb: 3 } }, { kill })).toEqual([]);
+  });
+
+  it("a render held over another (`over`) passes with its energy in the rule's band, over its first seconds, at least so many dB over the other's, read alike: a headshot's kill over the same without its gush", () => {
+    const over = { of: 'dry', band: [400, 2000] as [number, number], firstS: 0.3, db: 1.5 };
+    const dry = read({ overDb: 40 });
+    expect(checkSound(read({ overDb: 42.3 }), { over }, { dry })).toEqual([]);
+    expect(checkSound(read({ overDb: 41.5 }), { over }, { dry })).toEqual([]);
+    // The gush lost in the mix: barely over the kill without it, or under it.
+    expect(checkSound(read({ overDb: 40.4 }), { over }, { dry })).toEqual(["its first 300 ms's energy in 400-2000 Hz is 0.4 dB over dry's, not 1.5 dB or more over it"]);
+    expect(checkSound(read({ overDb: 39.2 }), { over }, { dry })).toEqual(["its first 300 ms's energy in 400-2000 Hz is 0.8 dB under dry's, not 1.5 dB or more over it"]);
+    // Over the whole file, said so.
+    expect(checkSound(read({ overDb: 40 }), { over: { of: 'dry', band: [400, 2000], db: 1.5 } }, { dry })).toEqual(["its energy in 400-2000 Hz is 0.0 dB over dry's, not 1.5 dB or more over it"]);
+    // Unmeasured, either, or the other not rendered, is a failure, not a pass.
+    expect(checkSound(read(), { over }, { dry })).toEqual(["its first 300 ms's energy in 400-2000 Hz over dry's was not measured"]);
+    expect(checkSound(read({ overDb: 42 }), { over }, { dry: read() })).toEqual(["its first 300 ms's energy in 400-2000 Hz over dry's was not measured"]);
+    expect(checkSound(read({ overDb: 42 }), { over }, {})).toEqual(["its energy is held over dry's, which was not rendered"]);
   });
 
   it('a table of each file: its name, peak, RMS, loudest 50 ms, its share in BAND and over 400 Hz, and what failed of it', () => {

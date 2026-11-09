@@ -14,8 +14,10 @@ import { P } from '../../src/world/materials';
 
 // Playing with friends and the hit feedback (app/together.ts, app/hit-feedback.ts): the others in a
 // room and a test's puppets drawn flinching and falling as their hits say; a death the room tells of
-// between frames felt on the frame's clock, however far the page's own clock is from it; and this
-// player's own death felt, when the round that killed them never was.
+// between frames felt on the frame's clock, however far the page's own clock is from it; this
+// player's own death felt, when the round that killed them never was; the room's word of a hit on this
+// player felt (a moving player's page may never strike the round on their body); and a teamkill no
+// kill of this player's to celebrate.
 
 /** The room's line, stood in for: what Together reads of it, and the room's words, to say by hand. */
 const { lines, FakeNet } = vi.hoisted(() => {
@@ -40,6 +42,7 @@ const { lines, FakeNet } = vi.hoisted(() => {
       readonly name: string,
       readonly build: string,
       readonly on: {
+        hurt(hp: number, from: number): void;
         death(victim: number, killer: number, zone: string | null, teamkill: boolean, cause: string): void;
       },
     ) {
@@ -239,5 +242,59 @@ describe('playing with friends, and the hit feedback', () => {
     expect([s.room, s.together]).toEqual([false, true]);
     expect(fb.frame(s, { ...none(), hits: [round(1, LOCAL_BODY)] }, FRAME + 48)).toEqual([]);
     expect(marker.calls).toHaveLength(1);
+  });
+
+  it("the room's word that another player's round hurt this player reaches the hit feedback (harmed) with the health it took, on the frame's clock; the battle's word (a shell, a fire, the front's round: from −1) does not, the page having reckoned it itself", () => {
+    const s = field();
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const harmed = vi.spyOn(fb, 'harmed');
+    const { together, net } = joined(fb, s);
+    vi.spyOn(performance, 'now').mockReturnValue(5);
+    together.prepare(s, 1 / 60, [], FRAME);
+    // Ann's round: 100 to 42.
+    net.on.hurt(42, 1);
+    expect(harmed).toHaveBeenCalledTimes(1);
+    expect(harmed).toHaveBeenLastCalledWith(58, FRAME);
+    expect(marker.calls).toEqual([['flash', 0.58, FRAME]]);
+    expect(fb.frame(s, none(), FRAME + 16)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    // The battle's, a frame on: the health shown, nothing felt from the word.
+    together.prepare(s, 1 / 60, [], FRAME + 16);
+    net.on.hurt(30, -1);
+    expect(harmed).toHaveBeenCalledTimes(1);
+    // Ann's again, past kill_window_s: 30 to 8.
+    together.prepare(s, 1 / 60, [], FRAME + 500);
+    net.on.hurt(8, 1);
+    expect(harmed).toHaveBeenCalledTimes(2);
+    expect(harmed).toHaveBeenLastCalledWith(22, FRAME + 500);
+    // A word that takes nothing (the page's regeneration ahead of the room's) is still a hit: at least nothing.
+    together.prepare(s, 1 / 60, [], FRAME + 1000);
+    net.on.hurt(20, 1);
+    expect(harmed).toHaveBeenLastCalledWith(0, FRAME + 1000);
+  });
+
+  it("a teamkill by this player is no kill of theirs to celebrate: no kill marker, no KILL or HEADSHOT, no thud and chime (the feed's team-killed is the word); the body still falls, and an enemy's kill is still marked", () => {
+    const s = field();
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const { together, net } = joined(fb, s);
+    // Ann (seat 1) on Red with this player; Bob (seat 2) on Blue.
+    net.seats[1].team = 'red';
+    net.seats.push({ id: 2, name: 'Bob', team: 'blue', ready: true, away: false });
+    vi.spyOn(performance, 'now').mockReturnValue(5);
+    together.prepare(s, 1 / 60, [], FRAME);
+    net.on.death(1, 0, 'head', true, 'round');
+    expect(marker.calls).toEqual([]);
+    expect(fb.frame(s, none(), FRAME + 16)).toEqual([]);
+    expect(fb.state()).toMatchObject({ voices: {}, markers: { hit: 0, head: 0, kill: 0 } });
+    // She falls, a headshot's quicker.
+    expect(fb.figureOverlay(1, FRAME + 16).fallS).toBe(0.45);
+    // Bob, an enemy, killed by this player: marked, popped and heard.
+    net.on.death(2, 0, 'torso', false, 'round');
+    expect(marker.calls).toEqual([
+      ['show', 'kill', FRAME],
+      ['pop', 'KILL', { name: 'Bob', team: 'blue' }, FRAME],
+    ]);
+    expect(fb.frame(s, none(), FRAME + 32)).toEqual([{ kind: 'kill', at: null, gain: 0.9 }]);
   });
 });

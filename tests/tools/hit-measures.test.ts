@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BACKSTOP, BURST, bloodDisc, bloodVoxels, changedPixels, clusters, discMask, crop, DUMMY, dummyCorners, GATES, magnify, NEAR_BACKSTOP, ringClear, screenBox, SHOTS, strip, wallBox, zoneOf, ZOOM } from '../../tools/lib/hit-measures.mjs';
+import { BACKSTOP, BURST, bloodDisc, bloodVoxels, burstFailure, changedPixels, clusters, discMask, crop, DUMMY, dummyCorners, GATES, magnify, NEAR_BACKSTOP, ringClear, screenBox, SHOTS, strip, wallBox, zoneOf, ZOOM } from '../../tools/lib/hit-measures.mjs';
 
 // G3's proof (tools/hit-captures.mjs, npm run hit-captures; the shots spec's §4): a torso hit and a
 // headshot on the range's 25 m dummy at dusk, frame by frame, and the spatter on the backstop behind
@@ -95,13 +95,34 @@ describe("G3's proof: the zoomed strips", () => {
 });
 
 describe("G3's proof: its gates (G3 Task 6)", () => {
-  it('the gates: the burst seen at frame 2 (40 px for a torso hit, 80 for a headshot, a pixel changed by 16 of 255 in any channel, where its blood is drawn and 1.5 px round it), the ring clear of the dummy by frame 6, a splat of 6 at 2 m and at 0.9 m', () => {
-    expect(BURST).toEqual({ frame: { torso: 2, head: 4 }, threshold: 16, margin: 1.5, px: { torso: 40, head: 80 } });
+  it("the gates: the torso hit's burst at frame 2 (30 px, in both drawings with it, and 3 times the redraws' noise), the headshot's at frame 4 (80 px), a pixel changed by 16 of 255 in any channel, where its blood is drawn and 1.5 px round it; the ring clear of the dummy by frame 6; a splat of 6 at 2 m and 10 at 0.9 m", () => {
+    expect(BURST).toEqual({ frame: { torso: 2, head: 4 }, threshold: 16, margin: 1.5, px: { torso: 30, head: 80 }, overNoise: { torso: 3 } });
     expect(GATES).toEqual({ ringFrame: 6, cluster: 6, nearCluster: 10 });
     // The nearer backstop: a trench's back wall, about a metre behind the head; the rest as the first.
     expect(NEAR_BACKSTOP).toEqual({ ...BACKSTOP, behindM: 0.9 });
     // The dummy as it stands, for its box on the screen: 0.4 m either side of its feet, 1.9 m tall.
     expect(DUMMY).toEqual({ halfWidthM: 0.4, heightM: 1.9 });
+  });
+
+  it("a torso hit's burst is gated on the lesser of its two drawings with its blood, held to 30 px and to 3 times the redraws' noise there (the 40 px gate sat inside that noise: 43 px drawn, 37 drawn again, noise 9); a headshot's on its first drawing, 80 px; the nearer headshot's is only recorded", () => {
+    const burst = (px: number, againPx: number, noise: number) => ({ px, againPx, noise });
+    // main's report at 36e80c5: 43 px, 37 again, noise 9; under the old gate a coin flip.
+    expect(burstFailure('torso', burst(43, 37, 9))).toBeNull();
+    expect(burstFailure('torso', burst(30, 31, 10))).toBeNull();
+    // Either drawing under 30 fails, the lesser said.
+    expect(burstFailure('torso', burst(43, 29, 5))).toBe('torso: its burst changed 29 px at frame 2 (the lesser of 43 and 29 drawn with it), under 30');
+    expect(burstFailure('torso', burst(28, 45, 5))).toBe('torso: its burst changed 28 px at frame 2 (the lesser of 28 and 45 drawn with it), under 30');
+    // Under 3 times the redraws' noise: the burst can't be told from it.
+    expect(burstFailure('torso', burst(40, 35, 12))).toBe("torso: its burst's 35 px at frame 2 is under 3 times the redraws' noise there (12 px)");
+    expect(burstFailure('torso', burst(40, 36, 12))).toBeNull();
+    // A missing burst (before Task 6 the torso's measured 5 px) fails.
+    expect(burstFailure('torso', burst(5, 4, 3))).toMatch(/under 30$/);
+    // The headshot keeps its own gate at frame 4: its first drawing, 80 px.
+    expect(burstFailure('head', burst(110, 20, 60))).toBeNull();
+    expect(burstFailure('head', burst(79, 111, 4))).toBe('head: its burst changed 79 px at frame 4, under 80');
+    // The nearer headshot and no burst read: nothing to gate.
+    expect(burstFailure('head-near', burst(10, 10, 10))).toBeNull();
+    expect(burstFailure('torso', null)).toBeNull();
   });
 
   it("the pixels a burst changes: those within the box where some channel differs by the threshold or more; alpha and what lies outside the box are no matter", () => {

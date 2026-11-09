@@ -11,7 +11,8 @@ import { FRAME_S, LEAD_S, RATE, renders, TAIL_S } from '../../tools/sounds/rende
 // render is held to. Each hit's voice at the ear as the shooter hears it (planFeedback's placing, its
 // [hits] gain), held to the peak range and to the small speaker; the gush to its band and to the kill's
 // thud's level; a steel plate's ring as heard from the spawn at the range's nearest and farthest plates, the
-// farthest to a floor; and a headshot's kill as its shooter hears it, to its band over its first 300 ms.
+// farthest to a floor; and a headshot's kill as its shooter hears it, to its band over its first 300 ms
+// and over the same kill without its gush, so the gush is not lost in it.
 
 const tun = loadTunables();
 const t = audioTunables(tun);
@@ -47,7 +48,7 @@ describe("the sounds' proof: what it renders", () => {
   });
 
   it('every render is held, none only reported: the voices, the far rings, the headshot that kills and the hands\' cues', () => {
-    expect(list.map((r) => r.name)).toEqual([...EARS, 'ding-30m', 'ding-85m', 'headshot-kill', ...CUES]);
+    expect(list.map((r) => r.name)).toEqual([...EARS, 'ding-30m', 'ding-85m', 'headshot-kill', 'headshot-kill-dry', ...CUES]);
     for (const r of list) expect(r.gated, r.name).toBe(true);
   });
 
@@ -63,7 +64,7 @@ describe("the sounds' proof: what it renders", () => {
 
   it('every voice at the ear is held to the small speaker: at least a quarter of its energy over 400 Hz', () => {
     for (const kind of [...EARS, ...CUES]) expect(byName(kind).rules?.high, kind).toBe(0.25);
-    for (const name of ['ding-30m', 'ding-85m', 'headshot-kill']) expect(byName(name).rules?.high, name).toBeUndefined();
+    for (const name of ['ding-30m', 'ding-85m', 'headshot-kill', 'headshot-kill-dry']) expect(byName(name).rules?.high, name).toBeUndefined();
   });
 
   it("the gush gushes: at least 55% of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill's thud's (the kill under 400 Hz, apart from its chime)", () => {
@@ -91,17 +92,26 @@ describe("the sounds' proof: what it renders", () => {
     expect(byName(`ding-${far}m`).rules).toEqual({ floorDb: -24 });
   });
 
-  it("a headshot that kills as its shooter hears it on the range: the crack and the gush at the ear, the kill's thud and chime a frame later (its voice with the next frame's); at least 35% of its first 300 ms in 400 Hz–2 kHz", () => {
+  it("a headshot that kills as its shooter hears it on the range: the crack and the gush at the ear, the kill's thud and chime a frame later (its voice with the next frame's); at least 35% of its first 300 ms in 400 Hz–2 kHz, and its first 300 ms there at least 1.5 dB over the same kill without the gush (its chime alone fills the band: the share holds without the gush)", () => {
     const r = byName('headshot-kill');
     const now = planFeedback(t, (['head', 'gush'] as const).map((kind) => ({ kind, at: null, gain: gains[kind] })), [0, 0, 0]);
     const [kill] = planFeedback(t, [{ kind: 'kill', at: null, gain: gains.kill }], [0, 0, 0]);
     expect(r.plans).toEqual([...now, { ...kill, delayS: FRAME_S }]);
-    expect(r.rules).toEqual({ band: { hz: [400, 2000], share: 0.35, firstS: 0.3 } });
+    expect(r.rules).toEqual({ band: { hz: [400, 2000], share: 0.35, firstS: 0.3 }, over: { of: 'headshot-kill-dry', band: [400, 2000], firstS: 0.3, db: 1.5 } });
     expect(r.lengthS).toBeCloseTo(LEAD_S + Math.max(...r.plans.map((p) => p.delayS + voiceLength(p, report))) + TAIL_S, 9);
+    // The same without the gush: the crack, and the kill a frame later; held to its peak's range alone.
+    const dry = byName('headshot-kill-dry');
+    expect(dry.plans).toEqual([now[0], { ...kill, delayS: FRAME_S }]);
+    expect(dry.plans.map((p) => p.kind)).toEqual(['head', 'kill']);
+    expect([dry.gated, dry.rules]).toEqual([true, undefined]);
+    expect(dry.lengthS).toBeCloseTo(LEAD_S + Math.max(...dry.plans.map((p) => p.delayS + voiceLength(p, report))) + TAIL_S, 9);
+    // No other render is held over another's.
+    for (const x of list) if (x.name !== 'headshot-kill') expect(x.rules?.over, x.name).toBeUndefined();
   });
 
   it('every name is its own (a file each), and a render held to another names one rendered', () => {
     expect(new Set(list.map((r) => r.name)).size).toBe(list.length);
     for (const r of list) if (r.rules?.near) expect(list.map((x) => x.name), r.name).toContain(r.rules.near.of);
+    for (const r of list) if (r.rules?.over) expect(list.map((x) => x.name), r.name).toContain(r.rules.over.of);
   });
 });

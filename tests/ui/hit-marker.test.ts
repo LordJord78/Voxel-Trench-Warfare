@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { loadTunables } from '../../src/core/tunables';
 import { HitMarker, markerTunables } from '../../src/ui/hit-marker';
@@ -264,6 +265,45 @@ describe('the hit marker', () => {
     marker.clear();
     expect([els.marker.hidden, els.pop.hidden, els.flash.hidden]).toEqual([true, true, true]);
     expect(marker.state()).toEqual({ marker: null, pop: null });
+  });
+
+  it("a weaker flash over a stronger one still fading goes on from what shows: an M870's blast split over two ticks (1, then 0.25 50 ms on) starts the second at about 0.86, not 0.25; a stronger one starts at its own", () => {
+    const { els, marker } = page();
+    marker.flash(1, 1000);
+    marker.tick(1050);
+    marker.flash(0.25, 1050);
+    const shown = 1 * (1 - 50 / 350);
+    const [from, to] = els.flash.animation.keyframes.map((k) => Number(k.opacity));
+    expect(from).toBeCloseTo(shown, 9);
+    expect(from).toBeCloseTo(0.86, 2);
+    expect(to).toBe(0);
+    expect(els.flash.animation.options).toMatchObject({ duration: 350 });
+    // Fading from there over hurt_flash_s.
+    marker.tick(1399);
+    expect(els.flash.hidden).toBe(false);
+    marker.tick(1400);
+    expect(els.flash.hidden).toBe(true);
+    // A stronger one over a weaker: its own strength.
+    marker.flash(0.3, 2000);
+    marker.flash(0.9, 2100);
+    expect(els.flash.animation.keyframes.map((k) => k.opacity)).toEqual([0.9, 0]);
+    // Once one is done, the next starts at its own, however weak.
+    marker.flash(1, 3000);
+    marker.tick(3350);
+    marker.flash(0.25, 3400);
+    expect(els.flash.animation.keyframes.map((k) => k.opacity)).toEqual([0.25, 0]);
+  });
+
+  it("the red flash lies over the scope's mask, under the marker, its ring and the words (index.html): a scoped player sees being hit", () => {
+    const html = readFileSync('index.html', 'utf8');
+    const at = (needle: string) => {
+      const i = html.indexOf(needle);
+      expect(i, needle).toBeGreaterThan(0);
+      return i;
+    };
+    const flash = at('<div id="hurt-flash"');
+    expect(flash).toBeGreaterThan(at('<div id="scope"'));
+    for (const over of ['<div class="marker"', '<b class="kill-ring"', '<p class="hit-pop"']) expect(flash, over).toBeLessThan(at(over));
   });
 
   it('a page without its elements keeps the state and throws nothing', () => {

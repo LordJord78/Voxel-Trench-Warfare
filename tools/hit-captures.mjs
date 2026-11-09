@@ -33,7 +33,8 @@
 // Exits 1 if:
 //   - a shot strikes another zone than it was aimed at (by its marker and the readout's word), the
 //     torso hit kills or the headshot does not, or no marker shows within MAX_FRAMES;
-//   - a burst changes fewer than BURST.px of its shot's pixels at its shot's BURST.frame;
+//   - a burst changes fewer than BURST.px of its shot's pixels at its shot's BURST.frame (a torso hit's
+//     in either drawing with its blood, and fewer than BURST.overNoise times the redraws' noise there);
 //   - the kill's ring's inner edge has not cleared the dummy's box on the screen by GATES.ringFrame;
 //   - the headshot leaves no new blood on the backstop's wall (the cone along the round), or on either
 //     backstop the wall's marks hold no cluster of GATES.cluster voxels;
@@ -42,7 +43,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { project } from './lib/camera.mjs';
-import { BACKSTOP, BURST, bloodDisc, bloodVoxels, changedPixels, clusters, crop, discMask, DUMMY, dummyCorners, GATES, magnify, NEAR_BACKSTOP, ringClear, screenBox, SHOTS, strip, wallBox, zoneOf, ZOOM } from './lib/hit-measures.mjs';
+import { BACKSTOP, BURST, bloodDisc, bloodVoxels, burstFailure, changedPixels, clusters, crop, discMask, DUMMY, dummyCorners, GATES, magnify, NEAR_BACKSTOP, ringClear, screenBox, SHOTS, strip, wallBox, zoneOf, ZOOM } from './lib/hit-measures.mjs';
 import { decode, encode } from './lib/image.mjs';
 import { stamp, writeReport } from './lib/report.mjs';
 
@@ -64,7 +65,7 @@ const STEP_TIMEOUT_MS = 60_000;
 const VANTAGE = { backM: 2.6, asideM: 1.8, upM: 1.9, lookM: 1.6, lookUpM: 0.5 };
 /** Blood voxels are looked for this far round the dummy's feet (m), and from a metre under them to 3 m over. */
 const SEARCH_M = 4;
-const HOOKS = ['range', 'rangeState', 'hitFeedback', 'standAt', 'setLoadout', 'trigger', 'freeze', 'thaw', 'stepFrames', 'redraw', 'hideBurst', 'waitFrames', 'holdLights', 'setTimeOfDay', 'setIntensity', 'setShelling', 'setQuality', 'play', 'camera', 'mode', 'flyTo', 'walk', 'frames', 'gpuErrors', 'hud'];
+const HOOKS = ['range', 'rangeState', 'hitFeedback', 'standAt', 'setLoadout', 'trigger', 'freeze', 'thaw', 'stepFrames', 'redraw', 'hideBurst', 'waitFrames', 'holdLights', 'setTimeOfDay', 'setIntensity', 'setShelling', 'setQuality', 'play', 'camera', 'mode', 'flyTo', 'walk', 'frames', 'gpuErrors', 'hud', 'jitter', 'player'];
 
 const withTimeout = (promise, what) =>
   Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`timed out (${STEP_TIMEOUT_MS} ms): ${what}`)), STEP_TIMEOUT_MS))]);
@@ -499,7 +500,8 @@ try {
         if (view.mode !== 'fly') failures.push(`the spatter view was ${view.mode}, not flying`);
       }
       const { entry, marked } = await shoot(page, shot, scene, feet);
-      if (entry.burst && entry.burst.px < BURST.px[shot.name]) failures.push(`${shot.name}: its burst changed ${entry.burst.px} px at frame ${BURST.frame[shot.zone]}, under ${BURST.px[shot.name]}`);
+      const burstFailed = burstFailure(shot.name, entry.burst ?? null);
+      if (burstFailed) failures.push(burstFailed);
       if (shot.kills) {
         // The kill's ring clear of the dummy's box on the screen by GATES.ringFrame.
         const f = marked.find((x) => x.at === GATES.ringFrame);

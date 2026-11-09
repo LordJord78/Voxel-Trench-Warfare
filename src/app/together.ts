@@ -517,6 +517,11 @@ export class Together {
 
   private hurt(hp: number, from: number): void {
     const now = performance.now();
+    // Another player's round (hit-feedback.ts harmed): felt from the room's word, at what it took, as
+    // a moving player's page mostly never strikes that round on their body (the shooter aimed at them
+    // as drawn 125 ms and more ago). The battle's (from −1: a shell, a fire, the front) the page
+    // reckoned itself and told the room, and felt as it did.
+    if (from >= 0) this.hits?.harmed(Math.max(0, this.hp - hp), this.frameNow);
     this.hp = hp;
     this.hurtAt = now;
     // Where it came from, clockwise from where the player looks.
@@ -549,10 +554,11 @@ export class Together {
       this.hits?.died(this.frameNow);
     } else {
       this.deaths.set(victim, now);
-      // Another's death (hit-feedback.ts): this player's kill marked, popped and heard; the body's fall
-      // and, a round's, its critical burst where it was last struck. Not this player's own, whose view
-      // is in the head: its blood would be thrown into the eye.
-      if (this.session) this.hits?.kill(victim, killer === net.you, v, this.frameNow, this.session, cause === 'round' ? zone : null);
+      // Another's death (hit-feedback.ts): this player's kill marked, popped and heard, but not a
+      // teamkill (it costs the team a point: the feed's "team-killed" says it, nothing celebrates it);
+      // the body's fall and, a round's, its critical burst where it was last struck. Not this player's
+      // own, whose view is in the head: its blood would be thrown into the eye.
+      if (this.session) this.hits?.kill(victim, killer === net.you && !teamkill, v, this.frameNow, this.session, cause === 'round' ? zone : null);
     }
   }
 

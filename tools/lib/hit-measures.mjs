@@ -37,8 +37,29 @@ export const NEAR_BACKSTOP = { ...BACKSTOP, behindM: 0.9 };
  * least `px` of a torso hit's and a headshot's, each read at its own `frame` (G3 Task 6's ruling: a headshot's
  * burst is thrown out of the far side and is still behind the head at frame 2; by frame 4, about 67 ms, its haze
  * spreads round it, so the headshot is read there and the torso hit at frame 2). `frame` is by the shot's zone.
+ * A torso hit's is held on the lesser of its two drawings with its blood, and to `overNoise` times the
+ * redraws' noise there (G3's final ruling: the 40 px gate sat inside that noise, 43 px drawn, 37 drawn
+ * again, noise 9; before Task 6 the torso's burst was 5 px, so 30 still tells it from nothing).
  */
-export const BURST = { frame: { torso: 2, head: 4 }, threshold: 16, margin: 1.5, px: { torso: 40, head: 80 } };
+export const BURST = { frame: { torso: 2, head: 4 }, threshold: 16, margin: 1.5, px: { torso: 30, head: 80 }, overNoise: { torso: 3 } };
+
+/**
+ * What fails of shot `name`'s burst (burstOf: `px` changed by its blood, `againPx` by it drawn again,
+ * the redraws' `noise`), or null: a torso hit's lesser drawing under BURST.px or under BURST.overNoise
+ * times the noise; a headshot's first drawing under BURST.px. A shot BURST holds no gate for (the
+ * nearer headshot, only recorded), or no burst read, is nothing to fail.
+ */
+export function burstFailure(name, burst) {
+  const px = BURST.px[name];
+  if (!burst || px === undefined) return null;
+  const frame = BURST.frame[name];
+  const times = BURST.overNoise[name];
+  if (times === undefined) return burst.px < px ? `${name}: its burst changed ${burst.px} px at frame ${frame}, under ${px}` : null;
+  const least = Math.min(burst.px, burst.againPx);
+  if (least < px) return `${name}: its burst changed ${least} px at frame ${frame} (the lesser of ${burst.px} and ${burst.againPx} drawn with it), under ${px}`;
+  if (least < times * burst.noise) return `${name}: its burst's ${least} px at frame ${frame} is under ${times} times the redraws' noise there (${burst.noise} px)`;
+  return null;
+}
 
 /** The kill's ring clear of the dummy's box on the screen by `ringFrame` after the kill; and the spatter on the 2 m backstop at least one cluster of `cluster` voxels, joined face to face (clusters), and on the 0.9 m one of `nearCluster` (the old dots reached 6 there; the splat's worst measured is 12). */
 export const GATES = { ringFrame: 6, cluster: 6, nearCluster: 10 };

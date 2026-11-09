@@ -148,6 +148,8 @@ export interface Hooks {
     plates: { index: number; at: [number, number, number]; hits: number }[];
     readout: string | null;
   };
+  /** A dummy's health set (held to 1 to 100), as if just hit then, its shots counted afresh; one down, or none, left as it is (Range.setHealth). A test's alone. */
+  rangeHp(id: number, hp: number): void;
   /**
    * The hit feedback (src/app/hit-feedback.ts): the marker showing and the words under it (null when
    * none show); the voices it has made, by kind; the red flashes; and the markers shown, by kind.

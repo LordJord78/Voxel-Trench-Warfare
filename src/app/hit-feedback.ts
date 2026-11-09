@@ -19,7 +19,16 @@
  *   aim jolted away from the round, and the hurt voice, once a tick; the damage as the room reckons
  *   it (the zone's by the gun's scale, net/gear.ts), a tick's added up. In a room the front's round
  *   (owner 1) is the harm the page sends for it: the zone's by `frontDamageScale` (combat/harm.ts
- *   frontHarm).
+ *   frontHarm). Not on the deploy screen (frame's `felt` false): the match's world runs there, and
+ *   its shells land, but the player is not in it.
+ * - **The room's word of a hit** (harmed: another player's round, Together.hurt): the page strikes a
+ *   relayed round on the player's body as it is now, but the shooter aimed at them as drawn 125 ms
+ *   and more ago, so a moving player's page mostly never strikes it; the room's word does. The red
+ *   flash at its share and the hurt voice (with the next frame's), no jolt (it comes 100–250 ms late:
+ *   a late jolt would read as the input lagging). Felt once, whichever came first: a word within
+ *   kill_window_s of a round or a blast felt here is that one's; a round struck here within
+ *   kill_window_s of a word flashes and jolts, but its voice was the word's. A frame's words (a
+ *   shotgun's pellets, told one by one) are one flash, at their sum's share, and one voice.
  * - **A blast's harm on the player** (a room's shell, `events.harms` of cause 'shell'): a frame's added
  *   up, the same red flash at its share of 100 and the hurt voice, once; no jolt, the blast's own
  *   shake and suppression stand for it. In a frame a round into the player was felt as well, one
@@ -27,16 +36,22 @@
  *   at the larger of the two. A round's harm adds nothing: its body hit flashes already.
  * - **The player killed** (the room's death, died): the round that killed them may never be felt
  *   here (the room's word can come before the shot, and a dead body strikes nothing). Unless the red
- *   flash of a round or a blast felt is still at half its strength or more (younger than half of
- *   hurt_flash_s), the red flash at full strength and the hurt voice; no jolt, the player being dead.
- *   So the death reads: a round felt ~300 ms before it left a flash at a tenth as they died.
+ *   flash of a round, a blast or a word felt still shows at half or more (its strength, faded over
+ *   hurt_flash_s), the red flash at full strength; no jolt, the player being dead. So the death reads:
+ *   a round felt ~300 ms before it left a flash at a tenth as they died, and a limb's round 100 ms
+ *   before a quarter's flash at 0.18. With it the hurt voice, once half of hurt_flash_s has passed
+ *   since the last flash started: a round felt just before has had its own.
  * - **A kill** (the room's death in a match, the range's own at once): when it was the player's, the
  *   kill marker, the pop (KILL, or HEADSHOT for a headshot's), and the kill's thud and chime at the
- *   ear. The body falls along the last round seen to strike it within kill_window_s, in head_fall_s
- *   from a headshot; and bursts critical there (failing such a hit, at its chest as last drawn),
- *   unless a headshot killed it, or that last round's tick struck the head: either bled and
- *   spattered as it struck, and a hit bursts critical once.
- * - **A plate** (the range's): the hit marker, and its ring where it stands.
+ *   ear (not a teamkill's: Together passes it as no kill of the player's). The body falls along the
+ *   last round seen to strike it within kill_window_s, in head_fall_s from a headshot; and bursts
+ *   critical there (failing such a hit, at its chest as last drawn), unless a headshot killed it, or
+ *   that last round's tick struck the head: either bled and spattered as it struck, and a hit bursts
+ *   critical once. The room's word comes a round trip after the hit, so the burst is carried on as
+ *   the body's chest has moved since (a runner's would hang behind it); the spatter goes from where
+ *   the round passed.
+ * - **A plate** (the range's): the hit marker, and its ring where it stands; once a frame a plate, so
+ *   a shotgun's pellets on one ring it once (their dings, alike and at once, would add up in phase).
  *
  * The voices of a kill, a plate and the player's death go out with the next frame's (frame). Times
  * are the frame's clock, ms (main's `now`, the one Together.prepare is given), the room's words too.
@@ -115,7 +130,7 @@ export interface Dropped {
   index: number;
 }
 
-/** A body's last hit: where its round went in, which way, where on it, when (ms; its tick), and whether its tick struck the head. */
+/** A body's last hit: where its round went in, which way, where on it, when (ms; its tick), whether its tick struck the head, and its chest as drawn then (null: not drawn). */
 interface Struck {
   position: V3;
   dir: V3;
@@ -123,6 +138,7 @@ interface Struck {
   at: number;
   tick: number;
   head: boolean;
+  chest: V3 | null;
 }
 
 const NONE: FigureOverlay = Object.freeze({});
@@ -144,8 +160,16 @@ export class HitFeedback {
   private readonly tally: Partial<Record<FeedbackKind, number>> = {};
   private readonly markers: Record<MarkerKind, number> = { hit: 0, head: 0, kill: 0 };
   private flashes = 0;
-  /** When the red flash last started: a round or a blast into the player felt, or the room's word of their death (ms). */
+  /** When the red flash last started (a round, a blast or the room's word of a hit felt, or of the player's death), ms; and how strong it was then (as the marker shows it: the larger of what it was asked and what still showed). */
   private hurtAt = Number.NEGATIVE_INFINITY;
+  private flashStrength = 0;
+  /** When a round or a blast into the player was last felt here (hurt, shelled), ms: a word of the room's within kill_window_s is that hit's. */
+  private feltAt = Number.NEGATIVE_INFINITY;
+  /** When the room's word of a hit was last felt (harmed), ms, and the damage of the frame's words so far: a round struck here within kill_window_s is that hit's, and a frame's words are one. */
+  private wordAt = Number.NEGATIVE_INFINITY;
+  private wordDamage = 0;
+  /** The plates rung since the last frame, by index: one ding a plate a frame. */
+  private readonly rung = new Set<number>();
 
   constructor(
     readonly t: HitFeedbackTunables,
@@ -158,22 +182,25 @@ export class HitFeedback {
    * After the frame's ticks, at `now` (ms): what its hits show and sound (the drawn bodies, `others`,
    * say where each one's chest is, for a kill; `dropped`, the bodies the range has dropped in the
    * frame, whose later hits are none): the voices to play, any a kill or a plate made since the last
-   * frame first. `dropped` is the range's, never kept.
+   * frame first. `dropped` is the range's, never kept. `felt` false (main's deploy screen, the match's
+   * world running without the player in it): nothing into the player is felt, no round's and no blast's.
    */
-  frame(session: Session, events: CombatEvents, now: number, others: readonly SoldierDraw[] = [], dropped: readonly Dropped[] = []): FeedbackVoice[] {
+  frame(session: Session, events: CombatEvents, now: number, others: readonly SoldierDraw[] = [], dropped: readonly Dropped[] = [], felt = true): FeedbackVoice[] {
     this.chests.clear();
     for (const d of others) this.chests.set(d.seat, toWorld(d.frames.torso, CHEST));
+    this.rung.clear();
     const out = this.queued;
     this.queued = [];
     const t = this.t;
     const eye = eyeOf(session);
     const room = session.room;
+    const into = (h: CombatEvents['hits'][number]) => felt && intoPlayer(h, room);
     // The frame's blasts on the player (a room's shells), added up: felt once, with the last tick's
     // rounds into the player if any were felt, as one flash and one voice.
     let blast = 0;
-    for (const h of events.harms) if (h.cause === 'shell') blast += h.amount;
+    if (felt) for (const h of events.harms) if (h.cause === 'shell') blast += h.amount;
     let lastHurt: number | null = null;
-    if (blast > 0) for (const h of events.hits) if (intoPlayer(h, room)) lastHurt = h.tick;
+    if (blast > 0) for (const h of events.hits) if (into(h)) lastHurt = h.tick;
     // A tick's at a time: the player's hits on bodies and in the head, others' heard, rounds into the player.
     let tick: number | null = null;
     let body = false;
@@ -218,7 +245,7 @@ export class HitFeedback {
         };
         hear('hit', t.hitHeardM);
         if (h.zone === 'head') hear('gush', t.gushHeardM);
-      } else if (intoPlayer(h, room)) {
+      } else if (into(h)) {
         hurt ??= { damage: 0, dir: copy(h.dir) };
         // In a room the front's round (owner 1) is felt as the harm the page sends for it: its zone's
         // damage × front_damage_scale (sim/session.ts, combat/harm.ts frontHarm).
@@ -255,30 +282,60 @@ export class HitFeedback {
     // struck; and so was a headshot in the last round's tick (an AK held on the chest climbing into
     // the head after the rounds that killed, a pellet in the head with them): no second.
     if (zone === null || zone === 'head' || recent?.head) return;
-    const at = recent?.position ?? this.chests.get(victimId);
+    const chest = this.chests.get(victimId);
+    const at = recent?.position ?? chest;
     if (!at) return;
     const dir = recent?.dir ?? away(eyeOf(session), at);
-    session.bleed(at, dir, true);
+    // Where the round went in, carried on as the chest has moved since (the room's word comes a round
+    // trip after the hit: a runner's burst would hang behind them); the spatter from where it passed.
+    const moved = recent?.chest && chest ? [chest[0] - recent.chest[0], chest[1] - recent.chest[1], chest[2] - recent.chest[2]] : null;
+    session.bleed(moved ? [at[0] + moved[0], at[1] + moved[1], at[2] + moved[2]] : at, dir, true);
     session.spatterAt(at, dir, hash32(victimId, Math.round(now)));
   }
 
   /**
-   * The player killed, by the room's word at `now` (ms): unless the red flash of a round or a blast felt
-   * is still at half its strength or more (it fades out over hurt_flash_s, so younger than half of
-   * that), the red flash at full strength and the hurt voice (with the next frame's), as a one-shot
-   * kill's round may never reach them here, and a round felt before it may have left its flash all but
-   * gone. No jolt: they are dead.
+   * The player killed, by the room's word at `now` (ms): unless the red flash of a round, a blast or a
+   * word felt still shows at half or more (its strength, fading out over hurt_flash_s), the red flash
+   * at full strength, as a one-shot kill's round may never reach them here, and a round felt before it
+   * may have left its flash all but gone; with the hurt voice (with the next frame's) once half of
+   * hurt_flash_s has passed since the last flash started, so a round just felt, voiced, is not voiced
+   * again at once. No jolt: they are dead.
    */
   died(now: number): void {
-    if (1 - (now - this.hurtAt) / (this.t.flashS * 1000) >= 0.5) return;
-    this.hurtAt = now;
-    this.marker.flash(1, now);
-    this.flashes++;
+    if (this.shownFlash(now) >= 0.5) return;
+    const voiced = now - this.hurtAt >= this.t.flashS * 500;
+    this.flash(1, now);
+    if (voiced) this.queued.push(this.voice('hurt', null));
+  }
+
+  /**
+   * The room's word, at `now` (ms, the frame's clock), that another player's round took `damage` of the
+   * player's health (Together.hurt): felt as such a round is, the red flash at its share and the hurt
+   * voice (with the next frame's), unless a round or a blast felt here within kill_window_s was that
+   * hit; no jolt, the word coming late. Another word in the same frame (a shotgun's pellets, told one
+   * by one) is the same hit's: the flash at their sum's share, no more voice.
+   */
+  harmed(damage: number, now: number): void {
+    const t = this.t;
+    if (now - this.feltAt <= t.killWindowS * 1000) return;
+    const again = this.wordAt === now;
+    this.wordDamage = again ? this.wordDamage + damage : damage;
+    this.wordAt = now;
+    const strength = Math.max(t.flashMin, Math.min(1, this.wordDamage / 100));
+    if (again) {
+      this.flashStrength = Math.max(strength, this.shownFlash(now));
+      this.hurtAt = now;
+      this.marker.flash(strength, now);
+      return;
+    }
+    this.flash(strength, now);
     this.queued.push(this.voice('hurt', null));
   }
 
-  /** A round of the player's rang one of the range's plates, standing at `at` (metres), at `now` (ms): the hit marker, and its ring there. */
-  plate(_event: Extract<RangeEvent, { kind: 'plate' }>, at: readonly number[], now: number): void {
+  /** A round of the player's rang one of the range's plates, standing at `at` (metres), at `now` (ms): the hit marker, and its ring there; once a frame a plate (a shotgun's pellets on it, one ring). */
+  plate(event: Extract<RangeEvent, { kind: 'plate' }>, at: readonly number[], now: number): void {
+    if (this.rung.has(event.index)) return;
+    this.rung.add(event.index);
     this.mark('hit', now);
     this.queued.push(this.voice('ding', copy(at)));
   }
@@ -303,16 +360,19 @@ export class HitFeedback {
     this.bodies.clear();
     this.falls.clear();
     this.chests.clear();
+    this.rung.clear();
     this.queued = [];
-    this.hurtAt = Number.NEGATIVE_INFINITY;
+    this.hurtAt = this.feltAt = this.wordAt = Number.NEGATIVE_INFINITY;
+    this.flashStrength = this.wordDamage = 0;
     this.marker.clear();
   }
 
-  /** A round of a tick into a body: its flinch and its last hit, a headshot of the same tick's kept. */
+  /** A round of a tick into a body: its flinch and its last hit, a headshot of the same tick's kept, and its chest as drawn this frame. */
   private struck(h: CombatEvents['hits'][number], now: number): void {
     const was = this.bodies.get(h.body);
     const sameTick = was !== undefined && was.tick === h.tick && was.at === now;
-    this.bodies.set(h.body, { position: copy(h.position), dir: copy(h.dir), zone: h.zone, at: now, tick: h.tick, head: h.zone === 'head' || (sameTick && was.head) });
+    const chest = this.chests.get(h.body);
+    this.bodies.set(h.body, { position: copy(h.position), dir: copy(h.dir), zone: h.zone, at: now, tick: h.tick, head: h.zone === 'head' || (sameTick && was.head), chest: chest ? copy(chest) : null });
   }
 
   /**
@@ -323,9 +383,8 @@ export class HitFeedback {
   private hurt(session: Session, damage: number, dir: V3, now: number, out: FeedbackVoice[], blast = 0): void {
     const t = this.t;
     const share = Math.min(1, damage / 100);
-    this.hurtAt = now;
-    this.marker.flash(Math.max(t.flashMin, share, Math.min(1, blast / 100)), now);
-    this.flashes++;
+    this.feltAt = now;
+    this.flash(Math.max(t.flashMin, share, Math.min(1, blast / 100)), now);
     // Away from the round: across the view the way it went, and up for one that came at the face
     // (down for one from behind), as the body takes it.
     const p = session.player;
@@ -336,15 +395,28 @@ export class HitFeedback {
     const [yaw, pitch] = n > 1e-6 ? [across / n, rise / n] : [0, 1];
     const deg = t.jolt[0] + t.jolt[1] * share;
     session.jolt(yaw * deg, pitch * deg);
+    // The room's word of this hit came first, and was voiced.
+    if (now - this.wordAt > t.killWindowS * 1000) out.push(this.voice('hurt', null));
+  }
+
+  /** Blasts' `amount` of harm on the player, a frame's: the flash and the voice, as a hit of as much gives; the shell shakes the view itself. Felt, for died and a word. */
+  private shelled(amount: number, now: number, out: FeedbackVoice[]): void {
+    this.feltAt = now;
+    this.flash(Math.max(this.t.flashMin, Math.min(1, amount / 100)), now);
     out.push(this.voice('hurt', null));
   }
 
-  /** Blasts' `amount` of harm on the player, a frame's: the flash and the voice, as a hit of as much gives; the shell shakes the view itself. Felt, for died. */
-  private shelled(amount: number, now: number, out: FeedbackVoice[]): void {
+  /** The red flash started at `now` (ms) at `strength`, counted; kept as the marker shows it, the larger of that and what still showed. */
+  private flash(strength: number, now: number): void {
+    this.flashStrength = Math.max(strength, this.shownFlash(now));
     this.hurtAt = now;
-    this.marker.flash(Math.max(this.t.flashMin, Math.min(1, amount / 100)), now);
+    this.marker.flash(strength, now);
     this.flashes++;
-    out.push(this.voice('hurt', null));
+  }
+
+  /** How strongly the red flash shows at `now` (ms): its strength as it started, faded out over hurt_flash_s. */
+  private shownFlash(now: number): number {
+    return this.flashStrength * Math.max(0, 1 - (now - this.hurtAt) / (this.t.flashS * 1000));
   }
 
   private mark(kind: MarkerKind, now: number): void {
