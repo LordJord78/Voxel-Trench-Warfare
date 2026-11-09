@@ -623,6 +623,22 @@ spread_vertical     = 0.6      # and this much of it up and down (the reference'
                                # rig); both across the line of fire
 reach_m             = 30.0     # enemy bays within this, along the line, fire
 
+[room_battle]
+# The battle in a room (the shared-battle spec): the room, not each page, decides when and where
+# its shells land, from its map's pinned field (src/net/shell-fields.ts), and tells everyone each
+# one lead_s before it lands. The relay cannot read this file, so src/net/shelling.ts SHELLING
+# copies these numbers for it; tests/net/shelling.test.ts holds the two equal.
+light_gap_s         = [6.0, 10.0]  # seconds from one shell to the next, drawn uniform
+heavy_gap_s         = [2.5, 4.0]   # (off: no shells)
+lead_s              = 1.5      # each told this long before it lands: its whistle
+radius_m            = [2.2, 3.4]   # drawn uniform
+spawn_clear_m       = 15.0     # none lands nearer either side's start
+nml_share           = 0.5      # the share landing in no man's land; the rest on a front or
+                               # support line of either side
+line_spread_m       = 4.0      # a line's shell lands this far either side of its trench
+nml_inset_m         = 8.0      # no man's land: between the fronts, this far in from each
+tries               = 8        # places tried for a shell before its slot sends nothing
+
 [range]
 # Solo play's firing range (the shots spec's §5, combat/range.ts): dummies and
 # steel plates out along the spawn bay's facing, each this far out from the

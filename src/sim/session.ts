@@ -150,7 +150,6 @@ export interface CombatEvents {
   craters: (Crater & { tick: number })[];
   /** Shells announced (their whistle): where each will land (metres), and in how long. */
   incoming: { tick: number; at: [number, number, number]; landsInS: number }[];
-  /** Shells landed: where (metres, the top of the ground), how big, and what they struck. */
   /** Shells landed: where, how big, what they struck, the crater each made (null where none could be), and the seed it was cut with. */
   blasts: { tick: number; at: [number, number, number]; radiusM: number; material: number; crater: number | null; seed?: number }[];
   /** Each scoop the player dug: how many voxels, and where (metres). */

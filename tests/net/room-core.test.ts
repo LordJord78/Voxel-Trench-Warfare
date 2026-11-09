@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { encodeShot, encodeState, parseRoom, PROTOCOL, type RoomMsg } from '../../src/net/protocol';
+import { DIG_CELLS_MAX, encodeShell, encodeShot, encodeState, parseRoom, PROTOCOL, type RoomMsg, type WireShell } from '../../src/net/protocol';
 import { PROTECT_MS } from '../../src/net/match-rules';
-import { AWAY_MS, COUNTDOWN_MS, OVER_MS, RoomCore, type Conn } from '../../src/net/room-core';
+import { AWAY_MS, COUNTDOWN_MS, LOG_CHARS_MAX, OVER_MS, RoomCore, type Conn } from '../../src/net/room-core';
+import { SHELL_FIELDS } from '../../src/net/shell-fields';
+import { Shelling, shellingSeed } from '../../src/net/shelling';
 
 class Fake implements Conn {
   readonly got: RoomMsg[] = [];
@@ -27,6 +29,24 @@ function join(room: RoomCore, name: string, now = 0, build = 'b1'): Fake {
   say(room, c, { t: 'hello', v: PROTOCOL, build, name }, now);
   return c;
 }
+
+/** Every shell `c` has been told, in order. */
+const shells = (c: Fake): WireShell[] => c.got.flatMap((m) => (m.t === 'shell' ? [m.s] : []));
+
+/** The room ticked every 50 ms over (from, to]: each shell `c` was told then, with the room's clock it was told at. */
+function tickTo(room: RoomCore, from: number, to: number, c: Fake): { s: WireShell; at: number }[] {
+  const told: { s: WireShell; at: number }[] = [];
+  for (let now = from + 50; now <= to; now += 50) {
+    const before = c.got.length;
+    room.tick(now);
+    for (const m of c.got.slice(before)) if (m.t === 'shell') told.push({ s: m.s, at: now });
+  }
+  return told;
+}
+
+/** The shells a match started at `startAt` on `map` (seed `seed`) tells by `throughS`, as the wire carries them. */
+const expected = (map: string, seed: number, startAt: number, throughS: number, intensity: 'light' | 'heavy' = 'heavy', firstId = 1) =>
+  new Shelling(SHELL_FIELDS[map], shellingSeed(startAt, seed), intensity, firstId).between(0, throughS).map((s) => encodeShell(s, startAt));
 
 const state = { tick: 1, position: [1, 2, 3] as [number, number, number], velocity: [0, 0, 0] as [number, number, number], yaw: 90, pitch: 0, stance: 0, height: 1.8, flags: 1 };
 
@@ -165,5 +185,154 @@ describe('a room', () => {
     expect(a.last('respawn')).toBeUndefined();
     room.tick(t + 2000);
     expect(a.last('respawn')).toMatchObject({ id: 1 });
+  });
+});
+
+describe("a room's shelling and its log", () => {
+  /** A room of two, a and b, its owner a, at `intensity`; the start called at `at`. */
+  function match(code: string, intensity: 'off' | 'light' | 'heavy', at = 0, config: object = {}) {
+    const room = new RoomCore(code);
+    const a = join(room, 'a');
+    const b = join(room, 'b');
+    say(room, a, { t: 'config', config: { intensity, ...config } }, 0);
+    say(room, a, { t: 'start' }, at);
+    return { room, a, b, startAt: at + COUNTDOWN_MS };
+  }
+
+  it('tells everyone each shell once, 1.5 s before it lands', () => {
+    const { room, a, b, startAt } = match('SHELL', 'heavy');
+    const told = tickTo(room, 0, startAt + 63_000, a);
+    expect(shells(b)).toEqual(shells(a));
+    expect(told.map((t) => t.s[0])).toEqual(told.map((_, i) => i + 1));
+    for (const { s, at } of told) {
+      expect(s[1] - at, `shell ${s[0]}`).toBeGreaterThanOrEqual(1450);
+      expect(s[1] - at, `shell ${s[0]}`).toBeLessThanOrEqual(1550);
+    }
+    // Told through landS 64.5: the room's own schedule over its map's field, from the match's seed.
+    expect(told.length).toBeGreaterThanOrEqual(16);
+    expect(told.length).toBeLessThanOrEqual(25);
+    expect(told.map((t) => t.s)).toEqual(expected('ravine', 7, startAt, 64.5));
+  });
+
+  it('refuses a hello of protocol 1', () => {
+    const room = new RoomCore('PROTO');
+    const old = new Fake();
+    room.open(old, 0);
+    say(room, old, { t: 'hello', v: 1, build: 'b1', name: 'old' }, 0);
+    expect(old.last('refused')).toEqual({ t: 'refused', reason: 'version' });
+    expect(old.closed).toBe('version');
+    expect(room.seats()).toEqual([]);
+  });
+
+  it("relays a dig to the others, stamped with the room's clock, and logs it", () => {
+    const room = new RoomCore('DIGS');
+    const a = join(room, 'a');
+    const b = join(room, 'b');
+    // Not in the lobby, nor in the countdown.
+    say(room, a, { t: 'dig', c: [9] }, 100);
+    say(room, a, { t: 'start' }, 1000);
+    say(room, a, { t: 'dig', c: [8] }, 1000 + COUNTDOWN_MS - 1);
+    say(room, a, { t: 'dig', c: [1, 2, 3] }, 12_000);
+    expect(b.got.filter((m) => m.t === 'dig')).toEqual([{ t: 'dig', d: [0, 12_000, 1, 2, 3] }]);
+    expect(a.last('dig')).toBeUndefined();
+    const c = join(room, 'c', 12_500);
+    expect(c.last('welcome')!.log).toEqual({ shells: [], digs: [[0, 12_000, 1, 2, 3]] });
+  });
+
+  it('welcomes a late joiner with the log so far, a shell still in the air among it', () => {
+    const { room, a } = match('LATER', 'heavy');
+    tickTo(room, 0, 23_000, a);
+    expect(shells(a).length).toBeGreaterThan(3);
+    // On to the next shell told, then half a second more.
+    let now = 23_000;
+    const before = shells(a).length;
+    while (shells(a).length === before) room.tick((now += 50));
+    expect(tickTo(room, now, now + 500, a)).toEqual([]);
+    const c = join(room, 'c', now + 500);
+    const log = c.last('welcome')!.log;
+    expect(log.shells).toEqual(shells(a));
+    expect(log.shells.at(-1)![1]).toBeGreaterThan(now + 500);
+    expect(log.digs).toEqual([]);
+  });
+
+  it('keeps its log through a rematch on the same map, numbering on; a new map clears it, and so does the last player leaving', () => {
+    const { room, a, b } = match('AGAIN', 'heavy');
+    tickTo(room, 0, 20_000, a);
+    const first = shells(a);
+    expect(first.length).toBeGreaterThan(3);
+    say(room, a, { t: 'end' }, 20_000);
+    say(room, a, { t: 'start' }, 21_000);
+    say(room, b, { t: 'dig', c: [5] }, 30_000);
+    tickTo(room, 21_000, 40_000, a);
+    const both = shells(a);
+    expect(both.length).toBeGreaterThan(first.length);
+    expect(both[first.length][0]).toBe(first.at(-1)![0] + 1);
+    expect(both.map((s) => s[0])).toEqual(both.map((_, i) => i + 1));
+    expect(both.slice(first.length)).toEqual(expected('ravine', 7, 21_000 + COUNTDOWN_MS, (40_000 - 21_000 - COUNTDOWN_MS) / 1000 + 1.5, 'heavy', first.length + 1));
+    const c = join(room, 'c', 40_000);
+    expect(c.last('welcome')!.log).toEqual({ shells: both, digs: [[1, 30_000, 5]] });
+    // Back in the lobby: the same map set again keeps it, another clears it.
+    say(room, a, { t: 'end' }, 40_000);
+    say(room, a, { t: 'config', config: { map: 'ravine' } }, 40_100);
+    const d = join(room, 'd', 40_200);
+    expect(d.last('welcome')!.log.shells).toEqual(both);
+    say(room, a, { t: 'config', config: { map: 'corridor' } }, 40_300);
+    const e = join(room, 'e', 40_400);
+    expect(e.last('welcome')!.log).toEqual({ shells: [], digs: [] });
+    // The Corridor's shells, from its own field and seed, numbered from 1.
+    say(room, a, { t: 'start' }, 41_000);
+    const told = tickTo(room, 41_000, 60_000, a).map((t) => t.s);
+    expect(told[0][0]).toBe(1);
+    expect(told).toEqual(expected('corridor', 11, 41_000 + COUNTDOWN_MS, (60_000 - 41_000 - COUNTDOWN_MS) / 1000 + 1.5));
+    // Everyone gone: the next to come finds no log, and its first shell is 1 again.
+    for (const p of [a, b, c, d, e]) room.close(p);
+    expect(room.empty).toBe(true);
+    const f = join(room, 'f', 70_000);
+    expect(f.last('welcome')!.log).toEqual({ shells: [], digs: [] });
+    say(room, f, { t: 'start' }, 70_000);
+    tickTo(room, 70_000, 90_000, f);
+    expect(shells(f)[0][0]).toBe(1);
+  });
+
+  it('keeps its log under LOG_CHARS_MAX, dropping its oldest digs, never a shell', () => {
+    const { room, a, b } = match('FULLS', 'heavy');
+    tickTo(room, 0, 30_000, a);
+    expect(shells(a).length).toBeGreaterThan(5);
+    const cells = Array.from({ length: DIG_CELLS_MAX }, (_, i) => 2147483647 - i);
+    const entry = JSON.stringify([0, 30_000, ...cells]).length + 1;
+    const sent = Math.ceil(LOG_CHARS_MAX / entry) + 50;
+    // Fifty scoops a second, within the room's rate, and the shelling ticking on through them.
+    let now = 30_000;
+    for (let k = 0; k < sent; k++) {
+      now += 20;
+      say(room, a, { t: 'dig', c: cells }, now);
+      if (k % 3 === 2) room.tick(now);
+    }
+    const relayed = b.got.flatMap((m) => (m.t === 'dig' ? [m.d] : []));
+    expect(relayed).toHaveLength(sent);
+    const log = join(room, 'c', now + 10).last('welcome')!.log;
+    expect(log.shells).toEqual(shells(a));
+    expect(log.shells.length).toBeGreaterThan(10);
+    const chars = [...log.shells, ...log.digs].reduce((n, e) => n + JSON.stringify(e).length + 1, 0);
+    expect(chars).toBeLessThanOrEqual(LOG_CHARS_MAX);
+    // Only as many dropped as it had to: the newest kept, in order.
+    expect(chars).toBeGreaterThan(LOG_CHARS_MAX - 2 * entry);
+    expect(log.digs.length).toBeLessThan(sent);
+    expect(log.digs).toEqual(relayed.slice(relayed.length - log.digs.length));
+  });
+
+  it('shells nothing when off, nor once the match is won', () => {
+    const off = match('QUIET', 'off');
+    tickTo(off.room, 0, off.startAt + 63_000, off.a);
+    expect(shells(off.a)).toEqual([]);
+    const won = match('WONIT', 'heavy', 0, { killTarget: 1 });
+    tickTo(won.room, 0, 20_000, won.a);
+    const before = shells(won.a).length;
+    expect(before).toBeGreaterThan(3);
+    say(won.room, won.a, { t: 'hit', v: 1, z: 'head' }, 20_000);
+    expect(won.a.last('over')).toMatchObject({ winner: 'red' });
+    tickTo(won.room, 20_000, 20_000 + OVER_MS - 100, won.a);
+    expect(won.room.phase).toBe('playing');
+    expect(shells(won.a)).toHaveLength(before);
   });
 });

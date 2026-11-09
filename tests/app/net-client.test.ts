@@ -41,8 +41,8 @@ const welcome = (now: number, match: Record<string, unknown> | null = null) => (
 describe("a player's line to the room", () => {
   let page = 0;
   /** A client on the page's clock, its socket opened at page time 1000: the hello goes. */
-  const joined = () => {
-    const client = new NetClient('http://relay.test', 'ABCDE', 'Jordan', 'build', quiet, () => page);
+  const joined = (on: NetEvents = quiet) => {
+    const client = new NetClient('http://relay.test', 'ABCDE', 'Jordan', 'build', on, () => page);
     page = 1000;
     StubSocket.last!.open();
     expect(StubSocket.last!.sent[0]).toMatchObject({ t: 'hello' });
@@ -71,10 +71,14 @@ describe("a player's line to the room", () => {
   });
 
   it("gives the match's seconds from its start, and 0 with no match", () => {
-    const playing = joined();
+    // What the match's start hears already reckons by the room's clock: the welcome is sampled before anything else.
+    let atStart: number | null = null;
+    const playing: NetClient = joined({ ...quiet, started: () => (atStart = playing.matchSeconds()) });
     page = 1040;
     StubSocket.last!.say(welcome(5_000_000, { startAt: 4_990_000, seed: 3, config: defaultConfig() }));
     expect(playing.match).not.toBeNull();
+    expect(atStart).not.toBeNull();
+    expect(Math.abs(atStart! - 10.02)).toBeLessThan(0.002);
     expect(Math.abs(playing.matchSeconds() - 10.02)).toBeLessThan(0.002);
     const lobby = joined();
     page = 1040;

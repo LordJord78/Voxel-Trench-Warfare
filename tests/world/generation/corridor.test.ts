@@ -10,6 +10,8 @@ import { checkInvariants } from '../../../src/world/generation/invariants';
 import { MAP_SEEDS, genParams } from '../../../src/world/generation/params';
 import { planWorld } from '../../../src/world/generation/plan';
 import { pickSpawns } from '../../../src/world/generation/spawn';
+import { shellField } from '../../../src/world/generation/shell-field';
+import { SHELL_FIELDS } from '../../../src/net/shell-fields';
 import { clearOfTrenches } from '../../../src/world/generation/trenches';
 
 // The Corridor (the multiplayer spec's §5): a wood down the middle, Red dug in at its south end and
@@ -83,6 +85,10 @@ describe('the Corridor', () => {
     for (const q of trees) expect(clear(q.x, q.z), `tree at ${q.x},${q.z}`).toBe(true);
   });
 
+  it("is the room's shell field (net/shell-fields.ts): its lines, no man's land, and both sides' starts", () => {
+    const field = shellField(plan, { red: pickSpawns(world.map, plan, 'front', 4), blue: pickSpawns(world.map, plan, 'enemy_front', 4) });
+    expect(SHELL_FIELDS.corridor, JSON.stringify(field)).toEqual(field);
+  });
   it('matches the golden fingerprint for seed 11', async () => {
     expect(golden.seed).toBe(seed);
     expect(await fingerprint(world.map)).toBe(golden.fingerprint);
