@@ -5,7 +5,8 @@ import { segmentDistance } from '../../src/combat/suppression';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
 import { BrickMap } from '../../src/world/bricks';
-import type { WorldPlan } from '../../src/world/generation/plan';
+import { genParams } from '../../src/world/generation/params';
+import { planWorld, type WorldPlan } from '../../src/world/generation/plan';
 
 const TICK = 1 / 60;
 const tun = loadTunables();
@@ -43,6 +44,7 @@ describe('the front', () => {
       spreadM: 1.6,
       spreadVertical: 0.6,
       reachM: 30,
+      crestClearM: 0.3,
     });
   });
 
@@ -189,6 +191,98 @@ describe('the front', () => {
       expect(o[1]).toBeLessThanOrEqual(6.2);
     }
     expect(source([120, 2, 50], rng)).toBeNull();
+  });
+
+  it("fires from side 0's front line for side 0, and side 1's for side 1", () => {
+    const plan = planWorld(genParams(tun), 7);
+    const v = plan.params.voxel;
+    const fronts = ([0, 1] as const).map((side) => plan.lines.find((l) => l.spec.side === side && l.spec.firingSteps)!);
+    // Mid-field: half way along the lines, half way across no man's land.
+    const target: [number, number, number] = [(plan.params.dims.x * v) / 2, plan.params.ground * v + 1.6, ((fronts[0].spec.crossBase + fronts[1].spec.crossBase) / 2) * v];
+    for (const side of [0, 1] as const) {
+      const bays = fronts[side].bays;
+      const front = new Front(T, planSource(plan, T.reachM, side), Rng.root(9).derive('front'));
+      front.intensity = 'heavy';
+      const rounds = field();
+      let checked = 0;
+      for (let k = 0; k < 600; k++) {
+        const n = front.tick(TICK, target, rounds, SPEC);
+        for (let s = rounds.count - n; s < rounds.count; s++) {
+          const o = rounds.position(s);
+          // At the far edge of one of that line's bays (the front of its trench), over its crest.
+          const from = bays.find((b) => Math.abs(o[2] - (b.facing > 0 ? b.b1 : b.b0) * v) <= 0.5 && o[1] >= b.crestY * v + 0.4 - 1e-9 && o[1] <= b.crestY * v + 1.2 + 1e-9);
+          expect(from, `side ${side}: ${o.join(', ')}`).toBeDefined();
+          checked++;
+        }
+        rounds.step(TICK);
+      }
+      expect(checked, `side ${side}`).toBeGreaterThan(50);
+    }
+    // Side 1 is the default: the enemy's line, as solo play has it.
+    const rng = (seed: number) => Rng.root(seed).derive('front');
+    expect(planSource(plan, T.reachM)(target, rng(4))).toEqual(planSource(plan, T.reachM, 1)(target, rng(4)));
+  });
+
+  it('at a player it cannot see, fires 0.3 m over where its sight was stopped', () => {
+    const origin: [number, number, number] = [10, 3, 80];
+    const head: [number, number, number] = [10, 1.6, 5];
+    for (const intensity of ['light', 'heavy'] as const) {
+      const front = new Front(T, () => [origin[0], origin[1], origin[2]], Rng.root(5).derive('front'));
+      front.room = true;
+      front.intensity = intensity;
+      const asked: number[][][] = [];
+      const sight = (from: readonly number[], to: readonly number[]): [number, number, number] => {
+        asked.push([[...from], [...to]]);
+        return [10, 2, 30];
+      };
+      const rounds = field();
+      const across: number[] = [];
+      for (let k = 0; k < 60 * 60; k++) {
+        const n = front.tick(TICK, head, rounds, SPEC, sight);
+        for (let s = rounds.count - n; s < rounds.count; s++) {
+          const o = rounds.position(s);
+          const v = rounds.velocity(s);
+          // Where its ray crosses z = 30, the parapet's face.
+          const t = (30 - o[2]) / v[2];
+          expect(o[1] + v[1] * t, intensity).toBeCloseTo(2.3, 6);
+          const x = o[0] + v[0] * t;
+          expect(Math.abs(x - 10), intensity).toBeLessThanOrEqual(T.spreadM + 1e-6);
+          across.push(x - 10);
+        }
+        rounds.step(TICK);
+      }
+      // Asked once a round, from its muzzle at the head; scattered sideways across the whole spread.
+      expect(asked.length, intensity).toBe(across.length);
+      expect(asked.every(([from, to]) => from.join() === origin.join() && to.join() === head.join()), intensity).toBe(true);
+      expect(across.length, intensity).toBeGreaterThan(20);
+      expect(Math.min(...across), intensity).toBeLessThan(-0.8);
+      expect(Math.max(...across), intensity).toBeGreaterThan(0.8);
+    }
+  });
+
+  it('in a room light aims to hit, scattered as heavy is; solo it never passes nearer than light_miss_m', () => {
+    const misses = (room: boolean) => {
+      const front = new Front(T, lineSource(38, 0.4), Rng.root(7).derive('front'));
+      front.room = room;
+      front.intensity = 'light';
+      const rounds = field();
+      const out: number[] = [];
+      while (out.length < 400) {
+        const n = front.tick(TICK, TARGET, rounds, SPEC);
+        for (let s = rounds.count - n; s < rounds.count; s++) {
+          const o = rounds.position(s);
+          const v = rounds.velocity(s);
+          out.push(segmentDistance(o, [o[0] + v[0], o[1] + v[1], o[2] + v[2]], TARGET));
+        }
+        rounds.step(TICK);
+      }
+      return out;
+    };
+    const room = misses(true);
+    expect(room.filter((m) => m < 0.3).length).toBeGreaterThan(0);
+    // Within heavy's scatter of the head, as heavy's are.
+    expect(Math.max(...room)).toBeLessThanOrEqual(Math.hypot(T.spreadM, T.spreadVertical * T.spreadM) + 0.01);
+    expect(Math.min(...misses(false))).toBeGreaterThanOrEqual(T.lightMissM - 0.01);
   });
 
   it('is deterministic', () => {

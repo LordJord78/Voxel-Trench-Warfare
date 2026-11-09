@@ -15,12 +15,12 @@ import { armSpec, GUN_DEFS, loadoutArms, type ArmSpec, type Loadout } from '../c
 import { aimRangeM, ballisticsTunables, projectileSpec, Rounds, type BodyHit, type Impact, type ProjectileSpec } from '../combat/ballistics';
 import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
 import { Entrenching, entrenchingTunables, type Scoop } from '../combat/entrenching';
-import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
-import { blastHarm, harmTunables, type HarmTunables } from '../combat/harm';
+import { Front, frontTunables, planSource, type FrontSight, type FrontSource } from '../combat/front';
+import { blastHarm, frontHarm, harmTunables, type HarmTunables } from '../combat/harm';
 import { gunClass, Handling, handlingTunables, ZERO_HANDS, type HandlingCue } from '../combat/handling';
 import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
 import { Recoil } from '../combat/recoil';
-import { bodySphere, hitParts, PART_BOX, pose, toWorld, type Frame, type PartName, type V3 } from '../combat/soldier-rig';
+import { bodySphere, CHEST, hitParts, pose, toWorld, type Frame, type PartName, type V3 } from '../combat/soldier-rig';
 import { Suppression, suppressionTunables } from '../combat/suppression';
 import { ViewKick } from '../combat/viewkick';
 import { heldPose, modelToView, viewBasis, viewmodelTunables, type Holding, type ViewmodelKick, type ViewmodelPose, type ViewmodelTunables } from '../combat/viewmodel';
@@ -55,9 +55,6 @@ export const PORT_ANCHOR = 2;
 
 /** The local player's body, among the bodies a round may strike. */
 export const LOCAL_BODY = -1;
-
-/** A body's chest: the middle of its torso's box, in the torso's frame. Where a blast's harm is reckoned to. */
-const CHEST = [0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2);
 
 /** `Session.held` when the shovel is in the hands. */
 export const SHOVEL_HELD = -1;
@@ -294,6 +291,8 @@ export class Session {
   readonly suppression: Suppression;
   /** The enemy line's incoming fire. */
   readonly front: Front;
+  /** Which side's front line it fires from (frontFrom): the enemy's, side 1, until it is set. */
+  frontSide: 0 | 1 = 1;
   /** Craters cut off the main thread and written back a budget a tick; rounds' marks go through it. */
   readonly destruction: Destruction;
   /** The front's shells: their intensity is set beside the front's (the pause menu sets both). */
@@ -316,7 +315,8 @@ export class Session {
   together = false;
   /**
    * In a room's match (the shared-battle spec): its shells are cut on the ground where their craters
-   * go out, and the battle harms the player (`harms`). Together sets it each frame; off in solo play.
+   * go out, and the battle harms the player (`harms`); the front fires to hurt, over the crest at a
+   * head it cannot see, and its rounds chip nothing. Together sets it each frame; off in solo play.
    */
   room = false;
   bodies: Body[] = [];
@@ -357,8 +357,10 @@ export class Session {
   private readonly chipEnergyJ: number;
   /** A shell's splash's energy, at a crater of 3 m: by the cube of its radius. */
   private readonly splashEnergyJ: number;
-  /** [room_battle]'s harm: a blast's on the player, in a room. */
+  /** [room_battle]'s harm: a blast's and the front's round's on the player, in a room. */
   private readonly harmT: HarmTunables;
+  /** In a room, what the front's muzzles see of the player's head: the session's sight. */
+  private readonly frontSight: FrontSight = (from, to) => this.sight(from, to);
   /** A shell's debris thrown into water near it: over how many times its radius, how many points, each splash's energy, and how long the debris falls. */
   private readonly debris: { reach: number; samples: number; energyJ: number; fallS: [number, number] };
   /** Debris splashes due: when (the tick) and where (metres). */
@@ -471,6 +473,16 @@ export class Session {
     if (owner === 0) for (const b of this.targets) test(b.id, b.frames, b.feet);
     if (this.together && owner !== 0 && this.alive) test(LOCAL_BODY, this.ownBody(), this.player.position.toArray());
     return best;
+  }
+
+  /**
+   * The front fires from `side`'s front line (combat/front.ts planSource): in a room, the line
+   * across from the player's team (side 1 at Red, side 0 at Blue); side 1 again for solo play.
+   * Without a plan its source stays as it is.
+   */
+  frontFrom(side: 0 | 1): void {
+    if (this.plan) this.front.source = planSource(this.plan, this.front.t.reachM, side);
+    this.frontSide = side;
   }
 
   /** The player's own parts' frames, as others draw them (soldier-rig.ts), this tick. */
@@ -921,19 +933,25 @@ export class Session {
     // Rounds into bodies: a puff of the uniform's dust where each struck, and blood, but not out of the player's own.
     for (const hit of this.rounds.bodyHits) {
       this.events.hits.push({ ...hit, tick: this.ticks });
+      // In a room the front's round into the player harms them by its zone (combat/harm.ts), for the room.
+      if (this.room && hit.owner === 1 && hit.body === LOCAL_BODY) this.events.harms.push({ tick: this.ticks, amount: frontHarm(hit.zone, this.harmT), cause: 'round' });
       const { dust } = this.kinds;
       this.particles.emit(hit.position, [-hit.dir[0] * dust.speed, dust.lift, -hit.dir[2] * dust.speed], dust, dust.count, this.particleRng, this.tints[P_KHAKI]);
     }
     this.bleedHits(this.rounds.bodyHits);
     this.spatterHits(this.rounds.bodyHits);
     for (const hit of this.rounds.impacts) {
-      this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
+      // In a room the front's rounds chip nothing: each page's front is its own, and the world is
+      // everyone's. Their dust and suppression stay.
+      if (!(this.room && hit.owner === 1)) this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
       if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
       this.events.impacts.push({ ...hit, tick: this.ticks });
       this.throwImpact(hit);
     }
-    // The front's rounds are the ones its tick adds to the pool, the last in it.
-    const fired = this.front.tick(dt, eye, this.rounds, this.frontProjectile);
+    // The front's rounds are the ones its tick adds to the pool, the last in it. In a room it fires
+    // to hurt, over the crest at a head it cannot see.
+    this.front.room = this.room;
+    const fired = this.front.tick(dt, eye, this.rounds, this.frontProjectile, this.room ? this.frontSight : undefined);
     for (let slot = this.rounds.count - fired; slot < this.rounds.count; slot++) {
       const v = this.rounds.velocity(slot);
       const speed = hypot(v[0], v[1], v[2]);
@@ -993,9 +1011,9 @@ export class Session {
 
   /**
    * A voxel ray from `from` to `to` (metres): where it meets solid (metres) a voxel or more short of
-   * `to`, or null if it gets that far. A blast's cover; the front's view of the player is the same ray.
+   * `to`, or null if it gets that far. A blast's cover; in a room, the front's view of the player's head.
    */
-  private sight(from: readonly [number, number, number], to: readonly [number, number, number]): V3 | null {
+  sight(from: readonly [number, number, number], to: readonly [number, number, number]): V3 | null {
     const v = this.voxel;
     const o: V3 = [from[0] / v, from[1] / v, from[2] / v];
     const d = [to[0] / v - o[0], to[1] / v - o[1], to[2] / v - o[2]];

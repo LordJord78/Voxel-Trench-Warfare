@@ -22,6 +22,7 @@ import { AudioEngine } from '../audio/engine';
 import { audioTunables, planFeedback, planVoices } from '../audio/plan';
 import { cleanLoadout, type Loadout } from '../combat/arsenal';
 import { gunModel, shovelModel } from '../combat/gun-models';
+import { harmTunables } from '../combat/harm';
 import { traceRifle } from '../combat/rifle-model';
 import { projectToPixel, rayDir, type CameraPose } from '../render/camera';
 import type { SmokePuff, TransientLight } from '../render/effects';
@@ -270,6 +271,10 @@ async function start(): Promise<void> {
   const views = standardViews(world.plan, world.spawn);
   // Craters are cut in a worker, off the frame.
   const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn, runner: workerRunner() }, tun, SEED, views.bay.yaw);
+  // Each team's starts, picked once from the world as loaded (before any crater): the starts the
+  // room's shell field pins (net/shell-fields.ts), whose shells keep clear of them, for every deploy
+  // and respawn.
+  const starts = { red: pickSpawns(world.map, world.plan, 'front', 4), blue: pickSpawns(world.map, world.plan, 'enemy_front', 4) };
   // The visitor's loadout (ui/loadout.ts), kept between visits: in the hands from the first spawn.
   let loadout: Loadout = loadLoadout(storage);
   /** A loadout chosen mid-match with friends: taken at the next respawn. */
@@ -623,16 +628,16 @@ async function start(): Promise<void> {
   let wheelAt = Number.NEGATIVE_INFINITY;
   /** Soldiers a test stands in the world without a room (puppets). */
   let puppets: Figure[] = [];
-  /** A team's starts: the line its players start and come back in at. */
+  /** A team's starts: the line its players start and come back in at, as the world was loaded (starts). */
   const startOf = (team: 'red' | 'blue', k: number) => {
-    const spawns = pickSpawns(session.map, world.plan, team === 'red' ? 'front' : 'enemy_front', 4);
+    const spawns = starts[team];
     return spawns[k % spawns.length];
   };
   // Hit feedback (hit-feedback.ts): the marker at the crosshair, HEADSHOT and KILL under it, the red
   // flash of being hit (hit-marker.ts), the voices of a hit, and bodies flinching and falling as they
   // were shot; on the range and in a room alike.
   const hitMarker = new HitMarker(document, markerTunables(tun));
-  const hits = new HitFeedback(hitFeedbackTunables(tun), hitMarker);
+  const hits = new HitFeedback(hitFeedbackTunables(tun), hitMarker, harmTunables(tun).frontDamageScale);
   // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
   const searchParams = new URLSearchParams(location.search);
   const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
@@ -655,8 +660,10 @@ async function start(): Promise<void> {
       // The match's battle from its start, on its clock: every client's the same moment of the same battle.
       battle = new Director(world.plan, tun, SEED, ground);
       battleGiven = 0;
-      // The battle's fire at players waits for the room to run it for everyone (the spec's §6).
-      session.front.intensity = 'off';
+      // The front fires at the player from the line across from their team, at the room's intensity
+      // (the shared-battle spec's "The front in a room"); the room sends the shells, not the artillery.
+      session.frontFrom(team === 'red' ? 1 : 0);
+      session.front.intensity = match.config.intensity;
       session.artillery.intensity = 'off';
     },
     play: () => play(true),
@@ -665,6 +672,10 @@ async function start(): Promise<void> {
       input.blur();
       mode = 'ready';
       if (document.pointerLockElement) document.exitPointerLock();
+      // The battle is the visitor's again: the enemy's line, at their settings.
+      session.frontFrom(1);
+      session.front.intensity = settings.intensity;
+      session.artillery.intensity = settings.intensity;
     },
     note: showNote,
     killed: () => {

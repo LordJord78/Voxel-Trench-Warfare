@@ -12,7 +12,8 @@
  * - **Rounds into the player** (LOCAL_BODY; never their own, which a body's test leaves out): the red
  *   flash at the damage's share of 100, the aim jolted away from the round, and the hurt voice, once a
  *   tick; the damage as the room reckons it (the zone's by the gun's scale, net/gear.ts), a tick's
- *   added up.
+ *   added up. In a room the front's round (owner 1) is the harm the page sends for it: the zone's by
+ *   `frontDamageScale` (combat/harm.ts frontHarm).
  * - **A blast's harm on the player** (a room's shell, `events.harms` of cause 'shell'): the same red
  *   flash at the harm's share of 100 and the hurt voice; no jolt, the blast's own shake and
  *   suppression stand for it. A round's harm adds nothing: its body hit flashes already.
@@ -119,6 +120,8 @@ export class HitFeedback {
   constructor(
     readonly t: HitFeedbackTunables,
     private readonly marker: FeedbackMarker,
+    /** [room_battle] front_damage_scale (combat/harm.ts harmTunables): the front's round in a room, as its harm. */
+    private readonly frontDamageScale = 1,
   ) {}
 
   /**
@@ -175,7 +178,10 @@ export class HitFeedback {
         if (h.zone === 'head') hear('gush', t.gushHeardM);
       } else if (h.body === LOCAL_BODY && h.owner !== 0) {
         hurt ??= { damage: 0, dir: copy(h.dir) };
-        hurt.damage += gunDamage(DAMAGE[h.zone], h.gun);
+        // In a room the front's round (owner 1) is felt as the harm the page sends for it: its zone's
+        // damage × front_damage_scale (sim/session.ts, combat/harm.ts frontHarm).
+        const front = session.room && h.owner === 1 ? this.frontDamageScale : 1;
+        hurt.damage += gunDamage(DAMAGE[h.zone], h.gun) * front;
       }
     }
     done();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Strike } from '../../src/battle/director';
-import { fireTunables } from '../../src/battle/fires';
+import { fireTunables, roomStrike } from '../../src/battle/fires';
 import { loadTunables } from '../../src/core/tunables';
 import { SILENT_STEP_S } from '../../src/net/clock';
 import type { ClientMsg, RoomShell } from '../../src/net/protocol';
@@ -124,10 +124,7 @@ describe("the room's shells on a page", () => {
     const struck: Strike[] = [];
     const craters: Crater[] = [];
     c.step(4_000, (e) => {
-      const got = c.battle.strikes(e);
-      // None as the shell lands: only once its crater is in.
-      if (got.length > 0) expect(e.craters.map((k) => k.id)).toContain(got[0].crater);
-      struck.push(...got);
+      struck.push(...c.battle.strikes(e));
       craters.push(...e.craters);
     });
     expect(craters).toHaveLength(2);
@@ -141,6 +138,17 @@ describe("the room's shells on a page", () => {
     const [x, y, z] = [Math.floor(fuel![0] / V), Math.round(fuel![1] / V), Math.floor(fuel![2] / V)];
     expect(kindOf(c.session.map.get(x, y - 1, z))).toBe(K.TIMBER);
     expect(c.session.map.get(x, y, z)).toBe(P.AIR);
+    // A crater on the timber that is none of the room's shells (the session's own land): no strike,
+    // though its crater says it struck timber and would light it were it the room's.
+    const own = c.session.land(3.0, 24.0, 2.2, 4_244);
+    const ownCraters: Crater[] = [];
+    c.step(6_000, (e) => {
+      expect(c.battle.strikes(e)).toEqual([]);
+      ownCraters.push(...e.craters);
+    });
+    expect(ownCraters.map((k) => k.id)).toEqual([own]);
+    expect(ownCraters[0].material).toBe(P.TIMBER);
+    expect(roomStrike(c.session.map, ownCraters[0], 4_244, V, fireT)).not.toBeNull();
   });
 
   it('sends each harm as a hurt, at most 200, and nothing while not in play', () => {
@@ -172,6 +180,8 @@ describe("the room's shells on a page", () => {
     c.battle.hear(far, 1_000);
     c.battle.hear(near, 1_000);
     expect(c.session.drainEvents().incoming).toHaveLength(2);
+    // As after a match in which no frame ran here: nothing set the session to the room.
+    c.session.room = false;
     c.battle.finish();
     expect(c.battle.waiting).toEqual([]);
     expect(c.battle.landed.map((s) => s.id)).toEqual([1, 2]);
@@ -185,6 +195,8 @@ describe("the room's shells on a page", () => {
       harms.push(...ev.harms);
     });
     expect(craters).toHaveLength(2);
+    // Cut where the ground is, as the room's are on every page: each says what it struck.
+    expect(craters.map((k) => k.material)).toEqual([P.CLAY, P.SPOIL]);
     expect(harms).toEqual([]);
     expect(c.session.destruction.pending).toBe(0);
     expect(sameWorld(c.session.map, trenchArena())).toBe(false);
