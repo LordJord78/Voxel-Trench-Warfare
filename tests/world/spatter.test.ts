@@ -59,7 +59,11 @@ function changed(before: BrickMap, after: BrickMap): number[][] {
   return out;
 }
 
-/** The most voxels of `marks` ([x, y, z, ...] each) that join, a face or an edge shared, into one. */
+/**
+ * The most voxels of `marks` ([x, y, z, ...] each) that join, a face shared, into one (6-connected, as
+ * tools/lib/hit-measures.mjs's clusters). Dots meeting only at their corners on a wall's face are a
+ * scatter, not a splat.
+ */
 function largestCluster(marks: readonly (readonly number[])[]): number {
   const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
   const left = new Set(marks.map(([x, y, z]) => key(x, y, z)));
@@ -71,8 +75,7 @@ function largestCluster(marks: readonly (readonly number[])[]): number {
     while (stack.length) {
       const [x, y, z] = stack.pop()!;
       size++;
-      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
-        if (Math.abs(dx) + Math.abs(dy) + Math.abs(dz) > 2) continue;
+      for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
         if (left.delete(key(x + dx, y + dy, z + dz))) stack.push([x + dx, y + dy, z + dz]);
       }
     }
@@ -524,13 +527,19 @@ describe('spatter', () => {
 
   it("each ray's mark splats: with spatter_splat 3, the rays' own marks and, about them, neighbours on the face they struck; a wall 1.5 m behind takes a cluster of 6 or more", () => {
     expect(T.splat).toBe(3);
+    // The cluster is face-joined: a checkerboard of 8 dots on a face, meeting only at their corners, is 8 dots.
+    const checker: number[][] = [];
+    for (let x = 0; x < 4; x++) for (let y = 0; y < 4; y++) if ((x + y) % 2 === 0) checker.push([x, y, 25]);
+    expect(largestCluster(checker)).toBe(1);
     const make = () => wall(25, 40, P.MUD);
     const SPLAT: SpatterTunables = { ...T, fallRays: 0 };
     let rayMarks = 0;
     let extraMarks = 0;
     const biggest: number[] = [];
+    const raysBiggest: number[] = [];
     for (const seed of SEEDS) {
       const rays = marked(make, seed, CONE).marks;
+      raysBiggest.push(largestCluster(rays));
       const all = marked(make, seed, SPLAT);
       expect(all.n).toBe(all.marks.length);
       // The rays' own marks, every one; the splat never moves a ray.
@@ -550,6 +559,9 @@ describe('spatter', () => {
     // A splat, not a scatter of dots: more than a neighbour a ray, and on every seed a connected cluster of 6 or more.
     expect(extraMarks).toBeGreaterThan(rayMarks);
     for (const b of biggest) expect(b, JSON.stringify(biggest)).toBeGreaterThanOrEqual(6);
+    // And the cluster tells a splat from dots: the rays alone fall short of 6 on most seeds, and the splat's is larger on every one.
+    expect(raysBiggest.filter((b) => b < 6).length, JSON.stringify(raysBiggest)).toBeGreaterThan(SEEDS.length / 2);
+    for (let i = 0; i < SEEDS.length; i++) expect(biggest[i], `${JSON.stringify(raysBiggest)} ${JSON.stringify(biggest)}`).toBeGreaterThan(raysBiggest[i]);
   });
 
   it('one ray on the round into a flat wall: its voxel and exactly 3 of the 8 about it on the face; which 3 is the seed\'s, and over seeds every one of the 8 is taken; at the cone\'s very edge, none', () => {

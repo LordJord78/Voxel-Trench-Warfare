@@ -38,7 +38,7 @@ export const NEAR_BACKSTOP = { ...BACKSTOP, behindM: 0.9 };
  */
 export const BURST = { frame: 2, threshold: 16, margin: 1.5, px: { torso: 40, head: 80 } };
 
-/** The kill's ring clear of the dummy's box on the screen by `ringFrame` after the kill; and the spatter on each backstop at least one cluster of `cluster` voxels. */
+/** The kill's ring clear of the dummy's box on the screen by `ringFrame` after the kill; and the spatter on each backstop at least one cluster of `cluster` voxels, joined face to face (clusters). */
 export const GATES = { ringFrame: 6, cluster: 6 };
 
 /** The dummy as it stands, for its box on the screen: `halfWidthM` either side of its feet, `heightM` tall (its 1.8 m, its helmet, its rifle at rest). */
@@ -145,7 +145,15 @@ export function changedPixels(a, b, box, threshold, mask) {
   return n;
 }
 
-/** The voxels ([x, y, z, ...] each) in clusters, those sharing a face or an edge joined (18-connected): each cluster's size, the largest first. */
+/** The six steps to a voxel that shares a face. */
+const FACES = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
+/**
+ * The voxels ([x, y, z, ...] each) in clusters, those sharing a face joined (6-connected): each
+ * cluster's size, the largest first. Voxels meeting only at an edge are not joined: on a wall's face
+ * those are dots touching at their corners, a scatter, not a splat (G3 Task 6's fix round 1: the old
+ * spatter's dots passed an 18-connected gate).
+ */
 export function clusters(voxels) {
   const key = (x, y, z) => `${x},${y},${z}`;
   const left = new Set(voxels.map((v) => key(v[0], v[1], v[2])));
@@ -157,13 +165,8 @@ export function clusters(voxels) {
     while (stack.length) {
       const [x, y, z] = stack.pop();
       size++;
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dz = -1; dz <= 1; dz++) {
-            if (Math.abs(dx) + Math.abs(dy) + Math.abs(dz) > 2) continue;
-            if (left.delete(key(x + dx, y + dy, z + dz))) stack.push([x + dx, y + dy, z + dz]);
-          }
-        }
+      for (const [dx, dy, dz] of FACES) {
+        if (left.delete(key(x + dx, y + dy, z + dz))) stack.push([x + dx, y + dy, z + dz]);
       }
     }
     sizes.push(size);

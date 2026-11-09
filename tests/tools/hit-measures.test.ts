@@ -151,12 +151,19 @@ describe("G3's proof: its gates (G3 Task 6)", () => {
     expect(changedPixels(a, b, [0, 0, 8, 6], 16, mask)).toBe(2);
   });
 
-  it('clusters: voxels joined by a face or an edge are one (18-connected), a corner alone is not; their sizes, the largest first', () => {
+  it('clusters: voxels joined by a shared face are one (6-connected); an edge or a corner alone is not; their sizes, the largest first', () => {
     expect(clusters([])).toEqual([]);
     const plus = [[5, 5, 5], [4, 5, 5], [6, 5, 5], [5, 4, 5], [5, 6, 5]];
+    // Dots touching at their corners on a wall's face (an edge in 3D) read as dots, not a splat.
     const diagonal = [[0, 0, 0], [1, 1, 0], [2, 2, 0]];
     const corner = [[20, 20, 20], [21, 21, 21]];
-    expect(clusters([...plus, ...diagonal, ...corner])).toEqual([5, 3, 1, 1]);
+    expect(clusters([...plus, ...diagonal, ...corner])).toEqual([5, 1, 1, 1, 1, 1]);
+    // A checkerboard on a face: no two share a face, so 8 dots, not a cluster of 8.
+    const checker = [];
+    for (let x = 0; x < 4; x++) for (let y = 0; y < 4; y++) if ((x + y) % 2 === 0) checker.push([40 + x, 40 + y, 9]);
+    expect(clusters(checker)).toEqual([1, 1, 1, 1, 1, 1, 1, 1]);
+    // An L of a face-joined run, through each axis.
+    expect(clusters([[0, 0, 30], [1, 0, 30], [1, 1, 30], [1, 1, 31]])).toEqual([4]);
     // The shade and anything after x, y, z are no matter, and a voxel twice is once.
     expect(clusters([[1, 1, 1, 85], [1, 1, 2, 83], [1, 1, 1, 85]])).toEqual([2]);
   });
