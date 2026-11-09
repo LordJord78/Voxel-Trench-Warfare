@@ -17,7 +17,9 @@
  *   rooms; in solo play it harms no one, though puppets make the session test the player's body);
  *   never their own, which a body's test leaves out. The red flash at the damage's share of 100, the
  *   aim jolted away from the round, and the hurt voice, once a tick; the damage as the room reckons
- *   it (the zone's by the gun's scale, net/gear.ts), a tick's added up.
+ *   it (the zone's by the gun's scale, net/gear.ts), a tick's added up. In a room the front's round
+ *   (owner 1) is the harm the page sends for it: the zone's by `frontDamageScale` (combat/harm.ts
+ *   frontHarm).
  * - **A blast's harm on the player** (a room's shell, `events.harms` of cause 'shell'): a frame's added
  *   up, the same red flash at its share of 100 and the hurt voice, once; no jolt, the blast's own
  *   shake and suppression stand for it. In a frame a round into the player was felt as well, one
@@ -42,7 +44,7 @@
 
 import type { FeedbackKind, FeedbackVoice } from '../audio/plan';
 import type { RangeEvent } from '../combat/range';
-import { PART_BOX, toWorld, type Flinch, type V3 } from '../combat/soldier-rig';
+import { CHEST, toWorld, type Flinch, type V3 } from '../combat/soldier-rig';
 import { viewBasis } from '../combat/viewmodel';
 import { hash32 } from '../core/hash';
 import type { Tunables } from '../core/tunables';
@@ -125,8 +127,6 @@ interface Struck {
 
 const NONE: FigureOverlay = Object.freeze({});
 const DEG = 180 / Math.PI;
-/** A body's chest: the middle of its torso's box, in the torso's frame. */
-const CHEST: V3 = [0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2) as V3;
 
 const copy = (v: readonly number[]): V3 => [v[0], v[1], v[2]];
 const dot = (a: readonly number[], b: readonly number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -150,6 +150,8 @@ export class HitFeedback {
   constructor(
     readonly t: HitFeedbackTunables,
     private readonly marker: FeedbackMarker,
+    /** [room_battle] front_damage_scale (combat/harm.ts harmTunables): the front's round in a room, as its harm. */
+    private readonly frontDamageScale = 1,
   ) {}
 
   /**
@@ -218,7 +220,10 @@ export class HitFeedback {
         if (h.zone === 'head') hear('gush', t.gushHeardM);
       } else if (intoPlayer(h, room)) {
         hurt ??= { damage: 0, dir: copy(h.dir) };
-        hurt.damage += gunDamage(DAMAGE[h.zone], h.gun);
+        // In a room the front's round (owner 1) is felt as the harm the page sends for it: its zone's
+        // damage × front_damage_scale (sim/session.ts, combat/harm.ts frontHarm).
+        const front = session.room && h.owner === 1 ? this.frontDamageScale : 1;
+        hurt.damage += gunDamage(DAMAGE[h.zone], h.gun) * front;
       }
     }
     done();

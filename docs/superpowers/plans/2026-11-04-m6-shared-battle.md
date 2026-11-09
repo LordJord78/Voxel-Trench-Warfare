@@ -109,6 +109,18 @@ The spec is silent on the following; they are decided here.
     - two players digging the same ground within a round trip: their clients apply the two scoops in opposite orders;
     - blood spatter (sub-project 7): per page, colour only. Each page spatters a headshot or a kill from its own tick, and the victim's page none. Each `BLOOD_*` shade keeps the rules of what it marks (sod takes `BLOOD_SOIL`, mud's kind, whose rules are sod's), so every shared edit reads the same world. Task 8's two-page comparisons mask it.
 
+    M6's final review added these, lettered as its synthesis letters them:
+    - (b) a scoop over a shell told in the last round trip before the end, or a dig carried across an end, can go in on the other side of `finish()`'s quiet craters (ruled, Task 6);
+    - (c) after a match ends during a catch-up, that match's chars may fall differently: colour only (Task 7);
+    - (d) a digger whose clock runs ahead can stamp a dig before a shell it already landed: note 9 tolerates 1.2 s, in one direction (parked, Task 6);
+    - (e) shots fired in a match's last round trip chip only the shooter's world (parked by the final review);
+    - (h) a chip racing a scoop over the same ground within a round trip: shots carry no room stamp, the same class as a chip racing a crater.
+
+    And these known limits:
+    - (a) a very long-lived room's welcome grows past `ROOM_TEXT_MAX` on shells alone (about 17,600 shells), and the joiner then waits at "Joining…"; long before that, each new scoop leaves the log on arrival (ledger, Task 2);
+    - (f) the log holds about 3,200 scoops, roughly 14 digger-minutes over a map's life; past that, a reloader or joiner lacks the earliest scoops; the owner changing the map, or everyone leaving, resets the log;
+    - (g) a catch-up costs about 0.3–0.47 s of crater work per shell the map has seen, on one destruction worker (benched: 55 heavy shells in 17.4 s, 120 in 56 s). The wait is shown with its progress and unthrottled in a hidden tab; the cost itself is parked until Task 8 measures a realistic log.
+
     The spec's Deferred section lists these.
 
 ## Global Constraints

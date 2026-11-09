@@ -55,6 +55,12 @@ export const PART_BOX: Record<PartName, { min: V3; max: V3 }> = {
   rifle: { min: [-0.09, -0.24, -0.42], max: [0.09, 0.2, 1.02] },
 };
 
+/**
+ * A body's chest: the middle of its torso's box, in the torso's frame (0.28 m up from the waist).
+ * Where a blast's harm is reckoned to in a room (sim/session.ts land). Shared, so read only.
+ */
+export const CHEST: Readonly<V3> = Object.freeze([0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2) as V3);
+
 const THIGH = 0.46;
 const SHIN = 0.47;
 const UPPER_ARM = 0.29;

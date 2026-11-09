@@ -27,6 +27,11 @@
  * chance (fires.ts), fed in with the inputs; the hamlet's are lit at nightfall and die down when the
  * dark lifts; at most `max_fires` burn, the oldest strike fire first to die down past them. Each chars
  * what it burned once, at its full burn, and crackles by its strength.
+ *
+ * In a room every client's Director lights the same fires (the shared-battle spec): a room's shell's
+ * strike draws from its own seed, each lighting of the hamlet from its own (the n-th from
+ * `battle.fires.hamlet.<n>`), and the crackles from a stream of their own, so none of them hangs on
+ * what else a client's fires' stream has drawn (its unseeded strikes, a nightfall its tab spent hidden).
  */
 
 import { atan2, cos, radians, sin } from '../core/dmath';
@@ -59,13 +64,17 @@ export interface BattleInputs {
 /**
  * A shell of the session's landed: where it struck (metres), the material it struck, and its crater's
  * id; and its seed, if it has one (a room's shell): its fire's chance, size and burn are then drawn
- * from it, the same on every client whatever each drew before.
+ * from it, the same on every client whatever each drew before. `atS`, if it has one (a room's shell),
+ * is the battle's second its shell landed at, on the match's clock: its fire stands from then, however
+ * late this page's crater went in (its worker, a hidden tab, a catch-up), so it grows, lights and chars
+ * on every client alike.
  */
 export interface Strike {
   at: [number, number, number];
   material: number;
   crater: number | null;
   seed?: number;
+  atS?: number;
 }
 
 /** A fire as it is: where, how hard it burns (0 to 1), its size, whether it is the hamlet's, and whether it is dying down. */
@@ -166,7 +175,12 @@ export class Director {
   private nextTracer = 1;
   private nextBurst = 1;
   private readonly fireT: FireTunables;
+  /** The unseeded strikes' draws; each hamlet lighting's from its own stream off `root`, and the crackles' from theirs. */
   private readonly fireRng: Rng;
+  private readonly crackleRng: Rng;
+  private readonly root: Rng;
+  /** The hamlet's lightings so far: the next is drawn from `battle.fires.hamlet.<lightings>`. */
+  private lightings = 0;
   /** Where the hamlet's fires stand, from the plan. */
   private readonly hamletSites: [number, number, number][];
   private burning: (Fire & { crater: number | null; charred: boolean })[] = [];
@@ -194,6 +208,8 @@ export class Director {
     this.fireT = fireTunables(tun);
     this.waterT = waterTunables(tun);
     this.fireRng = root.derive('battle.fires');
+    this.crackleRng = root.derive('battle.fires.crackle');
+    this.root = root;
     this.hamletSites = plan ? hamletFireSites(plan, root.derive('battle.fires.hamlet'), this.fireT) : [];
     this.field = plan ? (x, z) => fieldHeight(plan.terrain, plan.params, x / plan.params.voxel, z / plan.params.voxel) * plan.params.voxel : () => -Infinity;
     // fbm is under 1, and the swale only dips: the field is never higher than this.
@@ -366,7 +382,11 @@ export class Director {
     return { wind: [wx, wz], slope: this.waterT.roughnessPerMps * Math.sqrt(wx * wx + wz * wz) };
   }
 
-  /** A step of the fires, at `now`: the strikes since the last lit by chance; the hamlet's lit or dying with the dark; the cap; chars and crackles; the out dropped. */
+  /**
+   * A step of the fires, at `now`: the strikes since the last lit by chance; the hamlet's lit or dying
+   * with the dark, each lighting's sizes from its own stream; the cap; chars and crackles (from theirs);
+   * the out dropped.
+   */
   private tendFires(now: number, inputs: BattleInputs, events: BattleEvents): void {
     const ft = this.fireT;
     const r = this.fireRng;
@@ -378,7 +398,9 @@ export class Director {
       const size = sr.uniform(ft.size[0], ft.size[1]);
       const burnS = sr.uniform(ft.burnS[0], ft.burnS[1]);
       if (roll >= fireChance(s.material, ft)) continue;
-      const f = { id: this.nextFire++, at: [s.at[0], s.at[1], s.at[2]] as [number, number, number], t0: now, burnS, size, hamlet: false, crater: s.crater, charred: false };
+      // A room's shell's fire stands from its landing (fireStrength depends on now − t0 alone); never from later than now.
+      const t0 = s.atS === undefined ? now : Math.min(now, s.atS);
+      const f = { id: this.nextFire++, at: [s.at[0], s.at[1], s.at[2]] as [number, number, number], t0, burnS, size, hamlet: false, crater: s.crater, charred: false };
       this.burning.push(f);
       events.fires.push({ id: f.id, at: f.at });
     }
@@ -386,8 +408,9 @@ export class Director {
     const dark = inputs.darkness > this.ft.darkAbove;
     if (dark && !this.hamletLit) {
       this.hamletLit = true;
+      const hr = this.root.derive(`battle.fires.hamlet.${this.lightings++}`);
       for (const at of this.hamletSites) {
-        const f = { id: this.nextFire++, at, t0: now, burnS: 0, size: r.uniform(ft.size[0], ft.size[1]), hamlet: true, crater: null, charred: false };
+        const f = { id: this.nextFire++, at, t0: now, burnS: 0, size: hr.uniform(ft.size[0], ft.size[1]), hamlet: true, crater: null, charred: false };
         this.burning.push(f);
         events.fires.push({ id: f.id, at: f.at });
       }
@@ -411,7 +434,7 @@ export class Director {
         f.charred = true;
         events.chars.push({ fire: f.id, at: f.at, crater: f.crater });
       }
-      if (strength > 0 && r.float() < (ft.cracklePerS * strength) / HZ) events.crackles.push({ at: f.at, gain: strength });
+      if (strength > 0 && this.crackleRng.float() < (ft.cracklePerS * strength) / HZ) events.crackles.push({ at: f.at, gain: strength });
     }
     // Dropped once died down: from its being put out, or the end of its burn (the hamlet's burn on).
     this.burning = this.burning.filter((f) => {

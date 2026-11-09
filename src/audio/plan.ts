@@ -201,7 +201,8 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
     out.push({ kind: 'crack', at: c.at, delayS: 0, gain: t.crackGain * Math.max(0, 1 - c.missM / t.crackRadiusM), lowpassHz: t.openLowpassHz });
   }
   for (const i of events.impacts) {
-    if (distance(i.position) > t.impactWithinM) continue;
+    // A silent round's (another's shot long overdue: Session.fireRemote) is not heard.
+    if (i.silent || distance(i.position) > t.impactWithinM) continue;
     out.push(afar(i.position, t.impactGain, struck(i.material)));
   }
   for (const s of events.incoming) out.push({ ...afar(s.at, t.whistleGain, 'whistle'), delayS: 0, lengthS: s.landsInS, fromHz: t.whistleFromHz, toHz: t.whistleToHz });

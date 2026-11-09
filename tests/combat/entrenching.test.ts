@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Entrenching, entrenchingTunables, type Scoop } from '../../src/combat/entrenching';
+import { applyScoop, Entrenching, entrenchingTunables, packCell, scoopBox, type Scoop } from '../../src/combat/entrenching';
 import { loadTunables } from '../../src/core/tunables';
 import { BrickMap } from '../../src/world/bricks';
 import { isGranular, isLoose, P } from '../../src/world/materials';
@@ -288,6 +288,51 @@ describe('what a scoop leaves', () => {
       expect(outside.length, `scoop ${scoops}: ${writes.length} writes, ${JSON.stringify(b)}`).toBe(0);
     }
     expect(scoops).toBeGreaterThan(3);
+  });
+
+  it('a scoop records the cells it cleared, and those applied to a copy of the world make the same world', () => {
+    // A bank dry, and a pit below the water table, where a scoop floods: each scoop's cells, packed as
+    // findScoop orders voxels, applied to a copy (applyScoop) leave it the same as the digger's.
+    const pit = () => {
+      const map = new BrickMap({ x: 64, y: 64, z: 64 });
+      map.fillBox(0, 0, 0, 64, 16, 64, P.SUBSOIL);
+      map.fillBox(28, 10, 22, 38, 16, 34, P.SPOIL);
+      map.takeDirty();
+      return map;
+    };
+    expect(packCell({ x: 64, y: 32, z: 16 }, 5, 6, 7)).toBe((7 * 32 + 6) * 64 + 5);
+    for (const [make, waterTable, seconds] of [[bank, undefined, 4], [pit, 15, 2]] as const) {
+      const map = make();
+      const copy = make();
+      const tool = new Entrenching(map, t, V, waterTable);
+      // The first scoop is the voxels findScoop names, in its order.
+      const first = new Entrenching(make(), t, V, waterTable).findScoop(FEET, 0).map(([x, y, z]) => packCell(map.dims, x, y, z));
+      let asked: Box | null = null;
+      const scoops: Scoop[] = [];
+      for (let k = 0; k < Math.floor(seconds / DT); k++) {
+        const s = tool.work(FEET, 0, DT, (box) => ((asked = box), true));
+        if (!s) continue;
+        scoops.push(s);
+        expect(s.cells).toHaveLength(s.voxels);
+        // The box it asked be free is the scoop's box; its middle the cells'.
+        expect(scoopBox(map.dims, s.cells)).toEqual(asked);
+        const mid = [0, 0, 0];
+        for (const c of s.cells) {
+          const [x, y, z] = [c % 64, Math.floor(c / 64) % 64, Math.floor(c / 4096)];
+          expect(packCell(map.dims, x, y, z)).toBe(c);
+          expect(isLoose(copy.get(x, y, z)), `${x},${y},${z}`).toBe(true);
+          mid[0] += (x + 0.5) * V;
+          mid[1] += (y + 0.5) * V;
+          mid[2] += (z + 0.5) * V;
+        }
+        for (const i of [0, 1, 2]) expect(s.at[i]).toBeCloseTo(mid[i] / s.cells.length, 9);
+        applyScoop(copy, s.cells, waterTable);
+        expect(sameWorld(map, copy), `scoop ${scoops.length}`).toBe(true);
+      }
+      expect(scoops.length).toBeGreaterThanOrEqual(waterTable === undefined ? 12 : 3);
+      expect(scoops[0].cells).toEqual(first);
+      if (waterTable !== undefined) expect(count(map, (p) => p === P.WATER)).toBeGreaterThan(0);
+    }
   });
 
   it('digging is deterministic', () => {

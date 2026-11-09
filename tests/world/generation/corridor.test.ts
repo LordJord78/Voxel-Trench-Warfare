@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { loadTunables } from '../../../src/core/tunables';
+import { Session } from '../../../src/sim/session';
 import { fingerprint } from '../../../src/world/fingerprint';
 import { isSolid } from '../../../src/world/materials';
 import { corridorX } from '../../../src/world/generation/corridor';
@@ -13,12 +14,14 @@ import { pickSpawns } from '../../../src/world/generation/spawn';
 import { shellField } from '../../../src/world/generation/shell-field';
 import { SHELL_FIELDS } from '../../../src/net/shell-fields';
 import { clearOfTrenches } from '../../../src/world/generation/trenches';
+import { frontViewOfStarts } from '../../support/worlds';
 
 // The Corridor (the multiplayer spec's §5): a wood down the middle, Red dug in at its south end and
 // Blue at its north, the whole map the same turned half a turn about its centre.
 const golden = JSON.parse(readFileSync(new URL('../../fixtures/golden-corridor.json', import.meta.url), 'utf8')) as { seed: number; fingerprint: string };
 
-const p = genParams(loadTunables(), undefined, 'corridor');
+const tun = loadTunables();
+const p = genParams(tun, undefined, 'corridor');
 const seed = MAP_SEEDS.corridor;
 const plan = planWorld(p, seed);
 const W = p.dims;
@@ -89,6 +92,16 @@ describe('the Corridor', () => {
     const field = shellField(plan, { red: pickSpawns(world.map, plan, 'front', 4), blue: pickSpawns(world.map, plan, 'enemy_front', 4) });
     expect(SHELL_FIELDS.corridor, JSON.stringify(field)).toEqual(field);
   });
+
+  it('in a room the front sees no one standing at a Red or Blue start', () => {
+    // Each side's starts, from the line across: over the wood, from either end of it.
+    const s = Session.create({ map: world.map, plan, spawn: world.spawn }, tun, 1, 0);
+    const { starts, seen } = frontViewOfStarts(s, plan);
+    expect(starts.map((st) => st.line)).toEqual(['front', 'front', 'front', 'front', 'enemy_front', 'enemy_front', 'enemy_front', 'enemy_front']);
+    for (const st of starts) expect(st.points, `${st.line} start at ${st.at.join(', ')}`).toBeGreaterThan(0);
+    expect(seen).toEqual([]);
+  });
+
   it('matches the golden fingerprint for seed 11', async () => {
     expect(golden.seed).toBe(seed);
     expect(await fingerprint(world.map)).toBe(golden.fingerprint);

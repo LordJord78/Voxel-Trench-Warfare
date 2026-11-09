@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadTunables } from '../../src/core/tunables';
 import { blastHarm, harmTunables } from '../../src/combat/harm';
 import { BILLBOARD_FLOATS } from '../../src/combat/particles';
-import { PART_BOX, pose, toWorld } from '../../src/combat/soldier-rig';
+import { CHEST, pose, toWorld } from '../../src/combat/soldier-rig';
 import { Stance } from '../../src/physics/character';
 import { boxHitsSolid } from '../../src/physics/collision';
 import { idleIntent, Session } from '../../src/sim/session';
@@ -16,11 +16,11 @@ import { trenchArena } from '../support/worlds';
 const tun = loadTunables();
 const harmT = harmTunables(tun);
 
-/** The player's chest as their body is posed: the middle of its torso's box. */
+/** The player's chest as their body is posed (soldier-rig.ts CHEST, the middle of its torso's box). */
 function chestOf(s: Session): [number, number, number] {
   const p = s.player;
   const frames = pose({ position: p.position.toArray(), yaw: p.yaw, pitch: p.pitch, height: p.height, speed: p.velocity.horizontalLength, bob: p.bobPhase, deadFor: null });
-  return toWorld(frames.torso, [0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2));
+  return toWorld(frames.torso, CHEST);
 }
 
 const near = (a: readonly number[], b: readonly number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);

@@ -3,9 +3,11 @@
  * joining a room, the lobby, the way into a match; this player's state and shots sent twenty times
  * a second; the others posed, drawn and given to the session for rounds to strike, their shots
  * fired; this player's hits claimed (they decide what their rounds struck, as they saw it); the
- * room's shells landed on its clock (sim/room-battle.ts), and the battle's harm to this player told
- * the room; and the match over the view: health, deaths and the way back in, the feed, the board,
- * who won.
+ * room's shells landed on its clock and the others' scoops dug in order with them
+ * (sim/room-battle.ts), and the battle's harm to this player and their own scoops told the room; on
+ * joining, the room's log caught up first (RoomBattle.catchUp), so a page that joins or reloads
+ * mid-match has the world of one that was there; and the match over the view: health, deaths and the
+ * way back in, the feed, the board, who won.
  *
  * It is made with the page but does nothing until the player hosts or follows a link: solo play
  * never opens a socket or asks the relay anything.
@@ -13,8 +15,9 @@
 
 import { holdOf, muzzleOf } from '../combat/arsenal';
 import { hitParts, pose, toWorld, type Flinch } from '../combat/soldier-rig';
+import { SILENT_STEP_S } from '../net/clock';
 import { decodeGear, encodeGear, teamTracer } from '../net/gear';
-import { MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type MatchInfo, type PlayerState, type RoomConfig, type ShotState, type Team, type Zone } from '../net/protocol';
+import { encodeShot, MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type Dig, type MatchInfo, type MatchLog, type PlayerState, type RoomConfig, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
 import type { RoomBattle } from '../sim/room-battle';
@@ -23,11 +26,13 @@ import { Lobby } from '../ui/lobby';
 import { MatchHud, type BoardRow } from '../ui/match-hud';
 import { MAP_NAMES, isMapId, type MapId } from '../world/generation/params';
 import type { FigureOverlay, HitFeedback } from './hit-feedback';
-import { makeRoom, NetClient } from './net-client';
+import { makeRoom, NetClient, type RemoteShot, type RoomEdit } from './net-client';
 import type { RemotePlayer } from './net-players';
 
 /** States sent a second. */
 const SEND_HZ = 20;
+/** What the lobby, or the way in, says while the room's log is caught up. */
+const CATCHING_UP = 'Catching up on the battle\u2026';
 const NAME_KEY = 'trenchline.name';
 /** Strides a second at a walk (camera.head_bob_hz), and the walking speed they are at (stance.standing.speed). */
 const STRIDE_HZ = 1.9;
@@ -126,6 +131,16 @@ export function shotTracer(seat: number, draws: readonly { seat: number; team: T
 }
 
 /**
+ * How a death is put in the kill feed: a teammate's kill; the battle's (`killer` −1), by its cause;
+ * or a player's, by where their round struck.
+ */
+export function howKilled(killer: number, zone: Zone | null, teamkill: boolean, cause: Cause): string {
+  if (teamkill) return 'team-killed';
+  if (killer < 0) return cause === 'shell' ? 'shelled' : cause === 'fire' ? 'burned' : 'shot from the line';
+  return zone === 'head' ? 'headshot' : 'shot';
+}
+
+/**
  * What a page playing the map `loaded` does about a room set to `room`: nothing; claim the room
  * for its own map (a room it has just made, which nobody has set yet); or go to the room's map,
  * which means generating that world (a reload).
@@ -157,6 +172,15 @@ export interface TogetherHooks {
   respawn(team: Team, spawn: number): void;
   /** A new room battle on this page's session. */
   battle(): RoomBattle;
+  /**
+   * The room's log (the welcome's) caught up on `battle` (RoomBattle.catchUp), at the room's clock
+   * `now`: with the match's battle around the page run along it when the welcome carried a `match`.
+   * While it runs, the page runs neither the session nor `battle`. `progress` is told how far it has
+   * come (CatchUpPage.progress), which the page shows.
+   */
+  catchUp(battle: RoomBattle, log: MatchLog, match: MatchInfo | null, now: () => number, progress: (done: number, total: number) => void): Promise<void>;
+  /** The catch-up failed (`catchUp` rejected with `error`): the world is not the room's, and the page stops, saying why. */
+  failed(error: unknown): void;
 }
 
 /** Where the relay is: `?relay=` on a development build (the tests'), the build's own, or the local one on localhost; null where there is none. */
@@ -182,11 +206,11 @@ export class Together {
   private shownAt = 0;
   /** Others killed and not yet back: when (performance.now()). */
   private readonly deaths = new Map<number, number>();
-  /** This player killed: by whom (null, the battle) and when. */
-  private fallen: { by: { name: string; team: Team } | null; at: number } | null = null;
+  /** This player killed: by whom (null, the battle; undefined, a player seated nowhere the room has said), when, and by what. */
+  private fallen: { by: { name: string; team: Team } | null | undefined; at: number; cause: Cause } | null = null;
   private winner: { winner: Team; red: number; blue: number } | null = null;
-  /** This player's shots not yet sent. */
-  private shotsOut: ShotState[] = [];
+  /** This player's shots not yet sent, as their words: in a room, the words each flew as (Session sent). */
+  private shotsOut: number[][] = [];
   /** Where this player stood and looked at the last frame, for where harm came from. */
   private self: { position: readonly number[]; yaw: number } | null = null;
   /** Tab held: the board shown. */
@@ -206,6 +230,37 @@ export class Together {
   private frameNow = 0;
   /** The match's shells on this page: made with its first frame, dropped as it starts and once it is over. */
   battle: RoomBattle | null = null;
+  /**
+   * Whether this page's world has caught up with the room's: true, but from the room's welcome until
+   * its log is caught up (RoomBattle.catchUp). Until then the session does not run, the battle is
+   * neither fed nor ticked (the room's edits wait in the net's queue), Go is not offered, and a match
+   * that ends waits to land its last shells (`ended`).
+   */
+  caughtUp = true;
+  /**
+   * The last welcome's catch-up (`welcomed`), settled once it is done: the page caught up and the
+   * ends that waited for it done, or the catch-up failed and the page stopped. What waits on the
+   * catch-up awaits this rather than counting the awaits inside it (the tests do).
+   */
+  catchingUp: Promise<void> = Promise.resolve();
+  /** The match the log is caught up on ended meanwhile: the catch-up's clock is then after every time. */
+  private overWhileCatching = false;
+  /** Why the catch-up failed, if it did: said where "Catching up…" would be, for good. */
+  private failure: string | null = null;
+  /** How far the catch-up has come, as it last said: the log's entries done, of how many (null: nothing said yet). */
+  private progress: { done: number; total: number } | null = null;
+  /** Why the line to the room went, if it did: said in the lobby's status for good, whatever is shown after. */
+  private lostWhy: string | null = null;
+  /** The battle work of each match's end that came while the log was caught up, done in order once it is. */
+  private onceCaughtUp: (() => void)[] = [];
+  /**
+   * The others' scoops the last match's battle still held when it ended (RoomBattle.finish), behind
+   * craters not yet in: the next match's battle is given them before its first tick. The world, and
+   * so they, are the page's until it is reloaded for another map or left. Scoops the room relays in
+   * the lobby (sent before the end reached their digger: net/room-core.ts) wait in the net's queue,
+   * and are fed after these, with the next match's first edits.
+   */
+  private carried: Dig[] = [];
 
   /**
    * `hits`, the hit feedback (hit-feedback.ts): the others' flinches and falls come from it, and a
@@ -289,6 +344,7 @@ export class Together {
         if (!this.followMap()) this.show();
       },
       started: (match) => this.started(match),
+      welcomed: () => void (this.catchingUp = this.welcomed()),
       ended: () => this.ended(),
       lost: (why) => this.lost(why),
       hurt: (hp, from) => this.hurt(hp, from),
@@ -296,6 +352,9 @@ export class Together {
       respawn: (id, spawn) => this.respawned(id, spawn),
       over: (winner, red, blue) => {
         this.winner = { winner, red, blue };
+        // A cease-fire: the room heeds no hurt once the match is won (net/match-rules.ts), so the front
+        // firing on would only flash and voice hits that do nothing. The end gives the visitor's back.
+        if (this.session) this.session.front.intensity = 'off';
       },
     });
     this.hooks.showLobby();
@@ -309,7 +368,8 @@ export class Together {
     const left = net.match!.startAt - net.serverNow();
     if (!this.inPlay) {
       const side = this.team === 'blue' ? 'Blue' : 'Red';
-      this.lobby.deploy(left > 0 ? `You fight for ${side}. The match starts in ${Math.ceil(left / 1000)}…` : `The match is on. You fight for ${side}.`, left <= 0);
+      const line = !this.caughtUp ? (this.failure ?? this.catching()) : left > 0 ? `You fight for ${side}. The match starts in ${Math.ceil(left / 1000)}…` : `The match is on. You fight for ${side}.`;
+      this.lobby.deploy(line, this.caughtUp && left <= 0);
     }
     // Sent only once they have gone in: on the deploy screen the world runs on, but nobody draws or shoots them.
     if (!playing || !this.inPlay || left > 0) return;
@@ -324,8 +384,11 @@ export class Together {
    * test stands in the world) posed, each flinching and falling as its hits say; the living among
    * them given to the session for rounds to strike; their shots fired, each from its shooter's eye,
    * its tracer and flash at their soldier's muzzle, the tracer in their seat's team's colour
-   * (shotTracer). In a match, the room's shells heard and landed on its clock, once the clock has its
-   * first sample. What to draw.
+   * (shotTracer), once the room's log is caught up, no more a frame than the round pool has room for
+   * (Session.roundRoom: the pool filled to three quarters at most, the rest the player's own and the
+   * front's), and silent once more than SILENT_STEP_S old. In a match, the room's shells heard and
+   * landed on its clock, once the clock has its first sample and the room's log is caught up. What
+   * to draw.
    */
   prepare(session: Session, dt: number, extra: readonly Figure[] = [], now = performance.now()): SoldierDraw[] {
     this.session = session;
@@ -335,20 +398,40 @@ export class Together {
     const draws = this.gaits.pose(figures, dt);
     session.together = this.inMatch || extra.length > 0;
     session.room = this.inMatch;
+    // Its shots' pellets are seeded by its seat, as the others seed them from its rounds' owner.
+    session.seat = this.inMatch ? this.net!.you : -1;
     session.bodies = draws.filter((_, i) => figures[i].deadFor === null).map((d) => ({ id: d.seat, frames: d.frames, feet: d.feet }));
     if (this.net && this.inMatch) {
-      const battle = (this.battle ??= this.hooks.battle());
-      if (this.net.clock.synced) {
-        const nowMs = this.net.serverNow();
-        this.feed(battle, nowMs);
-        battle.tick(nowMs);
+      // None made while the log is caught up: a new battle would take the craters' waits from the one catching up.
+      if (this.caughtUp) {
+        const battle = this.matchBattle();
+        if (this.net.clock.synced) {
+          const nowMs = this.net.serverNow();
+          this.give(battle, this.net.takeEdits(), nowMs);
+          battle.tick(nowMs);
+        }
       }
-      for (const { seat, shot } of this.net.takeShots()) {
-        const d = draws.find((x) => x.seat === seat);
-        // From the muzzle of the gun they are drawn with.
-        const g = decodeGear(d?.gear ?? 0);
-        const muzzle = d && g.gun !== null ? toWorld(d.frames.rifle, muzzleOf(g.gun, g.fit)) : shot.origin;
-        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark, shotTracer(seat, draws, this.net.seats));
+      // Their shots once the world is the room's (until then they wait in the net's queue, as its
+      // edits do: their chips go on the world the room's craters have made), in the order they came,
+      // as many as the round pool has room for (the rest the next frames), with the player's trigger
+      // and the front's left theirs (Session.roundRoom); one more than SILENT_STEP_S old (a backlog)
+      // flies silent, for its chips alone.
+      if (this.caughtUp) {
+        const nowMs = this.net.serverNow();
+        let room = session.roundRoom();
+        const fits = (s: RemoteShot) => {
+          const rounds = session.shotRounds(s.shot.mark);
+          if (rounds > room) return false;
+          room -= rounds;
+          return true;
+        };
+        for (const { seat, shot, at } of this.net.takeShots(fits)) {
+          const d = draws.find((x) => x.seat === seat);
+          // From the muzzle of the gun they are drawn with.
+          const g = decodeGear(d?.gear ?? 0);
+          const muzzle = d && g.gun !== null ? toWorld(d.frames.rifle, muzzleOf(g.gun, g.fit)) : shot.origin;
+          session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark, shotTracer(seat, draws, this.net.seats), shot.tick, nowMs - at > 1000 * SILENT_STEP_S);
+        }
       }
     }
     return draws;
@@ -356,19 +439,28 @@ export class Together {
 
   /**
    * After the frame's ticks: this player's shots kept to send, their hits claimed (the hit feedback
-   * marks them), the battle's harm to them told the room while they are in and alive, and the match shown.
+   * marks them), the battle's harm to them and their scoops told the room while they are in and
+   * alive (the harm only once the match has begun, as the room heeds it; a scoop whenever it is dug,
+   * as it is the world's), and the match shown.
    */
   after(session: Session, events: CombatEvents, draws: readonly SoldierDraw[], now: number): void {
     const net = this.net;
     if (!net || !this.inMatch) return;
-    for (const s of events.shots) if (this.shotsOut.length < 2 * SHOTS_MAX) this.shotsOut.push({ tick: s.tick, origin: s.origin, dir: s.dir, tracer: s.tracer, ...(s.mark === undefined ? {} : { mark: s.mark }) });
+    for (const s of events.shots) if (this.shotsOut.length < 2 * SHOTS_MAX) this.shotsOut.push(s.wire ?? encodeShot({ tick: s.tick, origin: s.origin, dir: s.dir, tracer: s.tracer, ...(s.mark === undefined ? {} : { mark: s.mark }) }));
     for (const h of events.hits) {
       if (h.owner !== 0 || h.body < 0 || h.body >= MAX_PLAYERS) continue;
       net.hit(h.body, h.zone, h.gun);
       this.claimed++;
     }
     if (this.battle) {
-      for (const m of this.battle.outgoing(events, this.inPlay && this.begun && !this.fallen && session.alive)) if (m.t === 'hurt') net.hurt(m.a, m.c);
+      // A scoop dug in play is the world's, even in a moment a clock sample has put back before the
+      // match's start (dropped, it would be the digger's alone); a hurt is told only once it has begun.
+      const begun = this.begun;
+      for (const m of this.battle.outgoing(events, this.inPlay && !this.fallen && session.alive)) {
+        if (m.t === 'hurt') {
+          if (begun) net.hurt(m.a, m.c);
+        } else if (m.t === 'dig') net.dig(m.c);
+      }
     }
     const p = session.player;
     this.self = { position: p.position.toArray(), yaw: p.yaw };
@@ -378,7 +470,7 @@ export class Together {
     if (!this.fallen && this.hp < 100 && now - this.hurtAt >= REGEN_DELAY_MS) this.hp = Math.min(100, this.hp + REGEN_PER_S * dt);
     this.hud.health(this.fallen ? 0 : this.hp);
     const respawnMs = (net.match?.config.respawnS ?? 5) * 1000;
-    this.hud.fallen(this.fallen?.by, this.fallen ? (this.fallen.at + respawnMs - now) / 1000 : null);
+    this.hud.fallen(this.fallen?.by, this.fallen ? (this.fallen.at + respawnMs - now) / 1000 : null, this.fallen?.cause);
     this.hud.won(this.winner?.winner ?? null, this.winner?.red, this.winner?.blue);
     this.hud.board(this.boardOpen, this.rows(), net.score, net.match?.config.killTarget ?? 0);
     this.hud.aimed(this.fallen ? null : this.teammateAimed(session, draws));
@@ -445,11 +537,11 @@ export class Together {
       return s ? { name: s.name, team: s.team } : null;
     };
     const v = who(victim);
-    const k = killer >= 0 ? who(killer) : null;
-    const how = teamkill ? 'team-killed' : killer < 0 ? (cause === 'shell' ? 'shelled' : cause === 'fire' ? 'burned' : 'shot from the line') : zone === 'head' ? 'headshot' : 'shot';
-    if (v) this.hud.killed({ killer: k, victim: v, how }, now);
+    // A player's kill whose seat is gone (they left) is no one the page can name: not the battle's.
+    const k = killer >= 0 ? (who(killer) ?? undefined) : null;
+    if (v) this.hud.killed({ killer: k ?? null, victim: v, how: howKilled(killer, zone, teamkill, cause) }, now);
     if (victim === net.you) {
-      this.fallen = { by: k, at: now };
+      this.fallen = { by: k, at: now, cause };
       this.hp = 0;
       this.hooks.killed();
       // Killed (hit-feedback.ts): felt from the room's word when the round that did it was not, as a
@@ -516,7 +608,7 @@ export class Together {
   }
 
   private go(): void {
-    if (!this.begun) return;
+    if (!this.begun || !this.caughtUp) return;
     this.inPlay = true;
     this.lobby.hide();
     this.hooks.play();
@@ -541,12 +633,27 @@ export class Together {
 
   private ended(): void {
     // Every shell told, heard or still queued, lands now, quietly: the world is the same on every page
-    // for the next match. The match's shells told just before the end are still in the queue; heard
-    // as the match is over, they whistle for no time left.
-    if (this.net) {
-      const battle = (this.battle ??= this.hooks.battle());
-      this.feed(battle, Number.POSITIVE_INFINITY);
-      battle.finish();
+    // for the next match. The match's shells and scoops told just before the end are still in the
+    // queue; given as the match is over, the shells whistle for no time left, and those a scoop's
+    // stamp lands are overdue, so quiet. The scoops still held wait for the next match's battle.
+    // While the room's log is caught up, not yet: the log's rest lands first, in order, on the battle
+    // catching up (the match's), then this, once it is (welcomed), with the edits the room sent before
+    // its end; those after it are the next match's.
+    const net = this.net;
+    if (net) {
+      const battle = this.battle;
+      const edits = net.takeEdits();
+      const over = () => {
+        const b = battle ?? this.matchBattle();
+        this.battle = null;
+        this.give(b, edits, Number.POSITIVE_INFINITY);
+        this.carried = b.finish();
+      };
+      if (this.caughtUp) over();
+      else {
+        this.overWhileCatching = true;
+        this.onceCaughtUp.push(over);
+      }
     }
     this.battle = null;
     this.inPlay = false;
@@ -560,12 +667,64 @@ export class Together {
     this.show();
   }
 
-  /** The room's edits heard since the last frame, to `battle` in the order they came, at `nowMs` on the room's clock (after every time: the match over). */
-  private feed(battle: RoomBattle, nowMs: number): void {
-    for (const e of this.net!.takeEdits()) if (e.t === 'shell') battle.hear(e.shell, nowMs);
+  /**
+   * The room's welcome: its log caught up on this page's battle (made now, in the lobby too) before the
+   * page plays, the session still and the room's edits waiting meanwhile; then the end of each match
+   * that ended meanwhile, in order; then the edits go to the battle, at the next frame. NetClient calls
+   * this after `started`, so no frame runs between the match's deploy and the catch-up. A page leaving
+   * for the room's map catches up on nothing here. A catch-up that fails, wherever, leaves the page
+   * not caught up, so it plays nothing on a world that is not the room's: it says why, and stops
+   * (`failed`), rather than catching up for ever.
+   */
+  private async welcomed(): Promise<void> {
+    const net = this.net;
+    if (!net || this.leaving) return;
+    this.caughtUp = false;
+    this.overWhileCatching = false;
+    this.failure = null;
+    this.progress = null;
+    const battle = (this.battle ??= this.hooks.battle());
+    this.show();
+    // How far it has come, said as it goes: in the lobby's status now, and on the way in at the next
+    // frame; but never over why the line went, once it has.
+    const progress = (done: number, total: number) => {
+      this.progress = { done, total };
+      if (!this.caughtUp && !this.failure && !this.lostWhy) this.lobby.status(this.catching());
+    };
+    // The room's clock as the catch-up reads it: after every time once the match is over, as its end
+    // gives the match's last edits, so the shells still in the air are heard with none left to whistle.
+    try {
+      await this.hooks.catchUp(battle, net.log, net.match, () => (this.overWhileCatching ? Number.POSITIVE_INFINITY : net.serverNow()), progress);
+    } catch (e) {
+      this.failure = `Could not catch up on the battle: ${e instanceof Error ? e.message : String(e)}`;
+      this.show();
+      this.hooks.failed(e);
+      return;
+    }
+    for (const over of this.onceCaughtUp.splice(0)) over();
+    this.caughtUp = true;
+    this.show();
+  }
+
+  /** The match's battle; made if there is none, and given the scoops the last one held before anything else. */
+  private matchBattle(): RoomBattle {
+    if (this.battle) return this.battle;
+    const battle = (this.battle = this.hooks.battle());
+    const nowMs = this.net!.serverNow();
+    for (const d of this.carried.splice(0)) battle.dug(d, nowMs);
+    return battle;
+  }
+
+  /** The room's `edits`, to `battle` in the order they came, at `nowMs` on the room's clock (after every time: the match over). */
+  private give(battle: RoomBattle, edits: readonly RoomEdit[], nowMs: number): void {
+    for (const e of edits) {
+      if (e.t === 'shell') battle.hear(e.shell, nowMs);
+      else battle.dug(e.dig, nowMs);
+    }
   }
 
   private lost(why: string): void {
+    this.lostWhy = why;
     this.lobby.gather();
     this.lobby.status(why);
     this.hooks.note(why);
@@ -597,6 +756,17 @@ export class Together {
     url.searchParams.set('room', net.room);
     url.searchParams.set('map', net.config.map);
     this.lobby.show({ room: net.room, invite: url.toString(), you: net.you, owner: net.owner, seats: net.seats, config: net.config });
+    if (!this.caughtUp) this.lobby.status(this.failure ?? this.catching());
+    // Not ready, nor started, on a world that is not yet the room's.
+    this.lobby.playable(this.caughtUp);
+    // A line gone is gone (a catch-up ending after it shows the lobby again): the page says why, not that the host will start.
+    if (this.lostWhy) this.lobby.status(this.lostWhy);
+  }
+
+  /** "Catching up on the battle…", and how far it has come once it has said. */
+  private catching(): string {
+    const p = this.progress;
+    return p && p.total > 0 ? `${CATCHING_UP} ${p.done} of ${p.total}` : CATCHING_UP;
   }
 
   private savedName(): string {

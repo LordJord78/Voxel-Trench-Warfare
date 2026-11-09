@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CLIENT_TEXT_MAX, cleanConfig, cleanName, decodeDig, decodeShell, decodeShot, decodeState, defaultConfig, DIG_CELLS_MAX, encodeShot, encodeState, HURT_MAX, NAME_MAX, parseClient, parseRoom, PROTOCOL, ROOM_TEXT_MAX, SHOTS_MAX, type PlayerState, type WireDig } from '../../src/net/protocol';
+import { Rng } from '../../src/core/rng';
+import { loadTunables } from '../../src/core/tunables';
+import { encodeShotMark } from '../../src/net/gear';
+import { CLIENT_TEXT_MAX, cleanConfig, cleanName, decodeDig, decodeShell, decodeShot, decodeState, defaultConfig, DIG_CELLS_MAX, DIG_SPAN_MAX, encodeShot, encodeState, HURT_MAX, NAME_MAX, parseClient, parseRoom, PROTOCOL, ROOM_TEXT_MAX, sent, SHOTS_MAX, WORLD_DIMS, type PlayerState, type ShotState, type WireDig } from '../../src/net/protocol';
+import { genParams, MAP_IDS } from '../../src/world/generation/params';
+import { LAST_CELL as LAST, MOST_CELLS as MOST, worldCell as cell } from '../support/cells';
 
 const state: PlayerState = { tick: 1234, position: [128.4567, 13.05, 105.2], velocity: [-4.1, 0, 0.25], yaw: 271.25, pitch: -12.5, stance: 3, height: 1.8, flags: 33 };
 
@@ -41,11 +46,12 @@ describe('the protocol', () => {
   it('carries shells and digs as integers, and believes no malformed one', () => {
     expect(PROTOCOL).toBe(2);
     expect(DIG_CELLS_MAX).toBe(64);
-    // A player's scoop: 1–64 packed cells, each an integer in [0, 2^31).
-    const most = Array.from({ length: DIG_CELLS_MAX }, (_, i) => 2147483647 - i);
-    expect(parseClient(JSON.stringify({ t: 'dig', c: [0, 5, 2147483647] }))).toEqual({ t: 'dig', c: [0, 5, 2147483647] });
+    // A player's scoop: 1–64 packed cells of the world (each an integer in [0, X·Y·Z)), close together.
+    const most = MOST;
+    expect(parseClient(JSON.stringify({ t: 'dig', c: [0, 5, 2] }))).toEqual({ t: 'dig', c: [0, 5, 2] });
+    expect(parseClient(JSON.stringify({ t: 'dig', c: [LAST] }))).toEqual({ t: 'dig', c: [LAST] });
     expect(parseClient(JSON.stringify({ t: 'dig', c: most }))).toEqual({ t: 'dig', c: most });
-    for (const c of [[], Array(DIG_CELLS_MAX + 1).fill(1), [1.5], [-1], [2147483648], [1, null], ['1'], 'x', 7, null]) {
+    for (const c of [[], Array(DIG_CELLS_MAX + 1).fill(1), [1.5], [-1], [LAST + 1], [2147483648], [1, null], ['1'], 'x', 7, null]) {
       expect(parseClient(JSON.stringify({ t: 'dig', c })), JSON.stringify(c).slice(0, 40)).toBeNull();
     }
     expect(parseClient(JSON.stringify({ t: 'dig' }))).toBeNull();
@@ -60,7 +66,7 @@ describe('the protocol', () => {
     // The room's dig: [seat, at (room ms), ...cells], from a seat 0–7.
     expect(decodeDig([7, 12_000, 1, 2, 3])).toEqual({ seat: 7, at: 12_000, cells: [1, 2, 3] });
     expect(decodeDig([0, 12_000, ...most])).toEqual({ seat: 0, at: 12_000, cells: most });
-    for (const bad of [[8, 12_000, 1], [-1, 12_000, 1], [0.5, 12_000, 1], [0, 12_000], [0, 12_000, 1.5], [0, 12_000, -1], [0, 12_000, 2147483648], [0, 1.5, 1], [0, 12_000, ...most, 1], 'x', null]) {
+    for (const bad of [[8, 12_000, 1], [-1, 12_000, 1], [0.5, 12_000, 1], [0, 12_000], [0, 12_000, 1.5], [0, 12_000, -1], [0, 12_000, LAST + 1], [0, 12_000, 2147483648], [0, 1.5, 1], [0, 12_000, ...most, LAST], 'x', null]) {
       expect(decodeDig(bad), JSON.stringify(bad).slice(0, 40)).toBeNull();
     }
     expect(parseRoom(JSON.stringify({ t: 'shell', s: shell }))).toEqual({ t: 'shell', s: shell });
@@ -75,12 +81,75 @@ describe('the protocol', () => {
     expect(parseClient(JSON.stringify({ t: 'hurt', a: 10, c: 'blast' }))).toBeNull();
   });
 
+  it("refuses a scoop whose cells span more of the world than a shovel reaches, whoever sends it: the room logs and relays none, and no page digs one", () => {
+    // Corner to corner, two cells: a settle over the whole map, hundreds of megabytes on every page.
+    const corners = [cell(0, 150, 0), cell(WORLD_DIMS.x - 1, 150, WORLD_DIMS.z - 1)];
+    expect(parseClient(JSON.stringify({ t: 'dig', c: corners }))).toBeNull();
+    expect(decodeDig([1, 12_000, ...corners])).toBeNull();
+    expect(parseRoom(JSON.stringify({ t: 'dig', d: [1, 12_000, ...corners] }))).toBeNull();
+    const seats = [{ id: 0, name: 'Jordan', team: 'red', ready: false, away: false }];
+    const welcome = parseRoom(JSON.stringify({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats, config: defaultConfig(), phase: 'lobby', match: null, now: 5, log: { shells: [], digs: [[1, 9_000, ...corners], [1, 9_100, 7]] } }));
+    expect((welcome as Extract<typeof welcome, { t: 'welcome' }>).log.digs).toEqual([[1, 9_100, 7]]);
+    // On every axis, DIG_SPAN_MAX cells across is a scoop; one more is not.
+    const at = [1_000, 100, 1_000];
+    for (const axis of [0, 1, 2]) {
+      const far = (n: number) => cell(...(at.map((v, k) => (k === axis ? v + n : v)) as [number, number, number]));
+      expect(decodeDig([1, 12_000, far(0), far(DIG_SPAN_MAX - 1)]), `axis ${axis}`).not.toBeNull();
+      expect(decodeDig([1, 12_000, far(0), far(DIG_SPAN_MAX)]), `axis ${axis}`).toBeNull();
+      expect(parseClient(JSON.stringify({ t: 'dig', c: [far(DIG_SPAN_MAX), far(0)] })), `axis ${axis}`).toBeNull();
+    }
+    // Unpacked as packed: x the fastest, so cells a row apart in y are near, not 2,560 apart in x.
+    expect(decodeDig([1, 12_000, cell(2_559, 10, 7), cell(2_559, 11, 7), cell(2_524, 12, 8)])).not.toBeNull();
+  });
+
+  it("pins the world's dims, the same as both maps generate, and a scoop's span to what the shovel reaches", () => {
+    const tun = loadTunables();
+    for (const map of MAP_IDS) expect(genParams(tun, undefined, map).dims, map).toEqual(WORLD_DIMS);
+    // The shovel takes its voxels within ceil(reach) of a point (combat/entrenching.ts scan): an honest
+    // scoop is at most 2·ceil(reach) + 1 across, and the room allows a few voxels more.
+    const reach = Math.ceil(tun.f('entrenching.reach_m') / tun.f('world.voxel_size') - 1e-9);
+    expect(DIG_SPAN_MAX).toBe(2 * reach + 4);
+    expect(DIG_SPAN_MAX).toBeGreaterThanOrEqual(2 * reach + 1);
+  });
+
+  it('a shot flown as sent is what its words say', () => {
+    // A shot is flown as the others will fly it (sent): the words it goes out as, and the shot they
+    // say, which is the shot every other client decodes from the room's frame ([seat, ...words]).
+    const rng = Rng.root(11).derive('protocol.sent');
+    const guns = ['ak74', 'm4', 'mp5', 'svd', 'm249', 'm870', 'm17', 'pm'] as const;
+    let moved = 0;
+    for (let k = 0; k < 50; k++) {
+      const d = [rng.normal(), rng.normal(), rng.normal()];
+      const l = Math.hypot(d[0], d[1], d[2]);
+      const tracer = rng.chance(0.5);
+      const s: ShotState = {
+        tick: rng.randint(0, 2_000_000),
+        origin: [rng.uniform(-50, 300), rng.uniform(-5, 40), rng.uniform(-50, 300)],
+        dir: [d[0] / l, d[1] / l, d[2] / l],
+        tracer,
+        ...(rng.chance(0.8) ? { mark: encodeShotMark({ tracer, kind: rng.randint(0, 4), suppressed: rng.chance(0.5), gun: rng.choice(guns) }) } : {}),
+      };
+      const out = sent(s);
+      expect(out.wire).toEqual(encodeShot(s));
+      const seat = rng.randint(0, 8);
+      const frame = parseRoom(JSON.stringify({ t: 'f', s: 5, ps: [], sh: [[seat, ...out.wire]] }));
+      expect(frame).toMatchObject({ t: 'f' });
+      const relayed = (frame as Extract<typeof frame, { t: 'f' }>).sh;
+      expect(relayed).toHaveLength(1);
+      expect(relayed[0][0]).toBe(seat);
+      expect(decodeShot(relayed[0].slice(1)), `shot ${k}`).toEqual(out.shot);
+      // Rounded to the millimetre and to 1e-4 of a unit: not the shot as aimed.
+      if (out.shot.origin.some((v, i) => v !== s.origin[i]) || out.shot.dir.some((v, i) => v !== s.dir[i])) moved++;
+    }
+    expect(moved).toBe(50);
+  });
+
   it("takes a room's message up to a mebibyte, a player's still not past 4,096 characters", () => {
     expect(ROOM_TEXT_MAX).toBe(1 << 20);
     expect(CLIENT_TEXT_MAX).toBe(4096);
     const seats = [{ id: 0, name: 'Jordan', team: 'red', ready: false, away: false }];
     const welcome = (digs: WireDig[]) => JSON.stringify({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats, config: defaultConfig(), phase: 'lobby', match: null, now: 5, log: { shells: [[1, 9000, 120_500, 2_000, 2_750, 77]], digs } });
-    const scoop = (k: number): WireDig => [k % 8, 12_000 + k, ...Array.from({ length: DIG_CELLS_MAX }, (_, i) => 2147483647 - i)];
+    const scoop = (k: number): WireDig => [k % 8, 12_000 + k, ...MOST];
     const digs = Array.from({ length: 150 }, (_, k) => scoop(k));
     const text = welcome(digs);
     expect(JSON.stringify({ shells: [[1, 9000, 120_500, 2_000, 2_750, 77]], digs }).length).toBeGreaterThan(100_000);

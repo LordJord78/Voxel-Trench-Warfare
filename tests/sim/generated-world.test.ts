@@ -4,12 +4,14 @@ import { Artillery, artilleryTunables, planShellSource } from '../../src/combat/
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
 import { Stance } from '../../src/physics/character';
-import { Session } from '../../src/sim/session';
+import { idleIntent, Session } from '../../src/sim/session';
 import { fillBand } from '../../src/world/generation/fill';
 import { generateWorld, type GeneratedWorld } from '../../src/world/generation/generate';
 import { genParams } from '../../src/world/generation/params';
 import { planWorld } from '../../src/world/generation/plan';
+import { groundTop } from '../../src/world/raycast';
 import { isSolid, P } from '../../src/world/materials';
+import { frontViewOfStarts } from '../support/worlds';
 
 // Play over the generated world: every friendly bench is climbed by walking at it from its treads,
 // never the parapet behind it unless jump is held, and then every bay is left in seconds, over the
@@ -193,6 +195,45 @@ describe("the front's shells over the generated world", () => {
     expect(light.filter((d) => d > 40).length / light.length).toBeGreaterThan(0.6);
     expect(heavy.length).toBeGreaterThan(400);
     expect(heavy.filter((d) => d < 15).length).toBeGreaterThan(0);
+  });
+});
+
+describe('the front in a room over the generated world', () => {
+  it('in a room the front sees no one standing at a Red or Blue start', () => {
+    const s = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn }, tun, 1, 0);
+    const { starts, seen } = frontViewOfStarts(s, world.plan);
+    // Four a side, each looked at from a bay or more.
+    expect(starts.map((st) => st.line)).toEqual(['front', 'front', 'front', 'front', 'enemy_front', 'enemy_front', 'enemy_front', 'enemy_front']);
+    for (const st of starts) expect(st.points, `${st.line} start at ${st.at.join(', ')}`).toBeGreaterThan(0);
+    expect(seen).toEqual([]);
+  });
+
+  it("frontFrom(side) fires from that side's front line", () => {
+    const v = params.voxel;
+    const fronts = ([0, 1] as const).map((side) => world.plan.lines.find((l) => l.spec.side === side && l.spec.firingSteps)!);
+    // In no man's land, half way along the lines and half way across, on the ground.
+    const x = (params.dims.x * v) / 2;
+    const z = ((fronts[0].spec.crossBase + fronts[1].spec.crossBase) / 2) * v;
+    const top = groundTop(world.map, x / v, z / v)!;
+    const s = Session.create({ map: world.map, plan: world.plan, spawn: { position: [x, top * v, z] } }, tun, 4, 0);
+    s.intent = idleIntent();
+    s.room = true;
+    expect(s.frontSide).toBe(1);
+    s.front.intensity = 'heavy';
+    for (const side of [0, 1] as const) {
+      s.frontFrom(side);
+      expect(s.frontSide).toBe(side);
+      const shots = [];
+      for (let k = 0; k < 3 * 60; k++) {
+        s.tick();
+        shots.push(...s.drainEvents().frontShots);
+      }
+      expect(shots.length, `side ${side}`).toBeGreaterThan(0);
+      for (const shot of shots) {
+        const near = fronts[side].bays.some((b) => Math.abs(shot.origin[2] - (b.facing > 0 ? b.b1 : b.b0) * v) <= 0.5);
+        expect(near, `side ${side}: ${shot.origin.join(', ')}`).toBe(true);
+      }
+    }
   });
 });
 

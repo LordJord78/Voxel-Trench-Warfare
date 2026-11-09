@@ -17,11 +17,14 @@
  * duckboards and undisturbed ground are not shovel work, so the
  * tool cannot quietly re-excavate the map. Banked work survives letting go:
  * being shot at should make you stop, not start again.
+ *
+ * A scoop is its cells (packCell), so in a room every client digs another's as
+ * its digger did (applyScoop, the shared-battle spec's note 9).
  */
 
 import type { Tunables } from '../core/tunables';
 import { yawBasis } from '../physics/vec';
-import { BRICK, UNIFORM, type BrickMap } from '../world/bricks';
+import { BRICK, UNIFORM, type BrickMap, type Dims } from '../world/bricks';
 import { settleRegion } from '../world/destruction';
 import { isLoose, P } from '../world/materials';
 import type { Box } from '../world/region';
@@ -49,10 +52,11 @@ export function entrenchingTunables(tun: Tunables): EntrenchingTunables {
   };
 }
 
-/** A scoop dug: how many voxels went, and its middle, metres. */
+/** A scoop dug: how many voxels went, its middle (metres), and the cells it cleared (packCell), nearest first. */
 export interface Scoop {
   voxels: number;
   at: [number, number, number];
+  cells: number[];
 }
 
 /** Voxels about a scoop its settling starts from. */
@@ -67,6 +71,61 @@ const SPREAD = 2;
 const ASIDE = 2;
 
 const LOOSE = Uint8Array.from({ length: 256 }, (_, p) => (isLoose(p) ? 1 : 0));
+
+/** A cell of `dims` packed as one number, (z·Y + y)·X + x: the index findScoop breaks ties by, and a scoop's cells on the wire. */
+export function packCell(dims: Dims, x: number, y: number, z: number): number {
+  return (z * dims.y + y) * dims.x + x;
+}
+
+/** Each of `cells` inside `dims`, unpacked to its voxel: one past the world's end is none of its. */
+function unpacked(dims: Dims, cells: readonly number[]): [number, number, number][] {
+  const out: [number, number, number][] = [];
+  const all = dims.x * dims.y * dims.z;
+  for (const c of cells) {
+    if (!Number.isInteger(c) || c < 0 || c >= all) continue;
+    out.push([c % dims.x, Math.floor(c / dims.x) % dims.y, Math.floor(c / (dims.x * dims.y))]);
+  }
+  return out;
+}
+
+/** The box a scoop's settling starts from: SETTLE_PAD about its voxels. */
+function settleBox(voxels: readonly (readonly number[])[]): Box {
+  const box: Box = { x0: Infinity, y0: Infinity, z0: Infinity, x1: -Infinity, y1: -Infinity, z1: -Infinity };
+  for (const [x, y, z] of voxels) {
+    box.x0 = Math.min(box.x0, x - SETTLE_PAD);
+    box.y0 = Math.min(box.y0, y - SETTLE_PAD);
+    box.z0 = Math.min(box.z0, z - SETTLE_PAD);
+    box.x1 = Math.max(box.x1, x + 1 + SETTLE_PAD);
+    box.y1 = Math.max(box.y1, y + 1 + SETTLE_PAD);
+    box.z1 = Math.max(box.z1, z + 1 + SETTLE_PAD);
+  }
+  return box;
+}
+
+/**
+ * The box a scoop of `cells` may write in, which `work` asks be free before it digs: SETTLE_PAD
+ * about them, SPREAD wider in x and z. Empty (all zero) for no cell of the world's.
+ */
+export function scoopBox(dims: Dims, cells: readonly number[]): Box {
+  const voxels = unpacked(dims, cells);
+  if (voxels.length === 0) return { x0: 0, y0: 0, z0: 0, x1: 0, y1: 0, z1: 0 };
+  const box = settleBox(voxels);
+  return { ...box, x0: box.x0 - SPREAD, z0: box.z0 - SPREAD, x1: box.x1 + SPREAD, z1: box.z1 + SPREAD };
+}
+
+/**
+ * A scoop of `cells` dug in `map`, as `work` digs it: each loose one cleared to air, thrown over the
+ * parapet, and the ground about them settled within its box, flooding below `waterTable`. Every
+ * client digs another's scoop through it, and the digger its own, so the same cells make the same
+ * world. A cell that is not loose (none, from a client in step) is left; one off the world is none.
+ */
+export function applyScoop(map: BrickMap, cells: readonly number[], waterTable?: number): void {
+  const voxels = unpacked(map.dims, cells);
+  if (voxels.length === 0) return;
+  // Thrown over the parapet, not moved: a trench that gets deeper every time someone tidies it is not a mechanic.
+  for (const [x, y, z] of voxels) if (LOOSE[map.get(x, y, z)]) map.set(x, y, z, P.AIR);
+  settleRegion(map, settleBox(voxels), waterTable, { pad: SPREAD, widen: false });
+}
 
 export class Entrenching {
   /** Seconds of digging banked toward the next scoop: kept when digging stops, never more than one scoop's. */
@@ -103,7 +162,7 @@ export class Entrenching {
     const indices: number[] = [];
     const found: [number, number, number][] = [];
     this.scan(feet, yaw, (x, y, z, d2) => {
-      const index = (z * dims.y + y) * dims.x + x;
+      const index = packCell(dims, x, y, z);
       let k = found.length;
       if (k === n && (d2 > d2s[k - 1] || (d2 === d2s[k - 1] && index > indices[k - 1]))) return false;
       while (k > 0 && (d2s[k - 1] > d2 || (d2s[k - 1] === d2 && indices[k - 1] > index))) k--;
@@ -122,8 +181,9 @@ export class Entrenching {
 
   /**
    * One tick of digging: `dt` banked if anything loose is in reach, and a scoop
-   * once a scoop's worth is, unless `free` refuses the box its settling may
-   * touch (a crater's region out): then the work waits, banked.
+   * once a scoop's worth is (applyScoop, its cells returned), unless `free`
+   * refuses the box its settling may touch (scoopBox: a crater's region out, or in
+   * a room one still to come): then the work waits, banked.
    */
   work(feet: readonly number[], yaw: number, dt: number, free?: (box: Box) => boolean): Scoop | null {
     let any = false;
@@ -133,32 +193,23 @@ export class Entrenching {
     this.banked += dt;
     if (this.banked < this.scoopS) return null;
     const taken = this.findScoop(feet, yaw);
-    const box: Box = { x0: Infinity, y0: Infinity, z0: Infinity, x1: -Infinity, y1: -Infinity, z1: -Infinity };
-    for (const [x, y, z] of taken) {
-      box.x0 = Math.min(box.x0, x - SETTLE_PAD);
-      box.y0 = Math.min(box.y0, y - SETTLE_PAD);
-      box.z0 = Math.min(box.z0, z - SETTLE_PAD);
-      box.x1 = Math.max(box.x1, x + 1 + SETTLE_PAD);
-      box.y1 = Math.max(box.y1, y + 1 + SETTLE_PAD);
-      box.z1 = Math.max(box.z1, z + 1 + SETTLE_PAD);
-    }
-    if (free && !free({ ...box, x0: box.x0 - SPREAD, z0: box.z0 - SPREAD, x1: box.x1 + SPREAD, z1: box.z1 + SPREAD })) {
+    const { dims } = this.map;
+    const cells = taken.map(([x, y, z]) => packCell(dims, x, y, z));
+    if (free && !free(scoopBox(dims, cells))) {
       this.banked = this.scoopS;
       return null;
     }
+    applyScoop(this.map, cells, this.waterTable);
     const at: [number, number, number] = [0, 0, 0];
     for (const [x, y, z] of taken) {
-      // Thrown over the parapet, not moved: a trench that gets deeper every time someone tidies it is not a mechanic.
-      this.map.set(x, y, z, P.AIR);
       at[0] += x + 0.5;
       at[1] += y + 0.5;
       at[2] += z + 0.5;
     }
-    settleRegion(this.map, box, this.waterTable, { pad: SPREAD, widen: false });
     this.banked = Math.min(this.banked - this.scoopS, this.scoopS);
     this.cleared += taken.length;
     const per = this.voxel / taken.length;
-    return { voxels: taken.length, at: [at[0] * per, at[1] * per, at[2] * per] };
+    return { voxels: taken.length, at: [at[0] * per, at[1] * per, at[2] * per], cells };
   }
 
   /**

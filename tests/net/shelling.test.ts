@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { hash32 } from '../../src/core/hash';
+import { fnv1a64, hash32 } from '../../src/core/hash';
 import { hypot } from '../../src/core/dmath';
 import { loadTunables } from '../../src/core/tunables';
-import { decodeShell, encodeShell } from '../../src/net/protocol';
+import { decodeShell, DIG_SPAN_MAX, encodeShell, PROTOCOL, WORLD_DIMS } from '../../src/net/protocol';
 import { MAP_SEEDS } from '../../src/net/room-core';
 import { SHELL_FIELDS } from '../../src/net/shell-fields';
 import { SHELLING, Shelling, shellingSeed, type ScheduledShell, type ShellField } from '../../src/net/shelling';
@@ -136,5 +136,14 @@ describe("the room's shelling", () => {
 
   it('has a field for every map the room plays', () => {
     expect(Object.keys(SHELL_FIELDS).sort()).toEqual(Object.keys(MAP_SEEDS).sort());
+  });
+
+  it("pins the relay's game data: a change to it is a new protocol and a redeployed relay", () => {
+    // The pages and a deployed relay are matched by PROTOCOL alone: a map's starts or [room_battle]
+    // moved without a bump would have the live relay shell the old field, spawn kills and all, and the
+    // world's dims or a scoop's span changed without one would have it drop honest scoops. When this
+    // fails, bump PROTOCOL (and the literal) and redeploy the relay with the pages.
+    const data = { PROTOCOL, SHELLING, SHELL_FIELDS, MAP_SEEDS, WORLD_DIMS, DIG_SPAN_MAX };
+    expect(fnv1a64(JSON.stringify(data)).toString(16), "the relay's data changed: bump PROTOCOL and redeploy the relay").toBe('b396df0e3fe0254f');
   });
 });

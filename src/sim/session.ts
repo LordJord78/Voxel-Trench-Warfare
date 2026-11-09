@@ -11,22 +11,22 @@
  */
 
 import { Artillery, artilleryTunables, planShellSource, type ShellSource } from '../combat/artillery';
-import { armSpec, GUN_DEFS, loadoutArms, type ArmSpec, type Loadout } from '../combat/arsenal';
+import { armSpec, attachmentTerms, GUN_DEFS, loadoutArms, type ArmSpec, type Loadout } from '../combat/arsenal';
 import { aimRangeM, ballisticsTunables, projectileSpec, Rounds, type BodyHit, type Impact, type ProjectileSpec } from '../combat/ballistics';
 import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
-import { Entrenching, entrenchingTunables, type Scoop } from '../combat/entrenching';
-import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
-import { blastHarm, harmTunables, type HarmTunables } from '../combat/harm';
+import { applyScoop, Entrenching, entrenchingTunables, scoopBox, type Scoop } from '../combat/entrenching';
+import { Front, frontTunables, planSource, type FrontSight, type FrontSource } from '../combat/front';
+import { blastHarm, frontHarm, harmTunables, type HarmTunables } from '../combat/harm';
 import { gunClass, Handling, handlingTunables, ZERO_HANDS, type HandlingCue } from '../combat/handling';
 import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
 import { Recoil } from '../combat/recoil';
-import { bodySphere, hitParts, PART_BOX, pose, toWorld, type Frame, type PartName, type V3 } from '../combat/soldier-rig';
+import { bodySphere, CHEST, hitParts, pose, toWorld, type Frame, type PartName, type V3 } from '../combat/soldier-rig';
 import { Suppression, suppressionTunables } from '../combat/suppression';
 import { ViewKick } from '../combat/viewkick';
 import { heldPose, modelToView, viewBasis, viewmodelTunables, type Holding, type ViewmodelKick, type ViewmodelPose, type ViewmodelTunables } from '../combat/viewmodel';
-import { Weapon, weaponSpec } from '../combat/weapon';
+import { pelletDirs, pelletSeed, Weapon, weaponSpec } from '../combat/weapon';
 import { FixedClock } from '../core/clock';
-import { cos, exp, hypot, radians, sin, TAU } from '../core/dmath';
+import { cos, exp, hypot, sin, TAU } from '../core/dmath';
 import { hash32 } from '../core/hash';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
@@ -38,9 +38,10 @@ import type { BrickMap } from '../world/bricks';
 import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, P, paletteData } from '../world/materials';
 import { groundTop, raycast } from '../world/raycast';
+import type { Box } from '../world/region';
 import { spatter, spatterTunables, type SpatterTunables } from '../world/spatter';
-import { BARE, decodeShotMark, encodeShotMark, GUNS, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
-import type { Team } from '../net/protocol';
+import { BARE, decodeShotMark, encodeShotMark, GUNS, stepShare, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
+import { sent, type Team } from '../net/protocol';
 import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from './destruction';
 
 /** The uniform's colour, for the dust a round throws out of a body. */
@@ -55,9 +56,6 @@ export const PORT_ANCHOR = 2;
 
 /** The local player's body, among the bodies a round may strike. */
 export const LOCAL_BODY = -1;
-
-/** A body's chest: the middle of its torso's box, in the torso's frame. Where a blast's harm is reckoned to. */
-const CHEST = [0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2);
 
 /** `Session.held` when the shovel is in the hands. */
 export const SHOVEL_HELD = -1;
@@ -133,11 +131,13 @@ export interface ShotEvent {
   tracer: boolean;
   /** The player's: the drawn rifle's (they leave from the eye); the front's: the origin. */
   muzzle: [number, number, number];
-  /** A player's shot's word (net/gear.ts ShotMark): its gun, its tracer's colour, whether suppressed. */
+  /** A player's shot's word (net/gear.ts ShotMark): its gun, its tracer's colour, whether suppressed, a pellet gun's pattern's share. */
   mark?: number;
   /** The muzzle's flash and report, as shares of a bare gun's. */
   flash?: number;
   report?: number;
+  /** The player's, in a room: the shot's words (net/protocol.ts sent), which its origin and direction are, as every other client flies it. */
+  wire?: number[];
 }
 
 /**
@@ -308,6 +308,8 @@ export class Session {
   readonly suppression: Suppression;
   /** The enemy line's incoming fire. */
   readonly front: Front;
+  /** Which side's front line it fires from (frontFrom): the enemy's, side 1, until it is set. */
+  frontSide: 0 | 1 = 1;
   /** Craters cut off the main thread and written back a budget a tick; rounds' marks go through it. */
   readonly destruction: Destruction;
   /** The front's shells: their intensity is set beside the front's (the pause menu sets both). */
@@ -330,9 +332,23 @@ export class Session {
   together = false;
   /**
    * In a room's match (the shared-battle spec): its shells are cut on the ground where their craters
-   * go out, and the battle harms the player (`harms`). Together sets it each frame; off in solo play.
+   * go out, and the battle harms the player (`harms`); the front fires to hurt, over the crest at a
+   * head it cannot see, and its rounds chip nothing. Together sets it each frame; off in solo play.
    */
   room = false;
+  /**
+   * In a room, ground spoken for before the player's own scoop there (sim/room-battle.ts reserves,
+   * which its battle sets here): ground a shell heard and not yet landed would take, or ground a held
+   * scoop of another's will dig (the room stamped it first, so it goes in first on every page). The
+   * player's own scoop waits while its box is, as while a crater is pending there. Nothing solo.
+   */
+  reserved: (box: Box) => boolean = () => false;
+  /**
+   * The player's seat in the room's match (Together sets it each frame); −1 solo. With the tick it
+   * left on it seeds a shot's pellets (combat/weapon.ts pelletSeed), as every other client seeds them
+   * from the shot's owner.
+   */
+  seat = -1;
   bodies: Body[] = [];
   /**
    * The range's dummies (the shots spec's §5), set each frame: bodies only the player's rounds
@@ -357,8 +373,6 @@ export class Session {
   /** The view kick's camera, its roll's side and its shake: a stream of its own, so drawing them shifts no other. */
   private readonly cameraRng: Rng;
   private readonly suppressionRng: Rng;
-  /** Others' shotguns' pellets about their shot: drawn here, not by the shooter (cosmetic: hits are theirs to claim). */
-  private readonly remoteRng: Rng;
   private readonly tun: Tunables;
   /** The front's rounds: the AK's, whatever the player carries. */
   private readonly frontProjectile: ProjectileSpec;
@@ -366,13 +380,19 @@ export class Session {
   private readonly tracerConverge: [number, number];
   /** The player's tracer is lit in over this from the hip and this aimed, between by the share aimed (m; [effects] tracer_ignite_hip_m, tracer_ignite_m). */
   private readonly tracerIgnite: [number, number];
-  /** Each gun's round, pellets and cone, as another player's shots are fired. */
-  private readonly remoteGuns = new Map<GunKey, { spec: ProjectileSpec; pellets: number; coneDeg: number }>();
+  /** Each gun's round (bare, or suppressed), pellets and cone, as another player's shots are fired. */
+  private readonly remoteGuns = new Map<string, { spec: ProjectileSpec; pellets: number; coneDeg: number }>();
+  /** A suppressor's share of its gun's muzzle velocity ([attachment.suppressor] velocity). */
+  private readonly suppressorVelocity: number;
+  /** The most rounds in the pool that others' shots fill it to: [ballistics] others_fill of its capacity (roundRoom). */
+  private readonly othersMax: number;
   private readonly chipEnergyJ: number;
   /** A shell's splash's energy, at a crater of 3 m: by the cube of its radius. */
   private readonly splashEnergyJ: number;
-  /** [room_battle]'s harm: a blast's on the player, in a room. */
+  /** [room_battle]'s harm: a blast's and the front's round's on the player, in a room. */
   private readonly harmT: HarmTunables;
+  /** In a room, what the front's muzzles see of the player's head: the session's sight. */
+  private readonly frontSight: FrontSight = (from, to) => this.sight(from, to);
   /** A shell's debris thrown into water near it: over how many times its radius, how many points, each splash's energy, and how long the debris falls. */
   private readonly debris: { reach: number; samples: number; energyJ: number; fallS: [number, number] };
   /** Debris splashes due: when (the tick) and where (metres). */
@@ -415,8 +435,9 @@ export class Session {
     this.viewKickRng = this.streams.derive('combat.viewkick');
     this.cameraRng = this.streams.derive('combat.viewkick.camera');
     this.suppressionRng = this.streams.derive('combat.suppression');
-    this.remoteRng = this.streams.derive('combat.remote_pellets');
     this.chipEnergyJ = tun.f('destruction.chip_energy_j');
+    this.suppressorVelocity = attachmentTerms(tun, 'suppressor').velocity;
+    this.othersMax = Math.floor(tun.f('ballistics.others_fill') * tun.i('ballistics.pool_capacity'));
     this.splashEnergyJ = tun.f('artillery.splash_energy_j');
     this.harmT = harmTunables(tun);
     this.debris = {
@@ -493,6 +514,16 @@ export class Session {
     return best;
   }
 
+  /**
+   * The front fires from `side`'s front line (combat/front.ts planSource): in a room, the line
+   * across from the player's team (side 1 at Red, side 0 at Blue); side 1 again for solo play.
+   * Without a plan its source stays as it is.
+   */
+  frontFrom(side: 0 | 1): void {
+    if (this.plan) this.front.source = planSource(this.plan, this.front.t.reachM, side);
+    this.frontSide = side;
+  }
+
   /** The player's own parts' frames, as others draw them (soldier-rig.ts), this tick. */
   private ownBody(): Record<PartName, Frame> {
     if (this.ownFrames?.tick === this.ticks) return this.ownFrames.frames;
@@ -504,26 +535,34 @@ export class Session {
 
   /**
    * Another player's shot (owner 2 + their seat), from their eye along `dir`, its tracer and flash
-   * at their rifle's `muzzle`; `mark`, its word (net/gear.ts): their gun's round, its tracer's
-   * colour, and a shotgun's pellets spread about it here. Without one, the AK's, amber. `kind`, where
-   * given, is the tracer's colour whatever the mark says (their seat's team); a shot that is not a
-   * tracer draws none. Every pellet takes the shot's kind.
+   * at their rifle's `muzzle`; `mark`, its word (net/gear.ts): their gun's round, at a suppressor's
+   * velocity if it says so, its tracer's colour, and a shotgun's pellets, spread about the first by
+   * the gun's cone times the share the word carries, from the shot's seed (combat/weapon.ts
+   * pelletSeed: their seat and `tick`, the tick it left on), as the shooter spread them. Without one,
+   * the AK's, amber. `kind`, where given, is the tracer's colour whatever the mark says (their seat's
+   * team); a shot that is not a tracer draws none. Every pellet takes the shot's kind.
+   *
+   * `silent` (a backlog: a shot more than SILENT_STEP_S old, from a tab back from hidden or a page
+   * caught up on the room's log): its rounds draw no tracer, crack nothing, pass unheard and their
+   * strikes suppress no one (Rounds.fire); no remoteShots event and no muzzle flash. Its chips and
+   * body strikes are a loud one's, so every page's world takes them alike.
    */
-  fireRemote(owner: number, origin: readonly [number, number, number], dir: readonly [number, number, number], tracer: boolean, muzzle: readonly [number, number, number], mark?: number, kind?: number): void {
+  fireRemote(owner: number, origin: readonly [number, number, number], dir: readonly [number, number, number], tracer: boolean, muzzle: readonly [number, number, number], mark?: number, kind?: number, tick = 0, silent = false): void {
     const m = mark === undefined ? null : decodeShotMark(mark);
-    const gun = m ? this.remoteGun(m.gun) : { spec: this.frontProjectile, pellets: 1, coneDeg: 0 };
+    const gun = m ? this.remoteGun(m.gun, m.suppressed) : { spec: this.frontProjectile, pellets: 1, coneDeg: 0 };
     const spec = gun.spec;
     const v = spec.muzzleVelocity;
-    const round = !tracer ? TRACER_KIND.none : kind ?? (m ? m.kind : TRACER_KIND.amber);
+    const round = !tracer || silent ? TRACER_KIND.none : kind ?? (m ? m.kind : TRACER_KIND.amber);
     const from: [number, number, number] = [muzzle[0], muzzle[1], muzzle[2]];
     const reach = this.aimRange(owner, origin, dir);
-    // Lit in as the draw's own (a hip shot's): a shot mark carries no share aimed.
+    // Lit in as the draw's own (a hip shot's): a shot's word does not say how far its shooter had
+    // aimed, and a pellet gun's share in it is its pattern's, not the sights'.
     const drawn = { from, convergeM: reach };
-    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, drawn) < 0) return;
-    for (let k = 1; k < gun.pellets; k++) {
-      const d = this.spreadAbout(dir, gun.coneDeg, this.remoteRng);
-      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, round, drawn);
+    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, drawn, undefined, silent) < 0) return;
+    for (const d of pelletDirs(dir, gun.pellets - 1, gun.coneDeg * (m ? m.share : 1), pelletSeed(owner - 2, tick))) {
+      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, round, drawn, undefined, silent);
     }
+    if (silent) return;
     const flashShare = m?.suppressed ? 0.12 : 1;
     this.events.remoteShots.push({
       tick: this.ticks, owner, origin: [origin[0], origin[1], origin[2]], dir: [dir[0], dir[1], dir[2]], tracer, muzzle: from,
@@ -535,38 +574,38 @@ export class Session {
   }
 
   /**
-   * Another's gun as their shots need it: its round, its pellets and their cone (degrees). Its rounds
-   * say which gun they left (BodyHit.gun), so a round of theirs into the player is felt by its damage.
+   * Rounds others' shots may take now: the pool filled to [ballistics] others_fill of it at most
+   * (othersMax), every round in it counted. Together fires no more of others' shots a frame than
+   * fit, so a backlog flown at once leaves the rest for the player's trigger and the front's.
    */
-  private remoteGun(key: GunKey): { spec: ProjectileSpec; pellets: number; coneDeg: number } {
-    let g = this.remoteGuns.get(key);
-    if (!g) {
-      const w = weaponSpec(this.tun, GUN_DEFS[key].table);
-      g = { spec: { ...w.projectile, gun: GUNS.indexOf(key) }, pellets: w.pellets, coneDeg: w.dispersionMoa / 60 };
-      this.remoteGuns.set(key, g);
-    }
-    return g;
+  roundRoom(): number {
+    return Math.max(0, this.othersMax - this.rounds.count);
   }
 
-  /** A direction within `coneDeg` of unit `dir`, uniform over its disc. */
-  private spreadAbout(dir: readonly number[], coneDeg: number, rng: Rng): [number, number, number] {
-    const a = rng.uniform(0, TAU);
-    const r = radians(coneDeg) * Math.sqrt(rng.float());
-    // Two directions square to it: across it (level), and up from it.
-    let ux = dir[2];
-    let uz = -dir[0];
-    const level = hypot(ux, uz);
-    if (level < 1e-9) {
-      ux = 1;
-      uz = 0;
-    } else {
-      ux /= level;
-      uz /= level;
+  /** The rounds another's shot with the word `mark` fires: its gun's pellets; one without a word. */
+  shotRounds(mark?: number): number {
+    if (mark === undefined) return 1;
+    const m = decodeShotMark(mark);
+    return this.remoteGun(m.gun, m.suppressed).pellets;
+  }
+
+  /**
+   * Another's gun as their shots need it: its round, at the suppressor's velocity when `suppressed`
+   * (as the shooter's own flies: combat/arsenal.ts armSpec), its pellets and the gun's own cone
+   * (degrees), which, times the share their shot's word carries, they spread over about the first.
+   * Its rounds say which gun they left (BodyHit.gun), so a round of theirs into the player is felt by
+   * its damage.
+   */
+  private remoteGun(key: GunKey, suppressed: boolean): { spec: ProjectileSpec; pellets: number; coneDeg: number } {
+    const name = suppressed ? `${key}+suppressor` : key;
+    let g = this.remoteGuns.get(name);
+    if (!g) {
+      const w = weaponSpec(this.tun, GUN_DEFS[key].table);
+      const muzzleVelocity = suppressed ? w.projectile.muzzleVelocity * this.suppressorVelocity : w.projectile.muzzleVelocity;
+      g = { spec: { ...w.projectile, muzzleVelocity, gun: GUNS.indexOf(key) }, pellets: w.pellets, coneDeg: w.dispersionMoa / 60 };
+      this.remoteGuns.set(name, g);
     }
-    const w = [dir[1] * uz, dir[2] * ux - dir[0] * uz, -dir[1] * ux];
-    const d = [dir[0] + (ux * cos(a) + w[0] * sin(a)) * r, dir[1] + w[1] * sin(a) * r, dir[2] + (uz * cos(a) + w[2] * sin(a)) * r];
-    const n = hypot(d[0], d[1], d[2]);
-    return [d[0] / n, d[1] / n, d[2] / n];
+    return g;
   }
 
   /** A gun carried: its own weapon, recoil and kick; `tagged`, its rounds say which gun (for what their hits do). */
@@ -622,12 +661,17 @@ export class Session {
     return { kind: s.gun.slot === 'secondary' ? 'pistol' : 'rifle', sight: s.sight };
   }
 
-  /** The cone's half-angle now (degrees), as the next shot would be thrown: the stance's, the sights', the laser's and suppression's. */
+  /**
+   * The cone's half-angle now (degrees), as the next shot would be thrown: the gun's, times the
+   * stance's, the sights', the laser's and suppression's share. A pellet gun's is its pattern's, the
+   * share put to the step its shot's word would carry (net/gear.ts stepShare), as its pellets fly.
+   */
   coneDeg(): number {
     const arm = this.arm;
     const stance = this.controller.t.stances[this.player.stance].swayScale;
     const hip = arm.spec.hipSpread * (this.lightOn && arm.spec.fit.side === 'laser' ? arm.spec.laserSpread : 1);
-    return (arm.weapon.spec.dispersionMoa / 60) * stance * (hip + (arm.spec.adsSpread - hip) * this.aimed) * this.suppression.swayScale;
+    const share = stance * (hip + (arm.spec.adsSpread - hip) * this.aimed) * this.suppression.swayScale;
+    return (arm.weapon.spec.dispersionMoa / 60) * (arm.weapon.spec.pellets > 1 ? stepShare(share) : share);
   }
 
   /** The sight's magnification, `alpha` of the way between the last two ticks: 1 from the hip. */
@@ -716,17 +760,37 @@ export class Session {
   /**
    * Shovel work (the reference's _tick_dig), after the player has moved: F held, on the ground, not
    * lying down and not at the periscope. A scoop waits, banked, while a crater's region it would
-   * touch is out (its bricks would undo it); the ground a scoop settles may slump into the body,
-   * which is lifted out as a crater's slump is.
+   * touch is out (its bricks would undo it); in a room, while one is pending at all, or a shell heard
+   * would take its ground (`reserved`), so it goes in after every crater there on every client (the
+   * shared-battle spec's note 9). The ground a scoop settles may slump into the body, which is lifted
+   * out as a crater's slump is.
    */
   private dig(dt: number): void {
     const p = this.player;
     this.digging = this.acting.dig && p.onGround && p.climbTo === null && p.stance !== Stance.PRONE && p.stance !== Stance.PERISCOPE;
     if (!this.digging) return;
-    const scoop = this.entrenching.work(p.position.toArray(), p.yaw, dt, (box) => !this.destruction.overlapsOut(box));
+    const free = this.room ? (box: Box) => !this.destruction.overlapsPending(box) && !this.reserved(box) : (box: Box) => !this.destruction.overlapsOut(box);
+    const scoop = this.entrenching.work(p.position.toArray(), p.yaw, dt, free);
     if (!scoop) return;
     this.events.scoops.push({ ...scoop, tick: this.ticks });
     this.liftOut();
+  }
+
+  /**
+   * Another's scoop of `cells` (combat/entrenching.ts packCell), dug in this world as its digger dug
+   * it: held (false) while a crater's region pending overlaps its box, which would undo it or be cut
+   * from the ground before it; else dug (applyScoop) and the body lifted out of anything it slumped
+   * into. A scoop that comes `after` crater id `after` (Destruction.lastId when it was put in order)
+   * is not held by a later crater still queued, which waits for it (Destruction.waits): only by one
+   * of those up to `after`, or one out. It is no event: `events.scoops` stays the player's own, which
+   * the page sends every one of (as fireRemote's shots are remoteShots, never shots), and another's
+   * scoop makes no scrape here.
+   */
+  applyDig(cells: readonly number[], after = Number.POSITIVE_INFINITY): boolean {
+    if (this.destruction.overlapsPendingBy(scoopBox(this.map.dims, cells), after)) return false;
+    applyScoop(this.map, cells, this.entrenching.waterTable);
+    this.liftOut();
+    return true;
   }
 
   /**
@@ -841,11 +905,11 @@ export class Session {
   /**
    * The rifle after the player has moved, in the reference's order: the clocks (the weapon, the
    * recoil scaled by the stance, suppression, the view kick); a reload asked for; a shot from the
-   * eye along the view plus recoil and flinch, the cone widened by stance and suppression (none
-   * through the periscope: its holder is not holding the rifle), which kicks the recoil and then
-   * the view; every round's flight, with near misses heard at the eye; a mark wherever one struck,
-   * and suppression from the cracks and from others' impacts; and last the front's fire, whose
-   * rounds move from the next tick.
+   * eye along the view plus recoil and flinch, the cone widened by stance and suppression (a pellet
+   * gun's pattern about the aim; none through the periscope: its holder is not holding the rifle),
+   * which kicks the recoil and then the view; every round's flight, with near misses heard at the
+   * eye; a mark wherever one struck, and suppression from the cracks and from others' impacts; and
+   * last the front's fire, whose rounds move from the next tick.
    */
   private combat(dt: number): void {
     this.shots.length = 0;
@@ -897,35 +961,45 @@ export class Session {
     if (fires) {
       const aim: [number, number] = [p.yaw + this.recoil.yaw + this.suppression.flinchYaw, p.pitch + this.recoil.pitch + this.suppression.flinchPitch];
       const cone = sway * this.suppression.swayScale;
-      const dir = w.aim(aim[0], aim[1], cone, this.dispersion);
+      // A bullet is drawn within its cone. A pellet gun's pattern is about the aim: its first pellet
+      // leaves along it (the stream still draws, as for any shot), and its word carries the cone's
+      // share, put to its step (net/gear.ts stepShare), by which the others spread.
+      const pellets = w.spec.pellets > 1;
+      const aimed = w.aim(aim[0], aim[1], pellets ? 0 : cone, this.dispersion);
       const projectile = w.spec.projectile;
       const v = projectile.muzzleVelocity;
       const kind = w.tracer() ? teamTracer(this.team) : TRACER_KIND.none;
       const tracer = kind !== TRACER_KIND.none;
+      const mark = encodeShotMark({ tracer, kind, suppressed: arm.spec.suppressed, gun: arm.spec.gun.key, comp: arm.spec.fit.muzzle === 'compensator', ...(pellets ? { share: cone } : {}) });
+      // In a room the shot flies as its words say (net/protocol.ts sent): from the eye to the
+      // millimetre, along the aim to 1e-4, as every other client flies it from them.
+      const words = this.room ? sent({ tick: this.ticks, origin: eye, dir: aimed, tracer, mark }) : null;
+      const origin = words ? words.shot.origin : eye;
+      const dir = words ? words.shot.dir : aimed;
       // The round leaves the eye, so the reticle tells the truth; its tracer, flash and brass the
       // drawn rifle, as it stands before this shot kicks it; the tracer joining the round's path where
       // the shot is aimed (one cast a pull of the trigger: a shotgun's pellets share it), and lit in
       // by a metre from the hip, so a stream reads from the gun, further aimed, clear of the sights.
       const muzzle = this.muzzle();
-      const reach = this.aimRange(0, eye, dir);
+      const reach = this.aimRange(0, origin, dir);
       const [hipM, aimedM] = this.tracerIgnite;
       const drawn = { from: muzzle, convergeM: reach, igniteM: hipM + (aimedM - hipM) * this.aimed };
       // Every round of the pull carries it, as this tick (its shot event's): what it strikes says
       // which pull it was, however long it flies (the range counts a kill's shots by them).
-      if (this.rounds.fire(eye, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, drawn, this.ticks) >= 0) {
-        // A shotgun's other pellets, each the cone's own.
-        for (let k = 1; k < w.spec.pellets; k++) {
-          const d = w.aim(aim[0], aim[1], cone, this.dispersion);
-          this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, drawn, this.ticks);
+      if (this.rounds.fire(origin, [dir[0] * v, dir[1] * v, dir[2] * v], projectile, 0, kind, drawn, this.ticks) >= 0) {
+        // A shotgun's other pellets, about the first by the gun's cone times the share its word says
+        // (the step, stepShare, not the share itself), from the shot's seed, its seat and tick: the
+        // pellets every other client draws for it (combat/weapon.ts pelletDirs).
+        for (const d of pelletDirs(dir, w.spec.pellets - 1, (w.spec.dispersionMoa / 60) * stepShare(cone), pelletSeed(this.seat, this.ticks))) {
+          this.rounds.fire(origin, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, drawn, this.ticks);
         }
         w.shot();
         this.throwShot(muzzle, arm.spec.flash, arm.spec.suppressed);
         const kick = this.recoil.kickPitch;
         this.recoil.shot(this.recoilRng);
         this.viewKick.shot(this.recoil.kickPitch - kick, this.viewKickRng, this.cameraRng);
-        this.shots.push({ origin: eye, dir, aim, tracer });
-        const mark = encodeShotMark({ tracer, kind, suppressed: arm.spec.suppressed, gun: arm.spec.gun.key, comp: arm.spec.fit.muzzle === 'compensator' });
-        this.events.shots.push({ tick: this.ticks, origin: eye, dir, tracer, muzzle, mark, flash: arm.spec.flash, report: arm.spec.report });
+        this.shots.push({ origin, dir, aim, tracer });
+        this.events.shots.push({ tick: this.ticks, origin, dir, tracer, muzzle, mark, flash: arm.spec.flash, report: arm.spec.report, ...(words ? { wire: words.wire } : {}) });
       }
     }
     this.rounds.listen(eye, this.suppression.t.crackRadiusM);
@@ -942,19 +1016,25 @@ export class Session {
     // Rounds into bodies: a puff of the uniform's dust where each struck, and blood, but not out of the player's own.
     for (const hit of this.rounds.bodyHits) {
       this.events.hits.push({ ...hit, tick: this.ticks });
+      // In a room the front's round into the player harms them by its zone (combat/harm.ts), for the room.
+      if (this.room && hit.owner === 1 && hit.body === LOCAL_BODY) this.events.harms.push({ tick: this.ticks, amount: frontHarm(hit.zone, this.harmT), cause: 'round' });
       const { dust } = this.kinds;
       this.particles.emit(hit.position, [-hit.dir[0] * dust.speed, dust.lift, -hit.dir[2] * dust.speed], dust, dust.count, this.particleRng, this.tints[P_KHAKI]);
     }
     this.bleedHits(this.rounds.bodyHits);
     this.spatterHits(this.rounds.bodyHits);
     for (const hit of this.rounds.impacts) {
-      this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
-      if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
+      // In a room the front's rounds chip nothing: each page's front is its own, and the world is
+      // everyone's. Their dust and suppression stay.
+      if (!(this.room && hit.owner === 1)) this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
+      if (hit.owner !== 0 && !hit.silent) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
       this.events.impacts.push({ ...hit, tick: this.ticks });
       this.throwImpact(hit);
     }
-    // The front's rounds are the ones its tick adds to the pool, the last in it.
-    const fired = this.front.tick(dt, eye, this.rounds, this.frontProjectile);
+    // The front's rounds are the ones its tick adds to the pool, the last in it. In a room it fires
+    // to hurt, over the crest at a head it cannot see.
+    this.front.room = this.room;
+    const fired = this.front.tick(dt, eye, this.rounds, this.frontProjectile, this.room ? this.frontSight : undefined);
     for (let slot = this.rounds.count - fired; slot < this.rounds.count; slot++) {
       const v = this.rounds.velocity(slot);
       const speed = hypot(v[0], v[1], v[2]);
@@ -1014,9 +1094,9 @@ export class Session {
 
   /**
    * A voxel ray from `from` to `to` (metres): where it meets solid (metres) a voxel or more short of
-   * `to`, or null if it gets that far. A blast's cover; the front's view of the player is the same ray.
+   * `to`, or null if it gets that far. A blast's cover; in a room, the front's view of the player's head.
    */
-  private sight(from: readonly [number, number, number], to: readonly [number, number, number]): V3 | null {
+  sight(from: readonly [number, number, number], to: readonly [number, number, number]): V3 | null {
     const v = this.voxel;
     const o: V3 = [from[0] / v, from[1] / v, from[2] / v];
     const d = [to[0] / v - o[0], to[1] / v - o[1], to[2] / v - o[2]];

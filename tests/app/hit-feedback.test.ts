@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { HitFeedback, hitFeedbackTunables, type Dropped, type FeedbackMarker } from '../../src/app/hit-feedback';
 import type { FeedbackVoice } from '../../src/audio/plan';
 import { projectileSpec, type BodyHit } from '../../src/combat/ballistics';
+import { frontHarm, harmTunables } from '../../src/combat/harm';
 import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, particleSpec } from '../../src/combat/particles';
 import type { RangeEvent } from '../../src/combat/range';
-import { pose, toWorld, type V3 } from '../../src/combat/soldier-rig';
+import { CHEST, pose, toWorld, type V3 } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
 import { encodeShotMark, gunDamage } from '../../src/net/gear';
 import { DAMAGE } from '../../src/net/match-rules';
@@ -444,6 +445,32 @@ describe('hit feedback', () => {
     const m6 = new FakeMarker();
     expect(new HitFeedback(t, m6).frame(s, { ...none(), hits: [intoPlayer(s, 1)], harms: [shelled(s, 30)] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
     expect(m6.calls).toEqual([['flash', 0.3, NOW]]);
+  });
+
+  it("in a room the front's hit on the player flashes as the harm it sends", () => {
+    const s = field();
+    const p = s.player;
+    const chest = toWorld(pose({ position: p.position.toArray(), yaw: p.yaw, pitch: p.pitch, height: p.height, speed: 0, bob: p.bobPhase, deadFor: null }).torso, CHEST);
+    // The front's round (owner 1) in the chest, from the line ahead: it has no gun, so its estimate is the zone's damage alone.
+    const front = { ...none(), hits: [{ owner: 1, body: LOCAL_BODY, zone: 'torso' as const, position: chest, dir: [0, 0, -1] as V3, distance: 38, tick: s.ticks }] };
+    const harmT = harmTunables(tun);
+    // In a room: 55 × 0.6 = 33, the harm the page sends (combat/harm.ts frontHarm), flashed at 0.33.
+    s.room = true;
+    expect(frontHarm('torso', harmT)).toBe(33);
+    const room = new FakeMarker();
+    expect(new HitFeedback(t, room, harmT.frontDamageScale).frame(s, front, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(room.calls).toEqual([['flash', 0.33, NOW]]);
+    // Not in a room (a test's front at a together session): the front's round is not felt at all,
+    // scaled or not (G3's ruling: in solo play it harms no one), so no flash and no voice.
+    s.room = false;
+    const solo = new FakeMarker();
+    expect(new HitFeedback(t, solo, harmT.frontDamageScale).frame(s, front, NOW)).toEqual([]);
+    expect(solo.calls).toEqual([]);
+    // Another player's round in a room is theirs alone: an AK's chest hit, 55 × 1.05 = 58.
+    s.room = true;
+    const other = new FakeMarker();
+    new HitFeedback(t, other, harmT.frontDamageScale).frame(s, { ...none(), hits: [{ ...front.hits[0], owner: 4, gun: 0 }] }, NOW);
+    expect(other.calls).toEqual([['flash', 0.58, NOW]]);
   });
 
   it("the player's own round never hurts the player", () => {

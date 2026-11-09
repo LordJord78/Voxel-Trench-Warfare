@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bodySphere, hitParts, PART_BOX, PARTS, pose, toLocal, toWorld, type Frame, type PartName, type PoseInput, type V3 } from '../../src/combat/soldier-rig';
+import { bodySphere, CHEST, hitParts, PART_BOX, PARTS, pose, toLocal, toWorld, type Frame, type PartName, type PoseInput, type V3 } from '../../src/combat/soldier-rig';
 import { SETTLE_CONSTANT } from '../../src/combat/spring';
 import { loadTunables } from '../../src/core/tunables';
 
@@ -168,5 +168,19 @@ describe('a body struck', () => {
     expect(across(rest)?.part).toBe('torso');
     expect(across(leaning)?.part).toBe('torso');
     expect(across(leaning)!.t - across(rest)!.t).toBeGreaterThan(0.06);
+  });
+});
+
+describe("a body's chest", () => {
+  it("is the middle of its torso's box, 0.28 m up from the waist, and no one's to move", () => {
+    expect(CHEST).toEqual([0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2));
+    expect(CHEST[1]).toBeCloseTo(0.28, 9);
+    // Shared by the session's blasts and the hit feedback: read only, in its type and in fact.
+    expect(Object.isFrozen(CHEST)).toBe(true);
+    expect(() => {
+      // @ts-expect-error CHEST is read only.
+      CHEST[1] = 0;
+    }).toThrow(TypeError);
+    expect(CHEST[1]).toBeCloseTo(0.28, 9);
   });
 });

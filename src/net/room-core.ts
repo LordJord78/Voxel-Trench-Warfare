@@ -27,6 +27,14 @@
  * not the match's: a rematch on the same map starts on the cratered ground, so it lives until the
  * map changes or the last player leaves, and the shells are numbered on across matches. Past
  * LOG_CHARS_MAX its oldest scoops leave it, never a shell.
+ *
+ * A scoop is the world's for the same reason: from the start of the first match on it until the map
+ * changes, a player's scoop is stamped, logged and relayed in any phase. One sent just before a match
+ * ended reaches the room after it, and its digger has dug it: dropped, it would be in their world
+ * alone, there for the rematch. Between matches each seat's are taken up to LOBBY_DIGS_MAX: every
+ * page holds the lobby's scoops until the next match and digs them all in its first frames, so a
+ * client gone wrong could otherwise stall them all. In every phase a seat's scoops are taken no faster
+ * than DIG_RATE a second (DIG_BURST at once), a little over twice the shovel's fastest.
  */
 
 import { MatchRules, type MatchEvent } from './match-rules';
@@ -55,15 +63,33 @@ const BURST = 120;
 export const MAP_SEEDS: Record<string, number> = { ravine: 7, corridor: 11 };
 /** The log's most characters, counting each entry's JSON and a separator: a welcome stays under protocol.ts ROOM_TEXT_MAX. */
 export const LOG_CHARS_MAX = 900_000;
+/**
+ * The most scoops the room takes from a seat between matches, the rest dropped (neither relayed nor
+ * logged): only scoops in flight when the end reached their digger arrive between matches; a few
+ * round trips of the fastest shovel ([entrenching] scoop_voxels: a scoop each 0.26 s). Counted by
+ * seat until the next match starts or the room empties, so a client that reconnects (to its own
+ * seat, the lowest free) does not start afresh.
+ */
+export const LOBBY_DIGS_MAX = 16;
+/**
+ * The scoops a second a seat may send, in any phase, and how many at once: the shovel's fastest is
+ * about 3.9 a second. Past it a scoop is dropped (neither relayed nor logged) and the socket kept, so
+ * one seat cannot push every honest scoop out of the log (LOG_CHARS_MAX) or make every page dig sixty
+ * a second. The bucket is the seat's, as LOBBY_DIGS_MAX's count is: kept across a reconnect (to its
+ * own seat), so dropping the line does not refill it, and forgotten when the room empties.
+ */
+export const DIG_RATE = 8;
+export const DIG_BURST = 16;
 
-/** The room's log of its world: the shells told and the scoops relayed, their characters, and the next shell's id. */
+/** The room's log of its world: the shells told and the scoops relayed, their characters, the next shell's id, and whether a match has begun on it (from then its scoops are taken). */
 interface RoomLog extends MatchLog {
   chars: number;
   nextId: number;
+  played: boolean;
 }
 
 function emptyLog(): RoomLog {
-  return { shells: [], digs: [], chars: 0, nextId: 1 };
+  return { shells: [], digs: [], chars: 0, nextId: 1, played: false };
 }
 
 interface Member {
@@ -91,6 +117,10 @@ export class RoomCore {
   private shelling: Shelling | null = null;
   private toldS = 0;
   private log: RoomLog = emptyLog();
+  /** Each seat's scoops taken since the last match ended (none counted in a match), by seat id. */
+  private readonly lobbyDigs = new Map<number, number>();
+  /** Each seat's scoops' bucket (DIG_RATE, DIG_BURST): its tokens, and when they were last filled; by seat id, full until it digs. */
+  private readonly digBuckets = new Map<number, { tokens: number; at: number }>();
   /** When a won match goes back to the lobby. */
   private overAt: number | null = null;
   private build: string | null = null;
@@ -117,6 +147,11 @@ export class RoomCore {
     return this.members.size === 0;
   }
 
+  /** The scoops seat `seat` has had taken since the last match ended (LOBBY_DIGS_MAX; for the tests). */
+  lobbyDigsTaken(seat: number): number {
+    return this.lobbyDigs.get(seat) ?? 0;
+  }
+
   open(conn: Conn, now: number): void {
     this.members.set(conn, { conn, seat: null, openedAt: now, joinedAt: now, heardAt: now, saysAway: false, state: null, shots: [], tokens: BURST, tokensAt: now });
   }
@@ -134,6 +169,8 @@ export class RoomCore {
       this.rules = null;
       this.shelling = null;
       this.log = emptyLog();
+      this.lobbyDigs.clear();
+      this.digBuckets.clear();
       this.overAt = null;
       this.build = null;
       this.ownerId = -1;
@@ -219,6 +256,17 @@ export class RoomCore {
     }
   }
 
+  /** Whether seat `id`'s bucket has a scoop's token at `now`, filled at DIG_RATE to DIG_BURST since it was last drawn on: taken if so. */
+  private digTaken(id: number, now: number): boolean {
+    let b = this.digBuckets.get(id);
+    if (!b) this.digBuckets.set(id, (b = { tokens: DIG_BURST, at: now }));
+    b.tokens = Math.min(DIG_BURST, b.tokens + ((now - b.at) / 1000) * DIG_RATE);
+    b.at = now;
+    if (b.tokens < 1) return false;
+    b.tokens -= 1;
+    return true;
+  }
+
   private refuse(m: Member, reason: 'version' | 'full'): void {
     this.send(m, { t: 'refused', reason });
     m.conn.close(1008, reason);
@@ -261,7 +309,17 @@ export class RoomCore {
         if (this.rules && this.match && now >= this.match.startAt) this.apply(this.rules.hurt(seat.id, msg.a, msg.c, now));
         return;
       case 'dig':
-        if (this.phase === 'playing' && this.match && now >= this.match.startAt) {
+        // No faster than a shovel, in any phase: past the seat's bucket (its own across a reconnect), dropped.
+        if (!this.digTaken(seat.id, now)) return;
+        // In any phase once a match has begun on this world (a scoop sent before the end comes after
+        // it); never one of a world the room has left (the map changed since, and no match yet).
+        // Between matches, no more than LOBBY_DIGS_MAX a seat.
+        if (this.log.played) {
+          if (this.phase !== 'playing') {
+            const taken = this.lobbyDigs.get(seat.id) ?? 0;
+            if (taken >= LOBBY_DIGS_MAX) return;
+            this.lobbyDigs.set(seat.id, taken + 1);
+          }
           const d: WireDig = [seat.id, now, ...msg.c];
           this.record(this.log.digs, d);
           this.broadcast({ t: 'dig', d }, m);
@@ -296,6 +354,8 @@ export class RoomCore {
             : new Shelling(SHELL_FIELDS[this.config.map] ?? SHELL_FIELDS.ravine, shellingSeed(this.match.startAt, this.match.seed), this.config.intensity, this.log.nextId);
         this.toldS = 0;
         this.overAt = null;
+        this.log.played = true;
+        this.lobbyDigs.clear();
         for (const s of this.seated()) {
           s.state = null;
           s.shots.length = 0;

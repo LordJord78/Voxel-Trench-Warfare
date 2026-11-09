@@ -73,6 +73,12 @@ describe('the sound of a frame', () => {
     expect(beyond).toEqual([]);
   });
 
+  it("a silent round's impact (another's shot long overdue) is not heard", () => {
+    const near = impact([12, 2, 10], P.SOD);
+    expect(planVoices(t, { ...none(), impacts: [near] }, ear)).toHaveLength(1);
+    expect(planVoices(t, { ...none(), impacts: [{ ...near, silent: true }] }, ear)).toEqual([]);
+  });
+
   it("a frame's events make one voice each", () => {
     const events: CombatEvents = {
       shots: [shot([10.2, 1.8, 11]), shot([10.2, 1.8, 11])],
@@ -198,7 +204,7 @@ describe('the sound of a frame', () => {
 
   it('a scoop is a scrape where it was dug, at scrape_gain', () => {
     expect(t.scrapeGain).toBe(0.5);
-    const scoop = { tick: 1, voxels: 24, at: [10.6, 1.4, 10.8] as [number, number, number] };
+    const scoop = { tick: 1, voxels: 24, at: [10.6, 1.4, 10.8] as [number, number, number], cells: [] };
     const v = planVoices(t, { ...none(), scoops: [scoop, { ...scoop, voxels: 3 }] }, ear);
     expect(v.map((x) => x.kind)).toEqual(['scrape', 'scrape']);
     expect(v[0].at).toEqual(scoop.at);

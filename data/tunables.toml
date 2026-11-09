@@ -229,6 +229,11 @@ substeps_per_tick   = 4        # 240 Hz integration under a 60 Hz tick: a rifle
                                # substep (37 voxels at 10 cm); hits are found
                                # along each substep's segment, not at its end
 pool_capacity       = 256      # rounds in the air at once; full is full
+others_fill         = 0.75     # others' shots (a room's) fill the pool to this
+                               # share of it at most: the rest is the player's
+                               # own and the front's, so a backlog flown at once
+                               # (a catch-up, a tab back from hidden) never
+                               # refuses the player's trigger
 max_range_m         = 400.0    # wider than the 256 m map, so nothing vanishes
                                # mid-flight over open ground
 max_flight_time_s   = 4.0
@@ -253,8 +258,8 @@ move_scale          = 1.0      # its carrier's speed
 # The loadout's other guns (src/combat/arsenal.ts holds their shapes and what fits them). Each is
 # its [weapon.<key>] as the AK's is (the AK-74 is assault_rifle), with the aim's terms: the cone's
 # share aimed (ads_spread), how long the sights take to come up (ads_time_s), how fast its carrier
-# moves (move_scale), and a shotgun's pellets, each of them the cone's own. What a round does to a
-# body is the room's (src/net/gear.ts), so no client can claim more.
+# moves (move_scale), and a shotgun's pellets: the first along the aim, the others about it within
+# the cone. What a round does to a body is the room's (src/net/gear.ts), so no client can claim more.
 [weapon.m4]
 name                = "5.56 carbine"
 muzzle_velocity     = 905.0    # M855 from a 14.5 in barrel
@@ -331,7 +336,7 @@ drag_coefficient    = 0.470    # a sphere
 cross_section_m2    = 0.0000554   # 8.4 mm
 rounds_per_minute   = 75.0     # pumped
 magazine            = 7        # the tube
-dispersion_moa      = 160.0    # each pellet's cone: a 0.9 m spread at 20 m
+dispersion_moa      = 160.0    # the pattern about the aim, × its share's step: 0.93 m out at 20 m from the hip
 reload_time_s       = 4.0      # a full tube's: reload_base_s + 7 × reload_per_round_s
 reload_base_s       = 0.5      # shell by shell: this long first, then
 reload_per_round_s  = 0.5      # this long a shell (the hands lay their pushes out by these)
@@ -339,7 +344,7 @@ automatic           = false
 tracer              = true
 tracer_every        = 1
 pellets             = 9
-ads_spread          = 0.80
+ads_spread          = 0.80     # aimed, put to the step 0.7 (src/net/gear.ts SHOT_SHARES)
 ads_time_s          = 0.22
 move_scale          = 0.96
 
@@ -645,6 +650,18 @@ lethal_radii        = 0.5      # the spec's lethal_m, in the shell's radii
 reach_radii         = 2.2      # the spec's reach_m, in its radii: falling linearly to 0 here
 cover_share         = 0.35     # what is left of it when a voxel ray from it to the chest is blocked
 front_damage_scale  = 0.6      # the front's round: its zone's damage (net/match-rules DAMAGE) times this
+crest_clear_m       = 0.3      # the front at a player whose head its muzzle cannot see (combat/front.ts):
+                               # the round crosses where its sight was stopped this far over it (aimed
+                               # higher by its own fall, 0.26 m at the Corridor's 185 m), scattered
+                               # sideways only, so it cracks over the crest and does not hit
+sight_near_m        = 3.0      # its sight stopped nearer its muzzle than this is no stop: a muzzle in
+                               # the ground (spoil heaped over its bay) fires at the head, into what
+                               # it is in, not steeply up or sideways over a crest at its own mouth
+# The page's battle on the match's clock (src/app/battle-clock.ts): one behind it by more than
+# net/clock.ts SILENT_STEP_S (a tab back from hidden) catches up silently, a SILENT_STEP_S chunk at a
+# time at that second's dark, spread over frames. Not copied into SHELLING: the room runs no Director.
+catch_up_chunks     = 4        # chunks a frame at most: a dark heavy second is 60 Director steps of
+                               # up to 20 µs, so about 5 ms; a 20-minute absence is 5 s of frames
 
 [range]
 # Solo play's firing range (the shots spec's §5, combat/range.ts): dummies and

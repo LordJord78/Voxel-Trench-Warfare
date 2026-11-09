@@ -3,7 +3,7 @@ import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
 import { Destruction, destructionTunables, inProcessRunner, type DetonationRunner } from '../../src/sim/destruction';
 import { chip, detonate } from '../../src/world/destruction';
-import { runDetonation, type DetonationRequest, type DetonationResult } from '../../src/world/detonation';
+import { detonationRegion, runDetonation, type DetonationRequest, type DetonationResult } from '../../src/world/detonation';
 import { P } from '../../src/world/materials';
 import { groundTop } from '../../src/world/raycast';
 import { sameWorld, shellOptions, trenchArena } from '../support/worlds';
@@ -196,6 +196,69 @@ describe('the destruction queue', () => {
     };
     const d = new Destruction(map, runner, t());
     d.shell(CREST, 30, 11);
+    expect(land(d).craters.length).toBe(1);
+    expect(posted.map((r) => r.copy.size)).toEqual([posted[0].copy.size, [32, 16, 32]]);
+    expect(sameWorld(inPlace, map)).toBe(true);
+  });
+
+  it('a shell waits to go out while `waits` holds it, and so does every one behind it', () => {
+    // Two shells at the arena's ends, their regions apart: the second waits for the first all the same,
+    // as behind a region out, so craters go out in the order they were shelled on every client.
+    const map = trenchArena();
+    const runner = heldRunner();
+    const d = new Destruction(map, runner, t());
+    expect(d.lastId).toBe(0);
+    const west = d.shell([20, 64, 150], 3, 21);
+    const east = d.shell([236, 64, 150], 3, 22);
+    expect(d.lastId).toBe(east);
+    const [wBox, eBox] = [20, 236].map((x) => detonationRegion(map.dims, [x, 64, 150], 3, t().options.loosen)!);
+    expect(wBox.x1 <= eBox.x0).toBe(true);
+    let holding = true;
+    const asked: number[] = [];
+    d.waits = (id, box) => {
+      asked.push(id);
+      expect(box).toEqual(id === west ? wBox : eBox);
+      return holding && id === west;
+    };
+    d.tick();
+    d.tick();
+    expect(runner.posted).toEqual([]);
+    expect(asked).toEqual([west, west]);
+    expect(d.pending).toBe(2);
+    // A shell's region, while it is queued, is ground pending only to what comes after it (`upTo` its
+    // id or later); out, it is pending to everything, as its bricks will come back over it.
+    expect([d.overlapsPendingBy(wBox, west), d.overlapsPendingBy(wBox, west - 1), d.overlapsPendingBy(eBox, west)]).toEqual([true, false, false]);
+    holding = false;
+    d.tick();
+    expect(runner.posted.map((r) => r.id)).toEqual([west, east]);
+    expect([d.overlapsPendingBy(wBox, 0), d.overlapsPendingBy(eBox, 0)]).toEqual([true, true]);
+    runner.release();
+    expect(land(d, 2).craters.map((c) => c.id)).toEqual([west, east]);
+    expect(d.pending).toBe(0);
+  });
+
+  it('a job asking for a wider region that `waits` holds goes back to wait, and out again once let go', () => {
+    const inPlace = trenchArena();
+    detonate(inPlace, ...CREST, 30, Rng.root(11), shellOptions());
+    const map = trenchArena();
+    const posted: DetonationRequest[] = [];
+    const done: DetonationResult[] = [];
+    const runner: DetonationRunner = {
+      post: (req) => {
+        posted.push(req);
+        done.push(posted.length === 1 ? { id: req.id, wider: { x0: 0, y0: 0, z0: 0, x1: 256, y1: 128, z1: 256 } } : runDetonation(req));
+      },
+      take: () => done.splice(0),
+    };
+    const d = new Destruction(map, runner, t());
+    d.shell(CREST, 30, 11);
+    let holding = true;
+    // Its first region goes out; the wider one it asks for is held.
+    d.waits = (_, box) => holding && box.x1 - box.x0 === 256;
+    for (let k = 0; k < 5; k++) d.tick();
+    expect(posted).toHaveLength(1);
+    expect([d.pending, d.out.length]).toEqual([1, 0]);
+    holding = false;
     expect(land(d).craters.length).toBe(1);
     expect(posted.map((r) => r.copy.size)).toEqual([posted[0].copy.size, [32, 16, 32]]);
     expect(sameWorld(inPlace, map)).toBe(true);

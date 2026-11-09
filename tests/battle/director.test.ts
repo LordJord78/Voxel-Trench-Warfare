@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HORIZON_FLASHES } from '../../src/battle/barrages';
-import { battleDarkness, Director, type BattleEvents, type BattleInputs, type DistantShell } from '../../src/battle/director';
+import { battleDarkness, Director, type BattleEvents, type BattleInputs, type DistantShell, type Strike } from '../../src/battle/director';
 import { tracerAt, tracerTunables } from '../../src/battle/tracers';
 import { fireTunables } from '../../src/battle/fires';
 import { waterTunables } from '../../src/battle/water';
@@ -545,6 +545,92 @@ describe('the fires', () => {
     const onB = seeded(b, 230);
     expect(onA.length).toBeGreaterThanOrEqual(3);
     expect(onA).toEqual(onB);
+  });
+
+  it("two Directors that light the hamlet at the same match time light it at the same sizes, whatever they drew before; each lighting has its own", () => {
+    // In a room every client's Director lights the hamlet at the match's nightfall. A saw only the
+    // dark come and go: night at 30 s, day at 90 s, night again at 200 s. B, a client with another
+    // history, was struck on timber by seeded shells (5–14 s) and unseeded ones (15–24 s), their
+    // fires crackling; and its tab was hidden across the first dusk, so it came back to the night
+    // in one tick across it from 25 s, lighting the hamlet then, not at 30 s. Then the same frames.
+    const frames = (d: Director, from: number, to: number, darkness: number, strikes?: (s: number) => Strike[]) => {
+      for (let k = Math.round(from * 60); k < Math.round(to * 60); k++) d.tick(1 / 60, { intensity: 'light', darkness, player, strikes: strikes?.(k / 60) ?? [] });
+    };
+    const hamlet = (d: Director) => d.fires().filter((f) => f.hamlet).map((f) => [f.at, f.size]);
+    const a = new Director(plan, tun, 7);
+    frames(a, 0, 30, 0);
+    frames(a, 30, 31, 1);
+    const firstA = hamlet(a);
+    frames(a, 31, 90, 1);
+    const b = new Director(plan, tun, 7);
+    const struck = (seeded: boolean) => (s: number) => (Number.isInteger(s) ? [{ ...strike(P.TIMBER, 10 + s * 9, null), ...(seeded ? { seed: 500 + s } : {}) }] : []);
+    frames(b, 0, 15, 0, struck(true));
+    frames(b, 15, 25, 0, struck(false));
+    expect(b.fires().filter((f) => !f.hamlet).length).toBeGreaterThan(1);
+    b.tick(6, { intensity: 'light', darkness: 1, player });
+    expect(hamlet(b).length).toBeGreaterThan(0);
+    frames(b, 31, 90, 1);
+    expect(hamlet(b)).toEqual(firstA);
+    for (const d of [a, b]) {
+      frames(d, 90, 200, 0);
+      expect(hamlet(d)).toEqual([]);
+      frames(d, 200, 201, 1);
+    }
+    expect(hamlet(a).length).toBeGreaterThanOrEqual(fireT.hamletFires[0]);
+    expect(hamlet(b)).toEqual(hamlet(a));
+    // The second nightfall's fires stand where the first's did, at sizes of their own.
+    expect(hamlet(a).map((f) => f[0])).toEqual(firstA.map((f) => f[0]));
+    expect(hamlet(a).map((f) => f[1])).not.toEqual(firstA.map((f) => f[1]));
+  });
+
+  it('an unseeded strike after seeded ones lights the same as on a Director that never saw them', () => {
+    // A is struck on timber by ten seeded shells, one a second, and its fires crackle; B by none. Then,
+    // at 20 s, both by the same ten unseeded shells: they draw from the fires' own stream, which
+    // neither a seeded strike nor a crackle touches.
+    const day = (strikes: Strike[] = []): BattleInputs => ({ intensity: 'light', darkness: 0, player, strikes });
+    const a = new Director(plan, tun, 7);
+    const b = new Director(plan, tun, 7);
+    for (let k = 0; k < 20 * 60; k++) {
+      const s = k / 60;
+      a.tick(1 / 60, day(k % 60 === 0 && s < 10 ? [{ ...strike(P.TIMBER, 20 + s * 9, null), seed: 900 + s }] : []));
+      b.tick(1 / 60, day());
+    }
+    expect(a.fires().length).toBeGreaterThan(0);
+    expect(b.fires()).toEqual([]);
+    const unseeded = Array.from({ length: 10 }, (_, i) => strike(P.TIMBER, 150 + i * 7, null));
+    const lit = (d: Director) => {
+      const at = new Set(d.tick(1 / 60, day(unseeded)).fires.map((f) => f.at.join()));
+      d.tick(fireT.growS, day());
+      return d.fires().filter((f) => at.has(f.at.join())).map((f) => [f.at, f.size, f.strength]);
+    };
+    const onB = lit(b);
+    expect(onB.length).toBeGreaterThan(0);
+    expect(lit(a)).toEqual(onB);
+  });
+
+  it("a room's strike stands its fire from the second its shell landed (atS), however late it is given; never from later than now", () => {
+    // Seed 900 lights timber (above). It is given at 5 s saying it landed then, and at 8 s saying the
+    // same; and at 5 s saying 9 s, after the battle's now, which is as one saying nothing: from now.
+    const day = (strikes: Strike[] = []): BattleInputs => ({ intensity: 'light', darkness: 0, player, strikes });
+    const struck = (atS?: number): Strike => ({ ...strike(P.TIMBER, 60, null), seed: 900, ...(atS === undefined ? {} : { atS }) });
+    const run = (givenAt: number, atS?: number) => {
+      const d = new Director(plan, tun, 7);
+      const chars: number[] = [];
+      for (let k = 0; k < 40 * 60; k++) {
+        const e = d.tick(1 / 60, day(k === givenAt * 60 ? [struck(atS)] : []));
+        if (e.chars.length > 0) chars.push(d.seconds);
+        if (k === 12 * 60) chars.push(d.fires()[0].strength);
+      }
+      return chars;
+    };
+    const a = run(5, 5);
+    expect(a).toHaveLength(2);
+    expect(run(8, 5)).toEqual(a);
+    // Its char at its full burn, grow_s after its landing.
+    expect(a[1]).toBeCloseTo(5 + fireT.growS, 1);
+    const now = run(5);
+    expect(now).not.toEqual(a);
+    expect(run(5, 9)).toEqual(now);
   });
 });
 

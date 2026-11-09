@@ -22,7 +22,7 @@
  * The far field is not hit.
  */
 
-import { hypot } from '../core/dmath';
+import { exp, hypot } from '../core/dmath';
 import type { Tunables } from '../core/tunables';
 import type { BrickMap } from '../world/bricks';
 import { raycast, type WaterEntry } from '../world/raycast';
@@ -167,6 +167,8 @@ export interface Impact {
   kind: number;
   /** A tracer round's draw (StrikeDraw); none for a round that burns no tracer. */
   draw?: StrikeDraw;
+  /** A silent round's (Rounds.fire): its strike suppresses no one, and is not heard. */
+  silent?: true;
 }
 
 export class Rounds {
@@ -212,6 +214,8 @@ export class Rounds {
   private readonly nearMiss: Float64Array;
   private readonly nearAt: Float64Array;
   private readonly heard: Uint8Array;
+  /** Whether each round flies silent: it cracks nothing and passes unheard. */
+  private readonly silent: Uint8Array;
   private readonly specs: ProjectileSpec[] = [];
   private readonly size: [number, number, number];
 
@@ -236,7 +240,13 @@ export class Rounds {
     this.nearMiss = new Float64Array(n);
     this.nearAt = new Float64Array(n * 3);
     this.heard = new Uint8Array(n);
+    this.silent = new Uint8Array(n);
     this.size = [map.dims.x * voxel, map.dims.y * voxel, map.dims.z * voxel];
+  }
+
+  /** Rounds the pool has room for now. */
+  get room(): number {
+    return this.t.capacity - this.count;
   }
 
   /**
@@ -245,9 +255,10 @@ export class Rounds {
    * is full or the velocity is zero. `tracer` is true (the battle's amber), false, or a kind
    * (net/gear.ts TRACER_KIND: 0 none, 2 red, 3 blue). `shot` numbers the pull of the trigger it
    * leaves on (0 or more; a shotgun's pellets share one), for the body it strikes to say
-   * (BodyHit.shot); not given, its hit says none.
+   * (BodyHit.shot); not given, its hit says none. `silent`: it cracks nothing and passes unheard (born
+   * heard), and its strikes say so (Impact.silent): another's shot long overdue, flown for its chips.
    */
-  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean | number, drawn: TracerDraw = {}, shot = NO_SHOT): number {
+  fire(origin: readonly [number, number, number], velocity: readonly [number, number, number], spec: ProjectileSpec, owner: number, tracer: boolean | number, drawn: TracerDraw = {}, shot = NO_SHOT, silent = false): number {
     if (velocity[0] === 0 && velocity[1] === 0 && velocity[2] === 0) return -1;
     if (this.count >= this.t.capacity) {
       this.dropped++;
@@ -269,12 +280,30 @@ export class Rounds {
     this.ignite[i] = drawn.igniteM ?? UNSET;
     this.shot[i] = shot;
     this.nearMiss[i] = Infinity;
-    this.heard[i] = 0;
+    this.heard[i] = silent ? 1 : 0;
+    this.silent[i] = silent ? 1 : 0;
     return i;
   }
 
   isTracer(slot: number): boolean {
     return this.tracer[slot] !== 0;
+  }
+
+  /**
+   * How far a round of `spec` falls below the line it leaves on by `rangeM` along it (m), in this
+   * pool's air: its own gravity and quadratic drag, solved for a flat shot. Its speed decays as
+   * e^(−ks) over s, k = dragFactor · air density, and the fall's drag with it, so it falls
+   *
+   *     |g| · (e^(2ks) − 1 − 2ks) / (4 k² v0²)
+   *
+   * which is |g| s² / 2v0² with no drag. Integrated in substeps (step), a round falls a few mm more
+   * by 200 m. The front aims over a crest by it (front.ts).
+   */
+  dropM(spec: ProjectileSpec, rangeM: number): number {
+    const x = 2 * spec.dragFactor * this.t.airDensity * rangeM;
+    // (e^x − 1 − x) / (x²/2): 1 with no drag; its series where x is too small to take it directly.
+    const r = x > 1e-3 ? (2 * (exp(x) - 1 - x)) / (x * x) : 1 + x / 3;
+    return (-this.t.gravity * rangeM * rangeM * r) / (2 * spec.muzzleVelocity * spec.muzzleVelocity);
   }
 
   /** Who hears near misses: the player's eye (metres), within `radiusM`; null, no one. */
@@ -371,7 +400,7 @@ export class Rounds {
     this.age[i] += h;
     // A crack is measured along the substep's whole segment, as the reference does, even where it
     // strikes partway: a round covers metres a substep, and either end alone would miss most.
-    if (this.owner[i] !== 0 && this.listener) {
+    if (this.owner[i] !== 0 && this.listener && !this.silent[i]) {
       const [lx, ly, lz] = this.listener;
       const ax = this.pos[p];
       const ay = this.pos[p + 1];
@@ -436,6 +465,7 @@ export class Rounds {
           dir,
           kind: this.tracer[i],
           ...(this.tracer[i] ? { draw: this.strikeDraw(i, speed) } : {}),
+          ...(this.silent[i] ? { silent: true as const } : {}),
         });
         // Stopped before it passed: heard as near as it came.
         this.hearPass(i);
@@ -495,5 +525,6 @@ export class Rounds {
     this.nearMiss[i] = this.nearMiss[last];
     this.nearAt.copyWithin(i * 3, last * 3, last * 3 + 3);
     this.heard[i] = this.heard[last];
+    this.silent[i] = this.silent[last];
   }
 }

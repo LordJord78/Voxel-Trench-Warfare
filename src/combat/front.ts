@@ -15,10 +15,22 @@
  * leaves from where the source says (an enemy bay's crest in a generated
  * world; a line at a set distance in a test's), and its scatter is taken
  * across its line of fire, so a bay far along the line scatters as one
- * straight ahead does.
+ * straight ahead does. Each is aimed higher by its own fall that far
+ * (Rounds.dropM), so the scatter is about the head, and light's ring that far
+ * from it, where the rounds pass: at the Corridor's 185 m a round falls 0.26 m.
+ *
+ * In a room (the shared-battle spec's "The front in a room", `room`) it fires
+ * to hurt: light's rounds are scattered about the head as heavy's are, at
+ * light's own rate. And it fires where it can see: given a sight, a round whose
+ * muzzle cannot see the head is aimed `crest_clear_m` over where that sight was
+ * stopped, and higher by its own fall that far, so it crosses there
+ * `crest_clear_m` over at any range; scattered sideways only, it cracks over
+ * the crest in front of the player and does not hit them. A sight stopped
+ * within `sight_near_m` of the muzzle is no stop: a muzzle in the ground fires
+ * at the head, into what it is in, not steeply over a crest at its mouth.
  */
 
-import { cos, log, sin } from '../core/dmath';
+import { cos, hypot, log, sin } from '../core/dmath';
 import type { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import type { WorldPlan } from '../world/generation/plan';
@@ -37,6 +49,10 @@ export interface FrontTunables {
   spreadM: number;
   spreadVertical: number;
   reachM: number;
+  /** [room_battle]: how far over where its sight was stopped a round at a player it cannot see crosses it (m); it is aimed higher by its fall. */
+  crestClearM: number;
+  /** [room_battle]: a sight stopped nearer its muzzle than this (m) is no stop (a muzzle in the ground). */
+  sightNearM: number;
 }
 
 export function frontTunables(tun: Tunables): FrontTunables {
@@ -51,20 +67,29 @@ export function frontTunables(tun: Tunables): FrontTunables {
     spreadM: tun.f('front.spread_m'),
     spreadVertical: tun.f('front.spread_vertical'),
     reachM: tun.f('front.reach_m'),
+    crestClearM: tun.f('room_battle.crest_clear_m'),
+    sightNearM: tun.f('room_battle.sight_near_m'),
   };
 }
 
 /** Where the front fires from at `target` (metres): a muzzle, or null to hold fire. */
 export type FrontSource = (target: readonly [number, number, number], rng: Rng) => [number, number, number] | null;
 
+/** What a muzzle at `from` sees of `to` (metres): null if all of the way, or where its view was stopped. */
+export type FrontSight = (from: readonly [number, number, number], to: readonly [number, number, number]) => [number, number, number] | null;
+
 /** The reference's rig, for a world without a plan: a line `rangeM` off along +z, rounds 0.4–1.2 m over `groundY`. */
 export function lineSource(rangeM: number, groundY: number): FrontSource {
   return (target, rng) => [target[0] + rng.uniform(-20, 20), groundY + rng.uniform(0.4, 1.2), target[2] + rng.uniform(0.7 * rangeM, rangeM)];
 }
 
-/** A generated world's enemy front line: a bay within `reachM` of the target along the line, the round from 0.4–1.2 m over its crest. */
-export function planSource(plan: WorldPlan, reachM: number): FrontSource {
-  const line = plan.lines.find((l) => l.spec.side === 1 && l.spec.firingSteps);
+/**
+ * A generated world's front line of `side` (its fire trench; the enemy's, side 1, by default): a bay
+ * within `reachM` of the target along the line, the round from 0.4–1.2 m over its crest at the
+ * trench's front edge.
+ */
+export function planSource(plan: WorldPlan, reachM: number, side: 0 | 1 = 1): FrontSource {
+  const line = plan.lines.find((l) => l.spec.side === side && l.spec.firingSteps);
   const v = plan.params.voxel;
   return (target, rng) => {
     if (!line) return null;
@@ -85,6 +110,8 @@ const TAU = 2 * Math.PI;
 
 export class Front {
   intensity: Intensity = 'off';
+  /** In a room: light's rounds aimed to hit, as heavy's are. The session sets it each tick. */
+  room = false;
   /** Time to the next round, and where a burst is: rounds left in it. */
   private wait = 0;
   private burstLeft = 0;
@@ -92,12 +119,17 @@ export class Front {
 
   constructor(
     readonly t: FrontTunables,
-    private readonly source: FrontSource,
+    /** Where it fires from: the session moves it to the line across from the player's team (Session.frontFrom). */
+    public source: FrontSource,
     private readonly rng: Rng,
   ) {}
 
-  /** One tick: the rounds this intensity owes, fired at `target` into `rounds`; how many left. */
-  tick(dt: number, target: readonly [number, number, number], rounds: Rounds, spec: ProjectileSpec): number {
+  /**
+   * One tick: the rounds this intensity owes, fired at `target` (the head) into `rounds`; how many
+   * left. With a `sight` (in a room), a round whose muzzle cannot see the head goes over the crest,
+   * unless what stops its sight is within sight_near_m of the muzzle.
+   */
+  tick(dt: number, target: readonly [number, number, number], rounds: Rounds, spec: ProjectileSpec, sight?: FrontSight): number {
     let shots = 0;
     if (this.intensity === 'light') {
       // Due now, then the tick passes: the next no sooner than light_gap_s, the rest drawn.
@@ -125,7 +157,9 @@ export class Front {
     for (let k = 0; k < shots; k++) {
       const origin = this.source(target, this.rng);
       if (!origin) continue;
-      const aim = this.aimAt(origin, target);
+      const stop = sight ? sight(origin, target) : null;
+      const stopped = stop && hypot(stop[0] - origin[0], stop[1] - origin[1], stop[2] - origin[2]) >= this.t.sightNearM ? stop : null;
+      const aim = stopped ? this.overCrest(origin, target, stopped, rounds, spec) : this.aimAt(origin, target, rounds, spec);
       const d = [aim[0] - origin[0], aim[1] - origin[1], aim[2] - origin[2]];
       const len = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
       if (!(len > 0)) continue;
@@ -144,19 +178,22 @@ export class Front {
 
   /**
    * Where a round from `origin` is aimed: about the head, across the line of fire — sideways
-   * (level) and up. Heavy scatters within ±spread_m by ±spread_vertical of it; light picks a
-   * point on the ring light_miss_m to light_miss_m + spread_m out, so it passes no nearer.
+   * (level) and up. Heavy scatters within ±spread_m by ±spread_vertical of it; light, solo, picks a
+   * point on the ring light_miss_m to light_miss_m + spread_m out, so it passes no nearer; in a
+   * room, light scatters as heavy does. The point is raised by as much as the round of `spec` falls
+   * by it (Rounds.dropM), so in flight it passes there: the scatter about the head, the ring its
+   * distance from it.
    */
-  private aimAt(origin: readonly [number, number, number], target: readonly [number, number, number]): [number, number, number] {
+  private aimAt(origin: readonly [number, number, number], target: readonly [number, number, number], rounds: Rounds, spec: ProjectileSpec): [number, number, number] {
     const f = [target[0] - origin[0], target[1] - origin[1], target[2] - origin[2]];
     const level = Math.sqrt(f[0] * f[0] + f[2] * f[2]);
     const len = Math.sqrt(level * level + f[1] * f[1]);
     if (!(len > 0)) return [target[0], target[1], target[2]];
-    const side = level > 1e-9 ? [f[2] / level, 0, -f[0] / level] : [1, 0, 0];
+    const side = sideways(f, level);
     const up = [(f[1] * side[2] - f[2] * side[1]) / len, (f[2] * side[0] - f[0] * side[2]) / len, (f[0] * side[1] - f[1] * side[0]) / len];
     let across: number;
     let rise: number;
-    if (this.intensity === 'light') {
+    if (this.intensity === 'light' && !this.room) {
       const r = this.rng.uniform(this.t.lightMissM, this.t.lightMissM + this.t.spreadM);
       const turn = this.rng.uniform(0, TAU);
       across = r * cos(turn);
@@ -165,6 +202,29 @@ export class Front {
       across = this.rng.uniform(-this.t.spreadM, this.t.spreadM);
       rise = this.rng.uniform(-this.t.spreadVertical * this.t.spreadM, this.t.spreadVertical * this.t.spreadM);
     }
-    return [target[0] + side[0] * across + up[0] * rise, target[1] + side[1] * across + up[1] * rise, target[2] + side[2] * across + up[2] * rise];
+    const at = [target[0] + side[0] * across + up[0] * rise, target[1] + side[1] * across + up[1] * rise, target[2] + side[2] * across + up[2] * rise];
+    const fall = rounds.dropM(spec, hypot(at[0] - origin[0], at[1] - origin[1], at[2] - origin[2]));
+    return [at[0], at[1] + fall, at[2]];
   }
+
+  /**
+   * Where a round from `origin` is aimed at a head it cannot see, its sight stopped at `stopped`:
+   * crest_clear_m over that point and as much again as the round of `spec` falls by it
+   * (Rounds.dropM), so in flight it crosses the stop crest_clear_m over it at any range; scattered
+   * sideways (level, across the line of fire) within ±spread_m and not up or down, so it clears the
+   * crest and cracks over the player. Aimed straight at crest_clear_m, at the Corridor's 185 m it
+   * would fall 0.26 m of the 0.3: into the crest, or over it through the head behind it.
+   */
+  private overCrest(origin: readonly [number, number, number], target: readonly [number, number, number], stopped: readonly [number, number, number], rounds: Rounds, spec: ProjectileSpec): [number, number, number] {
+    const f = [target[0] - origin[0], target[1] - origin[1], target[2] - origin[2]];
+    const side = sideways(f, Math.sqrt(f[0] * f[0] + f[2] * f[2]));
+    const across = this.rng.uniform(-this.t.spreadM, this.t.spreadM);
+    const fall = rounds.dropM(spec, hypot(stopped[0] - origin[0], stopped[1] - origin[1], stopped[2] - origin[2]));
+    return [stopped[0] + side[0] * across, stopped[1] + this.t.crestClearM + fall, stopped[2] + side[2] * across];
+  }
+}
+
+/** The unit direction level and square to the line of fire `f` (`level`, its length over the ground); +x for a line straight up or down. */
+function sideways(f: readonly number[], level: number): [number, number, number] {
+  return level > 1e-9 ? [f[2] / level, 0, -f[0] / level] : [1, 0, 0];
 }

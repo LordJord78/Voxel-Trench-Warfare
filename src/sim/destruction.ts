@@ -20,6 +20,11 @@
  * A shell on the ground (in a room) is cut where the ground is when its job goes out, not where it
  * was when it landed: by then every earlier crater that overlaps it is in, so every client cuts it
  * from the same ground however late its worker hands craters back, and says what it struck there.
+ *
+ * In a room, a shell also waits to go out while `waits` holds it: another's scoop that came before
+ * it, still to be dug over its region (sim/room-battle.ts), so its crater is copied with that scoop
+ * in, as its digger's was. Until it goes out a shell has copied nothing, so ground it alone has
+ * queued is pending only to what comes after it (`overlapsPendingBy`).
  */
 
 import type { Tunables } from '../core/tunables';
@@ -28,7 +33,7 @@ import { chip, type DetonateOptions } from '../world/destruction';
 import { detonationRegion, runDetonation, type DetonationRequest, type DetonationResult } from '../world/detonation';
 import { P } from '../world/materials';
 import { groundTop } from '../world/raycast';
-import type { Box } from '../world/region';
+import { overlapXZ, type Box } from '../world/region';
 import { applyPatch, copyRegion, type BrickPatch } from '../world/region-copy';
 
 /** Where a crater's job runs: post it, and take what has come back since. */
@@ -105,13 +110,17 @@ interface Job {
 /** A job's crater, `bricks` written: what it struck, if it was cut on the ground. */
 const crater = (j: Job, bricks: number): Crater => ({ id: j.id, centre: j.centre, radius: j.radius, bricks, ...(j.material === undefined ? {} : { material: j.material }) });
 const inside = (b: Box, x: number, y: number, z: number) => x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1 && z >= b.z0 && z < b.z1;
-const overlap = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
 
 export class Destruction {
   /** Queued, out or landing, in the order they were shelled. */
   private readonly jobs: Job[] = [];
   /** Bricks the last tick wrote into the world. */
   written = 0;
+  /**
+   * Whether shell `id`'s job, over `box`, waits to go out: in a room, while a scoop before it is still
+   * to be dug there (sim/room-battle.ts). Like a region out, it holds every shell behind it too.
+   */
+  waits: (id: number, box: Box) => boolean = () => false;
   /** The craters whose cuts the last tick finished writing (their settling still to come). */
   cuts: Crater[] = [];
   private nextId = 1;
@@ -127,6 +136,20 @@ export class Destruction {
     return this.jobs.length;
   }
 
+  /** The id the last shell was given (0 before any): every shell after it has a greater one. */
+  get lastId(): number {
+    return this.nextId - 1;
+  }
+
+  /**
+   * The oldest shell still pending, and how it stands: queued, out or landing; null with none. Every
+   * shell after it goes out behind it or beside it, so a wait that never ends is its.
+   */
+  get oldest(): { id: number; state: 'queued' | 'out' | 'landing' } | null {
+    const j = this.jobs[0];
+    return j ? { id: j.id, state: j.state } : null;
+  }
+
   /** The regions out now. */
   get out(): readonly Box[] {
     return this.jobs.filter((j) => j.state !== 'queued').map((j) => j.box);
@@ -134,12 +157,22 @@ export class Destruction {
 
   /** Whether `box` reaches into a region out now: an edit there would be undone when its bricks come back. */
   overlapsOut(box: Box): boolean {
-    return this.jobs.some((j) => j.state !== 'queued' && overlap(j.box, box));
+    return this.jobs.some((j) => j.state !== 'queued' && overlapXZ(j.box, box));
   }
 
   /** Whether `box` reaches into the region of a shell queued, out or landing: ground a crater is still to be cut from. */
   overlapsPending(box: Box): boolean {
-    return this.jobs.some((j) => overlap(j.box, box));
+    return this.jobs.some((j) => overlapXZ(j.box, box));
+  }
+
+  /**
+   * Whether `box` reaches into the region of a shell pending to an edit that comes after shell `upTo`:
+   * one of id `upTo` or less, queued, out or landing; or a later one out or landing, whose bricks
+   * would come back over the edit. A later one still queued has copied nothing yet (and `waits` keeps
+   * it so, while the edit is held there).
+   */
+  overlapsPendingBy(box: Box, upTo: number): boolean {
+    return this.jobs.some((j) => (j.id <= upTo || j.state !== 'queued') && overlapXZ(j.box, box));
   }
 
   /**
@@ -172,7 +205,7 @@ export class Destruction {
       if (!j || j.state !== 'out') continue;
       if ('wider' in r) {
         j.box = r.wider;
-        if (this.jobs.some((o) => o !== j && o.state !== 'queued' && overlap(o.box, j.box))) {
+        if (this.waits(j.id, j.box) || this.jobs.some((o) => o !== j && o.state !== 'queued' && overlapXZ(o.box, j.box))) {
           j.state = 'queued';
           this.makeHeld(j);
         } else this.post(j);
@@ -202,10 +235,10 @@ export class Destruction {
       landed.push(crater(j, j.patches.length - (j.cutEnd ?? 0)));
     }
     for (const c of landed) this.jobs.splice(this.jobs.findIndex((j) => j.id === c.id), 1);
-    // In order: the first that would overlap a region out waits, and every one behind it.
+    // In order: the first that would overlap a region out, or that `waits` holds, waits, and every one behind it.
     for (const j of this.jobs) {
       if (j.state !== 'queued') continue;
-      if (this.jobs.some((o) => o !== j && o.state !== 'queued' && overlap(o.box, j.box))) break;
+      if (this.waits(j.id, j.box) || this.jobs.some((o) => o !== j && o.state !== 'queued' && overlapXZ(o.box, j.box))) break;
       this.post(j);
     }
     return landed;

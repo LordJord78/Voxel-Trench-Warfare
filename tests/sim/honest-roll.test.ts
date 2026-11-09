@@ -217,7 +217,8 @@ describe("the camera's roll and shake", () => {
     free.rolls.forEach((roll, k) => expect(roll, `tick ${k}`).toBeCloseTo(free.sums[k], 12));
     expect(Math.max(...free.rolls.map(Math.abs))).toBeGreaterThan(bound);
     expect(free.shots.map((e) => [e.origin, e.dir])).toEqual(held.shots.map((e) => [e.origin, e.dir]));
-    // Its pellets, the cone widened by suppression: many strike the floor ahead, the rest leave the map.
+    // Its pellets, about the aim within the gun's cone times its share, which suppression widens
+    // (past the top step, 2.8): many strike the floor ahead, the rest leave the map.
     expect(held.shots).toHaveLength(7);
     expect(held.impacts.length).toBeGreaterThan(3 * held.shots.length);
     expect(free.impacts).toEqual(held.impacts);

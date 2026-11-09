@@ -20,6 +20,18 @@ export const CLIENT_TEXT_MAX = 4096;
 export const ROOM_TEXT_MAX = 1 << 20;
 /** The most cells one scoop may carry. */
 export const DIG_CELLS_MAX = 64;
+/**
+ * The world's size in voxels, the same for every map: a scoop's cells are packed in it. Pinned here,
+ * as shell-fields.ts pins the fields, because the relay cannot generate a world; tests/net/protocol.test.ts
+ * holds it to both maps' generated dims.
+ */
+export const WORLD_DIMS = { x: 2560, y: 320, z: 2560 } as const;
+/**
+ * The most voxels across a scoop's cells may span on any axis: the shovel takes its voxels within
+ * ceil(reach_m / voxel) of a point (combat/entrenching.ts scan), so an honest scoop is at most 33
+ * across; this is 2·ceil(reach_m / voxel) + 4, held to [entrenching] reach_m by tests/net/protocol.test.ts.
+ */
+export const DIG_SPAN_MAX = 36;
 /** The most a hurt's amount may be: the most the battle does at once. */
 export const HURT_MAX = 200;
 export const MAX_PLAYERS = 8;
@@ -85,7 +97,7 @@ export const STATE = { ON_GROUND: 1, FIRING: 2, RELOADING: 4, DIGGING: 8, CLIMBI
 
 export type WireState = number[];
 
-/** A shot as others need it: the sender's tick, where it left (the eye) and which way, whether it is a tracer, and its word (net/gear.ts ShotMark: the gun, the tracer's colour, a suppressor). */
+/** A shot as others need it: the sender's tick, where it left (the eye) and which way, whether it is a tracer, and its word (net/gear.ts ShotMark: the gun, the tracer's colour, a suppressor, and a pellet gun's pattern's share). */
 export interface ShotState {
   tick: number;
   origin: [number, number, number];
@@ -114,6 +126,17 @@ export function decodeShot(w: unknown): ShotState | null {
   if (!(l > 0.5 && l < 1.5)) return null;
   const word = w[7] as number;
   return { tick: w[0] as number, origin: [(w[1] as number) / 1000, (w[2] as number) / 1000, (w[3] as number) / 1000], dir: [d[0] / l, d[1] / l, d[2] / l], tracer: (word & 1) === 1, ...(word > 1 ? { mark: word } : {}) };
+}
+
+/**
+ * A shot as it goes out: its words, and the shot they say (to the millimetre, and its direction to
+ * 1e-4 and made a unit again), which every other client flies. In a room the shooter flies that too,
+ * so the round is the same everywhere. A shot whose words would say nothing (no room believes them)
+ * is itself.
+ */
+export function sent(shot: ShotState): { wire: number[]; shot: ShotState } {
+  const wire = encodeShot(shot);
+  return { wire, shot: decodeShot(wire) ?? shot };
 }
 
 /** Where a round struck a body. */
@@ -155,7 +178,7 @@ export interface RoomShell {
   seed: number;
 }
 
-/** A scoop a player dug: their seat, when the room heard it (its clock, ms), and the cells it cleared, each packed as (z·Y + y)·X + x. */
+/** A scoop a player dug: their seat, when the room heard it (its clock, ms), and the cells it cleared, each packed as (z·Y + y)·X + x of WORLD_DIMS. */
 export interface Dig {
   seat: number;
   at: number;
@@ -185,15 +208,49 @@ export function decodeShell(w: unknown): RoomShell | null {
   return { id, landAt, at: [x / 1000, z / 1000], radius: radius / 1000, seed };
 }
 
-/** A scoop's cells, if they are: 1 to DIG_CELLS_MAX integers in [0, 2^31). */
-function digCells(c: unknown): c is number[] {
-  return Array.isArray(c) && c.length >= 1 && c.length <= DIG_CELLS_MAX && c.every((n) => Number.isInteger(n) && n >= 0 && n < I31);
+/** A world's size in voxels, as a scoop's cells are packed in it. */
+export interface CellDims {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
 }
 
-export function decodeDig(w: unknown): Dig | null {
+/**
+ * A scoop's cells, if they are: 1 to DIG_CELLS_MAX cells of a world of `dims` (integers in [0, X·Y·Z)),
+ * spanning at most DIG_SPAN_MAX voxels on every axis, unpacked as packed: x = c mod X, y = ⌊c / X⌋ mod Y,
+ * z = ⌊c / (X·Y)⌋. A scoop that spans more is no shovel's (a hostile client's), and every page would
+ * settle the whole box between its cells.
+ */
+function digCells(c: unknown, dims: CellDims = WORLD_DIMS): c is number[] {
+  if (!Array.isArray(c) || c.length < 1 || c.length > DIG_CELLS_MAX) return false;
+  const { x: X, y: Y } = dims;
+  const all = X * Y * dims.z;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let z0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  let z1 = -Infinity;
+  for (const n of c) {
+    if (!Number.isInteger(n) || n < 0 || n >= all || n >= I31) return false;
+    const x = n % X;
+    const y = Math.floor(n / X) % Y;
+    const z = Math.floor(n / (X * Y));
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    z0 = Math.min(z0, z);
+    x1 = Math.max(x1, x);
+    y1 = Math.max(y1, y);
+    z1 = Math.max(z1, z);
+  }
+  return x1 - x0 < DIG_SPAN_MAX && y1 - y0 < DIG_SPAN_MAX && z1 - z0 < DIG_SPAN_MAX;
+}
+
+/** A scoop as the room relays it, if it is one: its cells checked as cells of a world of `dims` (the world's; a test's own arena gives its own). */
+export function decodeDig(w: unknown, dims: CellDims = WORLD_DIMS): Dig | null {
   if (!Array.isArray(w) || w.length < 2) return null;
   const [seat, at, ...cells] = w as unknown[];
-  if (!Number.isInteger(seat) || (seat as number) < 0 || (seat as number) >= MAX_PLAYERS || !Number.isSafeInteger(at) || (at as number) < 0 || !digCells(cells)) return null;
+  if (!Number.isInteger(seat) || (seat as number) < 0 || (seat as number) >= MAX_PLAYERS || !Number.isSafeInteger(at) || (at as number) < 0 || !digCells(cells, dims)) return null;
   return { seat: seat as number, at: at as number, cells };
 }
 

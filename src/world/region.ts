@@ -19,6 +19,11 @@ export interface Box {
   z1: number;
 }
 
+/** Whether two boxes overlap across x and z, whatever their heights: a crater's region and a scoop's, each other's. */
+export function overlapXZ(a: Box, b: Box): boolean {
+  return a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
+}
+
 /** Clamp to the world, widening fractional edges outward; null if nothing is left. */
 export function clampBox(box: Box, dims: Dims): Box | null {
   const out = {
