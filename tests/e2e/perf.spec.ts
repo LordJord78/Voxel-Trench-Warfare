@@ -721,8 +721,8 @@ test('seven soldiers stay within the frame budget', async ({ page }) => {
 // dummies drawn as soldiers (the Ravine's five) and its plates in the world. The step view at its own
 // hour, 360 frames' GPU times with the range up, measured back to back against the same view with it
 // down, up and down twice in turn: what the range costs, read on the same machine at the same time
-// whatever its power state (the A/B, and the soldiers' pass's own time beside it). With the range up,
-// the frame within the budget at the 95th percentile.
+// whatever its power state (the A/B, and the soldiers' pass's own time beside it): the range up costs
+// at most 1 ms of the p95. Then, with the range up, the frame within the budget at the 95th percentile.
 test('the step view holds 14 ms with the range up', async ({ page }) => {
   test.setTimeout(300_000);
   const errors = await openGame(page);
@@ -779,6 +779,7 @@ test('the step view holds 14 ms with the range up', async ({ page }) => {
     runs.map((r) => `${r.up ? 'up' : 'down'} p95 ${r.p95.toFixed(2)} ms, median ${r.median.toFixed(2)}, the soldiers ${r.soldiers.toFixed(3)} (${r.drawn} drawn)`).join('; ') +
     `; up less down: p95 ${rise >= 0 ? '+' : ''}${rise.toFixed(2)} ms, the soldiers ${soldiersRise >= 0 ? '+' : ''}${soldiersRise.toFixed(3)} ms`;
   console.log(line);
+  expect(errors).toEqual([]);
   // Each run a full 360 frames; up, every dummy it lays drawn and its plates up; down, none of either.
   for (const r of runs) expect(r.count, line).toBe(360);
   for (const r of ups) {
@@ -787,6 +788,9 @@ test('the step view holds 14 ms with the range up', async ({ page }) => {
     expect(r.plates, line).toBeGreaterThanOrEqual(4);
   }
   for (const r of downs) expect([r.dummies, r.drawn, r.plates], line).toEqual([0, 0, 0]);
+  // The A/B, the acceptance: the range costs at most a millisecond of the GPU's p95 (twice the
+  // ledger's 0.5 ms line, over the runs' ~0.4 ms of noise), whatever the machine's power state.
+  expect(rise, line).toBeLessThanOrEqual(1.0);
+  // Then the absolute budget, last as in the other cases (a quiet machine's, G6's rerun).
   for (const r of ups) expect(r.p95, line).toBeLessThanOrEqual(BUDGET_MS);
-  expect(errors).toEqual([]);
 });
