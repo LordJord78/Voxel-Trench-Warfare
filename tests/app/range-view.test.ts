@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { rangeAllowed, RangeView } from '../../src/app/range';
 import { projectileSpec } from '../../src/combat/ballistics';
 import { FIRST_DUMMY, plateCentre, plateVoxels, rangeLayout, rangeTunables, type RangeEvent, type RangeSpot } from '../../src/combat/range';
-import { toWorld } from '../../src/combat/soldier-rig';
+import { toWorld, type Zone } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
+import { GUNS } from '../../src/net/gear';
 import { idleIntent, Session, type CombatEvents } from '../../src/sim/session';
 import { Readout, readoutLines, readoutText } from '../../src/ui/readout';
 import { BrickMap } from '../../src/world/bricks';
@@ -373,11 +374,80 @@ describe('the range in the app', () => {
     const [a, b] = view.state().dummies;
     /** A round of the player's into dummy `body` (no gun's: 55 to the torso), struck on `tick`, from the pull on tick `shot`. */
     const round = (body: number, tick: number, shot: number): CombatEvents['hits'][number] => ({ owner: 0, body, zone: 'torso', position: [0, 0, 0], dir: [0, 0, 1], distance: 25, shot, tick });
-    // One pull's two rounds struck on two ticks (a shotgun's pellets either side of one): one shot.
-    // Two pulls' rounds struck on one tick: two.
+    // One pull's two rounds struck on two ticks (a shotgun's pellets either side of one): one shot,
+    // and one event, the pull's (55 + 55 kills). Two pulls' rounds struck on one tick: two.
     const hits = [round(a.id, 50, 44), round(a.id, 51, 44), round(b.id, 52, 45), round(b.id, 52, 48)];
     const events = view.after({ ...s.drainEvents(), hits }, now(s));
-    expect(events.map((e) => [e.kind, e.kind === 'kill' ? e.shots : null])).toEqual([['hit', null], ['kill', 1], ['hit', null], ['kill', 2]]);
+    expect(events.map((e) => [e.kind, e.kind === 'kill' ? e.shots : null])).toEqual([['kill', 1], ['hit', null], ['kill', 2]]);
+  });
+
+  describe("a pull's pellets are one event, the pull's (the readout reads the shot, not one pellet)", () => {
+    const M870 = GUNS.indexOf('m870');
+    /** The range up on the field, its dummies posed: the view, the session and its first two dummies. */
+    const up = () => {
+      const s = field();
+      const view = new RangeView(tun);
+      view.raise(s, SPAWN, EYE);
+      view.frame(s, now(s));
+      const [a, b] = view.state().dummies;
+      return { s, view, a, b };
+    };
+    /** A pellet of the player's M870 into dummy `body`'s `zone`, `distance` m out, from the pull on tick `shot`, struck on `tick` (that pull's, unless told). */
+    const pellet = (body: number, zone: Zone, distance: number, shot: number, tick = shot): CombatEvents['hits'][number] => ({ owner: 0, body, zone, gun: M870, position: [0, 0, 0], dir: [0, 0, 1], distance, shot, tick });
+    const shown = (events: readonly RangeEvent[]) => {
+      const readout = new Readout(null, t.readoutS);
+      readout.show(events, 1);
+      return readout.text;
+    };
+
+    it('four limb pellets of one pull into one dummy: one event, LIMB 52 · 25 m (13 a pellet), the latest pellet\'s distance', () => {
+      const { s, view, a } = up();
+      const hits = [pellet(a.id, 'limb', 24.6, 40), pellet(a.id, 'limb', 25.4, 40), pellet(a.id, 'limb', 26.1, 40), pellet(a.id, 'limb', 25.2, 40)];
+      const events = view.after({ ...s.drainEvents(), hits }, now(s));
+      expect(events).toEqual([{ kind: 'hit', id: a.id, zone: 'limb', damage: 52, distanceM: 25.2 }]);
+      expect(shown(events)).toBe('LIMB 52 · 25 m');
+      // Its health is the four pellets' (Range.hit still counts each).
+      expect(view.state().dummies[0].hp).toBe(48);
+    });
+
+    it('a pull that kills reads its sum over DOWN IN 1: two pellets in the head and one in the torso, HEAD 107, whichever pellet killed', () => {
+      const { s, view, a } = up();
+      // Torso 23, head 42 (65), head 42 (107: the kill); two more after it find the dummy down.
+      const hits = [pellet(a.id, 'torso', 25.3, 60), pellet(a.id, 'head', 25.1, 60), pellet(a.id, 'head', 24.8, 60), pellet(a.id, 'torso', 25.6, 60), pellet(a.id, 'limb', 25.0, 60)];
+      const events = view.after({ ...s.drainEvents(), hits }, now(s));
+      expect(events).toEqual([{ kind: 'kill', id: a.id, zone: 'head', damage: 107, distanceM: 24.8, shots: 1 }]);
+      expect(shown(events)).toBe('HEAD 107 · 25 m\nDOWN IN 1 · 25 m');
+      // Five torso pellets: the fifth kills (115), and TORSO is the pull's zone.
+      const again = up();
+      const torso = Array.from({ length: 9 }, (_, k) => pellet(again.a.id, 'torso', 25, 70, 70 + (k > 4 ? 1 : 0)));
+      const killed = again.view.after({ ...again.s.drainEvents(), hits: torso }, now(again.s));
+      expect(killed).toEqual([{ kind: 'kill', id: again.a.id, zone: 'torso', damage: 115, distanceM: 25, shots: 1 }]);
+      expect(shown(killed)).toBe('TORSO 115 · 25 m\nDOWN IN 1 · 25 m');
+    });
+
+    it('no pellet in the head: the zone that took the most damage, a limb over a torso when the limbs took more', () => {
+      const { s, view, a } = up();
+      // A torso pellet's 23 against two limbs' 26.
+      const hits = [pellet(a.id, 'torso', 25, 80), pellet(a.id, 'limb', 25, 80), pellet(a.id, 'limb', 25, 80)];
+      expect(view.after({ ...s.drainEvents(), hits }, now(s))).toEqual([{ kind: 'hit', id: a.id, zone: 'limb', damage: 49, distanceM: 25 }]);
+    });
+
+    it('one pull into two dummies gives two events, each its own; and two pulls into one dummy, two', () => {
+      const { s, view, a, b } = up();
+      const hits = [pellet(a.id, 'torso', 25, 90), pellet(b.id, 'limb', 40, 90), pellet(a.id, 'torso', 25.2, 90), pellet(b.id, 'limb', 40.1, 90), pellet(b.id, 'torso', 40, 90)];
+      const events = view.after({ ...s.drainEvents(), hits }, now(s));
+      expect(events).toEqual([
+        { kind: 'hit', id: a.id, zone: 'torso', damage: 46, distanceM: 25.2 },
+        { kind: 'hit', id: b.id, zone: 'limb', damage: 49, distanceM: 40 },
+      ]);
+      // A frame's two pulls into one dummy: one event a pull, oldest first.
+      const two = up();
+      const pulls = [pellet(two.a.id, 'limb', 25, 100), pellet(two.a.id, 'limb', 25, 100), pellet(two.a.id, 'torso', 25, 101), pellet(two.a.id, 'limb', 25, 100, 101)];
+      expect(two.view.after({ ...two.s.drainEvents(), hits: pulls }, now(two.s))).toEqual([
+        { kind: 'hit', id: two.a.id, zone: 'limb', damage: 39, distanceM: 25 },
+        { kind: 'hit', id: two.a.id, zone: 'torso', damage: 23, distanceM: 25 },
+      ]);
+    });
   });
 
   it("raise keeps the front's shells range_shell_clear_m off every spot, a mover's walk too; lower lets them back", () => {

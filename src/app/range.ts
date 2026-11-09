@@ -25,11 +25,14 @@
  *   steel, as the range's events, oldest first. A hit; a kill, with the shots it took, a shot being
  *   a pull of the trigger, told by the pull each round carries to what it strikes (the tick it left
  *   on), so a shotgun's pellets are one, and a round still in the air as the next pull leaves is
- *   its own; a plate, the voxel struck repainted lead-grey (TARGET_STEEL_HIT). Others' rounds only
- *   spark off the steel. A frame with none gives one shared empty list.
+ *   its own; a plate, the voxel struck repainted lead-grey (TARGET_STEEL_HIT). A pull's rounds into
+ *   one dummy are one event, the pull's: their damage summed, HEAD if any struck the head (else the
+ *   zone that took the most), the latest one's distance, and the kill if one killed. Others' rounds
+ *   only spark off the steel. A frame with none gives one shared empty list.
  */
 
 import { FIRST_DUMMY, plateCentre, plateVoxels, Range, rangeLayout, rangeTunables, type RangeBay, type RangeEvent, type RangeTunables } from '../combat/range';
+import type { Zone } from '../combat/soldier-rig';
 import type { Tunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
@@ -205,8 +208,9 @@ export class RangeView {
   /**
    * After the frame's ticks, at `nowS` (the session's seconds): what the player's rounds did on the
    * range, oldest first. Each hit on a dummy counts the pull of the trigger its round left on
-   * (BodyHit.shot, the tick of that pull's shot), whatever tick it struck on. None while down, or
-   * when no round of the player's struck a dummy or the range's steel: one shared empty list.
+   * (BodyHit.shot, the tick of that pull's shot), whatever tick it struck on; a pull's rounds into
+   * one dummy are one event, the pull's (fold): a shotgun's pellets read as the shot. None while
+   * down, or when no round of the player's struck a dummy or the range's steel: one shared empty list.
    */
   after(events: CombatEvents, nowS: number): readonly RangeEvent[] {
     const on = this.on;
@@ -214,14 +218,24 @@ export class RangeView {
     const now = this.clock(nowS);
     let out: RangeEvent[] | null = null;
     let ticks: number[] | null = null;
+    /** Each dummy event's body and pull, and the damage each zone took in it, by its place in `out` (the plates come after). */
+    let pulls: Fold[] | null = null;
     for (const h of events.hits) {
       if (h.owner !== 0 || h.body < FIRST_DUMMY) continue;
       // Every pull of the player's says itself on its rounds (session.combat); a round that says
       // none (fired into the pool by hand) counts as a pull of the tick it struck on.
-      const e = on.range.hit(h.body, h.zone, h.gun, h.distance, h.shot ?? h.tick, now);
-      if (!e) continue;
+      const pull = h.shot ?? h.tick;
+      const e = on.range.hit(h.body, h.zone, h.gun, h.distance, pull, now);
+      if (!e || e.kind === 'plate') continue;
+      // A pull's pellets into one dummy are one event: the pull's.
+      const k = pulls === null ? -1 : pulls.findIndex((f) => f.body === h.body && f.pull === pull);
+      if (out !== null && pulls !== null && k >= 0) {
+        out[k] = fold(out[k], pulls[k], e);
+        continue;
+      }
       (out ??= []).push(e);
       (ticks ??= []).push(h.tick);
+      (pulls ??= []).push({ body: h.body, pull, damage: { head: 0, torso: 0, limb: 0, [e.zone]: e.damage } });
     }
     for (const i of events.impacts) {
       if (i.owner !== 0 || (i.material !== P.TARGET_STEEL && i.material !== P.TARGET_STEEL_HIT)) continue;
@@ -269,6 +283,32 @@ export class RangeView {
     this.now = Math.max(this.now, nowS);
     return this.now;
   }
+}
+
+/** A dummy event's pull of the trigger, into which body, and the damage each zone took in it. */
+interface Fold {
+  body: number;
+  pull: number;
+  damage: Record<Zone, number>;
+}
+
+/** The zones, in the order a tie of damage goes: the torso before a limb (the head never ties: any pellet there is the pull's zone). */
+const ZONES: readonly Zone[] = ['head', 'torso', 'limb'];
+
+/**
+ * A pull's event `was` (`f` its pull and its zones' damage) with another of its pellets, `e`, folded
+ * in: the damage summed; the zone HEAD if any pellet struck the head, else the zone that took the
+ * most (the torso before a limb on a tie); the distance the latest pellet's; and the kill, with its
+ * shots, if that pellet killed. Its place among the frame's, and so its tick, is the first pellet's.
+ */
+function fold(was: RangeEvent, f: Fold, e: Extract<RangeEvent, { kind: 'hit' | 'kill' }>): RangeEvent {
+  // Only a hit takes more: a dummy killed is down, and Range.hit gives nothing more of its pull.
+  if (was.kind !== 'hit') return was;
+  f.damage[e.zone] += e.damage;
+  let zone: Zone = 'head';
+  if (f.damage.head === 0) for (const z of ZONES) if (f.damage[z] > f.damage[zone]) zone = z;
+  const folded = { id: was.id, zone, damage: was.damage + e.damage, distanceM: e.distanceM };
+  return e.kind === 'kill' ? { kind: 'kill', ...folded, shots: e.shots } : { kind: 'hit', ...folded };
 }
 
 /** A voxel's key in `map`: its index, x fastest. */
