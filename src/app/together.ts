@@ -2,8 +2,10 @@
  * Playing with friends (the multiplayer spec's §2 and §4), as the game loop sees it: hosting or
  * joining a room, the lobby, the way into a match; this player's state and shots sent twenty times
  * a second; the others posed, drawn and given to the session for rounds to strike, their shots
- * fired; this player's hits claimed (they decide what their rounds struck, as they saw it); and the
- * match over the view: health, deaths and the way back in, the feed, the board, who won.
+ * fired; this player's hits claimed (they decide what their rounds struck, as they saw it); the
+ * room's shells landed on its clock (sim/room-battle.ts), and the battle's harm to this player told
+ * the room; and the match over the view: health, deaths and the way back in, the feed, the board,
+ * who won.
  *
  * It is made with the page but does nothing until the player hosts or follows a link: solo play
  * never opens a socket or asks the relay anything.
@@ -15,6 +17,7 @@ import { decodeGear, encodeGear, teamTracer } from '../net/gear';
 import { MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type MatchInfo, type PlayerState, type RoomConfig, type ShotState, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
+import type { RoomBattle } from '../sim/room-battle';
 import type { CombatEvents, Session } from '../sim/session';
 import { Lobby } from '../ui/lobby';
 import { MatchHud, type BoardRow } from '../ui/match-hud';
@@ -149,6 +152,8 @@ export interface TogetherHooks {
   killed(): void;
   /** This player is back in, at their team's `spawn`-th start. */
   respawn(team: Team, spawn: number): void;
+  /** A new room battle on this page's session. */
+  battle(): RoomBattle;
 }
 
 /** Where the relay is: `?relay=` on a development build (the tests'), the build's own, or the local one on localhost; null where there is none. */
@@ -191,6 +196,8 @@ export class Together {
   private leaving = false;
   /** The session the frames run, as the last frame gave it: a death between frames bleeds in it. */
   private session: Session | null = null;
+  /** The match's shells on this page: made with its first frame, dropped as it starts and once it is over. */
+  battle: RoomBattle | null = null;
 
   /**
    * `hits`, the hit feedback (hit-feedback.ts): the others' flinches and falls come from it, and a
@@ -295,7 +302,8 @@ export class Together {
       const side = this.team === 'blue' ? 'Blue' : 'Red';
       this.lobby.deploy(left > 0 ? `You fight for ${side}. The match starts in ${Math.ceil(left / 1000)}…` : `The match is on. You fight for ${side}.`, left <= 0);
     }
-    if (!playing || left > 0) return;
+    // Sent only once they have gone in: on the deploy screen the world runs on, but nobody draws or shoots them.
+    if (!playing || !this.inPlay || left > 0) return;
     const now = performance.now();
     if (now - this.sentAt < 1000 / SEND_HZ) return;
     this.sentAt = now;
@@ -307,7 +315,8 @@ export class Together {
    * test stands in the world) posed, each flinching and falling as its hits say; the living among
    * them given to the session for rounds to strike; their shots fired, each from its shooter's eye,
    * its tracer and flash at their soldier's muzzle, the tracer in their seat's team's colour
-   * (shotTracer). What to draw.
+   * (shotTracer). In a match, the room's shells heard and landed on its clock, once the clock has its
+   * first sample. What to draw.
    */
   prepare(session: Session, dt: number, extra: readonly Figure[] = [], now = performance.now()): SoldierDraw[] {
     this.session = session;
@@ -315,8 +324,15 @@ export class Together {
     const figures = [...this.figures(), ...extra].map((f) => (hits ? overlaid(f, hits.figureOverlay(f.seat, now)) : f));
     const draws = this.gaits.pose(figures, dt);
     session.together = this.inMatch || extra.length > 0;
+    session.room = this.inMatch;
     session.bodies = draws.filter((_, i) => figures[i].deadFor === null).map((d) => ({ id: d.seat, frames: d.frames, feet: d.feet }));
     if (this.net && this.inMatch) {
+      const battle = (this.battle ??= this.hooks.battle());
+      if (this.net.clock.synced) {
+        const nowMs = this.net.serverNow();
+        this.feed(battle, nowMs);
+        battle.tick(nowMs);
+      }
       for (const { seat, shot } of this.net.takeShots()) {
         const d = draws.find((x) => x.seat === seat);
         // From the muzzle of the gun they are drawn with.
@@ -328,7 +344,10 @@ export class Together {
     return draws;
   }
 
-  /** After the frame's ticks: this player's shots kept to send, their hits claimed (the hit feedback marks them), and the match shown. */
+  /**
+   * After the frame's ticks: this player's shots kept to send, their hits claimed (the hit feedback
+   * marks them), the battle's harm to them told the room while they are in and alive, and the match shown.
+   */
   after(session: Session, events: CombatEvents, draws: readonly SoldierDraw[], now: number): void {
     const net = this.net;
     if (!net || !this.inMatch) return;
@@ -337,6 +356,9 @@ export class Together {
       if (h.owner !== 0 || h.body < 0 || h.body >= MAX_PLAYERS) continue;
       net.hit(h.body, h.zone, h.gun);
       this.claimed++;
+    }
+    if (this.battle) {
+      for (const m of this.battle.outgoing(events, this.inPlay && this.begun && !this.fallen && session.alive)) if (m.t === 'hurt') net.hurt(m.a, m.c);
     }
     const p = session.player;
     this.self = { position: p.position.toArray(), yaw: p.yaw };
@@ -498,12 +520,22 @@ export class Together {
     this.hp = 100;
     this.hurtAt = Number.NEGATIVE_INFINITY;
     this.shotsOut = [];
+    this.battle = null;
     this.hud.clear();
     this.hits?.clear();
     this.hooks.deploy(team, Math.max(0, index), match);
   }
 
   private ended(): void {
+    // Every shell told, heard or still queued, lands now, quietly: the world is the same on every page
+    // for the next match. The match's shells told just before the end are still in the queue; heard
+    // as the match is over, they whistle for no time left.
+    if (this.net) {
+      const battle = (this.battle ??= this.hooks.battle());
+      this.feed(battle, Number.POSITIVE_INFINITY);
+      battle.finish();
+    }
+    this.battle = null;
     this.inPlay = false;
     this.deaths.clear();
     this.fallen = null;
@@ -513,6 +545,11 @@ export class Together {
     this.lobby.gather();
     this.hooks.ended();
     this.show();
+  }
+
+  /** The room's edits heard since the last frame, to `battle` in the order they came, at `nowMs` on the room's clock (after every time: the match over). */
+  private feed(battle: RoomBattle, nowMs: number): void {
+    for (const e of this.net!.takeEdits()) if (e.t === 'shell') battle.hear(e.shell, nowMs);
   }
 
   private lost(why: string): void {

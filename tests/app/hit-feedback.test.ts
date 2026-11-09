@@ -84,7 +84,7 @@ function strike(s: Session, from: readonly (readonly number[])[], dir: readonly 
 }
 
 /** Nothing happened. */
-const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [] });
+const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [], harms: [] });
 
 /** Blood's droplets and mist in the session's particles, by their colour (they only fade). */
 function bloodOf(s: Session): { droplets: number[][]; mists: number[][] } {
@@ -339,6 +339,34 @@ describe('hit feedback', () => {
     const light = new FakeMarker();
     new HitFeedback(t, light).frame(s, { ...none(), hits: [{ ...events.hits[0], zone: 'limb', gun: 7 }] }, NOW);
     expect(light.calls).toEqual([['flash', 0.25, NOW]]);
+  });
+
+  it("a blast's harm on the player is felt: the hurt flash and thump, scaled by its amount", () => {
+    const s = field();
+    const harm = (amount: number, cause: 'shell' | 'round' = 'shell') => ({ ...none(), harms: [{ tick: s.ticks, amount, cause }] });
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const was = [s.suppression.flinchYaw, s.suppression.flinchPitch];
+    // A blast's 80: the flash a hit of 80 gives, and the hurt voice at the ear.
+    const voices = fb.frame(s, harm(80), NOW);
+    expect(marker.calls).toEqual([['flash', 0.8, NOW]]);
+    expect(voices).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(fb.state().flashes).toBe(1);
+    expect(fb.state().voices).toEqual({ hurt: 1 });
+    // No jolt: the blast's own shake and suppression stand for it.
+    expect([s.suppression.flinchYaw, s.suppression.flinchPitch]).toEqual(was);
+    // Weaker, weaker: 40 at 0.4, 20 at the least, 0.25; 200 at the whole.
+    for (const [amount, strength] of [[40, 0.4], [20, 0.25], [200, 1]] as const) {
+      const m = new FakeMarker();
+      expect(new HitFeedback(t, m).frame(s, harm(amount), NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+      expect(m.calls, `${amount}`).toEqual([['flash', strength, NOW]]);
+    }
+    // A round's harm alone: nothing here, its body hit is what flashes.
+    const round = new FakeMarker();
+    const fr = new HitFeedback(t, round);
+    expect(fr.frame(s, harm(33, 'round'), NOW)).toEqual([]);
+    expect(round.calls).toEqual([]);
+    expect(fr.state().flashes).toBe(0);
   });
 
   it("the player's own round never hurts the player", () => {

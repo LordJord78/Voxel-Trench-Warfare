@@ -638,6 +638,13 @@ nml_share           = 0.5      # the share landing in no man's land; the rest on
 line_spread_m       = 4.0      # a line's shell lands this far either side of its trench
 nml_inset_m         = 8.0      # no man's land: between the fronts, this far in from each
 tries               = 8        # places tried for a shell before its slot sends nothing
+# What the battle does to a body in a room (src/combat/harm.ts): each page reckons its own player's
+# harm and tells the room (a hurt). The relay applies it; these are not copied into SHELLING.
+blast_hp            = 200.0    # a blast's harm within lethal_radii of it
+lethal_radii        = 0.5      # the spec's lethal_m, in the shell's radii
+reach_radii         = 2.2      # the spec's reach_m, in its radii: falling linearly to 0 here
+cover_share         = 0.35     # what is left of it when a voxel ray from it to the chest is blocked
+front_damage_scale  = 0.6      # the front's round: its zone's damage (net/match-rules DAMAGE) times this
 
 [range]
 # Solo play's firing range (the shots spec's §5, combat/range.ts): dummies and

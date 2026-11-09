@@ -1,13 +1,14 @@
 /**
  * One player's line to their room: the WebSocket, the room's clock (pings twice a second, five
  * quick ones on joining and on coming back to the tab), what the room last said of its seats,
- * settings and match, and the other players' states.
+ * settings and match, the other players' states, and the room's edits to the world (its shells)
+ * in the order they came.
  *
  * Only made for a game with friends: solo play never loads this, and makes no request at all.
  */
 
 import { matchSeconds, ServerClock } from '../net/clock';
-import { decodeShot, defaultConfig, encodeShot, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type MatchInfo, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
+import { decodeShell, decodeShot, defaultConfig, encodeShot, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type Dig, type MatchInfo, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type RoomShell, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
 import { RemotePlayers } from './net-players';
 
 export interface NetEvents {
@@ -34,6 +35,9 @@ export interface RemoteShot {
   seat: number;
   shot: ShotState;
 }
+
+/** An edit of the room's to the world: a shell it told, or a scoop a player dug. */
+export type RoomEdit = { t: 'shell'; shell: RoomShell } | { t: 'dig'; dig: Dig };
 
 const PING_MS = 500;
 
@@ -69,6 +73,8 @@ export class NetClient {
   tallies = new Map<number, { kills: number; deaths: number }>();
   /** Others' shots heard since the game last took them. */
   private shots: RemoteShot[] = [];
+  /** The room's edits heard since the game last took them, in the order they came. */
+  private edits: RoomEdit[] = [];
   private readonly ws: WebSocket;
   private pinger: ReturnType<typeof setInterval> | null = null;
   private closedByUs = false;
@@ -167,6 +173,13 @@ export class NetClient {
     return out;
   }
 
+  /** The room's edits heard since the last call, in the order they came. */
+  takeEdits(): RoomEdit[] {
+    const out = this.edits;
+    this.edits = [];
+    return out;
+  }
+
   close(): void {
     this.closedByUs = true;
     if (this.pinger) clearInterval(this.pinger);
@@ -249,6 +262,11 @@ export class NetClient {
           if (shot && p[0] !== this.you && this.shots.length < 64) this.shots.push({ seat: p[0], shot });
         }
         return;
+      case 'shell': {
+        const shell = decodeShell(m.s);
+        if (shell) this.edits.push({ t: 'shell', shell });
+        return;
+      }
       case 'hurt':
         this.on.hurt(m.hp, m.from);
         return;

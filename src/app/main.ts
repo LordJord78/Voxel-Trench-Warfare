@@ -36,6 +36,7 @@ import { battleFireLights, battleFlareLights, sceneLights, type SceneLight } fro
 import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
+import { RoomBattle } from '../sim/room-battle';
 import { idleIntent, Session, SHOVEL_HELD, type CombatEvents } from '../sim/session';
 import { MAP_SEEDS, isMapId, type MapId } from '../world/generation/params';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
@@ -465,7 +466,9 @@ async function start(): Promise<void> {
         ranAt = { hours: timeOfDay, darkness: inputs.darkness };
       }
     }
-    chars.make(session.map, (box) => session.destruction.overlapsOut(box));
+    // In a match a char waits while any crater is still to be cut there, queued too: its crater goes out
+    // on the ground as it is then, and says what it struck there, the same on every client.
+    chars.make(session.map, (box) => (together.inMatch ? session.destruction.overlapsPending(box) : session.destruction.overlapsOut(box)));
     horizon = [];
     if (lightsHeld === 'rest') {
       lit = lights;
@@ -677,6 +680,7 @@ async function start(): Promise<void> {
       session.respawn(at.position, facingYaw(at.bay));
       renderer.resetHistory();
     },
+    battle: () => new RoomBattle(session, fireT),
   }, hits);
 
   // The range (range.ts): solo play's dummies and steel plates in front of the spawn bay, from the
@@ -961,8 +965,11 @@ async function start(): Promise<void> {
       }
     } else {
       // With friends the world does not wait for a paused player: they stand while the menu is open.
+      // Nor for one still on the deploy screen once the match is on: its shells land and its craters
+      // are cut there too; but nobody draws or shoots them (together.frame sends nothing until they go in).
       const live = mode === 'playing' || (mode === 'paused' && together.inMatch);
-      if (live) {
+      const runs = live || (mode === 'ready' && together.begun);
+      if (runs) {
         if (mode === 'playing') {
           input.look(session.player, settings.sensitivity * aimTurn(), pitchLimit);
           session.intent = input.intent();
@@ -1048,7 +1055,9 @@ async function start(): Promise<void> {
     renderer.setSmoke(frameEffects.smoke);
     built = frameEffects.counts;
     builtDrawn = frameEffects.drawn;
-    light(dt, pose.position, strikesFrom(events), events.splashes.map((w) => ({ at: w.at, energyJ: w.energyJ })));
+    // In a match the battle's strikes are the room's shells' (sim/room-battle.ts): each on what its crater struck as it went out.
+    const strikes = together.inMatch ? (together.battle?.strikes(events) ?? []) : strikesFrom(events);
+    light(dt, pose.position, strikes, events.splashes.map((w) => ({ at: w.at, energyJ: w.energyJ })));
     renderer.render(pose, timeOfDay, now);
     lastPose = pose;
     frames++;

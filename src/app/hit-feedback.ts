@@ -13,6 +13,9 @@
  *   flash at the damage's share of 100, the aim jolted away from the round, and the hurt voice, once a
  *   tick; the damage as the room reckons it (the zone's by the gun's scale, net/gear.ts), a tick's
  *   added up.
+ * - **A blast's harm on the player** (a room's shell, `events.harms` of cause 'shell'): the same red
+ *   flash at the harm's share of 100 and the hurt voice; no jolt, the blast's own shake and
+ *   suppression stand for it. A round's harm adds nothing: its body hit flashes already.
  * - **A kill** (the room's death in a match, the range's own at once): when it was the player's, the
  *   kill marker, the pop (KILL, or HEADSHOT for a headshot's), and the kill's thud and chime at the
  *   ear. The body falls along the last round seen to strike it within kill_window_s, in head_fall_s
@@ -176,6 +179,8 @@ export class HitFeedback {
       }
     }
     done();
+    // A blast's harm on the player (in a room): felt as a hit of as much is, but for the jolt.
+    for (const h of events.harms) if (h.cause === 'shell') this.shelled(h.amount, now, out);
     this.forget(now);
     return out;
   }
@@ -258,6 +263,13 @@ export class HitFeedback {
     const [yaw, pitch] = n > 1e-6 ? [across / n, rise / n] : [0, 1];
     const deg = t.jolt[0] + t.jolt[1] * share;
     session.jolt(yaw * deg, pitch * deg);
+    out.push(this.voice('hurt', null));
+  }
+
+  /** A blast's `amount` of harm on the player: the flash and the voice, as a hit of as much gives; the shell shakes the view itself. */
+  private shelled(amount: number, now: number, out: FeedbackVoice[]): void {
+    this.marker.flash(Math.max(this.t.flashMin, Math.min(1, amount / 100)), now);
+    this.flashes++;
     out.push(this.voice('hurt', null));
   }
 

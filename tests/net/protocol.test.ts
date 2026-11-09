@@ -71,6 +71,8 @@ describe('the protocol', () => {
     expect(HURT_MAX).toBe(200);
     expect(parseClient(JSON.stringify({ t: 'hurt', a: HURT_MAX, c: 'shell' }))).toEqual({ t: 'hurt', a: HURT_MAX, c: 'shell' });
     expect(parseClient(JSON.stringify({ t: 'hurt', a: HURT_MAX + 0.5, c: 'shell' }))).toBeNull();
+    // A hurt names its cause as the kill feed does: a blast's is 'shell'.
+    expect(parseClient(JSON.stringify({ t: 'hurt', a: 10, c: 'blast' }))).toBeNull();
   });
 
   it("takes a room's message up to a mebibyte, a player's still not past 4,096 characters", () => {

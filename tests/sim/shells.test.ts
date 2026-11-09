@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { loadTunables } from '../../src/core/tunables';
+import { blastHarm, harmTunables } from '../../src/combat/harm';
 import { BILLBOARD_FLOATS } from '../../src/combat/particles';
+import { PART_BOX, pose, toWorld } from '../../src/combat/soldier-rig';
 import { Stance } from '../../src/physics/character';
 import { boxHitsSolid } from '../../src/physics/collision';
 import { idleIntent, Session } from '../../src/sim/session';
@@ -9,8 +11,19 @@ import { trenchArena } from '../support/worlds';
 
 // A shell landing in the session: at the top of the ground under it, its blast an event at once and
 // its crater an event once it is in the world; and the ground going from under the player leaves
-// them falling or standing, never inside solid or held in the air.
+// them falling or standing, never inside solid or held in the air. In a room, a shell by the player
+// harms them by its distance from their chest and whether its way there is blocked.
 const tun = loadTunables();
+const harmT = harmTunables(tun);
+
+/** The player's chest as their body is posed: the middle of its torso's box. */
+function chestOf(s: Session): [number, number, number] {
+  const p = s.player;
+  const frames = pose({ position: p.position.toArray(), yaw: p.yaw, pitch: p.pitch, height: p.height, speed: p.velocity.horizontalLength, bob: p.bobPhase, deadFor: null });
+  return toWorld(frames.torso, [0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2));
+}
+
+const near = (a: readonly number[], b: readonly number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 function session(spawn: [number, number, number] = [3.2, 4.4, 2]): Session {
   const s = Session.create({ map: trenchArena(), plan: null, spawn: { position: spawn }, waterTable: 42 }, tun, 7, 0);
@@ -105,6 +118,86 @@ describe('a shell landing', () => {
     const s = session();
     expect(s.land(-5, 15, 3, 7)).toBeNull();
     expect(s.drainEvents().blasts).toEqual([]);
+  });
+
+  it("in a room a shell by the player is a harm of its blast's by distance and cover; none solo, quiet, or dead", () => {
+    // The player on the open clay 7 m short of the trench, the shell 2 m ahead of them.
+    const at = (s: Session) => {
+      s.drainEvents();
+      s.land(12.8, 7.0, 3, 7);
+      return s.drainEvents();
+    };
+    const open = session([12.8, 6.4, 5.0]);
+    open.room = true;
+    const e = at(open);
+    expect(e.blasts).toHaveLength(1);
+    const d = near(e.blasts[0].at, chestOf(open));
+    expect(d).toBeGreaterThan(2);
+    expect(d).toBeLessThan(3);
+    expect(e.harms.map((h) => [h.tick, h.cause])).toEqual([[open.ticks, 'shell']]);
+    expect(e.harms[0].amount).toBeCloseTo(blastHarm(d, 3, false, harmT), 9);
+    expect(e.harms[0].amount).toBeGreaterThan(100);
+    // A clay wall 2.5 m high between them, 0.4 m thick and a metre from the player: the same blast, covered.
+    const walled = session([12.8, 6.4, 5.0]);
+    walled.map.fillBox(0, 64, 58, 256, 89, 62, P.CLAY);
+    walled.room = true;
+    const w = at(walled);
+    expect(near(w.blasts[0].at, chestOf(walled))).toBeCloseTo(d, 9);
+    expect(w.harms.map((h) => h.cause)).toEqual(['shell']);
+    expect(w.harms[0].amount).toBeCloseTo(blastHarm(d, 3, true, harmT), 9);
+    expect(w.harms[0].amount).toBeCloseTo(0.35 * e.harms[0].amount, 9);
+    // Solo, none.
+    expect(at(session([12.8, 6.4, 5.0])).harms).toEqual([]);
+    // Quiet: its crater alone, no blast, no particles, shake, suppression or harm.
+    const quiet = session([12.8, 6.4, 5.0]);
+    quiet.room = true;
+    quiet.drainEvents();
+    const billboards = () => quiet.particles.billboards(new Float32Array(quiet.particles.capacity * BILLBOARD_FLOATS));
+    const before = billboards();
+    expect(quiet.land(12.8, 7.0, 3, 7, true)).not.toBeNull();
+    const q = quiet.drainEvents();
+    expect([q.blasts, q.harms, q.splashes]).toEqual([[], [], []]);
+    expect(quiet.suppression.level).toBe(0);
+    expect(quiet.blastShake.amplitude).toBe(0);
+    expect(billboards()).toBe(before);
+    expect(quiet.destruction.pending).toBe(1);
+    // Dead, none.
+    const dead = session([12.8, 6.4, 5.0]);
+    dead.room = true;
+    dead.alive = false;
+    const k = at(dead);
+    expect(k.blasts).toHaveLength(1);
+    expect(k.harms).toEqual([]);
+  });
+
+  it('in a room a shell is cut where the ground is when its crater goes out, and the crater says what it struck', () => {
+    const s = session([12.8, 6.4, 3.0]);
+    s.room = true;
+    const id = s.land(12.8, 15.0, 3, 7);
+    const craters = [];
+    for (let k = 0; k < 10; k++) {
+      s.tick();
+      craters.push(...s.drainEvents().craters);
+    }
+    expect(craters.map((c) => [c.id, c.centre, c.radius, c.material])).toEqual([[id, [128, 76, 150], 30, P.SPOIL]]);
+    // Solo, a crater carries no material.
+    const solo = session([12.8, 6.4, 3.0]);
+    solo.land(12.8, 15.0, 3, 7);
+    const soloCraters = [];
+    for (let k = 0; k < 10; k++) {
+      solo.tick();
+      soloCraters.push(...solo.drainEvents().craters);
+    }
+    expect(soloCraters).toHaveLength(1);
+    expect(soloCraters[0]).not.toHaveProperty('material');
+  });
+
+  it('a whistle is an incoming shell at the top of the ground, in the time given', () => {
+    const s = session([12.8, 6.4, 3.0]);
+    s.whistle(12.8, 15.0, 1.25);
+    expect(s.drainEvents().incoming).toEqual([{ tick: s.ticks, at: [12.8, 7.6000000000000005, 15.0], landsInS: 1.25 }]);
+    s.whistle(-5, 15, 1);
+    expect(s.drainEvents().incoming).toEqual([]);
   });
 
   it('a crater cut where the player stands leaves them falling or standing, never inside solid or held in the air', () => {

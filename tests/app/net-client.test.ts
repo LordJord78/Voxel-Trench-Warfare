@@ -86,4 +86,19 @@ describe("a player's line to the room", () => {
     expect(lobby.match).toBeNull();
     expect(lobby.matchSeconds()).toBe(0);
   });
+
+  it("puts the room's shells on its edits, in the order they came, a malformed one dropped; taken once", () => {
+    const client = joined();
+    page = 1040;
+    StubSocket.last!.say(welcome(5_000_000, { startAt: 4_990_000, seed: 3, config: defaultConfig() }));
+    expect(client.takeEdits()).toEqual([]);
+    StubSocket.last!.say({ t: 'shell', s: [7, 5_001_500, 12_800, 15_000, 3_000, 42] });
+    StubSocket.last!.say({ t: 'shell', s: [7, 5_001_500, 12_800] });
+    StubSocket.last!.say({ t: 'shell', s: [8, 5_004_000, -1_250, 20_000, 2_200, 43] });
+    expect(client.takeEdits()).toEqual([
+      { t: 'shell', shell: { id: 7, landAt: 5_001_500, at: [12.8, 15], radius: 3, seed: 42 } },
+      { t: 'shell', shell: { id: 8, landAt: 5_004_000, at: [-1.25, 20], radius: 2.2, seed: 43 } },
+    ]);
+    expect(client.takeEdits()).toEqual([]);
+  });
 });

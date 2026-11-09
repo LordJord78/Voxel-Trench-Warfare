@@ -5,6 +5,7 @@ import { Destruction, destructionTunables, inProcessRunner, type DetonationRunne
 import { chip, detonate } from '../../src/world/destruction';
 import { runDetonation, type DetonationRequest, type DetonationResult } from '../../src/world/detonation';
 import { P } from '../../src/world/materials';
+import { groundTop } from '../../src/world/raycast';
 import { sameWorld, shellOptions, trenchArena } from '../support/worlds';
 
 // The session's craters land through a queue (the spec's §3): posted to a runner, written back a
@@ -100,6 +101,39 @@ describe('the destruction queue', () => {
     expect(runner.posted.map((r) => r.id)).toEqual([first, second]);
     runner.release();
     expect(land(d, 1).craters.map((c) => c.id)).toEqual([second]);
+    expect(sameWorld(inPlace, map)).toBe(true);
+  });
+
+  it('a shell on the ground is cut where the ground is when it goes out, and says what it struck there', () => {
+    const map = trenchArena();
+    const runner = heldRunner();
+    const d = new Destruction(map, runner, t());
+    const first = d.shell(CREST, 30, 11);
+    // On the ground: the y it is given is not where it is cut.
+    const second = d.shell([140, 0, 150], 25, 12, true);
+    d.tick();
+    d.tick();
+    expect(runner.posted.map((r) => r.id)).toEqual([first]);
+    // Waiting, it is pending, and so is the first; ground clear of both is not.
+    expect(d.overlapsPending({ x0: 140, y0: 0, z0: 150, x1: 141, y1: 1, z1: 151 })).toBe(true);
+    expect(d.overlapsPending({ x0: 250, y0: 0, z0: 10, x1: 251, y1: 1, z1: 11 })).toBe(false);
+    runner.release();
+    const firstIn = land(d, 1).craters;
+    expect(firstIn.map((c) => c.id)).toEqual([first]);
+    expect(firstIn[0]).not.toHaveProperty('material');
+    // The first in, the second goes out, centred on the ground as the first left it: lower than the crest was.
+    expect(runner.posted.map((r) => r.id)).toEqual([first, second]);
+    const top = groundTop(map, 140, 150)!;
+    expect(top).toBeLessThan(76);
+    expect(runner.posted[1].centre).toEqual([140, top, 150]);
+    const struck = map.get(140, top - 1, 150);
+    expect(struck).not.toBe(P.AIR);
+    runner.release();
+    expect(land(d, 1).craters).toEqual([{ id: second, centre: [140, top, 150], radius: 25, bricks: expect.any(Number), material: struck }]);
+    expect(d.overlapsPending({ x0: 140, y0: 0, z0: 150, x1: 141, y1: 1, z1: 151 })).toBe(false);
+    const inPlace = trenchArena();
+    detonate(inPlace, ...CREST, 30, Rng.root(11), shellOptions());
+    detonate(inPlace, 140, top, 150, 25, Rng.root(12), shellOptions());
     expect(sameWorld(inPlace, map)).toBe(true);
   });
 

@@ -16,10 +16,11 @@ import { aimRangeM, ballisticsTunables, projectileSpec, Rounds, type BodyHit, ty
 import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
 import { Entrenching, entrenchingTunables, type Scoop } from '../combat/entrenching';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
+import { blastHarm, harmTunables, type HarmTunables } from '../combat/harm';
 import { gunClass, Handling, handlingTunables, ZERO_HANDS, type HandlingCue } from '../combat/handling';
 import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
 import { Recoil } from '../combat/recoil';
-import { bodySphere, hitParts, pose, type Frame, type PartName } from '../combat/soldier-rig';
+import { bodySphere, hitParts, PART_BOX, pose, toWorld, type Frame, type PartName, type V3 } from '../combat/soldier-rig';
 import { Suppression, suppressionTunables } from '../combat/suppression';
 import { ViewKick } from '../combat/viewkick';
 import { heldPose, modelToView, viewBasis, viewmodelTunables, type Holding, type ViewmodelKick, type ViewmodelPose, type ViewmodelTunables } from '../combat/viewmodel';
@@ -36,7 +37,7 @@ import { Vec3, ZERO } from '../physics/vec';
 import type { BrickMap } from '../world/bricks';
 import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, P, paletteData } from '../world/materials';
-import { groundTop } from '../world/raycast';
+import { groundTop, raycast } from '../world/raycast';
 import { spatter, spatterTunables, type SpatterTunables } from '../world/spatter';
 import { BARE, decodeShotMark, encodeShotMark, GUNS, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
 import type { Team } from '../net/protocol';
@@ -54,6 +55,9 @@ export const PORT_ANCHOR = 2;
 
 /** The local player's body, among the bodies a round may strike. */
 export const LOCAL_BODY = -1;
+
+/** A body's chest: the middle of its torso's box, in the torso's frame. Where a blast's harm is reckoned to. */
+const CHEST = [0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2);
 
 /** `Session.held` when the shovel is in the hands. */
 export const SHOVEL_HELD = -1;
@@ -136,6 +140,16 @@ export interface ShotEvent {
   report?: number;
 }
 
+/**
+ * What the battle did to the player in a room (combat/harm.ts), which the page tells the room as a
+ * hurt: a blast's by its distance and cover, or the front's round by its zone.
+ */
+export interface Harm {
+  tick: number;
+  amount: number;
+  cause: 'shell' | 'round';
+}
+
 /** What combat did between drains, oldest first. */
 export interface CombatEvents {
   /** The player's shots, from the eye. */
@@ -165,10 +179,12 @@ export interface CombatEvents {
   splashes: { tick: number; at: [number, number, number]; energyJ: number; kind: 'round' | 'shell' | 'debris' }[];
   /** What the hands did that is heard (handling.ts): a reload's marks, the pump, an empty trigger's click; each at the gun's muzzle as its tick left it (`muzzle()`). */
   handling: { tick: number; cue: HandlingCue; at: [number, number, number] }[];
+  /** In a room, the battle's harm to the player: each a hurt for the room. */
+  harms: Harm[];
 }
 
 function noEvents(): CombatEvents {
-  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [] };
+  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [], harms: [] };
 }
 
 export interface SessionWorld {
@@ -298,6 +314,11 @@ export class Session {
    * set each frame) and the player's own. Off in solo play, which has no one to hit.
    */
   together = false;
+  /**
+   * In a room's match (the shared-battle spec): its shells are cut on the ground where their craters
+   * go out, and the battle harms the player (`harms`). Together sets it each frame; off in solo play.
+   */
+  room = false;
   bodies: Body[] = [];
   /**
    * The range's dummies (the shots spec's §5), set each frame: bodies only the player's rounds
@@ -336,6 +357,8 @@ export class Session {
   private readonly chipEnergyJ: number;
   /** A shell's splash's energy, at a crater of 3 m: by the cube of its radius. */
   private readonly splashEnergyJ: number;
+  /** [room_battle]'s harm: a blast's on the player, in a room. */
+  private readonly harmT: HarmTunables;
   /** A shell's debris thrown into water near it: over how many times its radius, how many points, each splash's energy, and how long the debris falls. */
   private readonly debris: { reach: number; samples: number; energyJ: number; fallS: [number, number] };
   /** Debris splashes due: when (the tick) and where (metres). */
@@ -379,6 +402,7 @@ export class Session {
     this.remoteRng = this.streams.derive('combat.remote_pellets');
     this.chipEnergyJ = tun.f('destruction.chip_energy_j');
     this.splashEnergyJ = tun.f('artillery.splash_energy_j');
+    this.harmT = harmTunables(tun);
     this.debris = {
       reach: tun.f('artillery.debris_splash_reach'),
       samples: tun.i('artillery.debris_splash_samples'),
@@ -918,24 +942,34 @@ export class Session {
     }
     // The front's shells: heard coming in whistle_s before they land.
     const shells = this.artillery.tick(dt, eye);
-    for (const sh of shells.announced) {
-      const top = groundTop(this.map, sh.x / this.voxel, sh.z / this.voxel);
-      if (top !== null) this.events.incoming.push({ tick: this.ticks, at: [sh.x, top * this.voxel, sh.z], landsInS: this.artillery.t.whistleS });
-    }
+    for (const sh of shells.announced) this.whistle(sh.x, sh.z, this.artillery.t.whistleS);
     for (const sh of shells.landed) this.land(sh.x, sh.z, sh.radiusM, sh.seed);
+  }
+
+  /** A shell heard coming in to (x, z) (metres), landing in `landsInS`: an incoming event at the top of the ground there; none off the map. */
+  whistle(x: number, z: number, landsInS: number): void {
+    const v = this.voxel;
+    const top = groundTop(this.map, x / v, z / v);
+    if (top !== null) this.events.incoming.push({ tick: this.ticks, at: [x, top * v, z], landsInS });
   }
 
   /**
    * A shell of `radiusM` landing at (x, z) (metres) on the top of the ground there, its crater cut
    * with `seed`: its blast now, its crater queued (an event once it is in the world). Its id, or null
    * where there is no ground (off the map).
+   *
+   * In a room its crater is cut on the ground where it is when the crater goes out (sim/destruction.ts),
+   * and while the player is alive its blast harms them by its distance from their chest, times
+   * cover_share if its way there is blocked (combat/harm.ts). `quiet` (a shell long overdue, a match
+   * over) queues its crater alone: no blast, no particles, debris, shake, suppression or harm.
    */
-  land(x: number, z: number, radiusM: number, seed: number): number | null {
+  land(x: number, z: number, radiusM: number, seed: number, quiet = false): number | null {
     const v = this.voxel;
     const top = groundTop(this.map, x / v, z / v);
     if (top === null) return null;
+    const id = this.destruction.shell([x / v, top, z / v], radiusM / v, seed, this.room);
+    if (quiet) return id;
     const material = this.map.get(Math.floor(x / v), top - 1, Math.floor(z / v));
-    const id = this.destruction.shell([x / v, top, z / v], radiusM / v, seed);
     const at: [number, number, number] = [x, top * v, z];
     this.events.blasts.push({ tick: this.ticks, at, radiusM, material, crater: id, seed });
     if (kindOf(material) === K.WATER) {
@@ -947,7 +981,29 @@ export class Session {
     const d = hypot(at[0] - p.position.x, at[1] - (p.position.y + this.controller.eyeHeight(p)), at[2] - p.position.z);
     this.blastShake.kick(d);
     this.suppression.blast(d);
+    if (this.room && this.alive) {
+      // To the chest, from a voxel over the struck ground: covered if that way is blocked.
+      const chest = toWorld(this.ownBody().torso, CHEST);
+      const covered = this.sight([x, at[1] + v, z], chest) !== null;
+      const amount = blastHarm(hypot(chest[0] - at[0], chest[1] - at[1], chest[2] - at[2]), radiusM, covered, this.harmT);
+      if (amount > 0) this.events.harms.push({ tick: this.ticks, amount, cause: 'shell' });
+    }
     return id;
+  }
+
+  /**
+   * A voxel ray from `from` to `to` (metres): where it meets solid (metres) a voxel or more short of
+   * `to`, or null if it gets that far. A blast's cover; the front's view of the player is the same ray.
+   */
+  private sight(from: readonly [number, number, number], to: readonly [number, number, number]): V3 | null {
+    const v = this.voxel;
+    const o: V3 = [from[0] / v, from[1] / v, from[2] / v];
+    const d = [to[0] / v - o[0], to[1] / v - o[1], to[2] / v - o[2]];
+    const length = hypot(d[0], d[1], d[2]);
+    if (length <= 1) return null;
+    const dir: V3 = [d[0] / length, d[1] / length, d[2] / length];
+    const hit = raycast(this.map, o, dir, length - 1);
+    return hit ? [(o[0] + dir[0] * hit.t) * v, (o[1] + dir[1] * hit.t) * v, (o[2] + dir[2] * hit.t) * v] : null;
   }
 
   /**
@@ -1263,5 +1319,7 @@ export class Session {
     this.landedTick = -1;
     // Put there facing the way given: no turn of the view for the hands to trail.
     this.look = [yaw, pitch];
+    // Nor its body as posed where it was: a shell landing before the next tick harms it here.
+    this.ownFrames = null;
   }
 }

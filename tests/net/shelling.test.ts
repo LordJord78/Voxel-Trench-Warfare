@@ -3,6 +3,7 @@ import { hash32 } from '../../src/core/hash';
 import { hypot } from '../../src/core/dmath';
 import { loadTunables } from '../../src/core/tunables';
 import { decodeShell, encodeShell } from '../../src/net/protocol';
+import { MAP_SEEDS } from '../../src/net/room-core';
 import { SHELL_FIELDS } from '../../src/net/shell-fields';
 import { SHELLING, Shelling, shellingSeed, type ScheduledShell, type ShellField } from '../../src/net/shelling';
 
@@ -131,5 +132,9 @@ describe("the room's shelling", () => {
     };
     expect(Object.keys(SHELLING).sort()).toEqual(Object.keys(keys).sort());
     for (const [name, key] of Object.entries(keys)) expect(SHELLING[name as keyof typeof SHELLING], key).toEqual(tun.get(`room_battle.${key}`));
+  });
+
+  it('has a field for every map the room plays', () => {
+    expect(Object.keys(SHELL_FIELDS).sort()).toEqual(Object.keys(MAP_SEEDS).sort());
   });
 });
