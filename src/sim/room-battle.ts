@@ -58,9 +58,9 @@ const HURT_LEAST = 1;
 const SETTLE_TICKS_MAX = 20_000;
 const SETTLE_MS_MAX = 60_000;
 /**
- * A catch-up lets the page breathe after this many of the log's scoops in a row (each dug at once,
- * with no settle to yield in), and after each run of the battle around the page of this many seconds
- * or more (a dark heavy second is 60 Director steps of tens of microseconds each).
+ * A catch-up lets the page breathe after every this many of the log's scoops (each dug at once, with
+ * no settle to yield in), and after each run of the battle around the page of this many seconds or
+ * more (a dark heavy second is 60 Director steps of tens of microseconds each).
  */
 const SCOOPS_A_BREATH = 32;
 const RUN_A_BREATH_S = 10;
@@ -199,7 +199,7 @@ export class RoomBattle {
       ...digs.map((dig, n): Entry => ({ at: dig.at, rank: 1, n, dig })),
     ];
     const due = entries.filter((e) => startAt === null || e.at <= nowMs).sort((a, b) => a.at - b.at || a.rank - b.rank || a.n - b.n);
-    /** The second the battle around the page was last run to (it runs from 0, never back), and the scoops in a row. */
+    /** The second the battle around the page was last run to (it runs from 0, never back), and the log's scoops taken. */
     let ranS = 0;
     let scoops = 0;
     const run = async (s: number, strikes: readonly Strike[]) => {
