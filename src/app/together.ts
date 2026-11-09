@@ -25,7 +25,7 @@ import { Lobby } from '../ui/lobby';
 import { MatchHud, type BoardRow } from '../ui/match-hud';
 import { MAP_NAMES, isMapId, type MapId } from '../world/generation/params';
 import type { FigureOverlay, HitFeedback } from './hit-feedback';
-import { makeRoom, NetClient } from './net-client';
+import { makeRoom, NetClient, type RoomEdit } from './net-client';
 import type { RemotePlayer } from './net-players';
 
 /** States sent a second. */
@@ -221,9 +221,14 @@ export class Together {
   /**
    * Whether this page's world has caught up with the room's: true, but from the room's welcome until
    * its log is caught up (RoomBattle.catchUp). Until then the session does not run, the battle is
-   * neither fed nor ticked (the room's edits wait in the net's queue), and Go is not offered.
+   * neither fed nor ticked (the room's edits wait in the net's queue), Go is not offered, and a match
+   * that ends waits to land its last shells (`ended`).
    */
   caughtUp = true;
+  /** The match the log is caught up on ended meanwhile: the catch-up's clock is then after every time. */
+  private overWhileCatching = false;
+  /** The battle work of each match's end that came while the log was caught up, done in order once it is. */
+  private onceCaughtUp: (() => void)[] = [];
   /**
    * The others' scoops the last match's battle still held when it ended (RoomBattle.finish), behind
    * craters not yet in: the next match's battle is given them before its first tick. The world, and
@@ -370,7 +375,7 @@ export class Together {
         const battle = this.matchBattle();
         if (this.net.clock.synced) {
           const nowMs = this.net.serverNow();
-          this.feed(battle, nowMs);
+          this.give(battle, this.net.takeEdits(), nowMs);
           battle.tick(nowMs);
         }
       }
@@ -575,10 +580,24 @@ export class Together {
     // for the next match. The match's shells and scoops told just before the end are still in the
     // queue; given as the match is over, the shells whistle for no time left, and those a scoop's
     // stamp lands are overdue, so quiet. The scoops still held wait for the next match's battle.
-    if (this.net) {
-      const battle = this.matchBattle();
-      this.feed(battle, Number.POSITIVE_INFINITY);
-      this.carried = battle.finish();
+    // While the room's log is caught up, not yet: the log's rest lands first, in order, on the battle
+    // catching up (the match's), then this, once it is (welcomed), with the edits the room sent before
+    // its end; those after it are the next match's.
+    const net = this.net;
+    if (net) {
+      const battle = this.battle;
+      const edits = net.takeEdits();
+      const over = () => {
+        const b = battle ?? this.matchBattle();
+        this.battle = null;
+        this.give(b, edits, Number.POSITIVE_INFINITY);
+        this.carried = b.finish();
+      };
+      if (this.caughtUp) over();
+      else {
+        this.overWhileCatching = true;
+        this.onceCaughtUp.push(over);
+      }
     }
     this.battle = null;
     this.inPlay = false;
@@ -594,17 +613,22 @@ export class Together {
 
   /**
    * The room's welcome: its log caught up on this page's battle (made now, in the lobby too) before the
-   * page plays, the session still and the room's edits waiting meanwhile; then the edits go to the
-   * battle, at the next frame. NetClient calls this after `started`, so no frame runs between the
-   * match's deploy and the catch-up. A page leaving for the room's map catches up on nothing here.
+   * page plays, the session still and the room's edits waiting meanwhile; then the end of each match
+   * that ended meanwhile, in order; then the edits go to the battle, at the next frame. NetClient calls
+   * this after `started`, so no frame runs between the match's deploy and the catch-up. A page leaving
+   * for the room's map catches up on nothing here.
    */
   private async welcomed(): Promise<void> {
     const net = this.net;
     if (!net || this.leaving) return;
     this.caughtUp = false;
+    this.overWhileCatching = false;
     const battle = (this.battle ??= this.hooks.battle());
     this.show();
-    await this.hooks.catchUp(battle, net.log, net.match, () => net.serverNow());
+    // The room's clock as the catch-up reads it: after every time once the match is over, as its end
+    // gives the match's last edits, so the shells still in the air are heard with none left to whistle.
+    await this.hooks.catchUp(battle, net.log, net.match, () => (this.overWhileCatching ? Number.POSITIVE_INFINITY : net.serverNow()));
+    for (const over of this.onceCaughtUp.splice(0)) over();
     this.caughtUp = true;
     this.show();
   }
@@ -618,9 +642,9 @@ export class Together {
     return battle;
   }
 
-  /** The room's edits heard since the last frame, to `battle` in the order they came, at `nowMs` on the room's clock (after every time: the match over). */
-  private feed(battle: RoomBattle, nowMs: number): void {
-    for (const e of this.net!.takeEdits()) {
+  /** The room's `edits`, to `battle` in the order they came, at `nowMs` on the room's clock (after every time: the match over). */
+  private give(battle: RoomBattle, edits: readonly RoomEdit[], nowMs: number): void {
+    for (const e of edits) {
       if (e.t === 'shell') battle.hear(e.shell, nowMs);
       else battle.dug(e.dig, nowMs);
     }

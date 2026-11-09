@@ -139,9 +139,10 @@ export class RoomBattle {
    * battle around the page, run along the log (null: none to run); `yieldNow` lets the page, and its
    * destruction worker, breathe between a settle's ticks.
    *
-   * - The session is set to the room first: the welcome comes between frames, before any prepare of
-   *   the match has set it (a hidden tab may run none during the whole catch-up), and a crater landed
-   *   off the room is cut where its shell landed, says nothing of what it struck, and strikes nothing.
+   * - The session is set to the room first, and again as each shell lands: the welcome comes between
+   *   frames, before any prepare of the match has set it (a hidden tab may run none during the whole
+   *   catch-up), a frame between the settles sets it off the room once the match is over, and a crater
+   *   landed off the room is cut where its shell landed, says nothing of what it struck, and strikes nothing.
    * - Its entries that decode, in time order, a shell before a scoop of the same ms: in a match, those
    *   due by the room's time as the catch-up begins; in the lobby, every one, whatever its time (a
    *   shell still in the air at the match's end, which `finish` landed on every page there).
@@ -160,7 +161,9 @@ export class RoomBattle {
    *   them (`dug`).
    *
    * While it runs, the page ticks neither the session nor this battle (together.ts caughtUp), and the
-   * room's edits wait in its queue.
+   * room's edits wait in its queue. A match that ends meanwhile waits for it too (together.ts ended):
+   * `now` is then after every time, so the shells still in the air are heard with none left, and the
+   * match's end lands them, quietly, after the log.
    */
   async catchUp(log: MatchLog, startAt: number | null, now: () => number, battle: BattleCatchUp | null, yieldNow: () => Promise<void>): Promise<void> {
     const { session } = this;
@@ -190,6 +193,9 @@ export class RoomBattle {
       }
       this.heard.add(shell.id);
       if (s !== null) battle?.runTo(s, []);
+      // Set again for each: a frame between the settles sets the session as the room is, off it once
+      // the match is over (it may end while the page catches up), and the shell is the room's all the same.
+      session.room = true;
       const id = session.land(shell.at[0], shell.at[1], shell.radius, shell.seed, true);
       const craters = await this.settle(yieldNow, shell);
       if (s === null) continue;

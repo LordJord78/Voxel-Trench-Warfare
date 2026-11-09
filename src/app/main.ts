@@ -700,10 +700,12 @@ async function start(): Promise<void> {
     // day then) and the player's feet, given each crater's strike first; its chars made at once, as
     // nothing is pending after a settle. With no match the battle and the clock are the visitor's,
     // and left alone. Then the battle is given the second it reached, and the next frame's step runs
-    // it on to now, silently past SILENT_STEP_S.
+    // it on to now, silently past SILENT_STEP_S. It is that battle throughout: if the room ends the
+    // match and starts the next while the log is caught up, the next's deploy makes its own, from 0.
     catchUp: async (room, log, match, now) => {
       let reached = 0;
       let along: BattleCatchUp | null = null;
+      const director = battle;
       if (match) {
         const { config } = match;
         const inputs = (s: number): BattleInputs => {
@@ -716,10 +718,10 @@ async function start(): Promise<void> {
         };
         along = {
           runTo: (s, strikes) => {
-            made(battle.tick(0, { ...inputs(reached), strikes }));
+            made(director.tick(0, { ...inputs(reached), strikes }));
             while (reached < s) {
               const next = Math.min(s, reached + 1);
-              made(battle.tick(next - reached, inputs(next)));
+              made(director.tick(next - reached, inputs(next)));
               reached = next;
             }
           },
@@ -734,7 +736,7 @@ async function start(): Promise<void> {
         return;
       }
       renderer.largeEdit();
-      if (match) battleGiven = reached;
+      if (match && battle === director) battleGiven = reached;
     },
   }, hits);
 

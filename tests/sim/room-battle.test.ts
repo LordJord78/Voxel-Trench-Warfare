@@ -884,6 +884,20 @@ describe("the room's log caught up on a page that joins or reloads", () => {
     expect(sameWorld(a.session.map, b.session.map)).toBe(true);
   }, 30_000);
 
+  it("a frame that sets the session off the room between the catch-up's settles changes nothing: each shell still lands on the room's ground, and strikes", async () => {
+    // The page's frames run between the settles' yields, and each sets the session as the room is:
+    // off it once the match is over (the room may end it while the page catches up). Two shells on
+    // the timber wall: each crater says what it struck, so each is the battle's strike.
+    const S1 = shell(1, 1_000, 2.0, 16.8, 1.5, 7_000);
+    const S2 = shell(2, 2_500, 11.0, 16.8, 1.5, 7_002);
+    const j = roomClient(walled(), PLAYER);
+    const spy = spyBattle();
+    await j.battle.catchUp(logOf([S1, S2]), 0, () => 3_000, spy, async () => {
+      j.session.room = false;
+    });
+    expect(spy.calls).toEqual([[1, 0], [1, 1], [2.5, 0], [2.5, 1], [3, 0]]);
+  });
+
   it('a catch-up whose crater never comes back fails loudly, naming it, rather than waiting for ever', async () => {
     const lost: DetonationRunner = { post: () => {}, take: () => [] };
     const j = roomClient(trenchArena(), PLAYER, 0, 1 / 60, lost);

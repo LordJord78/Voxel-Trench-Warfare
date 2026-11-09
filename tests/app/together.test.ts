@@ -1,10 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import { Gaits, howKilled, mapAction, relayUrl, shotTracer, type Figure } from '../../src/app/together';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Gaits, howKilled, mapAction, relayUrl, shotTracer, Together, type Figure, type TogetherHooks } from '../../src/app/together';
+import { fireTunables } from '../../src/battle/fires';
 import { holdOf } from '../../src/combat/arsenal';
 import { pose, type PoseInput, type V3 } from '../../src/combat/soldier-rig';
+import { loadTunables } from '../../src/core/tunables';
 import { decodeGear, TRACER_KIND } from '../../src/net/gear';
-import type { Seat } from '../../src/net/protocol';
+import { defaultConfig, type RoomShell, type Seat } from '../../src/net/protocol';
+import { RoomBattle } from '../../src/sim/room-battle';
 import { P } from '../../src/world/materials';
+import { roomClient, sameWorld, trenchArena } from '../support/worlds';
 
 describe('where the relay is', () => {
   const q = (s: string) => new URLSearchParams(s);
@@ -89,4 +93,237 @@ describe('the kill feed', () => {
     expect(howKilled(2, 'torso', true, 'round')).toBe('team-killed');
     expect(howKilled(2, 'limb', false, 'round')).toBe('shot');
   });
+});
+
+// A page that joins mid-match catches up on the room's log while the room plays on (together.ts
+// welcomed): the match may end, and the next start, before the catch-up is done. Together is made
+// here as the page makes it, on a stand-in for the page (FakePage) and the room's line (StubSocket),
+// its clock the test's; the session and its battle are a room client's (tests/support/worlds.ts).
+
+/** An element as the lobby and the match's HUD use it: what is set on it kept; children, none. */
+class FakeElement {
+  hidden = false;
+  textContent = '';
+  value = '';
+  className = '';
+  disabled = false;
+  readonly dataset: Record<string, string> = {};
+  readonly style: Record<string, string> = {};
+  private readonly classes = new Set<string>();
+  readonly classList = {
+    add: (c: string) => void this.classes.add(c),
+    remove: (c: string) => void this.classes.delete(c),
+    contains: (c: string) => this.classes.has(c),
+    toggle: (c: string, on: boolean) => void (on ? this.classes.add(c) : this.classes.delete(c)),
+  };
+  readonly elements = Object.assign([] as FakeElement[], { namedItem: () => null });
+  addEventListener(): void {}
+  querySelector(): FakeElement {
+    return new FakeElement();
+  }
+  querySelectorAll(): FakeElement[] {
+    return [];
+  }
+  replaceChildren(): void {}
+  append(): void {}
+  select(): void {}
+  focus(): void {}
+}
+
+/** The page as Together's lobby and HUD use it: its elements by id, each made as first asked for. */
+class FakePage {
+  activeElement: FakeElement | null = null;
+  hidden = false;
+  private readonly byId = new Map<string, FakeElement>();
+  getElementById(id: string): FakeElement {
+    let e = this.byId.get(id);
+    if (!e) this.byId.set(id, (e = new FakeElement()));
+    return e;
+  }
+  createElement(): FakeElement {
+    return new FakeElement();
+  }
+  createTextNode(): FakeElement {
+    return new FakeElement();
+  }
+  addEventListener(): void {}
+}
+
+/** The room's side of the line: the test opens it and says what the room says. */
+class StubSocket {
+  static readonly OPEN = 1;
+  static last: StubSocket | null = null;
+  readyState = 0;
+  private readonly listeners = new Map<string, ((e: unknown) => void)[]>();
+  constructor(readonly url: string) {
+    StubSocket.last = this;
+  }
+  addEventListener(type: string, fn: (e: unknown) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
+  }
+  send(): void {}
+  close(): void {
+    this.readyState = 3;
+  }
+  open(): void {
+    this.readyState = StubSocket.OPEN;
+    for (const fn of this.listeners.get('open') ?? []) fn({});
+  }
+  say(msg: Record<string, unknown>): void {
+    for (const fn of this.listeners.get('message') ?? []) fn({ data: JSON.stringify(msg) });
+  }
+}
+
+describe("a page catching up on the room's log while the room plays on", () => {
+  const tun = loadTunables();
+  const fireT = fireTunables(tun);
+  const PLAYER: [number, number, number] = [12.8, 6.4, 3.0];
+  const shell = (id: number, landAt: number, x: number, z: number, seed: number): RoomShell => ({ id, landAt, at: [x, z], radius: 2.0, seed });
+  const wire = (s: RoomShell) => [s.id, s.landAt, Math.round(s.at[0] * 1000), Math.round(s.at[1] * 1000), Math.round(s.radius * 1000), s.seed];
+  const seats = [{ id: 0, name: 'Jordan', team: 'red', ready: true, away: false }];
+  const MATCH = { startAt: 1_000, seed: 3, config: defaultConfig() };
+  // Four shells on the parapet, every crater over the others: in any other order, another world.
+  // S1 and S2 land before the welcome at 9 000; S3, told at 8 000, is in the air at it; S4 is told
+  // at 9 100, after it. The room ends the match at 10 000, before S4 lands: every page there lands
+  // it quietly then (RoomBattle.finish).
+  const S1 = shell(1, 3_000, 11.0, 15.0, 861);
+  const S2 = shell(2, 5_000, 12.5, 15.2, 862);
+  const S3 = shell(3, 9_500, 11.8, 15.4, 863);
+  const S4 = shell(4, 10_600, 12.0, 14.8, 864);
+
+  /** The world of a page that was there all along, the match over at 10 000 and every crater in. */
+  function stayed() {
+    const a = roomClient(trenchArena(), PLAYER);
+    for (const [s, told] of [[S1, 1_500], [S2, 3_500], [S3, 8_000], [S4, 9_100]] as const) {
+      a.step(told);
+      a.battle.hear(s, told);
+    }
+    a.step(10_000);
+    a.battle.finish();
+    a.step(14_000);
+    expect(a.battle.landed).toEqual([S1, S2, S3, S4]);
+    expect(a.session.destruction.pending).toBe(0);
+    return a;
+  }
+
+  let page = 0;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', StubSocket);
+    vi.stubGlobal('location', { href: 'http://localhost:5320/?room=ABCDE' });
+    vi.stubGlobal('history', { replaceState() {} });
+    vi.spyOn(performance, 'now').mockImplementation(() => page);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  /**
+   * A page joining the match: its Together, on a session not yet set to the room, welcomed at the
+   * room's 9 000 (its page clock 1 000) with S1, S2 and S3 in the log. Its catch-up runs as main.ts's
+   * does (no battle around the page here), and between its settles the page's frames run; at the
+   * first, the room's `say` comes. Each battle the page makes is kept, in order.
+   */
+  async function joining(say: (room: StubSocket) => void) {
+    const b = roomClient(trenchArena(), PLAYER);
+    b.session.room = false;
+    const doc = new FakePage();
+    const made: RoomBattle[] = [];
+    let caught: Promise<void> = Promise.resolve();
+    let yields = 0;
+    const status: string[] = [];
+    const frame = () => {
+      together.prepare(b.session, 1 / 60);
+      together.frame(b.session, false);
+    };
+    const yieldNow = async () => {
+      yields++;
+      page += 16;
+      expect(together.caughtUp).toBe(false);
+      if (yields === 1) {
+        say(StubSocket.last!);
+        status.push(doc.getElementById('lobby-status').textContent);
+      }
+      frame();
+    };
+    const hooks: TogetherHooks = {
+      map: defaultConfig().map,
+      switchMap() {},
+      showLobby() {},
+      deploy() {},
+      play() {},
+      ended() {},
+      note() {},
+      killed() {},
+      respawn() {},
+      battle: () => {
+        made.push(new RoomBattle(b.session, fireT));
+        return made[made.length - 1];
+      },
+      catchUp: (room, log, match, now) => (caught = room.catchUp(log, match?.startAt ?? null, now, null, yieldNow)),
+    };
+    const together = new Together(doc as unknown as Document, 'http://relay.test', 'build', null, hooks);
+    together.join('ABCDE');
+    page = 1_000;
+    StubSocket.last!.open();
+    StubSocket.last!.say({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats, config: defaultConfig(), phase: 'playing', match: MATCH, now: 9_000, log: { shells: [S1, S2, S3].map(wire), digs: [] } });
+    expect(together.caughtUp).toBe(false);
+    await caught;
+    await Promise.resolve();
+    // The room spoke inside S1's settle, and the catch-up went on after it: S2's settle yields too.
+    expect(yields).toBeGreaterThan(1);
+    return { b, together, made, status, frame };
+  }
+
+  /** `b`'s craters cut until none is pending, as its frames would once it plays. */
+  function settled(b: ReturnType<typeof roomClient>): void {
+    for (let k = 0; k < 2_000 && b.session.destruction.pending > 0; k++) b.session.advance(1 / 60);
+    expect(b.session.destruction.pending).toBe(0);
+  }
+
+  it("a match that ends during the catch-up ends with the room's world: the log's rest first, then the shells in the air, quietly", async () => {
+    const a = stayed();
+    // At the catch-up's first yield, inside S1's settle: S4 is told, and the room ends the match.
+    const { b, together, made, status } = await joining((room) => {
+      room.say({ t: 'shell', s: wire(S4) });
+      room.say({ t: 'end' });
+    });
+    expect(status).toEqual(['Catching up on the battle…']);
+    expect(together.caughtUp).toBe(true);
+    // One battle, the one caught up: it lands the log's rest in order, then the match over lands
+    // S3 (in the air at the welcome) and S4 (told after it), as on the page that was there.
+    expect(made).toHaveLength(1);
+    expect(together.battle).toBeNull();
+    expect([made[0].landed, made[0].waiting, made[0].held]).toEqual([[S1, S2, S3, S4], [], []]);
+    // Quietly, and with no whistle: the match is over, so every time has passed.
+    const e = b.session.drainEvents();
+    expect([e.incoming, e.blasts, e.harms]).toEqual([[], [], []]);
+    settled(b);
+    expect(b.session.destruction.lastId).toBe(4);
+    expect(sameWorld(a.session.map, b.session.map)).toBe(true);
+  }, 30_000);
+
+  it("the next match started during the catch-up is the next battle's: its shells are not the last match's to land", async () => {
+    // As above, then the owner starts the next match at 10 500 and its first shell is told: the
+    // page's battle for it is made once the catch-up is done, as the room's edits since the start.
+    const S5 = shell(5, 12_100, 6.0, 15.0, 865);
+    const { b, together, made, frame } = await joining((room) => {
+      room.say({ t: 'shell', s: wire(S4) });
+      room.say({ t: 'end' });
+      room.say({ t: 'start', match: { ...MATCH, startAt: 10_500 } });
+      room.say({ t: 'shell', s: wire(S5) });
+    });
+    expect(made).toHaveLength(1);
+    expect(together.battle).toBeNull();
+    expect([made[0].landed, made[0].waiting]).toEqual([[S1, S2, S3, S4], []]);
+    expect(b.session.drainEvents().incoming).toEqual([]);
+    frame();
+    expect(made).toHaveLength(2);
+    expect(together.battle).toBe(made[1]);
+    expect([made[1].landed, made[1].waiting]).toEqual([[], [S5]]);
+    // S5 whistles for its time, as any shell heard live does.
+    expect(b.session.drainEvents().incoming).toHaveLength(1);
+  }, 30_000);
 });
