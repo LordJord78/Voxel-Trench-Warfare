@@ -10,7 +10,7 @@ import { FRAME_S, LEAD_S, RATE, renders, TAIL_S } from '../../tools/sounds/rende
 // The sounds' proof (npm run sounds; the shots spec's §6, G3's Task 5): what is rendered, and what each
 // render is held to. Each hit's voice at the ear as the shooter hears it (planFeedback's placing, its
 // [hits] gain), held to the peak range and to the small speaker; the gush to its band and to the kill's
-// level; a steel plate's ring as heard from the spawn at the range's nearest and farthest plates, the
+// thud's level; a steel plate's ring as heard from the spawn at the range's nearest and farthest plates, the
 // farthest to a floor; and a headshot's kill as its shooter hears it, to its band over its first 300 ms.
 
 const tun = loadTunables();
@@ -54,8 +54,8 @@ describe("the sounds' proof: what it renders", () => {
     for (const name of ['ding-30m', 'ding-85m', 'headshot-kill']) expect(byName(name).rules?.high, name).toBeUndefined();
   });
 
-  it("the gush gushes: at least 55% of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill's", () => {
-    expect(byName('gush').rules).toEqual({ high: 0.25, band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3 } });
+  it("the gush gushes: at least 55% of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill's thud's (the kill under 400 Hz, apart from its chime)", () => {
+    expect(byName('gush').rules).toEqual({ high: 0.25, band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3, low: true } });
     // No other render is held to another's level, and only the gush and the headshot that kills to a band.
     for (const r of list) if (r.name !== 'gush') expect(r.rules?.near, r.name).toBeUndefined();
     expect(list.filter((r) => r.rules?.band).map((r) => r.name)).toEqual(['gush', 'headshot-kill']);

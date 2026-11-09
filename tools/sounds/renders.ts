@@ -9,7 +9,8 @@
  * The hits' voices (the shots spec's §4), each at the ear as the shooter hears it, at its [hits] gain,
  * and each held to the small speaker: a laptop barely plays what is under 400 Hz, so at least a quarter
  * of a voice's energy lies over it. The gush gushes: most of it in 400 Hz–2 kHz, and as loud over its
- * loudest 50 ms as the kill's, within 3 dB. A steel plate rings at the plate, so it is heard from the
+ * loudest 50 ms as the kill's thud, within 3 dB (the kill's part under 400 Hz: its chime, louder, is
+ * not the thud). A steel plate rings at the plate, so it is heard from the
  * spawn at the range's nearest and farthest plates too, the farthest held to a floor: its ring is the
  * shooter's only word of a hit there. And a headshot that kills, as its shooter hears it on the range,
  * the crack and the gush and a frame later the kill: the gush is not lost in it, a good share of its
@@ -53,8 +54,8 @@ export interface Render {
 const EARS: readonly FeedbackKind[] = ['hit', 'head', 'gush', 'kill', 'ding', 'hurt'];
 /** The small speaker: at least this share of a voice's energy over 400 Hz. */
 const SMALL_SPEAKER = 0.25;
-/** The gush gushes: at least this share of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill's. */
-const GUSH: SoundRules = { band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3 } };
+/** The gush gushes: at least this share of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill thud's (the kill's part under 400 Hz, apart from its chime). */
+const GUSH: SoundRules = { band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3, low: true } };
 /** A headshot that kills: at least this share of its first 300 ms's energy in 400 Hz–2 kHz, the gush not lost under the kill. */
 const HEADSHOT_KILL: SoundRules = { band: { hz: [400, 2000], share: 0.35, firstS: 0.3 } };
 /** The farthest plate's ring heard from the spawn: its peak at least this (dBFS). */

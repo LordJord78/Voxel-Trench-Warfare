@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BAND, bandShare, checkSound, dbfs, LOUDEST_S, loudest, measure, ONSET_DB, onset, PEAK_DB, ruleShare, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
+import { BAND, bandShare, checkSound, dbfs, LOUDEST_S, loudest, loudestUnder, measure, ONSET_DB, onset, PEAK_DB, ruleShare, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
 
 // The sounds' proof (tools/render-sounds.mjs, npm run sounds; the shots spec's §6, G3's Task 5): each
 // voice rendered to a stereo WAV, its peak held between −30 and −1 dBFS, nothing silent; a voice held
@@ -140,6 +140,25 @@ describe("the sounds' measures", () => {
     expect(loudest(new Float32Array(100), RATE).db).toBe(-Infinity);
   });
 
+  it("a voice's body: its loudest 50 ms under 400 Hz alone, a kill's thud apart from its louder chime, both ears together", () => {
+    // A thud of 6 cycles at 60 Hz, a fifth of full scale, from 10 ms; from 70 ms a chime at 1 kHz three times as loud, for 0.2 s.
+    const at = (t: number, from: number, s: number, hz: number, amp: number) => (t >= from && t < from + s ? amp * Math.sin(2 * Math.PI * hz * (t - from)) : 0);
+    const kill = signal(0.4, (t) => at(t, 0.01, 0.1, 60, 0.2) + at(t, 0.07, 0.2, 1000, 0.6));
+    const m = measure(kill, RATE);
+    // The whole voice's loudest 50 ms is the chime's; under 400 Hz, it is the thud's alone.
+    expect(m.loudestDb).toBeGreaterThan(dbfs(0.6) - 3.1);
+    expect(m.lowLoudestDb).toBeCloseTo(dbfs(0.2) - 3.01, 1);
+    expect(loudestUnder(kill, RATE, SMALL_SPEAKER_HZ).db).toBeCloseTo(m.lowLoudestDb, 9);
+    expect(loudestUnder(kill, RATE, SMALL_SPEAKER_HZ).atS).toBeGreaterThan(0.005);
+    expect(loudestUnder(kill, RATE, SMALL_SPEAKER_HZ).atS).toBeLessThan(0.065);
+    // Both ears: the window's mean power over them.
+    expect(measure([kill, new Float32Array(kill.length)], RATE).lowLoudestDb).toBeCloseTo(dbfs(0.2) - 3.01 - 3.01, 1);
+    // A chime alone has next to nothing under 400 Hz (its abrupt edges leak a little: 30 dB under it); silence nothing at all.
+    const chime = measure(signal(0.4, (t) => at(t, 0.07, 0.2, 1000, 0.6)), RATE);
+    expect(chime.lowLoudestDb).toBeLessThan(chime.loudestDb - 25);
+    expect(measure(new Float32Array(4800), RATE).lowLoudestDb).toBe(-Infinity);
+  });
+
   it("a rule's own band, measured apart from the table's: over the whole file, or its first seconds from its onset", () => {
     expect(ONSET_DB).toBe(-60);
     // A chime for 0.3 s after 22 ms of silence (a render's lead, the compressor's look-ahead and the HRTF's delay), then a thud as loud for 0.3 s.
@@ -161,7 +180,7 @@ describe("the sounds' measures", () => {
   });
 
   /** A file read, ok by every rule but those a test changes. */
-  const read = (m: Partial<Parameters<typeof checkSound>[0]> = {}) => ({ peakDb: -6, rmsDb: -18, loudestDb: -12, loudestAtS: 0.01, bandShare: 0.2, highShare: 0.6, ...m });
+  const read = (m: Partial<Parameters<typeof checkSound>[0]> = {}) => ({ peakDb: -6, rmsDb: -18, loudestDb: -12, loudestAtS: 0.01, lowLoudestDb: -20, bandShare: 0.2, highShare: 0.6, ...m });
 
   it('a file passes with its peak between −30 and −1 dBFS; over −1 it may clip, under −30 it is too quiet, and nothing at all is silent', () => {
     expect(PEAK_DB).toEqual([-30, -1]);
@@ -210,6 +229,24 @@ describe("the sounds' measures", () => {
     expect(checkSound(read({ loudestDb: -27.2 }), { near }, { kill })).toEqual(["its loudest 50 ms, -27.2 dBFS, is 11.0 dB under kill's (-16.2 dBFS), not within 3 dB"]);
     expect(checkSound(read({ loudestDb: -12.0 }), { near }, { kill })).toEqual(["its loudest 50 ms, -12.0 dBFS, is 4.2 dB over kill's (-16.2 dBFS), not within 3 dB"]);
     expect(checkSound(read({ loudestDb: -18 }), { near }, {})).toEqual(["its level is held to kill's, which was not rendered"]);
+  });
+
+  it("a voice held to another's body (`low`) is read against the other's loudest 50 ms under 400 Hz alone: the gush against the kill's thud, never its louder chime", () => {
+    const near = { of: 'kill', withinDb: 3, low: true };
+    // The kill as heard: its chime's window −14.5, its thud's −16.0.
+    const kill = read({ loudestDb: -14.5, lowLoudestDb: -16.0 });
+    expect(checkSound(read({ loudestDb: -16.9 }), { near }, { kill })).toEqual([]);
+    expect(checkSound(read({ loudestDb: -13.0 }), { near }, { kill })).toEqual([]);
+    // 2 dB over the whole kill but 3.5 over its thud: too loud.
+    expect(checkSound(read({ loudestDb: -12.5 }), { near }, { kill })).toEqual(["its loudest 50 ms, -12.5 dBFS, is 3.5 dB over kill's under 400 Hz (-16.0 dBFS), not within 3 dB"]);
+    // 4 dB under the whole kill but 2.5 under its thud: near enough.
+    expect(checkSound(read({ loudestDb: -18.5 }), { near }, { kill })).toEqual([]);
+    expect(checkSound(read({ loudestDb: -19.5 }), { near }, { kill })).toEqual(["its loudest 50 ms, -19.5 dBFS, is 3.5 dB under kill's under 400 Hz (-16.0 dBFS), not within 3 dB"]);
+    // Unmeasured is a failure, not a pass.
+    const { lowLoudestDb: _, ...unread } = kill;
+    expect(checkSound(read({ loudestDb: -16.9 }), { near }, { kill: unread as never })).toEqual(["its level is held to kill's under 400 Hz, which was not measured"]);
+    // Without `low`, the whole kill as before.
+    expect(checkSound(read({ loudestDb: -12.5 }), { near: { of: 'kill', withinDb: 3 } }, { kill })).toEqual([]);
   });
 
   it('a table of each file: its name, peak, RMS, loudest 50 ms, its share in BAND and over 400 Hz, and what failed of it', () => {

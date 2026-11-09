@@ -5,12 +5,14 @@ export type Channel = ArrayLike<number> & Iterable<number> & { subarray?: (from:
 /** One channel, or a list of them (a stereo render's left and right). */
 export type Channels = Channel | readonly Channel[];
 
-/** A file read with both ears together: its peak, RMS and loudest 50 ms (dBFS) and where that starts (s), its energy's share in BAND and over SMALL_SPEAKER_HZ. */
+/** A file read with both ears together: its peak, RMS and loudest 50 ms (dBFS) and where that starts (s), its body's loudest 50 ms, its energy's share in BAND and over SMALL_SPEAKER_HZ. */
 export interface Measured {
   peakDb: number;
   rmsDb: number;
   loudestDb: number;
   loudestAtS: number;
+  /** Its body's loudest 50 ms (dBFS): its part under SMALL_SPEAKER_HZ alone (a kill's thud, apart from its chime). */
+  lowLoudestDb: number;
   bandShare: number;
   highShare: number;
   /** A band rule's own share (ruleShare), measured apart from BAND's. */
@@ -31,8 +33,8 @@ export interface SoundRules {
   high?: number;
   /** Its peak at least this (dBFS). */
   floorDb?: number;
-  /** Its loudest 50 ms within `withinDb` of render `of`'s. */
-  near?: { of: string; withinDb: number };
+  /** Its loudest 50 ms within `withinDb` of render `of`'s; with `low`, of `of`'s body's, under SMALL_SPEAKER_HZ alone (the kill's thud, never its chime). */
+  near?: { of: string; withinDb: number; low?: boolean };
 }
 
 /** A file's row in the table: what it measured, what failed of it, and whether a failure fails the run (default true). */
@@ -52,6 +54,7 @@ export function dbfs(x: number): number;
 export function wav(x: Channels, rate: number): Uint8Array;
 export function bandShare(x: Channels, rate: number, lo: number, hi: number): number;
 export function loudest(x: Channels, rate: number, windowS?: number): { db: number; atS: number };
+export function loudestUnder(x: Channels, rate: number, hz: number, windowS?: number): { db: number; atS: number };
 export function measure(x: Channels, rate: number): Measured;
 export function onset(x: Channels, rate: number): number | null;
 export function ruleShare(x: Channels, rate: number, rule: BandRule): number;

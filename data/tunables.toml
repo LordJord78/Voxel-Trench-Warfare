@@ -732,9 +732,9 @@ kill_gain           = 0.9      # ring (at the plate, heard from the firing step)
 ding_gain           = 1.5      # being hit. npm run sounds holds each: its peak in
 hurt_gain           = 0.7      # -30 to -1 dBFS, a quarter of it over 400 Hz (a
                                # laptop's speakers), and the gush's loudest 50 ms
-                               # within 3 dB of the kill's. The gush is a narrow
-                               # band of noise fluttering down to a quarter, and
-                               # the compressor takes its peaks: hence its gain
+                               # within 3 dB of the kill's thud's. The gush is a
+                               # narrow band of noise fluttering down to a quarter,
+                               # and the compressor takes its peaks: hence its gain
 hit_heard_m         = 30.0     # another's round into a body is heard where it struck
 gush_heard_m        = 25.0     # this near; a headshot's gush this near
 hurt_flash_min      = 0.25     # being hit: a red flash at the damage's share of 100,

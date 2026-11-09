@@ -1,9 +1,10 @@
 // The sounds' proof's measures (tools/render-sounds.mjs, npm run sounds; the shots spec's §6, G3's Task 5):
 // a voice rendered offline is written as a stereo WAV, and read with both ears together: its peak (the
-// louder ear's), RMS and loudest 50 ms (dBFS), the share of its energy in 400 Hz–2 kHz and over 400 Hz
-// (an FFT of each ear, their energy summed). Each file's peak is held between −30 and −1 dBFS and none
-// may be silent; a render may be held besides to a band, to the small speaker (its share over 400 Hz),
-// to a floor under its peak, or to another render's loudest 50 ms. Plain JS, so the render page
+// louder ear's), RMS and loudest 50 ms (dBFS), its body's loudest 50 ms (its part under 400 Hz alone),
+// the share of its energy in 400 Hz–2 kHz and over 400 Hz (an FFT of each ear, their energy summed).
+// Each file's peak is held between −30 and −1 dBFS and none may be silent; a render may be held besides
+// to a band, to the small speaker (its share over 400 Hz), to a floor under its peak, or to another
+// render's loudest 50 ms, or its body's (a kill's thud, apart from its chime). Plain JS, so the render page
 // (tools/sounds/page.ts, which runs the FFT where it renders) and the tests read the same code.
 
 /** A file's peak must lie in this range (dBFS): over the top it may clip, under the bottom it is too quiet. */
@@ -100,6 +101,32 @@ function fft(re, im) {
   }
 }
 
+/**
+ * One channel's part under `hz` Hz: its FFT (zero-padded to a power of 2) with every bin over `hz`
+ * zeroed, and back, cut to its length. A brick wall, so a kill's thud (under 100 Hz) comes out whole and
+ * its chime (880 Hz and up) not at all.
+ */
+function under(samples, rate, hz) {
+  let n = 1;
+  while (n < samples.length) n <<= 1;
+  const re = new Float64Array(n);
+  const im = new Float64Array(n);
+  for (let i = 0; i < samples.length; i++) re[i] = samples[i];
+  fft(re, im);
+  for (let k = 0; k < n; k++) {
+    if ((Math.min(k, n - k) * rate) / n > hz) {
+      re[k] = 0;
+      im[k] = 0;
+    }
+  }
+  // The inverse: the FFT of the conjugate, conjugated, over n (its real part is all there is).
+  for (let k = 0; k < n; k++) im[k] = -im[k];
+  fft(re, im);
+  const out = new Float64Array(samples.length);
+  for (let i = 0; i < samples.length; i++) out[i] = re[i] / n;
+  return out;
+}
+
 /** One channel's energy (its power spectrum's sum, Parseval's) all told, and between `lo` and `hi` Hz. */
 function energy(samples, rate, lo, hi) {
   let n = 1;
@@ -162,9 +189,19 @@ export function loudest(x, rate, windowS = LOUDEST_S) {
 }
 
 /**
+ * The loudest `windowS` of `x`'s part under `hz` Hz alone (one channel or a list, at `rate`; each
+ * channel cut by under()): its RMS in dBFS, both ears together, and where it starts (s). A voice's body
+ * apart from its bright parts: a kill's thud, under its louder chime.
+ */
+export function loudestUnder(x, rate, hz, windowS = LOUDEST_S) {
+  return loudest(channelsOf(x).map((c) => under(c, rate, hz)), rate, windowS);
+}
+
+/**
  * `x` (one channel or a list, at `rate`) read with both ears together: its peak (the louder ear's), RMS
- * and loudest 50 ms in dBFS and where that starts (s), the share of its energy in BAND (the table's
- * column, always BAND), and the small speaker's: its share over SMALL_SPEAKER_HZ.
+ * and loudest 50 ms in dBFS and where that starts (s), its body's loudest 50 ms (its part under
+ * SMALL_SPEAKER_HZ alone: a kill's thud), the share of its energy in BAND (the table's column, always
+ * BAND), and the small speaker's: its share over SMALL_SPEAKER_HZ.
  */
 export function measure(x, rate) {
   const channels = channelsOf(x);
@@ -184,6 +221,7 @@ export function measure(x, rate) {
     rmsDb: dbfs(Math.sqrt(sum / Math.max(1, count))),
     loudestDb: l.db,
     loudestAtS: l.atS,
+    lowLoudestDb: loudestUnder(channels, rate, SMALL_SPEAKER_HZ).db,
     bandShare: bandShare(channels, rate, BAND[0], BAND[1]),
     highShare: bandShare(channels, rate, SMALL_SPEAKER_HZ, Infinity),
   };
@@ -234,7 +272,8 @@ const pct = (x) => `${Math.round(x * 100)}%`;
  * `rules`, under its floor (`floorDb`), too little of its energy in its band (`band`: at least `share`
  * of it in `hz`, over its first `firstS` seconds if given; half, if it asks no share), too little over
  * 400 Hz for a small speaker (`high`), or its loudest 50 ms further than `near.withinDb` from render
- * `near.of`'s, read in `others` (each render's measure by its name).
+ * `near.of`'s, read in `others` (each render's measure by its name): from its loudest 50 ms, or with
+ * `near.low` from its body's, under SMALL_SPEAKER_HZ alone (the kill's thud, never its louder chime).
  */
 export function checkSound(m, rules = {}, others = {}) {
   if (!(m.peakDb >= SILENT_DB)) return ['it is silent'];
@@ -251,12 +290,15 @@ export function checkSound(m, rules = {}, others = {}) {
   }
   if (rules.high !== undefined && !(m.highShare >= rules.high)) out.push(`only ${pct1(m.highShare)} of its energy is over ${SMALL_SPEAKER_HZ} Hz, not ${pct(rules.high)} or more: a small speaker barely plays it`);
   if (rules.near) {
-    const { of, withinDb } = rules.near;
+    const { of, withinDb, low } = rules.near;
     const other = others[of];
+    const whose = low ? `${of}'s under ${SMALL_SPEAKER_HZ} Hz` : `${of}'s`;
+    const level = other && (low ? other.lowLoudestDb : other.loudestDb);
     if (!other) out.push(`its level is held to ${of}'s, which was not rendered`);
+    else if (typeof level !== 'number') out.push(`its level is held to ${whose}, which was not measured`);
     else {
-      const gap = m.loudestDb - other.loudestDb;
-      if (!(Math.abs(gap) <= withinDb)) out.push(`its loudest 50 ms, ${db1(m.loudestDb)} dBFS, is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'under' : 'over'} ${of}'s (${db1(other.loudestDb)} dBFS), not within ${withinDb} dB`);
+      const gap = m.loudestDb - level;
+      if (!(Math.abs(gap) <= withinDb)) out.push(`its loudest 50 ms, ${db1(m.loudestDb)} dBFS, is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'under' : 'over'} ${whose} (${db1(level)} dBFS), not within ${withinDb} dB`);
     }
   }
   return out;
