@@ -26,9 +26,12 @@
  *     anything but the ground stands within 2 m over its walk;
  *   - (given the eye: a player's, standing on the spawn bay's firing step) the eye does not see it.
  *     A dummy is sighted at its chest (dummy_chest_m over its feet), a mover at both ends of its walk
- *     and at its middle, a plate at its centre; the line from the eye meets something that hides it
- *     (a parapet, a trunk, rising ground, a tree's leaves, though they stop no round), or a plate
- *     laid nearer, which will stand in the world.
+ *     and at its middle, a plate at its centre; the line from the eye meets something that hides it,
+ *     or a plate laid nearer, which will stand in the world. What hides is what the renderer draws,
+ *     every voxel but air: a parapet, a trunk, rising ground, and a tree's leaves and wire though
+ *     they stop no round, and water's top. The Ravine's 25 m dummy shows from the knees up: the
+ *     step's eye stands just over its own crest by design ([world.trench] crest_clearance_m), so a
+ *     near target's legs fall under the crest's line; its chest, where it is sighted, is in view.
  * - **The dummies** (Range): 100 HP, a match's damage (gunDamage(DAMAGE[zone], gun)), and health back
  *   as a match's comes back (net/match-rules.ts). At 0 HP one lies down_s, taking nothing, then
  *   stands where it lies at full health. A mover walks mover_span_m back and forth across at
@@ -45,7 +48,7 @@ import { DAMAGE, HP, REGEN_DELAY_MS, REGEN_PER_S } from '../net/match-rules';
 import type { BrickMap } from '../world/bricks';
 import { vx } from '../world/generation/params';
 import { bayIndex, type WorldPlan } from '../world/generation/plan';
-import { blocksSight, isGranular, K, kindOf, P } from '../world/materials';
+import { isGranular, K, kindOf, P } from '../world/materials';
 import { groundTop, raycast } from '../world/raycast';
 import type { Zone } from './soldier-rig';
 
@@ -327,14 +330,16 @@ function crosses(o: V3, d: V3, c: V3): boolean {
 }
 
 /**
- * What hides a target from the eye (raycast's stops): anything that blocks sight. Everything solid
- * does, and so do a tree's leaves, which stop no round.
+ * What hides a target from the eye (raycast's stops): what the renderer draws, every voxel but air.
+ * The primary tracer stops on every occupied voxel (traverse.wgsl traceWorld) and shade.wgsl draws
+ * water's top opaque, so a tree's leaves, wire and water hide what is behind them as anything solid
+ * does, though leaves and wire stop no round and their kinds' rule says they block no sight.
  */
-const HIDES = Uint8Array.from({ length: 256 }, (_, p) => (p !== P.AIR && blocksSight(p) ? 1 : 0));
+const HIDES = Uint8Array.from({ length: 256 }, (_, p) => (p !== P.AIR ? 1 : 0));
 
 /**
  * Whether `point` is in sight from `eye` (metres): the line between them meets nothing in the map
- * that hides it (world/raycast's walk), solid or leaves, nor any cell of `screens`: the plates laid
+ * that hides it (world/raycast's walk), any voxel but air, nor any cell of `screens`: the plates laid
  * in front of it, which stand in the world once the range is up.
  */
 function inSight(map: BrickMap, voxel: number, eye: V3, point: V3, screens: readonly V3[]): boolean {
@@ -368,7 +373,7 @@ function sighted(spawn: readonly [number, number, number], f: Frame, at: readonl
  * world's plan, a spot in a bay's or a leg's footprint is blocked whatever its ground looks like.
  * Sighted from `eye` (metres: a player's standing on the spawn bay's firing step, as the app's is), a
  * spot is laid only where the eye sees it (sightPoints, inSight): the line from the eye meets nothing
- * that hides it, solid or leaves, nor a plate laid nearer; one it does not see is blocked, and moves
+ * that hides it, any voxel but air, nor a plate laid nearer; one it does not see is blocked, and moves
  * on as one is. The plan and the eye are asked for every time, null for none: an eye of null lays
  * the unsighted layout, which only a test comparing the two wants; an eye left out is refused, never
  * taken for null.

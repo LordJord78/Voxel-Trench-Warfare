@@ -9,7 +9,7 @@ import { fillBand } from '../../src/world/generation/fill';
 import { generateWorld, type GeneratedWorld } from '../../src/world/generation/generate';
 import { MAP_SEEDS, genParams, type MapId } from '../../src/world/generation/params';
 import { planWorld, type WorldPlan } from '../../src/world/generation/plan';
-import { blocksSight, isGranular, isSolid, K, kindOf, P } from '../../src/world/materials';
+import { blocksSight, isGranular, K, kindOf, P } from '../../src/world/materials';
 import { groundTop, raycast } from '../../src/world/raycast';
 
 // The range (the shots spec's §5): dummies and steel plates out along the spawn bay's facing, each
@@ -46,8 +46,12 @@ function footprints(w: GeneratedWorld): [string, number, number, number, number]
 
 const MAPS: readonly MapId[] = ['ravine', 'corridor'];
 
-/** What hides a target from an eye (raycast's stops): anything that blocks sight, whether or not it stops a round. */
-const HIDES = Uint8Array.from({ length: 256 }, (_, p) => (p !== P.AIR && blocksSight(p) ? 1 : 0));
+/**
+ * What hides a target from an eye (raycast's stops): what the renderer draws, every voxel but air
+ * (the primary tracer stops on every occupied voxel, traverse.wgsl traceWorld, and shade.wgsl draws
+ * water's top opaque), whether or not it stops a round or blocks sight by its kind's rule.
+ */
+const HIDES = Uint8Array.from({ length: 256 }, (_, p) => (p !== P.AIR ? 1 : 0));
 
 describe('the range over the generated worlds', () => {
   const worlds = new Map<MapId, GeneratedWorld>();
@@ -95,16 +99,14 @@ describe('the range over the generated worlds', () => {
     expect(w.map.dims.z * v - w.spawn.position[2]).toBeLessThan(150);
   });
 
-  it('the same on the Corridor: its 5 plates, and 5 dummies and a mover; unsighted, the 150 m dummy and the 90 m mover with them', () => {
+  it('on the Corridor, 4 dummies, no mover and its 5 plates: the bay\'s own wire hides the 110 m dummy and the movers from the step, and spoil the 150 m dummy; unsighted, all of them', () => {
     const w = world('corridor');
     const spots = laid('corridor');
-    // Sighted from the step, the Corridor keeps its five plates and six dummies at the least. The
-    // 150 m dummy is behind rising spoil 32 m out wherever it is tried; the 90 m mover's one dry,
-    // clear walk has an end behind a picket of the bay's own wire.
-    const kinds = distances(spots);
-    expect(kinds.torso.length + kinds.head.length).toBe(5);
-    expect(kinds.dummy.length + kinds.mover.length).toBeGreaterThanOrEqual(6);
-    expect(kinds).toEqual({ dummy: [25, 40, 60, 80, 110], mover: [50], torso: [30, 55, 85], head: [45, 70] });
+    // Sighted from the step as the renderer draws the world (wire hides, though rounds pass it): the
+    // 110 m dummy and the 50 m mover stand behind the bay's own wire belt 6 m out wherever they are
+    // tried, the 90 m mover's one dry, clear walk has an end behind a picket of it, and the 150 m
+    // dummy is behind rising spoil 32 m out.
+    expect(distances(spots)).toEqual({ dummy: [25, 40, 60, 80], mover: [], torso: [30, 55, 85], head: [45, 70] });
     expect(distances(rangeLayout(w.map, w.plan.params.voxel, w.spawn, t, w.plan, null))).toEqual({ dummy: [25, 40, 60, 80, 110, 150], mover: [50, 90], torso: [30, 55, 85], head: [45, 70] });
     for (const s of spots) {
       const a = along(w.spawn, s.at);
@@ -165,10 +167,31 @@ describe('the range over the generated worlds', () => {
     }
   });
 
+  it('each map lays at least 4 dummies and 4 plates (the ruled floor), and water moves nothing: none lies on a line the layout sighted', () => {
+    for (const map of MAPS) {
+      const w = world(map);
+      const v = w.plan.params.voxel;
+      const spots = laid(map);
+      const kinds = distances(spots);
+      expect(kinds.dummy.length + kinds.mover.length, map).toBeGreaterThanOrEqual(4);
+      expect(kinds.torso.length + kinds.head.length, map).toBeGreaterThanOrEqual(4);
+      // Water lies in basins under their rims: from the step, none is on the line to any target laid.
+      const WATER = Uint8Array.from({ length: 256 }, (_, p) => (kindOf(p) === K.WATER ? 1 : 0));
+      const eye = eyeOf(map);
+      for (const s of spots) {
+        const p = s.kind === 'torso' || s.kind === 'head' ? plateCentre(plateVoxels(s, v, t, w.spawn.bay), v) : [s.at[0], s.at[1] + t.dummyChestM, s.at[2]];
+        const d = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
+        const len = Math.hypot(d[0], d[1], d[2]);
+        expect(raycast(w.map, [eye[0] / v, eye[1] / v, eye[2] / v], [d[0] / len, d[1] / len, d[2] / len], len / v, undefined, WATER), `${map}: ${s.kind} ${s.distanceM} m`).toBeNull();
+      }
+    }
+  });
+
   it("from the spawn bay's firing step every target laid is in sight, its plates standing in the world: a dummy's chest, a mover's at both ends of its walk and its middle, a plate's centre", () => {
     const eyeM = tun.f('player.eye_height_standing');
-    // Whatever stops a round hides what is behind it too: a line that nothing hides is clear of anything solid.
-    for (let p = 0; p < 256; p++) if (isSolid(p)) expect(HIDES[p], `palette ${p}`).toBe(1);
+    // What the renderer draws hides what is behind it: every palette id but air, wire and water too.
+    for (let p = 0; p < 256; p++) expect(HIDES[p], `palette ${p}`).toBe(p === P.AIR ? 0 : 1);
+    for (const p of [P.WIRE, P.WIRE_RUST, P.WATER]) expect([HIDES[p], blocksSight(p)], `palette ${p}`).toEqual([1, false]);
     for (const map of MAPS) {
       const w = world(map);
       const v = w.plan.params.voxel;
@@ -720,9 +743,12 @@ describe("the range's dummies", () => {
     const r = new Range([{ kind: 'mover', at: [20.05, 1.6, 50.05], distanceM: 50 }], t, BAY);
     const DT = 0.01;
     const xs: number[] = [];
+    /** Each sample's velocity along x, beside its position. */
+    const v: number[] = [];
     for (let k = 0; k <= 2400; k++) {
       const f = r.figures(k * DT)[0];
       xs.push(f.position[0]);
+      v.push(f.velocity[0]);
       expect([f.position[1], f.position[2], f.deadFor]).toEqual([1.6, 50.05, null]);
       // Across the bay's facing, at 1.4 m/s; facing +x as it walks +x, -x as it walks -x.
       expect(Math.abs(f.velocity[0])).toBeCloseTo(1.4, 9);
@@ -734,14 +760,18 @@ describe("the range's dummies", () => {
     expect(xs[1]).toBeGreaterThan(xs[0]);
     expect(Math.min(...xs)).toBeCloseTo(16.05, 1);
     expect(Math.max(...xs)).toBeCloseTo(24.05, 1);
-    // Each step's way: a step with a turn in it is any whose neighbours go opposite ways.
+    // Each step's way: a step with a turn in it is any whose neighbours go opposite ways. On every
+    // other, it walks the way it moves (its velocity, and so its facing, with it), after a turn too.
     const ways = xs.slice(1).map((x, k) => Math.sign(x - xs[k]));
     let clean = 0;
     for (let k = 1; k < ways.length - 1; k++) {
       if (ways[k - 1] !== ways[k + 1]) continue;
       clean++;
       expect(Math.abs(xs[k + 1] - xs[k]) / DT, `${k * DT} s`).toBeCloseTo(1.4, 6);
+      expect(Math.sign(v[k]), `${k * DT} s`).toBe(ways[k]);
     }
+    // Both ways, each after a turn.
+    expect([ways.includes(1), ways.includes(-1)]).toEqual([true, true]);
     expect(clean).toBeGreaterThan(2300);
     // Back where it was each 16 m of walking (11.43 s).
     const period = (2 * 8) / 1.4;
