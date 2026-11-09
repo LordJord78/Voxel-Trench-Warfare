@@ -64,13 +64,17 @@ export interface BattleInputs {
 /**
  * A shell of the session's landed: where it struck (metres), the material it struck, and its crater's
  * id; and its seed, if it has one (a room's shell): its fire's chance, size and burn are then drawn
- * from it, the same on every client whatever each drew before.
+ * from it, the same on every client whatever each drew before. `atS`, if it has one (a room's shell),
+ * is the battle's second its shell landed at, on the match's clock: its fire stands from then, however
+ * late this page's crater went in (its worker, a hidden tab, a catch-up), so it grows, lights and chars
+ * on every client alike.
  */
 export interface Strike {
   at: [number, number, number];
   material: number;
   crater: number | null;
   seed?: number;
+  atS?: number;
 }
 
 /** A fire as it is: where, how hard it burns (0 to 1), its size, whether it is the hamlet's, and whether it is dying down. */
@@ -394,7 +398,9 @@ export class Director {
       const size = sr.uniform(ft.size[0], ft.size[1]);
       const burnS = sr.uniform(ft.burnS[0], ft.burnS[1]);
       if (roll >= fireChance(s.material, ft)) continue;
-      const f = { id: this.nextFire++, at: [s.at[0], s.at[1], s.at[2]] as [number, number, number], t0: now, burnS, size, hamlet: false, crater: s.crater, charred: false };
+      // A room's shell's fire stands from its landing (fireStrength depends on now − t0 alone); never from later than now.
+      const t0 = s.atS === undefined ? now : Math.min(now, s.atS);
+      const f = { id: this.nextFire++, at: [s.at[0], s.at[1], s.at[2]] as [number, number, number], t0, burnS, size, hamlet: false, crater: s.crater, charred: false };
       this.burning.push(f);
       events.fires.push({ id: f.id, at: f.at });
     }

@@ -1124,8 +1124,9 @@ async function start(): Promise<void> {
     renderer.setSmoke(frameEffects.smoke);
     built = frameEffects.counts;
     builtDrawn = frameEffects.drawn;
-    // In a match the battle's strikes are the room's shells' (sim/room-battle.ts): each on what its crater struck as it went out.
-    const strikes = together.inMatch ? (together.battle?.strikes(events) ?? []) : strikesFrom(events);
+    // In a match the battle's strikes are the room's shells' (sim/room-battle.ts): each on what its crater
+    // struck as it went out, its fire standing from the match's second its shell landed.
+    const strikes = together.inMatch ? (together.battle?.strikes(events, together.net!.match!.startAt) ?? []) : strikesFrom(events);
     light(dt, pose.position, strikes, events.splashes.map((w) => ({ at: w.at, energyJ: w.energyJ })));
     renderer.render(pose, timeOfDay, now);
     lastPose = pose;

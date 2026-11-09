@@ -10,7 +10,8 @@
  *   than SILENT_STEP_S overdue (a hidden tab come back) lands quietly: its crater, and no blast or
  *   harm, so a player back from away takes no backlog of blasts at once.
  * - **Struck** (`strikes`): a crater of one of its shells, once in, on what burns, is a strike from
- *   that shell's seed (battle/fires.ts roomStrike), so every client lights the same fires.
+ *   that shell's seed (battle/fires.ts roomStrike), at the match's second it landed (Strike.atS), so
+ *   every client lights the same fires, on the match's clock however late its crater went in.
  * - **Dug** (`dug`, spec note 9): another's scoop, stamped with the room's clock, comes after every
  *   heard shell due by its stamp (they land first) and before every one after it. It is held while a
  *   crater's region it touches is pending (Session.applyDig), or an earlier held scoop overlaps it,
@@ -99,8 +100,8 @@ export class RoomBattle {
   private air: RoomShell[] = [];
   /** Landed, in the order they landed. */
   private readonly down: RoomShell[] = [];
-  /** Each of its shells' craters, by the crater's id: the shell's seed, until its strike is made. */
-  private readonly seeds = new Map<number, number>();
+  /** Each of its shells' craters, by the crater's id: the shell's seed and landing (the room's ms), until its strike is made. */
+  private readonly seeds = new Map<number, { seed: number; landAt: number }>();
   /** Others' scoops given to `dug` and not yet dug, in the order they came. */
   private digs: Held[] = [];
 
@@ -235,7 +236,7 @@ export class RoomBattle {
       this.down.push(shell);
       const crater = id === null ? undefined : craters.find((c) => c.id === id);
       const strike = crater ? roomStrike(session.map, crater, shell.seed, session.voxel, this.fireT) : null;
-      await run(s, strike ? [strike] : []);
+      await run(s, strike ? [{ ...strike, atS: s }] : []);
     };
     page.progress?.(0, due.length);
     for (let k = 0; k < due.length; k++) {
@@ -278,15 +279,18 @@ export class RoomBattle {
     this.dig();
   }
 
-  /** The strikes of this frame's craters that are its shells': on what burns, each from its shell's seed. */
-  strikes(events: CombatEvents): Strike[] {
+  /**
+   * The strikes of this frame's craters that are its shells': on what burns, each from its shell's seed,
+   * at the second of the match (begun at the room's `startAt`, ms) its shell landed.
+   */
+  strikes(events: CombatEvents, startAt: number): Strike[] {
     const out: Strike[] = [];
     for (const c of events.craters) {
-      const seed = this.seeds.get(c.id);
-      if (seed === undefined) continue;
+      const shell = this.seeds.get(c.id);
+      if (shell === undefined) continue;
       this.seeds.delete(c.id);
-      const strike = roomStrike(this.session.map, c, seed, this.session.voxel, this.fireT);
-      if (strike) out.push(strike);
+      const strike = roomStrike(this.session.map, c, shell.seed, this.session.voxel, this.fireT);
+      if (strike) out.push({ ...strike, atS: (shell.landAt - startAt) / 1000 });
     }
     return out;
   }
@@ -379,7 +383,7 @@ export class RoomBattle {
   private land(s: RoomShell, quiet: boolean): void {
     this.session.room = true;
     const id = this.session.land(s.at[0], s.at[1], s.radius, s.seed, quiet);
-    if (id !== null) this.seeds.set(id, s.seed);
+    if (id !== null) this.seeds.set(id, { seed: s.seed, landAt: s.landAt });
     this.down.push(s);
   }
 }

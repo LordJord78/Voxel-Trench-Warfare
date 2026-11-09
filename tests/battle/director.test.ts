@@ -607,6 +607,31 @@ describe('the fires', () => {
     expect(onB.length).toBeGreaterThan(0);
     expect(lit(a)).toEqual(onB);
   });
+
+  it("a room's strike stands its fire from the second its shell landed (atS), however late it is given; never from later than now", () => {
+    // Seed 900 lights timber (above). It is given at 5 s saying it landed then, and at 8 s saying the
+    // same; and at 5 s saying 9 s, after the battle's now, which is as one saying nothing: from now.
+    const day = (strikes: Strike[] = []): BattleInputs => ({ intensity: 'light', darkness: 0, player, strikes });
+    const struck = (atS?: number): Strike => ({ ...strike(P.TIMBER, 60, null), seed: 900, ...(atS === undefined ? {} : { atS }) });
+    const run = (givenAt: number, atS?: number) => {
+      const d = new Director(plan, tun, 7);
+      const chars: number[] = [];
+      for (let k = 0; k < 40 * 60; k++) {
+        const e = d.tick(1 / 60, day(k === givenAt * 60 ? [struck(atS)] : []));
+        if (e.chars.length > 0) chars.push(d.seconds);
+        if (k === 12 * 60) chars.push(d.fires()[0].strength);
+      }
+      return chars;
+    };
+    const a = run(5, 5);
+    expect(a).toHaveLength(2);
+    expect(run(8, 5)).toEqual(a);
+    // Its char at its full burn, grow_s after its landing.
+    expect(a[1]).toBeCloseTo(5 + fireT.growS, 1);
+    const now = run(5);
+    expect(now).not.toEqual(a);
+    expect(run(5, 9)).toEqual(now);
+  });
 });
 
 // The water (the battle spec's §1, §6): the session's splashes start rings on the director's clock,

@@ -172,7 +172,7 @@ describe("the room's shells on a page", () => {
     const struck: Strike[] = [];
     const craters: Crater[] = [];
     c.step(4_000, (e) => {
-      struck.push(...c.battle.strikes(e));
+      struck.push(...c.battle.strikes(e, 0));
       craters.push(...e.craters);
     });
     expect(craters).toHaveLength(2);
@@ -181,7 +181,8 @@ describe("the room's shells on a page", () => {
     expect(onSpoil.material).toBe(P.SPOIL);
     const fuel = fuelNear(c.session.map, onTimber.centre.map((m) => m * V), onTimber.radius * V + fireT.charM, V);
     expect(fuel).not.toBeNull();
-    expect(struck).toEqual([{ at: fuel, material: P.TIMBER, crater: onTimber.id, seed: 4_242 }]);
+    // At the match's second its shell landed (the match began at room time 0), whenever its crater went in.
+    expect(struck).toEqual([{ at: fuel, material: P.TIMBER, crater: onTimber.id, seed: 4_242, atS: 2 }]);
     // On what the crater left: timber under it, open air over it.
     const [x, y, z] = [Math.floor(fuel![0] / V), Math.round(fuel![1] / V), Math.floor(fuel![2] / V)];
     expect(kindOf(c.session.map.get(x, y - 1, z))).toBe(K.TIMBER);
@@ -191,13 +192,43 @@ describe("the room's shells on a page", () => {
     const own = c.session.land(3.0, 24.0, 2.2, 4_244);
     const ownCraters: Crater[] = [];
     c.step(6_000, (e) => {
-      expect(c.battle.strikes(e)).toEqual([]);
+      expect(c.battle.strikes(e, 0)).toEqual([]);
       ownCraters.push(...e.craters);
     });
     expect(ownCraters.map((k) => k.id)).toEqual([own]);
     expect(ownCraters[0].material).toBe(P.TIMBER);
     expect(roomStrike(c.session.map, ownCraters[0], 4_244, V, fireT)).not.toBeNull();
   });
+
+  it("a fire stands from its shell's landing, on the match's clock: on two pages whose craters go in 1.5 s apart it grows alike, and chars at the same second", () => {
+    // A shell on the timber wall whose seed rolls a fire; the match began at room time 0. One page's
+    // worker hands its crater back 1.5 s after the other's: each lights the fire when its crater is in,
+    // and both from the second the shell landed.
+    const S = shell(1, 1_000, 2.0, 16.8, 1.5, 7_000);
+    const page = (late?: number) => {
+      const c = roomClient(walled(), DIGGER, 0, 1 / 60, late === undefined ? undefined : lateRunner(late));
+      const director = new Director(null, tun, BATTLE_SEED);
+      const at = { crater: 0, charred: [] as number[] };
+      const frame = (e: CombatEvents) => {
+        if (e.craters.length > 0) at.crater = director.seconds;
+        const events = director.tick(1 / 60, { ...battleInputs(c), strikes: c.battle.strikes(e, 0) });
+        if (events.chars.length > 0) at.charred.push(director.seconds);
+      };
+      c.battle.hear(S, 0);
+      c.step(10_000, frame);
+      const grown = director.fires().map((f) => [f.id, f.strength]);
+      c.step(25_000, frame);
+      return { c, at, grown };
+    };
+    const quick = page();
+    const slow = page(90);
+    expect(slow.at.crater - quick.at.crater).toBeGreaterThan(1.4);
+    expect(quick.grown).toHaveLength(1);
+    expect(slow.grown).toEqual(quick.grown);
+    expect(quick.at.charred).toHaveLength(1);
+    expect(slow.at.charred).toEqual(quick.at.charred);
+    expect(sameWorld(quick.c.session.map, slow.c.session.map)).toBe(true);
+  }, 30_000);
 
   it('sends each harm as a hurt, at most 200, and nothing while not in play', () => {
     const c = client(1_000);
@@ -675,7 +706,7 @@ function liveClient(map: BrickMap) {
   const c = roomClient(map, DIGGER);
   const director = new Director(null, tun, BATTLE_SEED);
   const char = charring(c);
-  const frame = (e: CombatEvents) => char.made(director.tick(1 / 60, { ...battleInputs(c), strikes: c.battle.strikes(e) }));
+  const frame = (e: CombatEvents) => char.made(director.tick(1 / 60, { ...battleInputs(c), strikes: c.battle.strikes(e, 0) }));
   return { c, frame, charred: char.craters };
 }
 
