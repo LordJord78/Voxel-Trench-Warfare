@@ -253,7 +253,8 @@ describe("another's shot flown silent (a backlog, more than SILENT_STEP_S old)",
     expect(b.roundRoom()).toBe(share - tun.i('weapon.m870.pellets'));
     // Every round in the pool counts against it (the player's own and the front's too): past three
     // quarters full, it is none, never less; the pool itself still has the rest.
-    while (b.rounds.count < share + 10) b.fireRemote(5, [12.8, 2, 2], [0, 1, 0], false, [12.8, 2, 2]);
+    for (let k = b.rounds.count; k < share + 10; k++) b.fireRemote(5, [12.8, 2, 2], [0, 1, 0], false, [12.8, 2, 2]);
+    expect(b.rounds.count).toBe(share + 10);
     expect(b.roundRoom()).toBe(0);
     expect(b.rounds.room).toBe(capacity - share - 10);
   });

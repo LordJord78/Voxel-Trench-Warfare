@@ -493,7 +493,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
     await together.catchingUp;
     expect(together.caughtUp).toBe(true);
     // Caught up: the backlog flies, as many a frame as the pool has room for, the rest the next frames.
-    const capacity = b.session.roundRoom();
+    const share = b.session.roundRoom();
     const perFrame: number[] = [];
     for (let f = 0; f < 10 && fired.mock.calls.length < 300; f++) {
       const before = fired.mock.calls.length;
@@ -501,7 +501,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
       perFrame.push(fired.mock.calls.length - before);
       b.session.advance(1 / 60);
     }
-    expect(perFrame[0]).toBe(capacity);
+    expect(perFrame[0]).toBe(share);
     expect(perFrame.reduce((a, n) => a + n, 0)).toBe(300);
     expect(b.session.rounds.dropped).toBe(0);
     expect(fired.mock.calls.map((c) => c[7])).toEqual(Array.from({ length: 300 }, (_, k) => k));

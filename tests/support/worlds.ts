@@ -1,6 +1,6 @@
 /**
- * Test worlds for shelling: a trench with a parapet at its angle of repose, and a voxel-for-voxel
- * comparison; and for the room's battle, a runner that hands craters back late, a client of the
+ * Test worlds for shelling: a trench with a parapet at its angle of repose, a copy of a world, and a
+ * voxel-for-voxel comparison; and for the room's battle, a runner that hands craters back late, a client of the
  * room (a session and its RoomBattle) stepped along the room's clock, and the front's view of a
  * generated world's starts.
  */
@@ -9,7 +9,7 @@ import { loadTunables } from '../../src/core/tunables';
 import type { DetonationRunner } from '../../src/sim/destruction';
 import { RoomBattle } from '../../src/sim/room-battle';
 import { idleIntent, Session, type CombatEvents } from '../../src/sim/session';
-import { BrickMap } from '../../src/world/bricks';
+import { BrickMap, UNIFORM } from '../../src/world/bricks';
 import type { WorldPlan } from '../../src/world/generation/plan';
 import { pickSpawns } from '../../src/world/generation/spawn';
 import type { DetonateOptions } from '../../src/world/destruction';
@@ -40,6 +40,21 @@ export function trenchArena(): BrickMap {
   for (let y = 64; y < 76; y++) map.fillBox(0, y, 138 + (y - 64), 256, y + 1, 162 - (y - 64), P.SPOIL);
   map.takeDirty();
   return map;
+}
+
+/**
+ * A copy of `map`, brick by brick (its table, each dense brick's bytes through denseView, loaded with
+ * loadBrick): every client of a room on its own world, the one generated once. Nothing in it is dirty.
+ */
+export function cloneMap(map: BrickMap): BrickMap {
+  const out = new BrickMap(map.dims);
+  for (let bi = 0; bi < map.table.length; bi++) {
+    const e = map.table[bi];
+    if (e === 0) continue;
+    if (e & UNIFORM) out.loadBrick(bi, e);
+    else out.loadBrick(bi, 0, map.denseView(bi)!);
+  }
+  return out;
 }
 
 /** Whether two maps hold the same voxels everywhere. */

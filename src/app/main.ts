@@ -80,6 +80,7 @@ import { CameraRig, rigTunables } from './camera-rig';
 import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
 import { BattleClock, catchUpRunner } from './battle-clock';
+import { bloodCells, maskedFingerprint } from './world-compare';
 import { coverAt, daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type ShownBattle, type DebugEmber, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
@@ -1484,6 +1485,30 @@ async function start(): Promise<void> {
       score: () => together.net?.score ?? null,
       claimed: () => together.claimed,
       others: () => together.others().map(({ seat, state }) => ({ id: seat.id, team: seat.team, name: seat.name, position: state.position, stance: state.stance })),
+      /**
+       * The room's shells on this page (sim/room-battle.ts), this match's: how many it has heard (landed
+       * or in the air), those landed (id, where as [x, z] metres, how big) in the order they landed, and
+       * the next to land (where, and in how long on the room's clock; null with none in the air).
+       */
+      shells: () => {
+        const battle = together.battle;
+        const air = battle?.waiting ?? [];
+        const next = air.reduce<(typeof air)[number] | null>((a, s) => (a === null || s.landAt < a.landAt ? s : a), null);
+        const now = together.net?.serverNow() ?? 0;
+        return {
+          heard: (battle?.landed.length ?? 0) + air.length,
+          landed: (battle?.landed ?? []).map((s) => ({ id: s.id, at: [s.at[0], s.at[1]], radius: s.radius })),
+          next: next ? { at: [next.at[0], next.at[1]], landsInS: (next.landAt - now) / 1000 } : null,
+        };
+      },
+      /** Whether the room's log is caught up on this page (together.ts caughtUp). */
+      caughtUp: () => together.caughtUp,
+      /** The scoops this player sent, and the others' the room relayed to this page, this visit. */
+      digs: () => ({ sent: together.net?.digsSent ?? 0, heard: together.net?.digsHeard ?? 0 }),
+      /** The world's work still to do: craters queued or out, and others' scoops held behind them. */
+      pending: () => session.destruction.pending + (together.battle?.held.length ?? 0),
+      /** Every voxel holding a BLOOD_* id, as packed cells (world-compare.ts): per page, and masked when pages compare worlds. */
+      blood: () => bloodCells(world.map),
     },
     /** Soldiers stood in the world without a room, for the tests and the perf gate (seat 100 on, so they never share a probe with a player's). */
     puppets(list: (Pick<Figure, 'team' | 'position' | 'yaw' | 'pitch' | 'height'> & Partial<Pick<Figure, 'velocity' | 'deadFor' | 'gear' | 'flags'>>)[]) {
@@ -1783,7 +1808,11 @@ async function start(): Promise<void> {
         snapshotRegion = region;
         snapshot = resolve;
       }),
-    fingerprint: () => fingerprint(world.map),
+    /**
+     * The world's fingerprint; with `mask` (packed cells), with those voxels as air, each put back after
+     * (world-compare.ts): for a page whose frames are held (freeze), as two pages' worlds are compared.
+     */
+    fingerprint: (mask?: readonly number[]) => (mask ? maskedFingerprint(world.map, mask) : fingerprint(world.map)),
     setQuality: (q: Partial<Quality> & { budgetMs?: number }) => {
       renderer.setQuality(q);
       if (q.preset) {
