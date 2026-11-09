@@ -229,6 +229,12 @@ export class Together {
    * that ends waits to land its last shells (`ended`).
    */
   caughtUp = true;
+  /**
+   * The last welcome's catch-up (`welcomed`), settled once it is done: the page caught up and the
+   * ends that waited for it done, or the catch-up failed and the page stopped. What waits on the
+   * catch-up awaits this rather than counting the awaits inside it (the tests do).
+   */
+  catchingUp: Promise<void> = Promise.resolve();
   /** The match the log is caught up on ended meanwhile: the catch-up's clock is then after every time. */
   private overWhileCatching = false;
   /** Why the catch-up failed, if it did: said where "Catching up…" would be, for good. */
@@ -329,7 +335,7 @@ export class Together {
         if (!this.followMap()) this.show();
       },
       started: (match) => this.started(match),
-      welcomed: () => void this.welcomed(),
+      welcomed: () => void (this.catchingUp = this.welcomed()),
       ended: () => this.ended(),
       lost: (why) => this.lost(why),
       hurt: (hp, from) => this.hurt(hp, from),

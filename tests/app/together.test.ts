@@ -262,7 +262,6 @@ describe("a page catching up on the room's log while the room plays on", () => {
     b.session.room = false;
     const doc = new FakePage();
     const made: RoomBattle[] = [];
-    let caught: Promise<void> = Promise.resolve();
     let yields = 0;
     const status: string[] = [];
     const frame = () => {
@@ -293,7 +292,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
         made.push(new RoomBattle(b.session, fireT));
         return made[made.length - 1];
       },
-      catchUp: (room, log, match, now, progress) => (caught = room.catchUp(log, match?.startAt ?? null, now, null, yieldNow, { progress })),
+      catchUp: (room, log, match, now, progress) => room.catchUp(log, match?.startAt ?? null, now, null, yieldNow, { progress }),
       failed() {},
     };
     const together = new Together(doc as unknown as Document, 'http://relay.test', 'build', null, hooks);
@@ -302,8 +301,8 @@ describe("a page catching up on the room's log while the room plays on", () => {
     StubSocket.last!.open();
     StubSocket.last!.say({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats, config: defaultConfig(), phase: 'playing', match: MATCH, now: 9_000, log: { shells: [S1, S2, S3].map(wire), digs: [] } });
     expect(together.caughtUp).toBe(false);
-    await caught;
-    await Promise.resolve();
+    // The catch-up's end, and what the page's welcome does after it.
+    await together.catchingUp;
     // The room spoke inside S1's settle, and the catch-up went on after it: S2's settle yields too.
     expect(yields).toBeGreaterThan(1);
     return { b, together, made, status, frame };
@@ -407,21 +406,17 @@ describe("a page catching up on the room's log while the room plays on", () => {
       killed() {},
       respawn() {},
       battle: () => new RoomBattle(b.session, fireT),
-      catchUp: (...args) => (caught = catchUp(...args)),
+      catchUp,
       failed,
     };
-    let caught: Promise<void> = Promise.resolve();
     const together = new Together(doc as unknown as Document, 'http://relay.test', 'build', null, hooks);
     together.join('ABCDE');
     page = 1_000;
     StubSocket.last!.open();
     const both = [...seats, { id: 1, name: 'Sam', team: 'blue', ready: true, away: false }];
     StubSocket.last!.say({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats: both, config: defaultConfig(), phase: 'playing', match: MATCH, now: 9_000, log: { shells: [], digs: [] } });
-    if (wait) {
-      // The catch-up's end, then what the page's welcome does after it.
-      await caught.catch(() => {});
-      await Promise.resolve();
-    }
+    // The catch-up's end, and what the page's welcome does after it.
+    if (wait) await together.catchingUp;
     return { b, doc, together };
   }
 
@@ -451,8 +446,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
     StubSocket.last!.say({ t: 'roster', owner: 0, seats });
     expect(shown()).toEqual(['Catching up on the battle… 120 of 400', 'Catching up on the battle… 120 of 400', true, true]);
     finish();
-    await Promise.resolve();
-    await Promise.resolve();
+    await together.catchingUp;
     expect(together.caughtUp).toBe(true);
     // On the way in (the lobby's status is the gathering's, hidden while the match is on): Go, Ready and Start.
     const [, line, ready, start] = shown();
@@ -493,8 +487,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
     together.prepare(b.session, 1 / 60);
     expect(fired).not.toHaveBeenCalled();
     finish();
-    await Promise.resolve();
-    await Promise.resolve();
+    await together.catchingUp;
     expect(together.caughtUp).toBe(true);
     // Caught up: the backlog flies, as many a frame as the pool has room for, the rest the next frames.
     const capacity = b.session.roundRoom();
@@ -526,8 +519,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
     const LOST = 'The connection to the game was lost. Reload the page to rejoin.';
     expect(doc.getElementById('lobby-status').textContent).toBe(LOST);
     finish();
-    await Promise.resolve();
-    await Promise.resolve();
+    await together.catchingUp;
     expect(together.caughtUp).toBe(true);
     expect(doc.getElementById('lobby-status').textContent).toBe(LOST);
     // And whatever the room is said to do after: nothing comes on a closed line, but the page shows it again.
