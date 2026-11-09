@@ -16,12 +16,18 @@
  * region is copied again, wider, and posted again; if the wider one overlaps
  * another that is out, it goes back to wait its turn, its held marks made now.
  * With no tick nothing is written: a crater out while paused lands after.
+ *
+ * A shell on the ground (in a room) is cut where the ground is when its job goes out, not where it
+ * was when it landed: by then every earlier crater that overlaps it is in, so every client cuts it
+ * from the same ground however late its worker hands craters back, and says what it struck there.
  */
 
 import type { Tunables } from '../core/tunables';
 import type { BrickMap } from '../world/bricks';
 import { chip, type DetonateOptions } from '../world/destruction';
 import { detonationRegion, runDetonation, type DetonationRequest, type DetonationResult } from '../world/detonation';
+import { P } from '../world/materials';
+import { groundTop } from '../world/raycast';
 import type { Box } from '../world/region';
 import { applyPatch, copyRegion, type BrickPatch } from '../world/region-copy';
 
@@ -46,6 +52,8 @@ export interface Crater {
   centre: [number, number, number];
   radius: number;
   bricks: number;
+  /** A crater on the ground's: the voxel under its centre when it went out. */
+  material?: number;
 }
 
 export interface DestructionTunables {
@@ -80,6 +88,9 @@ interface Job {
   radius: number;
   seed: number;
   box: Box;
+  /** Centred on the top of the ground when it goes out; and the voxel under it then, once it has. */
+  onGround: boolean;
+  material?: number;
   /** Queued; out (posted, its settled bricks not yet back); or landing (they are). */
   state: 'queued' | 'out' | 'landing';
   /** Its bricks as they came back, cut then settled, and how many are written. */
@@ -91,6 +102,8 @@ interface Job {
   held: Mark[];
 }
 
+/** A job's crater, `bricks` written: what it struck, if it was cut on the ground. */
+const crater = (j: Job, bricks: number): Crater => ({ id: j.id, centre: j.centre, radius: j.radius, bricks, ...(j.material === undefined ? {} : { material: j.material }) });
 const inside = (b: Box, x: number, y: number, z: number) => x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1 && z >= b.z0 && z < b.z1;
 const overlap = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
 
@@ -124,11 +137,20 @@ export class Destruction {
     return this.jobs.some((j) => j.state !== 'queued' && overlap(j.box, box));
   }
 
-  /** A shell of `radius` at `centre` (voxels), its crater cut with `seed`: queued, and its id. One off the map cuts nothing. */
-  shell(centre: readonly [number, number, number], radius: number, seed: number): number {
+  /** Whether `box` reaches into the region of a shell queued, out or landing: ground a crater is still to be cut from. */
+  overlapsPending(box: Box): boolean {
+    return this.jobs.some((j) => overlap(j.box, box));
+  }
+
+  /**
+   * A shell of `radius` at `centre` (voxels), its crater cut with `seed`: queued, and its id. One off
+   * the map cuts nothing. `onGround`: its centre's y is the top of the ground there when it goes out
+   * (whatever `centre` says), and its crater says what it struck (`material`).
+   */
+  shell(centre: readonly [number, number, number], radius: number, seed: number, onGround = false): number {
     const id = this.nextId++;
     const box = detonationRegion(this.map.dims, centre, radius, this.t.options.loosen);
-    if (box) this.jobs.push({ id, centre: [centre[0], centre[1], centre[2]], radius, seed, box, state: 'queued', patches: [], applied: 0, cutEnd: null, cutIn: false, held: [] });
+    if (box) this.jobs.push({ id, centre: [centre[0], centre[1], centre[2]], radius, seed, box, onGround, state: 'queued', patches: [], applied: 0, cutEnd: null, cutIn: false, held: [] });
     return id;
   }
 
@@ -172,12 +194,12 @@ export class Destruction {
       }
       if (j.cutEnd !== null && !j.cutIn && j.applied >= j.cutEnd) {
         j.cutIn = true;
-        this.cuts.push({ id: j.id, centre: j.centre, radius: j.radius, bricks: j.cutEnd });
+        this.cuts.push(crater(j, j.cutEnd));
       }
       if (j.applied < j.patches.length) break;
       if (j.state !== 'landing') continue;
       this.makeHeld(j);
-      landed.push({ id: j.id, centre: j.centre, radius: j.radius, bricks: j.patches.length - (j.cutEnd ?? 0) });
+      landed.push(crater(j, j.patches.length - (j.cutEnd ?? 0)));
     }
     for (const c of landed) this.jobs.splice(this.jobs.findIndex((j) => j.id === c.id), 1);
     // In order: the first that would overlap a region out waits, and every one behind it.
@@ -190,6 +212,13 @@ export class Destruction {
   }
 
   private post(j: Job): void {
+    // On the ground: centred where it is now, the first time it goes out (a wider region asked for
+    // is copied again about the same centre). Nothing has written into its region since.
+    if (j.onGround && j.material === undefined) {
+      const top = groundTop(this.map, j.centre[0], j.centre[2]);
+      if (top !== null) j.centre[1] = top;
+      j.material = top === null ? P.AIR : this.map.get(Math.floor(j.centre[0]), top - 1, Math.floor(j.centre[2]));
+    }
     j.state = 'out';
     this.runner.post({ id: j.id, centre: j.centre, radius: j.radius, seed: j.seed, options: this.t.options, copy: copyRegion(this.map, j.box), world: this.map.dims });
   }

@@ -181,7 +181,7 @@ export class LoadoutMenu {
       );
     }
     const spec = armSpec(this.tun, gun, fit);
-    const stats = gunStats(spec, DAMAGE_SCALE[gun]);
+    const stats = gunStats(this.tun, spec, DAMAGE_SCALE[gun]);
     const statsEl = this.root.querySelector<HTMLElement>('.stats');
     if (statsEl) {
       statsEl.replaceChildren(

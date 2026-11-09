@@ -1,7 +1,16 @@
-/** Test worlds for shelling: a trench with a parapet at its angle of repose, and a voxel-for-voxel comparison. */
+/**
+ * Test worlds for shelling: a trench with a parapet at its angle of repose, and a voxel-for-voxel
+ * comparison; and for the room's battle, a runner that hands craters back late, and a client of the
+ * room (a session and its RoomBattle) stepped along the room's clock.
+ */
+import { fireTunables } from '../../src/battle/fires';
 import { loadTunables } from '../../src/core/tunables';
+import type { DetonationRunner } from '../../src/sim/destruction';
+import { RoomBattle } from '../../src/sim/room-battle';
+import { idleIntent, Session, type CombatEvents } from '../../src/sim/session';
 import { BrickMap } from '../../src/world/bricks';
 import type { DetonateOptions } from '../../src/world/destruction';
+import { runDetonation, type DetonationResult } from '../../src/world/detonation';
 import { P } from '../../src/world/materials';
 
 const tun = loadTunables();
@@ -40,4 +49,70 @@ export function sameWorld(a: BrickMap, b: BrickMap): boolean {
     for (let i = 0; i < 512; i++) if (x[i] !== y[i]) return false;
   }
   return true;
+}
+
+/**
+ * A runner that hands each crater back (its cut, then the rest, or its ask for a wider region)
+ * `ticks` session ticks after it was posted: the destruction worker on a slow machine. It counts its
+ * takes, which the session makes one a tick.
+ */
+export function lateRunner(ticks: number): DetonationRunner {
+  let taken = 0;
+  const waiting: { due: number; result: DetonationResult }[] = [];
+  return {
+    post: (req) => {
+      const due = taken + ticks;
+      const result = runDetonation(req, (cut) => waiting.push({ due, result: cut }));
+      waiting.push({ due, result });
+    },
+    take: () => {
+      taken++;
+      const out: DetonationResult[] = [];
+      for (let i = 0; i < waiting.length; ) {
+        if (waiting[i].due <= taken) out.push(waiting.splice(i, 1)[0].result);
+        else i++;
+      }
+      return out;
+    },
+  };
+}
+
+/** A client of the room: its session (set to a room), its battle, and how far its clock is off the room's (ms). */
+export interface RoomClient {
+  session: Session;
+  battle: RoomBattle;
+  offsetMs: number;
+  /**
+   * Its frames run on from the last up to room time `roomMs` (from room time 0): each frame ticks the
+   * battle at the client's own clock (room time + offsetMs), advances the session by its frame, and
+   * hands the frame's drained events to `each`.
+   */
+  step(roomMs: number, each?: (events: CombatEvents) => void): void;
+}
+
+/**
+ * A client on `map` standing at `spawn` (metres), its clock `offsetMs` off the room's, running frames
+ * of `frameS`, its craters cut by `runner` (in-process by default). Its session is set to a room
+ * (`room` true), as Together sets it in a match: no Together is here to set it.
+ */
+export function roomClient(map: BrickMap, spawn: [number, number, number], offsetMs = 0, frameS = 1 / 60, runner?: DetonationRunner): RoomClient {
+  const session = Session.create({ map, plan: null, spawn: { position: spawn }, ...(runner ? { runner } : {}) }, tun, 7, 0);
+  session.intent = idleIntent();
+  session.room = true;
+  const battle = new RoomBattle(session, fireTunables(tun));
+  let frames = 0;
+  return {
+    session,
+    battle,
+    offsetMs,
+    step(roomMs, each) {
+      while ((frames + 1) * frameS * 1000 <= roomMs) {
+        frames++;
+        battle.tick(frames * frameS * 1000 + offsetMs);
+        session.advance(frameS);
+        const events = session.drainEvents();
+        each?.(events);
+      }
+    },
+  };
 }

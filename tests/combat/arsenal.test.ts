@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { armSpec, cleanLoadout, defaultLoadout, fitOf, GUN_DEFS, PRIMARY_GUNS, SECONDARY_GUNS } from '../../src/combat/arsenal';
+import { armSpec, cleanLoadout, defaultLoadout, fitOf, GUN_DEFS, gunStats, PRIMARY_GUNS, SECONDARY_GUNS } from '../../src/combat/arsenal';
 import { gunModel, MODEL_VOXELS_MAX, shovelModel } from '../../src/combat/gun-models';
 import { rifleModel, type RifleModel } from '../../src/combat/rifle-model';
-import { loadTunables } from '../../src/core/tunables';
-import { BARE, GUNS, type Fit, type GunKey } from '../../src/net/gear';
+import { loadTunables, Tunables } from '../../src/core/tunables';
+import { BARE, DAMAGE_SCALE, GUNS, type Fit, type GunKey } from '../../src/net/gear';
 
 // The loadout's guns (combat/arsenal.ts) and their voxels (combat/gun-models.ts).
 const tun = loadTunables();
@@ -87,6 +87,35 @@ describe('the arsenal', () => {
     expect(kitted.muzzle[2]).toBeGreaterThan(bare.muzzle[2]);
     expect(bare.weapon.tracerEvery).toBe(1);
     expect(armSpec(tun, 'm870', BARE).weapon.pellets).toBe(9);
+  });
+
+  it("keeps the loadout's control bars where they stood before the heavier recoil: each within 0.03, their spread kept", () => {
+    // Recoil control is 1 − (kick + 2 × climb per shot) / [loadout] control_span, from the gun's own
+    // [recoil.*] table, held to 0.04–1. The shots spec's §3 raised every gun's kick + 2 × climb about
+    // 1.24 times, and the span with it (4.5 to 5.6): the bars compare the guns, and the heavier table
+    // is felt, not shown. Each bar as it stood, over the table before §3 (kick, climb per shot) and 4.5:
+    const before: Record<GunKey, [number, number]> = {
+      ak74: [0.34, 0.27], m4: [0.3, 0.22], mp5: [0.18, 0.13], svd: [1.6, 0.9],
+      m249: [0.32, 0.17], m870: [3.0, 1.5], m17: [0.9, 0.55], pm: [1.05, 0.6],
+    };
+    const was = (gun: GunKey) => Math.max(0.04, Math.min(1, 1 - (before[gun][0] + 2 * before[gun][1]) / 4.5));
+    const control = (gun: GunKey, t = tun) => gunStats(t, armSpec(t, gun, BARE), DAMAGE_SCALE[gun]).control;
+    // The AK's 0.804, the M4's 0.836, the MP5's 0.902, the SVD's 0.244, the M249's 0.853, the M870 at
+    // the floor, the M17's 0.556 and the PM's 0.500.
+    expect(GUNS.map((g) => was(g).toFixed(3))).toEqual(['0.804', '0.836', '0.902', '0.244', '0.853', '0.040', '0.556', '0.500']);
+    expect(tun.f('loadout.control_span')).toBe(5.6);
+    for (const gun of GUNS) expect(Math.abs(control(gun) - was(gun)), gun).toBeLessThanOrEqual(0.03);
+    // In the same order, the shotgun's at the floor and the SVD's well clear of it.
+    const order = (f: (g: GunKey) => number) => [...GUNS].sort((a, b) => f(a) - f(b));
+    expect(order(control)).toEqual(order(was));
+    expect(control('m870')).toBe(0.04);
+    expect(control('svd')).toBeGreaterThan(0.2);
+    // The span is the tunable's: at the old 4.5 every bar off the floor drops, the SVD's nearly to it.
+    const raw = tun.raw();
+    (raw.loadout as Record<string, unknown>).control_span = 4.5;
+    const old = new Tunables(raw);
+    for (const gun of GUNS) if (gun !== 'm870') expect(control(gun, old), gun).toBeLessThan(control(gun) - 0.02);
+    expect(control('svd', old)).toBeLessThan(0.1);
   });
 
   it('cleans a loadout: anything not one is the default, a fit only what its gun takes', () => {

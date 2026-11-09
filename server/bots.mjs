@@ -38,7 +38,7 @@ const players = [];
 for (let i = 0; i < N; i++) {
   const p = player(room, `bot${i}`);
   await p.open;
-  p.send({ t: 'hello', v: 1, build: 'bots', name: p.name });
+  p.send({ t: 'hello', v: 2, build: 'bots', name: p.name });
   const w = await p.until((m) => m.t === 'welcome', 'welcome');
   console.log(`${p.name}: seat ${w.you}, owner ${w.owner}, team ${w.seats.find((s) => s.id === w.you).team}`);
   p.you = w.you;

@@ -515,6 +515,37 @@ describe('the fires', () => {
     expect(stepped.fires().length).toBeGreaterThan(0);
     expect(stepped.fires()).toEqual(sought.fires());
   });
+
+  it('a seeded strike lights the same fire whatever the battle drew before it', () => {
+    // In a room every client feeds its Director the room's shells, but each has drawn its own battle
+    // before them (its strikes, its flares and guns about its own player): a shell's fire is its seed's.
+    const night = (x: number): BattleInputs => ({ intensity: 'light', darkness: 1, player: [x, player[1], player[2]] });
+    const a = new Director(plan, tun, 7);
+    const b = new Director(plan, tun, 7);
+    // A struck on timber every second for 40 s, unseeded, its player at x 20; B struck nowhere, its player at x 230.
+    for (let k = 0; k < 40 * 60; k++) {
+      a.tick(1 / 60, { ...night(20), strikes: k % 60 === 0 ? [strike(P.TIMBER, 300 + k / 60)] : [] });
+      b.tick(1 / 60, night(230));
+    }
+    /** A timber strike for each seed 1..20, one a second, then a second on: each seed's fire's size, the seeds that lit. */
+    const seeded = (d: Director, x: number) => {
+      const seedOf = new Map<number, number>();
+      for (let seed = 1; seed <= 20; seed++) {
+        for (let k = 0; k < 60; k++) {
+          const e = d.tick(1 / 60, { ...night(x), strikes: k === 0 ? [{ ...strike(P.TIMBER, 10 + seed * 10, null), seed }] : [] });
+          for (const f of e.fires) seedOf.set(f.id, seed);
+        }
+      }
+      d.tick(1, night(x));
+      const out = d.fires().flatMap((f) => (seedOf.has(f.id) ? [[seedOf.get(f.id)!, f.size]] : []));
+      expect(out).toHaveLength(seedOf.size);
+      return out.sort((p, q) => p[0] - q[0]);
+    };
+    const onA = seeded(a, 20);
+    const onB = seeded(b, 230);
+    expect(onA.length).toBeGreaterThanOrEqual(3);
+    expect(onA).toEqual(onB);
+  });
 });
 
 // The water (the battle spec's §1, §6): the session's splashes start rings on the director's clock,

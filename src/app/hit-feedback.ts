@@ -12,15 +12,20 @@
  *   Another's is heard where it struck: its thwack within [hits] hit_heard_m, a headshot's gush within
  *   gush_heard_m; its crack and its kill are the shooter's own.
  * - **Rounds into the player** (LOCAL_BODY): others' (owner 2 on), and the front's (owner 1) in a room
- *   only (`room`: M6 brings the front's harm into rooms; in solo play it harms no one, though puppets
- *   make the session test the player's body); never their own, which a body's test leaves out. The
- *   red flash at the damage's share of 100, the aim jolted away from the round, and the hurt voice,
- *   once a tick; the damage as the room reckons it (the zone's by the gun's scale, net/gear.ts), a
- *   tick's added up.
+ *   only (the session's `room`, which Together.prepare sets each frame: M6 brings the front's harm into
+ *   rooms; in solo play it harms no one, though puppets make the session test the player's body);
+ *   never their own, which a body's test leaves out. The red flash at the damage's share of 100, the
+ *   aim jolted away from the round, and the hurt voice, once a tick; the damage as the room reckons
+ *   it (the zone's by the gun's scale, net/gear.ts), a tick's added up.
+ * - **A blast's harm on the player** (a room's shell, `events.harms` of cause 'shell'): a frame's added
+ *   up, the same red flash at its share of 100 and the hurt voice, once; no jolt, the blast's own
+ *   shake and suppression stand for it. In a frame a round into the player was felt as well, one
+ *   flash and one hurt voice: the blasts' share joins the flash of the last tick a round was felt in,
+ *   at the larger of the two. A round's harm adds nothing: its body hit flashes already.
  * - **The player killed** (the room's death, died): the round that killed them may never be felt
  *   here (the room's word can come before the shot, and a dead body strikes nothing). Unless a round
- *   into them was felt within kill_window_s, the red flash at full strength and the hurt voice; no
- *   jolt, the player being dead.
+ *   or a blast into them was felt within kill_window_s, the red flash at full strength and the hurt
+ *   voice; no jolt, the player being dead.
  * - **A kill** (the room's death in a match, the range's own at once): when it was the player's, the
  *   kill marker, the pop (KILL, or HEADSHOT for a headshot's), and the kill's thud and chime at the
  *   ear. The body falls along the last round seen to strike it within kill_window_s, in head_fall_s
@@ -133,10 +138,8 @@ export class HitFeedback {
   private readonly tally: Partial<Record<FeedbackKind, number>> = {};
   private readonly markers: Record<MarkerKind, number> = { hit: 0, head: 0, kill: 0 };
   private flashes = 0;
-  /** When a round into the player was last felt, or the room's word of their death (ms). */
+  /** When a round or a blast into the player was last felt, or the room's word of their death (ms). */
   private hurtAt = Number.NEGATIVE_INFINITY;
-  /** In a room: the front's rounds (owner 1) hurt the player too (M6 brings its harm there). */
-  room = false;
 
   constructor(
     readonly t: HitFeedbackTunables,
@@ -156,6 +159,13 @@ export class HitFeedback {
     this.queued = [];
     const t = this.t;
     const eye = eyeOf(session);
+    const room = session.room;
+    // The frame's blasts on the player (a room's shells), added up: felt once, with the last tick's
+    // rounds into the player if any were felt, as one flash and one voice.
+    let blast = 0;
+    for (const h of events.harms) if (h.cause === 'shell') blast += h.amount;
+    let lastHurt: number | null = null;
+    if (blast > 0) for (const h of events.hits) if (intoPlayer(h, room)) lastHurt = h.tick;
     // A tick's at a time: the player's hits on bodies and in the head, others' heard, rounds into the player.
     let tick: number | null = null;
     let body = false;
@@ -169,7 +179,7 @@ export class HitFeedback {
         if (body) out.push(this.voice('hit', null));
         if (head) out.push(this.voice('head', null), this.voice('gush', null));
       }
-      if (hurt) this.hurt(session, hurt.damage, hurt.dir, now, out);
+      if (hurt) this.hurt(session, hurt.damage, hurt.dir, now, out, tick === lastHurt ? blast : 0);
       body = head = false;
       heard.clear();
       hurt = null;
@@ -200,12 +210,14 @@ export class HitFeedback {
         };
         hear('hit', t.hitHeardM);
         if (h.zone === 'head') hear('gush', t.gushHeardM);
-      } else if (h.body === LOCAL_BODY && (h.owner >= 2 || (h.owner === 1 && this.room))) {
+      } else if (intoPlayer(h, room)) {
         hurt ??= { damage: 0, dir: copy(h.dir) };
         hurt.damage += gunDamage(DAMAGE[h.zone], h.gun);
       }
     }
     done();
+    // The blasts' harm on the player (in a room) with no round felt: as a hit of as much is, but for the jolt.
+    if (blast > 0 && lastHurt === null) this.shelled(blast, now, out);
     this.forget(now);
     return out;
   }
@@ -240,9 +252,9 @@ export class HitFeedback {
   }
 
   /**
-   * The player killed, by the room's word at `now` (ms): unless a round into them was felt within
-   * kill_window_s, the red flash at full strength and the hurt voice (with the next frame's), as a
-   * one-shot kill's round may never reach them here. No jolt: they are dead.
+   * The player killed, by the room's word at `now` (ms): unless a round or a blast into them was felt
+   * within kill_window_s, the red flash at full strength and the hurt voice (with the next frame's), as
+   * a one-shot kill's round may never reach them here. No jolt: they are dead.
    */
   died(now: number): void {
     if (now - this.hurtAt <= this.t.killWindowS * 1000) return;
@@ -290,12 +302,16 @@ export class HitFeedback {
     this.bodies.set(h.body, { position: copy(h.position), dir: copy(h.dir), zone: h.zone, at: now, tick: h.tick, head: h.zone === 'head' || (sameTick && was.head) });
   }
 
-  /** Rounds into the player, a tick's, `damage` all told, the first along `dir`: the flash, the jolt and the voice. */
-  private hurt(session: Session, damage: number, dir: V3, now: number, out: FeedbackVoice[]): void {
+  /**
+   * Rounds into the player, a tick's, `damage` all told, the first along `dir`: the flash, the jolt and
+   * the voice. `blast`, the frame's blasts' harm felt with them: the flash at the larger share, the
+   * jolt the rounds' alone.
+   */
+  private hurt(session: Session, damage: number, dir: V3, now: number, out: FeedbackVoice[], blast = 0): void {
     const t = this.t;
     const share = Math.min(1, damage / 100);
     this.hurtAt = now;
-    this.marker.flash(Math.max(t.flashMin, share), now);
+    this.marker.flash(Math.max(t.flashMin, share, Math.min(1, blast / 100)), now);
     this.flashes++;
     // Away from the round: across the view the way it went, and up for one that came at the face
     // (down for one from behind), as the body takes it.
@@ -307,6 +323,14 @@ export class HitFeedback {
     const [yaw, pitch] = n > 1e-6 ? [across / n, rise / n] : [0, 1];
     const deg = t.jolt[0] + t.jolt[1] * share;
     session.jolt(yaw * deg, pitch * deg);
+    out.push(this.voice('hurt', null));
+  }
+
+  /** Blasts' `amount` of harm on the player, a frame's: the flash and the voice, as a hit of as much gives; the shell shakes the view itself. Felt, for died. */
+  private shelled(amount: number, now: number, out: FeedbackVoice[]): void {
+    this.hurtAt = now;
+    this.marker.flash(Math.max(this.t.flashMin, Math.min(1, amount / 100)), now);
+    this.flashes++;
     out.push(this.voice('hurt', null));
   }
 
@@ -324,6 +348,11 @@ export class HitFeedback {
     const keep = 1000 * Math.max(this.t.killWindowS, this.t.flinchSpan * this.t.flinchS);
     for (const [id, s] of this.bodies) if (now - s.at > keep) this.bodies.delete(id);
   }
+}
+
+/** A round into the player that is felt: another player's (owner 2 on), or the front's (owner 1) in a room (`room`, the session's); never their own. */
+function intoPlayer(h: CombatEvents['hits'][number], room: boolean): boolean {
+  return h.body === LOCAL_BODY && (h.owner >= 2 || (h.owner === 1 && room));
 }
 
 /** The player's eye (metres). */

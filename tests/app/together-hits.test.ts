@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HitFeedback, hitFeedbackTunables, type FeedbackMarker } from '../../src/app/hit-feedback';
 import type { RemotePlayer } from '../../src/app/net-players';
 import { Gaits, Together, type Figure, type TogetherHooks } from '../../src/app/together';
+import { fireTunables } from '../../src/battle/fires';
 import type { V3 } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
 import type { Team, Zone } from '../../src/net/protocol';
-import { idleIntent, Session, type CombatEvents } from '../../src/sim/session';
+import { RoomBattle } from '../../src/sim/room-battle';
+import { idleIntent, LOCAL_BODY, Session, type CombatEvents } from '../../src/sim/session';
 import { HitMarker, markerTunables, type MarkerKind, type PopText } from '../../src/ui/hit-marker';
 import { BrickMap } from '../../src/world/bricks';
 import { P } from '../../src/world/materials';
@@ -30,6 +32,8 @@ const { lines, FakeNet } = vi.hoisted(() => {
     /** The others as the room's states have them now. */
     others: unknown[] = [];
     readonly players = { at: () => this.others };
+    /** The room's clock, never sampled: no shell is heard or landed. */
+    readonly clock = { synced: false };
     constructor(
       readonly relay: string,
       readonly room: string,
@@ -51,6 +55,9 @@ const { lines, FakeNet } = vi.hoisted(() => {
       return 1e9;
     }
     takeShots() {
+      return [];
+    }
+    takeEdits() {
       return [];
     }
     hit() {}
@@ -104,7 +111,8 @@ function anything(): unknown {
   return p;
 }
 
-const hooks: TogetherHooks = { map: 'ravine', switchMap() {}, showLobby() {}, deploy() {}, play() {}, ended() {}, note() {}, killed() {}, respawn() {} };
+/** The page's hooks, its room battle on `session`. */
+const hooks = (session: Session): TogetherHooks => ({ map: 'ravine', switchMap() {}, showLobby() {}, deploy() {}, play() {}, ended() {}, note() {}, killed() {}, respawn() {}, battle: () => new RoomBattle(session, fireTunables(tun)) });
 
 /** 25.6 × 6.4 × 51.2 m of sod 0.4 m deep, the player at (12.8, 0.4, 5) facing +z, settled. */
 function field(): Session {
@@ -117,9 +125,9 @@ function field(): Session {
   return s;
 }
 
-/** Together with `hits`, joined to a room whose match is on: this player seat 0 (Red), Ann seat 1 (Blue). */
-function joined(hits: HitFeedback): { together: Together; net: InstanceType<typeof FakeNet> } {
-  const together = new Together(anything() as Document, 'http://127.0.0.1:8787', 'test', null, hooks, hits);
+/** Together with `hits` on `session`, joined to a room whose match is on: this player seat 0 (Red), Ann seat 1 (Blue). */
+function joined(hits: HitFeedback, session: Session): { together: Together; net: InstanceType<typeof FakeNet> } {
+  const together = new Together(anything() as Document, 'http://127.0.0.1:8787', 'test', null, hooks(session), hits);
   together.join('ABCDE');
   const net = lines.at(-1)!;
   net.seats = [
@@ -130,7 +138,10 @@ function joined(hits: HitFeedback): { together: Together; net: InstanceType<type
 }
 
 /** Nothing happened. */
-const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [] });
+const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [], harms: [] });
+
+/** A test's puppet, standing 20 m out. */
+const puppetOf = (): Figure => ({ seat: 100, team: 'blue', position: [12.8, 0.4, 25], velocity: [0, 0, 0], yaw: 180, pitch: 0, height: 1.8, deadFor: null });
 
 /** A round of `owner`'s into body `body`'s torso along +z, on tick 1. */
 const round = (owner: number, body: number, zone: Zone = 'torso'): CombatEvents['hits'][number] => ({ owner, body, zone, position: [12.8, 1.3, 25], dir: [0, 0, 1] as V3, distance: 20, tick: 1 });
@@ -149,7 +160,7 @@ describe('playing with friends, and the hit feedback', () => {
   it('prepare poses the others and the puppets flinching as their hits say, as drawn and as struck; once settled, as they stand', () => {
     const s = field();
     const fb = new HitFeedback(t, new FakeMarker());
-    const { together, net } = joined(fb);
+    const { together, net } = joined(fb, s);
     const state = (z: number) => ({ tick: 0, position: [12.8, 0.4, z] as [number, number, number], velocity: [0, 0, 0] as [number, number, number], yaw: 180, pitch: 0, stance: 0, height: 1.8, flags: 0, gear: 0 });
     const ann: RemotePlayer = { seat: net.seats[1], state: state(25) };
     net.others = [ann];
@@ -182,7 +193,7 @@ describe('playing with friends, and the hit feedback', () => {
     const s = field();
     const marker = new HitMarker({ querySelector: () => null } as unknown as Document, markerTunables(tun));
     const fb = new HitFeedback(t, marker);
-    const { together, net } = joined(fb);
+    const { together, net } = joined(fb, s);
     // The page's own clock stands far behind the frames' (a long pause simulated, a frozen page stepped).
     vi.spyOn(performance, 'now').mockReturnValue(5);
     together.prepare(s, 1 / 60, [], FRAME);
@@ -202,7 +213,7 @@ describe('playing with friends, and the hit feedback', () => {
     const s = field();
     const marker = new FakeMarker();
     const fb = new HitFeedback(t, marker);
-    const { together, net } = joined(fb);
+    const { together, net } = joined(fb, s);
     vi.spyOn(performance, 'now').mockReturnValue(5);
     together.prepare(s, 1 / 60, [], FRAME);
     // Ann's round killed this player, by the room's word, before it reached them here.
@@ -210,5 +221,23 @@ describe('playing with friends, and the hit feedback', () => {
     expect(marker.calls).toEqual([['flash', 1, FRAME]]);
     expect(fb.frame(s, none(), FRAME + 16)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
     expect(together.deadFor(5)).toBe(0);
+  });
+
+  it("prepare says the session is in a room's match (session.room), the one signal the hit feedback reads: the front's round into the player felt in the match, not out of it", () => {
+    const s = field();
+    s.together = true;
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const { together, net } = joined(fb, s);
+    together.prepare(s, 1 / 60, [], FRAME);
+    expect(s.room).toBe(true);
+    expect(fb.frame(s, { ...none(), hits: [round(1, LOCAL_BODY)] }, FRAME + 16)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(marker.calls).toEqual([['flash', 0.55, FRAME + 16]]);
+    // The match over, the room still joined: the next frame's prepare takes the room's harm away.
+    net.phase = 'lobby';
+    together.prepare(s, 1 / 60, [puppetOf()], FRAME + 32);
+    expect([s.room, s.together]).toEqual([false, true]);
+    expect(fb.frame(s, { ...none(), hits: [round(1, LOCAL_BODY)] }, FRAME + 48)).toEqual([]);
+    expect(marker.calls).toHaveLength(1);
   });
 });

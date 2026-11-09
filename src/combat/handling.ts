@@ -1,9 +1,9 @@
 /**
  * The gun in the hands, moving as a held gun does (the shots spec's §2): it bobs with the stride,
  * trails the view's turn, breathes at rest, swings low and across at a sprint, dips on a hard
- * landing, and works through its reload and its pump. The session ticks it with the tick's own time
- * and turn, so the muzzle the tracers and the flash leave from is the drawn gun's; none of it moves
- * a round, which leaves from the eye.
+ * landing, overshoots the aim as the sights arrive (§3), and works through its reload and its pump.
+ * The session ticks it with the tick's own time and turn, so the muzzle the tracers and the flash
+ * leave from is the drawn gun's; none of it moves a round, which leaves from the eye.
  *
  * What it gives is a change to the held pose (viewmodel.ts `heldPose`, which adds it after the aim's
  * blend): an offset in view space, metres x right, y up and z forward, and turns in degrees, pitch
@@ -78,6 +78,10 @@ export interface HandlingTunables {
   landingHardMps: number;
   landingSettleS: number;
   landingDamping: number;
+  /** An aim-in: the pitch (°) the muzzle is carried past the aim as the sights arrive, how long it takes to get there, and how long after they arrive it is back. */
+  aimOvershootDeg: number;
+  aimOvershootRiseS: number;
+  aimOvershootS: number;
   /** The long guns' reload: its keys' phases and poses. */
   reloadTiltAt: number;
   reloadTiltM: V3;
@@ -150,6 +154,9 @@ export function handlingTunables(tun: Tunables): HandlingTunables {
     landingHardMps: f('landing_hard_mps'),
     landingSettleS: f('landing_settle_s'),
     landingDamping: f('landing_damping'),
+    aimOvershootDeg: f('aim_overshoot_deg'),
+    aimOvershootRiseS: f('aim_overshoot_rise_s'),
+    aimOvershootS: f('aim_overshoot_s'),
     reloadTiltAt: f('reload_tilt_at'),
     reloadTiltM: v('reload_tilt_m'),
     reloadTiltPitchDeg: f('reload_tilt_pitch_deg'),
@@ -318,28 +325,38 @@ export class Handling {
   private readonly swayOmega: number;
   private readonly landOmega: number;
   private readonly curves: Record<Exclude<GunClass, 'pump'>, Curve>;
+  // The hands' state. Each field starts in one place, reset(), which the constructor calls too: a
+  // fresh pair and a pair reset are made alike, and cannot drift apart.
   /** The sprint's blend, 0 to 1: in over sprint_in_s, out over sprint_out_s. */
-  private blend = 0;
+  private blend!: number;
   /** The sway's springs, aside, up and in roll: each where it is and how fast it moves. */
-  private swaySide: [number, number] = [0, 0];
-  private swayUp: [number, number] = [0, 0];
-  private swayRoll: [number, number] = [0, 0];
-  /** The landing's dip, as a share of a full one, and its spring's speed. */
-  private land = 0;
-  private landSpeed = 0;
-  private wasOnGround = true;
+  private swaySide!: [number, number];
+  private swayUp!: [number, number];
+  private swayRoll!: [number, number];
+  /** The landing's dip, as a share of a full one, and its spring's speed; and whether the body was on the ground last tick. */
+  private land!: number;
+  private landSpeed!: number;
+  private wasOnGround!: boolean;
+  /**
+   * The aim's blend last tick; the overshoot under way, how long since the sights arrived and the
+   * pitch it carries on from (null once it is back at the aim); and the pitch it drew last tick.
+   */
+  private lastAimed!: number;
+  private overshoot!: { t: number; from: number } | null;
+  private overshot!: number;
   /** The stride's last phase, and whether this is the second of a pair (the swing across runs over two). */
-  private lastBob = 0;
-  private secondStride = false;
+  private lastBob!: number;
+  private secondStride!: boolean;
   /** The reload drawn last tick (with the shells it counted as it began), and its pose; one let go, easing back from where it was. */
-  private lastReload: { phase: number; gun: GunClass; shells: number } | null = null;
-  private lastCurve: HandsDelta = zero();
-  private release: { from: HandsDelta; t: number } | null = null;
-  private lastSinceShot = Number.POSITIVE_INFINITY;
-  private lastGun: GunClass | null = null;
+  private lastReload!: { phase: number; gun: GunClass; shells: number } | null;
+  private lastCurve!: HandsDelta;
+  private release!: { from: HandsDelta; t: number } | null;
+  /** The last tick's shot clock and gun, for the pump's cue. */
+  private lastSinceShot!: number;
+  private lastGun!: GunClass | null;
   /** The last two ticks' deltas. */
-  private prev: HandsDelta = zero();
-  private cur: HandsDelta = zero();
+  private prev!: HandsDelta;
+  private cur!: HandsDelta;
 
   constructor(readonly t: HandlingTunables) {
     this.swayOmega = SETTLE_CONSTANT / Math.max(1e-3, t.swaySettleS);
@@ -349,11 +366,40 @@ export class Handling {
       mg: magazineCurve(t, t.reloadTiltRollDeg, t.reloadMagOutAt, t.reloadMagInAt, t.reloadBoltAt, t.mgDepth, [{ at: t.mgCoverAt, cue: 'cover' }]),
       pistol: magazineCurve(t, t.pistolTiltRollDeg, t.pistolMagOutAt, t.pistolMagInAt, t.pistolSlideAt, 1, []),
     };
+    this.reset();
   }
 
   /** The sprint's blend now (0 to 1): no shot leaves while it is at or over `sprintBlocksFire`. */
   get sprint(): number {
     return this.blend;
+  }
+
+  /**
+   * The hands as a fresh pair's, as the constructor makes them and for a deploy (the session's equip
+   * and respawn): no sprint, the sway and the landing at rest (on the ground), no reload drawn or
+   * easing back, no overshoot, the stride's pair and the last gun's shot forgotten (so no pump is to
+   * come), and both ticks' deltas none. Every field of the state starts here, and only here.
+   */
+  reset(): void {
+    this.blend = 0;
+    this.swaySide = [0, 0];
+    this.swayUp = [0, 0];
+    this.swayRoll = [0, 0];
+    this.land = 0;
+    this.landSpeed = 0;
+    this.wasOnGround = true;
+    this.lastAimed = 0;
+    this.overshoot = null;
+    this.overshot = 0;
+    this.lastBob = 0;
+    this.secondStride = false;
+    this.lastReload = null;
+    this.lastCurve = zero();
+    this.release = null;
+    this.lastSinceShot = Number.POSITIVE_INFINITY;
+    this.lastGun = null;
+    this.prev = zero();
+    this.cur = zero();
   }
 
   /** The delta as the last tick left it. */
@@ -423,6 +469,27 @@ export class Handling {
     this.wasOnGround = i.onGround;
     o[1] -= t.landingDropM * this.land;
     d.pitch += t.landingPitchDeg * this.land;
+
+    // An aim-in: as the sights arrive (the aim's blend reaching 1), the muzzle is carried on past the
+    // aim from that tick, at a steady rate to aim_overshoot_deg over aim_overshoot_rise_s, then eased
+    // back to it, as a reload let go is, until aim_overshoot_s after they arrived. The sights arrive
+    // with no speed, so it starts from nothing rather than all at once, which would pop; arriving
+    // again while it is drawn, it carries on up from where it is.
+    if (aimed >= 1 && this.lastAimed < 1) this.overshoot = { t: 0, from: this.overshot };
+    this.lastAimed = aimed;
+    this.overshot = 0;
+    if (this.overshoot !== null) {
+      const o = this.overshoot;
+      o.t += i.dt;
+      if (o.t >= t.aimOvershootS) {
+        this.overshoot = null;
+      } else {
+        const peak = t.aimOvershootDeg;
+        const rise = t.aimOvershootRiseS;
+        this.overshot = o.t < rise ? o.from + (peak - o.from) * (o.t / rise) : peak * (1 - smooth((o.t - rise) / (t.aimOvershootS - rise)));
+        d.pitch += this.overshot;
+      }
+    }
 
     addScaled(d, this.reloadPose(i, cues), 1);
 

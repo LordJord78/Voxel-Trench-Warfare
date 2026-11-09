@@ -10,9 +10,13 @@
 import { cos, sin } from '../core/dmath';
 import type { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
+import type { Crater } from '../sim/destruction';
+import type { BrickMap } from '../world/bricks';
+import { fuelNear } from '../world/char';
 import { K, kindOf } from '../world/materials';
 import type { WorldPlan } from '../world/generation/plan';
 import { structureFootprints } from '../world/generation/props';
+import type { Strike } from './director';
 import type { Wind } from './wind';
 
 type V3 = [number, number, number];
@@ -131,6 +135,19 @@ export function fireChance(material: number, ft: FireTunables): number {
   if (kind === K.TIMBER || kind === K.CLOTH || kind === K.DUCKBOARD) return ft.chanceTimber;
   if (kind === K.HULL) return ft.chanceHull;
   return 0;
+}
+
+/**
+ * A room's shell's strike, once its crater (cut on the ground: sim/destruction.ts) is in: on what the
+ * crater struck as it went out, its fire standing on the nearest fuel the crater left within its
+ * radius and char_m (world/char.ts fuelNear), drawn from the shell's `seed`. Null where what it
+ * struck cannot burn, or it left nothing to. `voxel` is metres a voxel.
+ */
+export function roomStrike(map: BrickMap, crater: Crater, seed: number, voxel: number, t: FireTunables): Strike | null {
+  if (crater.material === undefined || fireChance(crater.material, t) <= 0) return null;
+  const centre = [crater.centre[0] * voxel, crater.centre[1] * voxel, crater.centre[2] * voxel];
+  const fuel = fuelNear(map, centre, crater.radius * voxel + t.charM, voxel);
+  return fuel ? { at: fuel, material: crater.material, crater: crater.id, seed } : null;
 }
 
 /** A flame or an ember: where (metres), its size across, its glow over its colour, and which. */

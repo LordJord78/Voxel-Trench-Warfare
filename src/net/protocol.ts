@@ -2,7 +2,8 @@
  * What the game and its room say to each other (the multiplayer spec's §2): JSON text over one
  * WebSocket a player. Control messages are small objects; a player's state, sent twenty times a
  * second, is a short array of integers (millimetres, centidegrees), so a frame of eight players
- * stays well under a kilobyte.
+ * stays well under a kilobyte. The room's shells and the players' scoops are arrays of integers
+ * too, and the welcome carries the room's log of both (the shared-battle spec).
  *
  * Everything that arrives is checked here before it is believed: the room hears from anyone with
  * the link, and a client from whatever answers at the relay's address.
@@ -10,8 +11,17 @@
 
 import { hypot } from '../core/dmath';
 import { GUNS } from './gear';
+import type { ScheduledShell } from './shelling';
 
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
+/** The longest text a player may send, in characters. */
+export const CLIENT_TEXT_MAX = 4096;
+/** The longest text a room may send: Cloudflare's WebSocket message limit, which its welcome's log stays under (room-core.ts LOG_CHARS_MAX). */
+export const ROOM_TEXT_MAX = 1 << 20;
+/** The most cells one scoop may carry. */
+export const DIG_CELLS_MAX = 64;
+/** The most a hurt's amount may be: the most the battle does at once. */
+export const HURT_MAX = 200;
 export const MAX_PLAYERS = 8;
 /** A name, at most this long once trimmed. */
 export const NAME_MAX = 16;
@@ -131,6 +141,70 @@ export function decodeState(w: unknown): PlayerState | null {
   return { tick: w[0] as number, position: [m(1), m(2), m(3)], velocity: [m(4), m(5), m(6)], yaw: d(7), pitch: d(8), stance, height: m(10), flags: word & 0xff, gear: word >= 0 ? (word >>> 8) & 0x7fff : 0 };
 }
 
+/** A room's shell on the wire: [id, landAt (room ms), x mm, z mm, radius mm, seed]. */
+export type WireShell = number[];
+/** A scoop on the wire, as the room relays it: [seat, at (room ms), ...cells]. */
+export type WireDig = number[];
+
+/** A shell the room told: its id, when it lands on the room's clock (ms), where ([x, z], metres), how big (m), and its crater's seed. */
+export interface RoomShell {
+  id: number;
+  landAt: number;
+  at: [number, number];
+  radius: number;
+  seed: number;
+}
+
+/** A scoop a player dug: their seat, when the room heard it (its clock, ms), and the cells it cleared, each packed as (z·Y + y)·X + x. */
+export interface Dig {
+  seat: number;
+  at: number;
+  cells: number[];
+}
+
+/** The room's log of its world (the welcome's): every shell told, and the scoops dug, since the map was set or the room filled. */
+export interface MatchLog {
+  shells: WireShell[];
+  digs: WireDig[];
+}
+
+const SHELL_LENGTH = 6;
+const I31 = 2147483648;
+const U32 = 4294967296;
+
+/** A scheduled shell on the wire, for a match started at the room's `startAt` (ms). */
+export function encodeShell(s: ScheduledShell, startAt: number): WireShell {
+  const mm = (m: number) => Math.round(m * 1000);
+  return [s.id, Math.round(startAt + s.landS * 1000), mm(s.at[0]), mm(s.at[1]), mm(s.radius), s.seed];
+}
+
+export function decodeShell(w: unknown): RoomShell | null {
+  if (!Array.isArray(w) || w.length !== SHELL_LENGTH || !w.every(Number.isSafeInteger)) return null;
+  const [id, landAt, x, z, radius, seed] = w as number[];
+  if (id < 0 || id >= I31 || landAt < 0 || Math.abs(x) >= I31 || Math.abs(z) >= I31 || radius <= 0 || radius >= I31 || seed < 0 || seed >= U32) return null;
+  return { id, landAt, at: [x / 1000, z / 1000], radius: radius / 1000, seed };
+}
+
+/** A scoop's cells, if they are: 1 to DIG_CELLS_MAX integers in [0, 2^31). */
+function digCells(c: unknown): c is number[] {
+  return Array.isArray(c) && c.length >= 1 && c.length <= DIG_CELLS_MAX && c.every((n) => Number.isInteger(n) && n >= 0 && n < I31);
+}
+
+export function decodeDig(w: unknown): Dig | null {
+  if (!Array.isArray(w) || w.length < 2) return null;
+  const [seat, at, ...cells] = w as unknown[];
+  if (!Number.isInteger(seat) || (seat as number) < 0 || (seat as number) >= MAX_PLAYERS || !Number.isSafeInteger(at) || (at as number) < 0 || !digCells(cells)) return null;
+  return { seat: seat as number, at: at as number, cells };
+}
+
+/** A welcome's log: its well formed shells and scoops, in order; empty if it has none. */
+function log(raw: unknown): MatchLog {
+  const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  const shells = Array.isArray(r.shells) ? (r.shells as unknown[]).filter((w): w is WireShell => decodeShell(w) !== null) : [];
+  const digs = Array.isArray(r.digs) ? (r.digs as unknown[]).filter((w): w is WireDig => decodeDig(w) !== null) : [];
+  return { shells, digs };
+}
+
 /** What a player sends their room. */
 export type ClientMsg =
   | { t: 'hello'; v: number; build: string; name: string }
@@ -148,13 +222,16 @@ export type ClientMsg =
   | { t: 'hit'; v: number; z: Zone; w?: number }
   /** The battle hurt this player: `a` of health, by `c`. */
   | { t: 'hurt'; a: number; c: Cause }
-  | { t: 'away'; away: boolean };
+  | { t: 'away'; away: boolean }
+  /** A scoop this player dug: the cells it cleared, packed as (z·Y + y)·X + x. */
+  | { t: 'dig'; c: number[] };
 
 export type Refusal = 'full' | 'version' | 'no-room' | 'bad-hello';
 
 /** What a room sends its players. */
 export type RoomMsg =
-  | { t: 'welcome'; you: number; room: string; owner: number; seats: Seat[]; config: RoomConfig; phase: Phase; match: MatchInfo | null; now: number }
+  /** The hello's reply: this player's seat, the room as it stands, its clock, and its log of the world so far. */
+  | { t: 'welcome'; you: number; room: string; owner: number; seats: Seat[]; config: RoomConfig; phase: Phase; match: MatchInfo | null; now: number; log: MatchLog }
   | { t: 'refused'; reason: Refusal }
   | { t: 'roster'; owner: number; seats: Seat[] }
   | { t: 'config'; config: RoomConfig }
@@ -172,7 +249,11 @@ export type RoomMsg =
   /** The teams' scores, and each player's kills and deaths as [id, kills, deaths]. */
   | { t: 'score'; red: number; blue: number; ps: number[][] }
   /** The match is won. */
-  | { t: 'over'; winner: Team; red: number; blue: number };
+  | { t: 'over'; winner: Team; red: number; blue: number }
+  /** A shell, told a lead before it lands. */
+  | { t: 'shell'; s: WireShell }
+  /** Another player's scoop, stamped with the room's clock. */
+  | { t: 'dig'; d: WireDig };
 
 /** Control characters, and the invisible and direction-changing ones a name could hide behind. */
 function hidden(c: number): boolean {
@@ -209,8 +290,8 @@ export function cleanConfig(raw: unknown): Partial<RoomConfig> {
   return out;
 }
 
-function parse(raw: unknown): Record<string, unknown> | null {
-  if (typeof raw !== 'string' || raw.length > 4096) return null;
+function parse(raw: unknown, max: number): Record<string, unknown> | null {
+  if (typeof raw !== 'string' || raw.length > max) return null;
   try {
     const v: unknown = JSON.parse(raw);
     return typeof v === 'object' && v !== null && !Array.isArray(v) && typeof (v as { t?: unknown }).t === 'string' ? (v as Record<string, unknown>) : null;
@@ -221,7 +302,7 @@ function parse(raw: unknown): Record<string, unknown> | null {
 
 /** A player's message, if it is one: the room's guard against whatever a socket sends. */
 export function parseClient(raw: unknown): ClientMsg | null {
-  const m = parse(raw);
+  const m = parse(raw, CLIENT_TEXT_MAX);
   if (!m) return null;
   switch (m.t) {
     case 'hello':
@@ -249,9 +330,11 @@ export function parseClient(raw: unknown): ClientMsg | null {
       if (!Number.isInteger(m.v) || !ZONES.includes(m.z as Zone)) return null;
       return Number.isInteger(m.w) && (m.w as number) >= 0 && (m.w as number) < GUNS.length ? { t: 'hit', v: m.v as number, z: m.z as Zone, w: m.w as number } : { t: 'hit', v: m.v as number, z: m.z as Zone };
     case 'hurt':
-      return typeof m.a === 'number' && Number.isFinite(m.a) && m.a > 0 && m.a <= 200 && CAUSES.includes(m.c as Cause) ? { t: 'hurt', a: m.a, c: m.c as Cause } : null;
+      return typeof m.a === 'number' && Number.isFinite(m.a) && m.a > 0 && m.a <= HURT_MAX && CAUSES.includes(m.c as Cause) ? { t: 'hurt', a: m.a, c: m.c as Cause } : null;
     case 'away':
       return typeof m.away === 'boolean' ? { t: 'away', away: m.away } : null;
+    case 'dig':
+      return digCells(m.c) ? { t: 'dig', c: [...m.c] } : null;
     default:
       return null;
   }
@@ -283,13 +366,13 @@ function match(raw: unknown): MatchInfo | null {
 
 /** A room's message, if it is one. */
 export function parseRoom(raw: unknown): RoomMsg | null {
-  const m = parse(raw);
+  const m = parse(raw, ROOM_TEXT_MAX);
   if (!m) return null;
   switch (m.t) {
     case 'welcome': {
       const s = seats(m.seats);
       if (!s || !Number.isInteger(m.you) || typeof m.room !== 'string' || typeof m.now !== 'number') return null;
-      return { t: 'welcome', you: m.you as number, room: m.room, owner: Number.isInteger(m.owner) ? (m.owner as number) : -1, seats: s, config: config(m.config), phase: m.phase === 'playing' ? 'playing' : 'lobby', match: match(m.match), now: m.now };
+      return { t: 'welcome', you: m.you as number, room: m.room, owner: Number.isInteger(m.owner) ? (m.owner as number) : -1, seats: s, config: config(m.config), phase: m.phase === 'playing' ? 'playing' : 'lobby', match: match(m.match), now: m.now, log: log(m.log) };
     }
     case 'refused':
       return m.reason === 'full' || m.reason === 'version' || m.reason === 'no-room' || m.reason === 'bad-hello' ? { t: 'refused', reason: m.reason } : null;
@@ -328,6 +411,10 @@ export function parseRoom(raw: unknown): RoomMsg | null {
     }
     case 'over':
       return (m.winner === 'red' || m.winner === 'blue') && typeof m.red === 'number' && typeof m.blue === 'number' ? { t: 'over', winner: m.winner, red: m.red, blue: m.blue } : null;
+    case 'shell':
+      return decodeShell(m.s) ? { t: 'shell', s: m.s as WireShell } : null;
+    case 'dig':
+      return decodeDig(m.d) ? { t: 'dig', d: m.d as WireDig } : null;
     default:
       return null;
   }

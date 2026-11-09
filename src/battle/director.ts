@@ -56,11 +56,16 @@ export interface BattleInputs {
   splashes?: readonly { at: readonly [number, number, number]; energyJ: number }[];
 }
 
-/** A shell of the session's landed: where it struck (metres), the material it struck, and its crater's id. */
+/**
+ * A shell of the session's landed: where it struck (metres), the material it struck, and its crater's
+ * id; and its seed, if it has one (a room's shell): its fire's chance, size and burn are then drawn
+ * from it, the same on every client whatever each drew before.
+ */
 export interface Strike {
   at: [number, number, number];
   material: number;
   crater: number | null;
+  seed?: number;
 }
 
 /** A fire as it is: where, how hard it burns (0 to 1), its size, whether it is the hamlet's, and whether it is dying down. */
@@ -366,10 +371,12 @@ export class Director {
     const ft = this.fireT;
     const r = this.fireRng;
     for (const s of this.pending) {
-      // Every draw made whatever it struck, so the stream does not hang on the material.
-      const roll = r.float();
-      const size = r.uniform(ft.size[0], ft.size[1]);
-      const burnS = r.uniform(ft.burnS[0], ft.burnS[1]);
+      // Every draw made whatever it struck, so the stream does not hang on the material; a seeded
+      // strike's from its own seed, leaving the fires' stream as it was.
+      const sr = s.seed === undefined ? r : Rng.root(s.seed).derive('battle.fire');
+      const roll = sr.float();
+      const size = sr.uniform(ft.size[0], ft.size[1]);
+      const burnS = sr.uniform(ft.burnS[0], ft.burnS[1]);
       if (roll >= fireChance(s.material, ft)) continue;
       const f = { id: this.nextFire++, at: [s.at[0], s.at[1], s.at[2]] as [number, number, number], t0: now, burnS, size, hamlet: false, crater: s.crater, charred: false };
       this.burning.push(f);

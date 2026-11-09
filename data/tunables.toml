@@ -430,6 +430,14 @@ move                = 1.0
 [attachment.laser]
 hip_spread          = 0.65
 
+# The loadout's bars (src/combat/arsenal.ts gunStats): each gun's numbers against the arsenal's.
+# Recoil control is 1 - (kick_pitch_deg + 2 × climb_per_shot_deg) / control_span, from the gun's
+# [recoil.*] table. The shots spec's §3 made every gun's kick + 2 × climb about 1.24 times the
+# reference's, and the span grew with it (from 4.5): the bars still set the guns against each other
+# as they did (the AK's 0.80, the SVD's 0.24), and the heavier recoil is felt, not shown.
+[loadout]
+control_span        = 5.6
+
 # The hands (src/sim/session.ts): what is in them comes down and the next comes up (a gun from the
 # other, the shovel while F is held, the gun again after); aimed, the recoil is steadier and the feet
 # slower, and the mouse turns by the sight's magnification (times ads_sensitivity).
@@ -456,17 +464,20 @@ dig_stroke_s        = 0.85     # the shovel's stroke as drawn: push, lift, throw
 #   climb  an offset that accumulates over a burst, approaches a ceiling and
 #          bleeds off when you stop. The pattern you have to correct.
 #
-# Feel first: the whole thing is LIGHT. If it reads as weightless rather than
-# snappy, raise kick_pitch_deg before touching anything else.
+# Feel first: light, but with weight. The shots spec's §3 raised the reference's
+# kick ×1.3, climb per shot ×1.2 and ceiling ×1.15, every gun alike; settle
+# times, drift, jitter and the burst reset are the reference's. If it reads as
+# weightless rather than snappy, raise kick_pitch_deg before touching anything
+# else.
 # ---------------------------------------------------------------------------
 
 [recoil.defaults]
-kick_pitch_deg      = 0.30
+kick_pitch_deg      = 0.39
 kick_yaw_deg        = 0.00
 settle_time_s       = 0.20     # kick back to 2% of its peak in this long
 damping_ratio       = 1.00     # critically damped: fastest return, no bounce
-climb_ceiling_deg   = 2.00
-climb_per_shot_deg  = 0.30
+climb_ceiling_deg   = 2.30
+climb_per_shot_deg  = 0.36
 climb_recovery_s    = 0.30
 drift_yaw_deg       = 0.00
 drift_onset_shots   = 6.0
@@ -478,10 +489,10 @@ burst_reset_s       = 0.28     # off the trigger this long and the pattern reset
 # Tiny kick, a quick vertical climb that plateaus, and a mild rightward drift
 # that only shows up once you are past about six rounds.
 [recoil.assault_rifle]
-kick_pitch_deg      = 0.34
+kick_pitch_deg      = 0.44
 settle_time_s       = 0.20     # peak lands 2 frames after the shot, gone in 0.22 s
-climb_ceiling_deg   = 1.65     # ~2.4 m of rise at 100 m, held on the trigger
-climb_per_shot_deg  = 0.27     # so the plateau arrives in about 8 rounds
+climb_ceiling_deg   = 1.90     # ~3.3 m of rise at 100 m, held on the trigger
+climb_per_shot_deg  = 0.32     # so the plateau arrives in about 8 rounds
 climb_recovery_s    = 0.26
 drift_yaw_deg       = 0.075    # rightward; positive yaw is right
 drift_onset_shots   = 6.0
@@ -491,9 +502,9 @@ jitter_yaw_deg      = 0.055
 
 # The carbine: lighter in the hands than the AK, and a little faster.
 [recoil.m4]
-kick_pitch_deg      = 0.30
-climb_ceiling_deg   = 1.45
-climb_per_shot_deg  = 0.22
+kick_pitch_deg      = 0.39
+climb_ceiling_deg   = 1.67
+climb_per_shot_deg  = 0.26
 climb_recovery_s    = 0.24
 drift_yaw_deg       = 0.05
 jitter_pitch_deg    = 0.03
@@ -501,10 +512,10 @@ jitter_yaw_deg      = 0.05
 
 # A pistol cartridge in a heavy gun: almost nothing.
 [recoil.mp5]
-kick_pitch_deg      = 0.18
+kick_pitch_deg      = 0.23
 settle_time_s       = 0.16
-climb_ceiling_deg   = 0.95
-climb_per_shot_deg  = 0.13
+climb_ceiling_deg   = 1.09
+climb_per_shot_deg  = 0.16
 climb_recovery_s    = 0.20
 drift_yaw_deg       = 0.03
 jitter_pitch_deg    = 0.025
@@ -512,18 +523,18 @@ jitter_yaw_deg      = 0.04
 
 # A full-power round: each shot throws the muzzle up, and it comes back.
 [recoil.svd]
-kick_pitch_deg      = 1.60
+kick_pitch_deg      = 2.08
 settle_time_s       = 0.32
-climb_ceiling_deg   = 2.50
-climb_per_shot_deg  = 0.90
+climb_ceiling_deg   = 2.88
+climb_per_shot_deg  = 1.08
 climb_recovery_s    = 0.40
 burst_reset_s       = 0.50
 
 # Heavy, so each round is small; long bursts walk right and up.
 [recoil.m249]
-kick_pitch_deg      = 0.32
-climb_ceiling_deg   = 2.20
-climb_per_shot_deg  = 0.17
+kick_pitch_deg      = 0.42
+climb_ceiling_deg   = 2.53
+climb_per_shot_deg  = 0.20
 climb_recovery_s    = 0.35
 drift_yaw_deg       = 0.12
 drift_onset_shots   = 8.0
@@ -531,26 +542,26 @@ jitter_pitch_deg    = 0.05
 jitter_yaw_deg      = 0.09
 
 [recoil.m870]
-kick_pitch_deg      = 3.00
+kick_pitch_deg      = 3.90
 settle_time_s       = 0.38
-climb_ceiling_deg   = 3.00
-climb_per_shot_deg  = 1.50
+climb_ceiling_deg   = 3.45
+climb_per_shot_deg  = 1.80
 climb_recovery_s    = 0.45
 burst_reset_s       = 0.80
 
 [recoil.m17]
-kick_pitch_deg      = 0.90
+kick_pitch_deg      = 1.17
 settle_time_s       = 0.22
-climb_ceiling_deg   = 2.00
-climb_per_shot_deg  = 0.55
+climb_ceiling_deg   = 2.30
+climb_per_shot_deg  = 0.66
 climb_recovery_s    = 0.25
 burst_reset_s       = 0.35
 
 [recoil.pm]
-kick_pitch_deg      = 1.05
+kick_pitch_deg      = 1.37
 settle_time_s       = 0.22
-climb_ceiling_deg   = 2.00
-climb_per_shot_deg  = 0.60
+climb_ceiling_deg   = 2.30
+climb_per_shot_deg  = 0.72
 climb_recovery_s    = 0.25
 burst_reset_s       = 0.35
 
@@ -611,6 +622,29 @@ spread_m            = 1.6      # heavy's aim scatter about the head, sideways,
 spread_vertical     = 0.6      # and this much of it up and down (the reference's
                                # rig); both across the line of fire
 reach_m             = 30.0     # enemy bays within this, along the line, fire
+
+[room_battle]
+# The battle in a room (the shared-battle spec): the room, not each page, decides when and where
+# its shells land, from its map's pinned field (src/net/shell-fields.ts), and tells everyone each
+# one lead_s before it lands. The relay cannot read this file, so src/net/shelling.ts SHELLING
+# copies these numbers for it; tests/net/shelling.test.ts holds the two equal.
+light_gap_s         = [6.0, 10.0]  # seconds from one shell to the next, drawn uniform
+heavy_gap_s         = [2.5, 4.0]   # (off: no shells)
+lead_s              = 1.5      # each told this long before it lands: its whistle
+radius_m            = [2.2, 3.4]   # drawn uniform
+spawn_clear_m       = 15.0     # none lands nearer either side's start
+nml_share           = 0.5      # the share landing in no man's land; the rest on a front or
+                               # support line of either side
+line_spread_m       = 4.0      # a line's shell lands this far either side of its trench
+nml_inset_m         = 8.0      # no man's land: between the fronts, this far in from each
+tries               = 8        # places tried for a shell before its slot sends nothing
+# What the battle does to a body in a room (src/combat/harm.ts): each page reckons its own player's
+# harm and tells the room (a hurt). The relay applies it; these are not copied into SHELLING.
+blast_hp            = 200.0    # a blast's harm within lethal_radii of it
+lethal_radii        = 0.5      # the spec's lethal_m, in the shell's radii
+reach_radii         = 2.2      # the spec's reach_m, in its radii: falling linearly to 0 here
+cover_share         = 0.35     # what is left of it when a voxel ray from it to the chest is blocked
+front_damage_scale  = 0.6      # the front's round: its zone's damage (net/match-rules DAMAGE) times this
 
 [range]
 # Solo play's firing range (the shots spec's §5, combat/range.ts): dummies and
@@ -736,13 +770,19 @@ bricks_per_tick        = 512   # a crater's changed bricks written back a tick:
 #
 # damping_ratio below 1 overshoots on the way back, which is what reads as mass.
 # It belongs here and nowhere near the aim axis.
+#
+# The shots spec's §3 made the punch heavier (back ×1.3 and pitch ×1.25 on the
+# reference's, every gun alike, at damping 0.7) and gave the camera two
+# channels of its own, which turn and move the eye and never the round: a roll
+# about the line of sight, its side drawn each shot, and a shake for a moment
+# after it, drawn afresh each tick. Their draws are their own stream's.
 # ---------------------------------------------------------------------------
 
 [viewkick.defaults]
-punch_back_m        = 0.030    # shoved toward the eye; the biggest weight cue
+punch_back_m        = 0.039    # shoved toward the eye; the biggest weight cue
 punch_up_m          = 0.008
 punch_side_m        = 0.002
-punch_pitch_deg     = 1.10     # viewmodel only — the sight picture moves 0.34
+punch_pitch_deg     = 1.375    # viewmodel only — the sight picture moves 0.44
 punch_yaw_deg       = 0.15
 punch_roll_deg      = 0.45
 aim_pitch_follow    = 0.90     # viewmodel pitch per degree of aim kick, so the
@@ -750,66 +790,77 @@ aim_pitch_follow    = 0.90     # viewmodel pitch per degree of aim kick, so the
 settle_time_s       = 0.22     # close to the aim layer's 0.20 so they finish
                                # together; drift these apart and the gun reads
                                # as two guns
-damping_ratio       = 0.85     # overshoot: the mass settling back
+damping_ratio       = 0.70     # overshoot: the mass snapping back past rest
 fov_pulse_deg       = -0.55    # a snap in, not a zoom out
 fov_settle_s        = 0.16
 fov_damping_ratio   = 1.00     # no bounce on the lens; it reads as a wobble
+cam_roll_deg        = 0.70     # the camera rolled about the line of sight a
+                               # shot, to a side drawn for it (the rifles')
+cam_roll_settle_s   = 0.12     # back to level: 2% of the roll in this long
+cam_roll_damping_ratio = 1.00  # critically damped: level again, never past it
+cam_shake_m         = 0.0015   # the eye moved up to this on each axis, and
+cam_shake_deg       = 0.12     # turned up to this in pitch and yaw,
+cam_shake_s         = 0.06     # drawn afresh each tick for this long after a shot
 report_peak_db      = 158.0    # 5.45 at the shooter's ear
 report_low_hz       = 70.0     # where the body of the transient sits
 report_length_s     = 0.18
 jitter_scale        = 0.12     # per-shot variation, as a fraction of each value
 
 [viewkick.assault_rifle]
-punch_back_m        = 0.034
-punch_pitch_deg     = 1.25
+punch_back_m        = 0.0442
+punch_pitch_deg     = 1.5625
 punch_roll_deg      = 0.55
-damping_ratio       = 0.82
 fov_pulse_deg       = -0.60
 
 [viewkick.m4]
-punch_back_m        = 0.030
-punch_pitch_deg     = 1.10
+punch_back_m        = 0.039
+punch_pitch_deg     = 1.375
 punch_roll_deg      = 0.45
 
 [viewkick.mp5]
-punch_back_m        = 0.020
-punch_pitch_deg     = 0.70
+punch_back_m        = 0.026
+punch_pitch_deg     = 0.875
 punch_roll_deg      = 0.30
 fov_pulse_deg       = -0.30
+cam_roll_deg        = 0.45
 
 [viewkick.svd]
-punch_back_m        = 0.060
-punch_pitch_deg     = 3.20
+punch_back_m        = 0.078
+punch_pitch_deg     = 4.00
 punch_roll_deg      = 1.20
 settle_time_s       = 0.32
 fov_pulse_deg       = -1.10
+cam_roll_deg        = 1.40
 
 [viewkick.m249]
-punch_back_m        = 0.032
-punch_pitch_deg     = 1.00
+punch_back_m        = 0.0416
+punch_pitch_deg     = 1.25
 punch_roll_deg      = 0.70
 
 [viewkick.m870]
-punch_back_m        = 0.080
+punch_back_m        = 0.104
 punch_up_m          = 0.020
-punch_pitch_deg     = 5.50
+punch_pitch_deg     = 6.875
 punch_roll_deg      = 1.80
 settle_time_s       = 0.36
 fov_pulse_deg       = -1.40
+cam_roll_deg        = 1.80
 
 [viewkick.m17]
-punch_back_m        = 0.025
+punch_back_m        = 0.0325
 punch_up_m          = 0.015
-punch_pitch_deg     = 4.00
+punch_pitch_deg     = 5.00
 punch_roll_deg      = 1.00
 settle_time_s       = 0.20
+cam_roll_deg        = 0.90
 
 [viewkick.pm]
-punch_back_m        = 0.025
+punch_back_m        = 0.0325
 punch_up_m          = 0.016
-punch_pitch_deg     = 4.40
+punch_pitch_deg     = 5.50
 punch_roll_deg      = 1.10
 settle_time_s       = 0.20
+cam_roll_deg        = 0.90
 
 # ---------------------------------------------------------------------------
 # PARTICLES
@@ -1157,7 +1208,10 @@ ember_max_px        = 12.0     # and drawn no wider than this, in pixels of the 
 rest_right_m        = 0.175    # where the rifle sits when nothing is happening
 rest_up_m           = -0.205
 rest_forward_m      = 0.440
-sway_follow         = 0.5      # the walk's sideways sway the rifle carries
+sway_follow         = 0.5      # the share of a sideways sway the rifle carries; the
+                               # rig passes none in play (the hands' figure eight,
+                               # [handling], is the gun's only stride motion), and
+                               # it is kept for the pinned poses
 run_dip_m           = 0.012    # how far it drops at a run (the reference's)
 step_raise_m        = 0.14     # raised to the shoulder on the firing step, so it
                                # clears a crest 0.12 m under a standing eye (at
@@ -1215,6 +1269,12 @@ landing_pitch_deg   = -4.0
 landing_hard_mps    = 8.0      # landed this fast (m/s), the full dip, as the eye's
 landing_settle_s    = 0.25
 landing_damping     = 1.0      # critically damped: back without a bounce
+# An aim-in (the shots spec's §3): as the sights arrive (the aim's blend reaching
+# 1), the muzzle is carried on past the aim at a steady rate from that tick, then
+# eased back to it. Never a step: the sights arrive with no speed.
+aim_overshoot_deg   = 0.4      # pitch past the aim, muzzle up
+aim_overshoot_rise_s = 0.05    # carried there over this: a third of it a tick at 60 Hz
+aim_overshoot_s     = 0.15     # and back at the aim this long after the sights arrive
 # Reloads: curves keyed over the reload's phase (0 to 1), from rest and back to
 # it, eased between keys as the shovel's stroke is. A cue is heard as its key is
 # passed. The long guns' (rifle, carbine, SMG and marksman):
@@ -1340,6 +1400,8 @@ fov_lerp_per_s      = 7.0      # how fast the periscope's tunnel eases in
 head_bob_amplitude  = 0.035
 head_bob_hz         = 1.9
 landing_dip         = 0.11
+roll_max_deg        = 3.0      # the view's roll, from every source (a shot's, suppression's
+                               # shake, a shell's blast), held within this (the shots spec's §3)
 
 [render]
 tracer_length_m     = 7.0      # streak behind the round, not a dot. Nothing reads it: a tracer's

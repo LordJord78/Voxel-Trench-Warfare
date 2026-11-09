@@ -135,13 +135,16 @@ describe('the viewmodel', () => {
     map.fillBox(0, 0, 0, 64, 4, 64, P.SOD);
     const s = Session.create({ map, plan: null, spawn: { position: [3.2, 0.4, 3.2] } }, tun, 7, 0);
     for (let k = 0; k < 20; k++) s.tick();
+    // Settling from the spawn is itself a small landing, which dips the eye and so the muzzle (the
+    // camera's landing dip); this test wants none.
+    s.player.landingImpact = 0;
     const m = rifleModel();
     const { muzzle, port: portAt } = s.arm.spec;
     // Where the session holds a model point: the held pose at rest (no kick, raise, aim or dip) with
     // the hands' delta, from the eye along the view as the last tick left it, to the last bit.
     const held = (point: readonly number[], hands: HandsDelta) => {
       const p = s.player;
-      expect(s.viewAt(1)).toEqual({ yaw: 0, pitch: 0, roll: 0, fov: 0 });
+      expect(s.viewAt(1)).toEqual({ yaw: 0, pitch: 0, roll: 0, fov: 0, shake: [0, 0, 0] });
       const { forward, right, up } = viewBasis(p.yaw, p.pitch);
       const v = modelToView(heldPose(t, s.holding(), still, 0, 0, 0, 0, 1, null, hands), point);
       const eye = [p.position.x, p.position.y + s.controller.eyeHeight(p), p.position.z];

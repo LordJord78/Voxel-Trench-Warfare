@@ -88,7 +88,7 @@ function strike(s: Session, from: readonly (readonly number[])[], dir: readonly 
 }
 
 /** Nothing happened. */
-const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [] });
+const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [], harms: [] });
 
 /** Blood's droplets and mist in the session's particles, by their colour (they only fade). */
 function bloodOf(s: Session): { droplets: number[][]; mists: number[][] } {
@@ -354,6 +354,96 @@ describe('hit feedback', () => {
     expect(light.calls).toEqual([['flash', 0.25, NOW]]);
   });
 
+  it("a blast's harm on the player is felt: the hurt flash and thump, scaled by its amount", () => {
+    const s = field();
+    const harm = (amount: number, cause: 'shell' | 'round' = 'shell') => ({ ...none(), harms: [{ tick: s.ticks, amount, cause }] });
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const was = [s.suppression.flinchYaw, s.suppression.flinchPitch];
+    // A blast's 80: the flash a hit of 80 gives, and the hurt voice at the ear.
+    const voices = fb.frame(s, harm(80), NOW);
+    expect(marker.calls).toEqual([['flash', 0.8, NOW]]);
+    expect(voices).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(fb.state().flashes).toBe(1);
+    expect(fb.state().voices).toEqual({ hurt: 1 });
+    // No jolt: the blast's own shake and suppression stand for it.
+    expect([s.suppression.flinchYaw, s.suppression.flinchPitch]).toEqual(was);
+    // Weaker, weaker: 40 at 0.4, 20 at the least, 0.25; 200 at the whole.
+    for (const [amount, strength] of [[40, 0.4], [20, 0.25], [200, 1]] as const) {
+      const m = new FakeMarker();
+      expect(new HitFeedback(t, m).frame(s, harm(amount), NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+      expect(m.calls, `${amount}`).toEqual([['flash', strength, NOW]]);
+    }
+    // A round's harm alone: nothing here, its body hit is what flashes.
+    const round = new FakeMarker();
+    const fr = new HitFeedback(t, round);
+    expect(fr.frame(s, harm(33, 'round'), NOW)).toEqual([]);
+    expect(round.calls).toEqual([]);
+    expect(fr.state().flashes).toBe(0);
+  });
+
+  it("a blast felt counts as felt for the room's word of the player's death: a shell that kills flashes once", () => {
+    const s = field();
+    s.room = true;
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    expect(fb.frame(s, { ...none(), harms: [{ tick: s.ticks, amount: 100, cause: 'shell' }] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    // The room's word of the death by that shell, 0.1 s on: nothing more.
+    fb.died(NOW + 100);
+    expect(fb.frame(s, none(), NOW + 116)).toEqual([]);
+    expect(marker.calls).toEqual([['flash', 1, NOW]]);
+    expect(fb.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
+    // Past kill_window_s from the blast, the room's word is felt.
+    fb.died(NOW + 400);
+    expect(marker.calls.at(-1)).toEqual(['flash', 1, NOW + 400]);
+    expect(fb.frame(s, none(), NOW + 416)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+  });
+
+  it("a frame's blasts and a round into the player: one flash at the larger share and one hurt voice; the jolt the round's alone", () => {
+    const shelled = (s: Session, amount: number, tick = s.ticks) => ({ tick, amount, cause: 'shell' as const });
+    // A blast's 80 and a round's 55 on the same tick: one flash at 0.8, one voice.
+    const s = field();
+    s.together = true;
+    s.room = true;
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const was = [s.suppression.flinchYaw, s.suppression.flinchPitch];
+    expect(fb.frame(s, { ...none(), hits: [intoPlayer(s, 4)], harms: [shelled(s, 80)] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(marker.calls).toEqual([['flash', 0.8, NOW]]);
+    expect(fb.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
+    // The round jolts the aim (it came along +x: across the view) by its own share, not the blast's.
+    expect(s.suppression.flinchYaw - was[0]).toBeCloseTo(1.5 + 1.5 * 0.55, 3);
+    // Two blasts of 15 (30 all told) and the round's 55, the blasts a tick before it: one flash at 0.55, one voice.
+    const m2 = new FakeMarker();
+    const f2 = new HitFeedback(t, m2);
+    expect(f2.frame(s, { ...none(), hits: [intoPlayer(s, 4)], harms: [shelled(s, 15, s.ticks - 1), shelled(s, 15, s.ticks - 1)] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(m2.calls).toEqual([['flash', 0.55, NOW]]);
+    // The front's round (owner 1) is felt in a room, so it takes the blasts' share too: 0.9 over 0.55.
+    const m3 = new FakeMarker();
+    expect(new HitFeedback(t, m3).frame(s, { ...none(), hits: [intoPlayer(s, 1)], harms: [shelled(s, 50), shelled(s, 40)] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(m3.calls).toEqual([['flash', 0.9, NOW]]);
+    // Rounds on two ticks and a blast: the blast joins the later tick's flash, which is the one left showing.
+    const m4 = new FakeMarker();
+    const early = { ...intoPlayer(s, 4), tick: s.ticks - 1 };
+    expect(new HitFeedback(t, m4).frame(s, { ...none(), hits: [early, intoPlayer(s, 4)], harms: [shelled(s, 70, s.ticks - 1)] }, NOW)).toEqual([
+      { kind: 'hurt', at: null, gain: 0.7 },
+      { kind: 'hurt', at: null, gain: 0.7 },
+    ]);
+    expect(m4.calls).toEqual([
+      ['flash', 0.55, NOW],
+      ['flash', 0.7, NOW],
+    ]);
+    // Blasts alone in a frame: added up, one flash and one voice.
+    const m5 = new FakeMarker();
+    expect(new HitFeedback(t, m5).frame(s, { ...none(), harms: [shelled(s, 30), shelled(s, 20)] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(m5.calls).toEqual([['flash', 0.5, NOW]]);
+    // Out of a room the front's round is not felt, so it takes no share: the blast's flash is its own (both given here by hand).
+    s.room = false;
+    const m6 = new FakeMarker();
+    expect(new HitFeedback(t, m6).frame(s, { ...none(), hits: [intoPlayer(s, 1)], harms: [shelled(s, 30)] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(m6.calls).toEqual([['flash', 0.3, NOW]]);
+  });
+
   it("the player's own round never hurts the player", () => {
     const s = field();
     s.together = true;
@@ -531,21 +621,22 @@ describe('hit feedback', () => {
     expect(after.frame(s, none(), NOW + 416)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
   });
 
-  it("the front's rounds (owner 1) into the player: nothing in solo play (puppets make it together), the flash in a room; others' rounds always", () => {
+  it("the front's rounds (owner 1) into the player: nothing in solo play (puppets make it together), the flash in a room (the session's, as Together.prepare sets it); others' rounds always", () => {
     const s = field();
     s.together = true;
     const marker = new FakeMarker();
     const fb = new HitFeedback(t, marker);
     const was = [s.suppression.flinchYaw, s.suppression.flinchPitch];
-    expect(fb.room).toBe(false);
+    expect(s.room).toBe(false);
+    expect('room' in fb).toBe(false);
     expect(fb.frame(s, { ...none(), hits: [intoPlayer(s, 1)] }, NOW)).toEqual([]);
     expect(marker.calls).toEqual([]);
     expect([s.suppression.flinchYaw, s.suppression.flinchPitch]).toEqual(was);
     // Another player's round (seat 0's, owner 2), in solo too: a puppet's world is a room's.
     expect(fb.frame(s, { ...none(), hits: [intoPlayer(s, 2)] }, NOW + 16)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
     expect(marker.calls).toEqual([['flash', 0.55, NOW + 16]]);
-    // In a room the front's rounds are felt (M6 brings its harm into rooms).
-    fb.room = true;
+    // In a room the front's rounds are felt (M6 brings its harm into rooms): the session says so.
+    s.room = true;
     expect(fb.frame(s, { ...none(), hits: [intoPlayer(s, 1)] }, NOW + 32)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
     expect(marker.calls.at(-1)).toEqual(['flash', 0.55, NOW + 32]);
     // Never the player's own.

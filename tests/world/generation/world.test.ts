@@ -12,6 +12,9 @@ import { genParams } from '../../../src/world/generation/params';
 import { planWorld } from '../../../src/world/generation/plan';
 import { columnModel } from '../../../src/world/generation/columns';
 import { structureFootprints } from '../../../src/world/generation/props';
+import { shellField } from '../../../src/world/generation/shell-field';
+import { pickSpawns } from '../../../src/world/generation/spawn';
+import { SHELL_FIELDS } from '../../../src/net/shell-fields';
 
 const golden = JSON.parse(readFileSync(new URL('../../fixtures/golden.json', import.meta.url), 'utf8')) as { seed: number; fingerprint: string };
 
@@ -64,6 +67,10 @@ describe('the generated world', () => {
     expect(dense).toBe(world.map.denseCount);
     expect(wrong).toBe(0);
     expect(world.mirror.takeEdits()).toEqual([]);
+  });
+  it("is the room's shell field (net/shell-fields.ts): its lines, no man's land, and both sides' starts", () => {
+    const field = shellField(plan, { red: pickSpawns(world.map, plan, 'front', 4), blue: pickSpawns(world.map, plan, 'enemy_front', 4) });
+    expect(SHELL_FIELDS.ravine, JSON.stringify(field)).toEqual(field);
   });
   it('matches the golden fingerprint for seed 7', async () => {
     expect(golden.seed).toBe(7);

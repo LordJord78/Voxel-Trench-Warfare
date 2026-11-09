@@ -16,10 +16,11 @@ import { aimRangeM, ballisticsTunables, projectileSpec, Rounds, type BodyHit, ty
 import { BlastShake, blastShakeTunables } from '../combat/blast-shake';
 import { Entrenching, entrenchingTunables, type Scoop } from '../combat/entrenching';
 import { Front, frontTunables, planSource, type FrontSource } from '../combat/front';
+import { blastHarm, harmTunables, type HarmTunables } from '../combat/harm';
 import { gunClass, Handling, handlingTunables, ZERO_HANDS, type HandlingCue } from '../combat/handling';
 import { particleSpec, Particles, type ParticleSpec } from '../combat/particles';
 import { Recoil } from '../combat/recoil';
-import { bodySphere, hitParts, pose, type Frame, type PartName } from '../combat/soldier-rig';
+import { bodySphere, hitParts, PART_BOX, pose, toWorld, type Frame, type PartName, type V3 } from '../combat/soldier-rig';
 import { Suppression, suppressionTunables } from '../combat/suppression';
 import { ViewKick } from '../combat/viewkick';
 import { heldPose, modelToView, viewBasis, viewmodelTunables, type Holding, type ViewmodelKick, type ViewmodelPose, type ViewmodelTunables } from '../combat/viewmodel';
@@ -36,7 +37,7 @@ import { Vec3, ZERO } from '../physics/vec';
 import type { BrickMap } from '../world/bricks';
 import type { WorldPlan } from '../world/generation/plan';
 import { K, kindOf, P, paletteData } from '../world/materials';
-import { groundTop } from '../world/raycast';
+import { groundTop, raycast } from '../world/raycast';
 import { spatter, spatterTunables, type SpatterTunables } from '../world/spatter';
 import { BARE, decodeShotMark, encodeShotMark, GUNS, teamTracer, TRACER_KIND, type Gear, type GunKey } from '../net/gear';
 import type { Team } from '../net/protocol';
@@ -54,6 +55,9 @@ export const PORT_ANCHOR = 2;
 
 /** The local player's body, among the bodies a round may strike. */
 export const LOCAL_BODY = -1;
+
+/** A body's chest: the middle of its torso's box, in the torso's frame. Where a blast's harm is reckoned to. */
+const CHEST = [0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2);
 
 /** `Session.held` when the shovel is in the hands. */
 export const SHOVEL_HELD = -1;
@@ -106,12 +110,19 @@ export function idleIntent(): MoveIntent {
   return { forward: 0, strafe: 0, jump: false, sprint: false, stance: Stance.STANDING, periscope: false, fire: false, reload: false, dig: false };
 }
 
-/** How the rifle and suppression turn the view, in degrees: recoil and the flinch (yaw, pitch), the shake (pitch, roll), and the view kick's pulse of the field of view. */
+/**
+ * How the rifle and suppression turn the view, in degrees: recoil and the flinch (yaw, pitch), the
+ * shakes of suppression and a blast (pitch, roll), the view kick's pulse of the field of view, and
+ * its camera's roll and a shot's shake (pitch, yaw, and `shake`, the eye moved, in metres along the
+ * world's axes). Every round leaves the eye along the player's view plus recoil and the flinch alone:
+ * the rest is the camera's.
+ */
 export interface ViewOffsets {
   yaw: number;
   pitch: number;
   roll: number;
   fov: number;
+  shake: [number, number, number];
 }
 
 /** A shot, from where it left along its direction (unit), whether it is a tracer, and the muzzle it flashed at; `tick` is the session's tick that fired it. */
@@ -129,6 +140,16 @@ export interface ShotEvent {
   report?: number;
 }
 
+/**
+ * What the battle did to the player in a room (combat/harm.ts), which the page tells the room as a
+ * hurt: a blast's by its distance and cover, or the front's round by its zone.
+ */
+export interface Harm {
+  tick: number;
+  amount: number;
+  cause: 'shell' | 'round';
+}
+
 /** What combat did between drains, oldest first. */
 export interface CombatEvents {
   /** The player's shots, from the eye. */
@@ -143,9 +164,8 @@ export interface CombatEvents {
   craters: (Crater & { tick: number })[];
   /** Shells announced (their whistle): where each will land (metres), and in how long. */
   incoming: { tick: number; at: [number, number, number]; landsInS: number }[];
-  /** Shells landed: where (metres, the top of the ground), how big, and what they struck. */
-  /** Shells landed: where, how big, what they struck, and the crater each made (null where none could be). */
-  blasts: { tick: number; at: [number, number, number]; radiusM: number; material: number; crater: number | null }[];
+  /** Shells landed: where, how big, what they struck, the crater each made (null where none could be), and the seed it was cut with. */
+  blasts: { tick: number; at: [number, number, number]; radiusM: number; material: number; crater: number | null; seed?: number }[];
   /** Each scoop the player dug: how many voxels, and where (metres). */
   scoops: (Scoop & { tick: number })[];
   /** Other players' shots, from their eyes, their tracers and flashes at their rifles' muzzles. */
@@ -159,10 +179,12 @@ export interface CombatEvents {
   splashes: { tick: number; at: [number, number, number]; energyJ: number; kind: 'round' | 'shell' | 'debris' }[];
   /** What the hands did that is heard (handling.ts): a reload's marks, the pump, an empty trigger's click; each at the gun's muzzle as its tick left it (`muzzle()`). */
   handling: { tick: number; cue: HandlingCue; at: [number, number, number] }[];
+  /** In a room, the battle's harm to the player: each a hurt for the room. */
+  harms: Harm[];
 }
 
 function noEvents(): CombatEvents {
-  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [] };
+  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [], harms: [] };
 }
 
 export interface SessionWorld {
@@ -191,8 +213,30 @@ export class Session {
   intent: MoveIntent = idleIntent();
   /** The player's foot before the last tick. */
   prevPosition: Vec3;
+  /** The player's landing speed (m/s) before the last tick: the eye's dip is drawn between it and the latest (landingDipAt). */
+  prevLandingImpact = 0;
+  /**
+   * How far the player's foot has risen (metres; a fall's negative) at its own speed over the ticks
+   * run, now and as the tick before the last left it: each tick its velocity by the tick's time, but a
+   * landing tick its drop, the fall and the ground's catch that ends it (the landing leaves the body at
+   * a standstill, so its velocity explains none of it: the drop is at the speed it came down at), and
+   * never a rise: a landing comes down. A step's snap is not in it, nor is one taken on the landing
+   * tick itself: a lip up to [player] air_step_up stepped up onto in the air as the fall meets it, a
+   * settle's lift of a body put into the ground, the controller's unstick. Nor are a climb, a lift out
+   * of the ground (liftOut) or a teleport (a teleport holds it where the frames between ticks showed
+   * it). The camera explains every frame's motion by it, a takeoff's and a landing's too, not as a
+   * step, and eases what it has not as it eases any step (camera-rig.ts).
+   */
+  risen = 0;
+  prevRisen = 0;
+  /** The tick the player last came down on (its landing speed rising: a fall's end), or -1 (none since a teleport). */
+  landedTick = -1;
   /** The view's offsets before the last tick. */
   private prevView: ViewOffsets;
+  /** The view's roll, from every source, is held within this (degrees; [camera] roll_max_deg). */
+  private readonly rollMaxDeg: number;
+  /** The eye's dip on a hard landing (metres; [camera] landing_dip): the camera's, which carries the drawn gun, and so the muzzle. */
+  private readonly landingDip: number;
   /** Where the rifle is held, and the view kick's channels before the last tick. */
   readonly viewmodel: ViewmodelTunables;
   private prevKick: ViewmodelKick;
@@ -233,7 +277,11 @@ export class Session {
   /** The trigger as the last tick had it in the hands (a press is its rising), and an empty trigger's reload: its tick, and its gun. */
   private triggerWas = false;
   private dryReload: { tick: number; weapon: Weapon } | null = null;
-  /** A press the sprint alone held back, the gun still swung low: it stands, the sprint dropped, until the gun is up to take it. */
+  /**
+   * A press the gun could not take yet: one the sprint alone held back, the gun still swung low. It
+   * stands until the gun takes it, dropping the sprint while the gun is up; a climb (the hands on the
+   * parapet, which wait out only a press held through it) or a gun put down lets it go.
+   */
   private pressWaiting = false;
   /** The hands' cues heard this tick: each is placed at the muzzle as the tick leaves it. */
   private heard: HandlingCue[] = [];
@@ -266,6 +314,11 @@ export class Session {
    * set each frame) and the player's own. Off in solo play, which has no one to hit.
    */
   together = false;
+  /**
+   * In a room's match (the shared-battle spec): its shells are cut on the ground where their craters
+   * go out, and the battle harms the player (`harms`). Together sets it each frame; off in solo play.
+   */
+  room = false;
   bodies: Body[] = [];
   /**
    * The range's dummies (the shots spec's §5), set each frame: bodies only the player's rounds
@@ -287,6 +340,8 @@ export class Session {
   private readonly dispersion: Rng;
   private readonly recoilRng: Rng;
   private readonly viewKickRng: Rng;
+  /** The view kick's camera, its roll's side and its shake: a stream of its own, so drawing them shifts no other. */
+  private readonly cameraRng: Rng;
   private readonly suppressionRng: Rng;
   /** Others' shotguns' pellets about their shot: drawn here, not by the shooter (cosmetic: hits are theirs to claim). */
   private readonly remoteRng: Rng;
@@ -302,6 +357,8 @@ export class Session {
   private readonly chipEnergyJ: number;
   /** A shell's splash's energy, at a crater of 3 m: by the cube of its radius. */
   private readonly splashEnergyJ: number;
+  /** [room_battle]'s harm: a blast's on the player, in a room. */
+  private readonly harmT: HarmTunables;
   /** A shell's debris thrown into water near it: over how many times its radius, how many points, each splash's energy, and how long the debris falls. */
   private readonly debris: { reach: number; samples: number; energyJ: number; fallS: [number, number] };
   /** Debris splashes due: when (the tick) and where (metres). */
@@ -340,10 +397,12 @@ export class Session {
     this.dispersion = this.streams.derive('combat.dispersion');
     this.recoilRng = this.streams.derive('combat.recoil');
     this.viewKickRng = this.streams.derive('combat.viewkick');
+    this.cameraRng = this.streams.derive('combat.viewkick.camera');
     this.suppressionRng = this.streams.derive('combat.suppression');
     this.remoteRng = this.streams.derive('combat.remote_pellets');
     this.chipEnergyJ = tun.f('destruction.chip_energy_j');
     this.splashEnergyJ = tun.f('artillery.splash_energy_j');
+    this.harmT = harmTunables(tun);
     this.debris = {
       reach: tun.f('artillery.debris_splash_reach'),
       samples: tun.i('artillery.debris_splash_samples'),
@@ -355,6 +414,8 @@ export class Session {
     const front = frontTunables(tun);
     const plan = world.plan;
     this.front = new Front(front, world.front ?? (plan ? planSource(plan, front.reachM) : () => null), this.streams.derive('front'));
+    this.rollMaxDeg = tun.f('camera.roll_max_deg');
+    this.landingDip = tun.f('camera.landing_dip');
     this.prevView = this.view();
     this.viewmodel = viewmodelTunables(tun);
     this.prevKick = this.kick();
@@ -521,8 +582,10 @@ export class Session {
     this.stroke = this.prevStroke = null;
     this.lightOn = false;
     this.prevKick = this.kick();
-    // A press waiting out a sprint was made for the last gun: none fires the new one.
+    // A press waiting out a sprint was made for the last gun: none fires the new one. And the hands
+    // start clean: no sprint, sway, landing or reload, and no pump to come from the last gun's shot.
     this.pressWaiting = false;
+    this.handling.reset();
   }
 
   /** What the player shows the others (net/gear.ts): what is in their hands and its fit, their light. */
@@ -568,7 +631,9 @@ export class Session {
     this.suppression.calm();
     this.digging = false;
     // Nor does one from the last life: a match's end and the next one's deploy run no tick between.
+    // Nor do the last life's hands.
     this.pressWaiting = false;
+    this.handling.reset();
   }
 
   /** A frame's real time, in seconds: runs the whole ticks it covers and returns how many. */
@@ -582,12 +647,12 @@ export class Session {
     this.ticks++;
     this.acting = this.alive ? this.intent : idleIntent();
     const p = this.player;
-    // Firing (a press waiting for the gun to come up out of a sprint as well), aiming or aimed down
-    // the sights the player does not sprint. The trigger and the sights are a gun's: a button drops
-    // the sprint only while a gun is up to take it, as handle()'s canAim has it (the shovel out,
-    // digging, the periscope up or a climb under way, it does not), the hands as the last tick left them.
-    const gunUp = this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && p.climbTo === null;
-    if ((((this.acting.fire || this.acting.aim === true) && gunUp) || this.pressWaiting || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
+    // Firing (a press waiting to be taken as well), aiming or aimed down the sights the player does
+    // not sprint. The trigger and the sights are a gun's: a button, or a press waiting, drops the
+    // sprint only while a gun is up to take it (gunUp, as the trigger and the sights have it: the
+    // shovel out, digging, the periscope up or a climb under way, it does not, so a press held through
+    // a climb holds the sprint off only once the climb is over), the hands as the last tick left them.
+    if ((((this.acting.fire || this.acting.aim === true || this.pressWaiting) && this.gunUp(p)) || this.aimed > 0.5) && this.acting.sprint) this.acting = { ...this.acting, sprint: false };
     // Suppression as the last tick left it slows the feet and pins the player off the step; what
     // is in the hands, and the sights up, slow them too.
     const carried = this.held === SHOVEL_HELD ? 1 : this.arm.spec.move;
@@ -595,6 +660,8 @@ export class Session {
     p.pinned = this.suppression.pinned;
     const wasOnStep = p.stance === Stance.FIRING_STEP;
     this.prevPosition = p.position;
+    this.prevLandingImpact = p.landingImpact;
+    this.prevRisen = this.risen;
     this.prevView = this.view();
     this.prevKick = this.kick();
     this.prevRaised = this.raised;
@@ -602,6 +669,12 @@ export class Session {
     this.prevReady = this.ready;
     this.prevStroke = this.stroke;
     this.controller.tick(p, this.acting, this.clock.dt);
+    // The foot's rise at its own speed, the controller's alone (a lift out of the ground comes after).
+    // A landing comes down: its tick's is its drop, and anything it rose is a step taken as it landed
+    // (a lip stepped up onto in the air, a settle's lift, the controller's unstick), the eye's to ease.
+    const landed = p.landingImpact > this.prevLandingImpact;
+    this.risen += landed ? Math.min(0, p.position.y - this.prevPosition.y) : p.velocity.y * this.clock.dt;
+    if (landed) this.landedTick = this.ticks;
     if (wasOnStep && p.pinned && p.stance !== Stance.FIRING_STEP) this.ejected++;
     // To the shoulder on the firing step, over the parapet; down off it.
     const raise = p.stance === Stance.FIRING_STEP ? 1 : 0;
@@ -661,12 +734,24 @@ export class Session {
       this.ready = Math.min(1, this.ready + dt / raise);
     }
     const spec = this.arm.spec;
-    const canAim = a.aim === true && this.alive && this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && p.climbTo === null;
+    const canAim = a.aim === true && this.alive && this.gunUp(p);
     if (canAim) this.aimed = Math.min(1, this.aimed + dt / spec.adsTimeS);
     else if (this.aimed > 0) this.aimed = Math.max(0, this.aimed - dt / (spec.adsTimeS * 0.8));
     if (a.light && spec.fit.side !== 'none') this.lightOn = !this.lightOn;
     if (a.mode && this.held !== SHOVEL_HELD) this.arm.weapon.toggleMode();
     this.stroke = this.digging && this.held === SHOVEL_HELD && this.ready >= 1 && this.entrenching.inReach ? ((this.stroke ?? 0) + dt / h.strokeS) % 1 : null;
+  }
+
+  /**
+   * A gun up to take the trigger and the sights, and either button to drop the sprint: one in the
+   * hands (not the shovel), raised, not put down to dig, not at the periscope (whose holder holds that
+   * rather than the gun), and no climb under way (the hands are on the parapet). The gun-up rule, in
+   * one place, read as the hands stand when it is asked. `climbing` false asks it with the climb set
+   * aside: a gun up but for a climb is not put down, so a press held through the climb waits it out
+   * (combat()).
+   */
+  private gunUp(p: CharacterState, climbing = p.climbTo !== null): boolean {
+    return this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && !climbing;
   }
 
   /**
@@ -755,24 +840,40 @@ export class Session {
     this.recoil.scale = stance * (1 + (this.hands.adsRecoil - 1) * this.aimed);
     for (const a of this.arms) {
       a.recoil.tick(dt);
-      a.viewKick.tick(dt);
+      a.viewKick.tick(dt, this.cameraRng);
     }
     this.suppression.tick(dt);
     this.blastShake.tick(dt);
-    const inHand = this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging;
     if (this.acting.reload && this.held !== SHOVEL_HELD) w.beginReload();
     const eye: [number, number, number] = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
-    // No shot with the shovel in the hands, a gun not yet up, through the periscope, or the gun still
-    // swung low from a sprint (its blend at or over sprint_blocks_fire); an empty one clicks. The
-    // sprint delays a press and does not lose it: one it alone holds back waits, the sprint dropped
-    // meanwhile (tick()), so the blend falls a tick's share each tick and the press pulls the trigger
-    // as it passes under, a tap out of a sprint as a held press would. Killed, nothing waits.
+    // No shot with the shovel in the hands, a gun not yet up, through the periscope, mid-climb, or the
+    // gun still swung low from a sprint (its blend at or over sprint_blocks_fire); an empty one clicks.
+    // The sprint delays a press and does not lose it: one it alone holds back waits, the sprint
+    // dropped meanwhile (tick()), so the blend falls a tick's share each tick and the press pulls the
+    // trigger as it passes under, a tap out of a sprint as a held press would. A climb, the gun up but
+    // for it (the hands on the parapet), waits out a press held through it and lets a tap go, as the
+    // sights do: a press taken before it stays taken while held, so the climb's end is no new press (a
+    // gun that fires once a press fires no more, and an empty one clicks no more); one made mid-climb
+    // and still held as it ends pulls the trigger then; and no press waits it out (one waiting out a
+    // sprint as it begins, or made mid-climb and let go, is gone: fired as the climb ended, up to a
+    // second later, it would leave along wherever the view had turned). A gun put down lets a press
+    // go, mid-climb too; killed, nothing waits.
     const low = this.handling.sprint >= this.handling.t.sprintBlocksFire;
-    const pulled = (this.acting.fire || (this.pressWaiting && this.alive)) && p.stance !== Stance.PERISCOPE && inHand;
-    const trigger = pulled && !low;
-    this.pressWaiting = pulled && low;
-    this.dryTrigger(w, trigger);
-    if (w.wants(trigger)) {
+    const wanted = this.acting.fire || (this.pressWaiting && this.alive);
+    let fires = false;
+    if (p.climbTo !== null && this.gunUp(p, false)) {
+      const kept = this.triggerWas && this.acting.fire;
+      this.pressWaiting = false;
+      this.dryTrigger(w, kept);
+      w.holdFire(this.acting.fire);
+    } else {
+      const pulled = wanted && this.gunUp(p);
+      const trigger = pulled && !low;
+      this.pressWaiting = pulled && low;
+      this.dryTrigger(w, trigger);
+      fires = w.wants(trigger);
+    }
+    if (fires) {
       const aim: [number, number] = [p.yaw + this.recoil.yaw + this.suppression.flinchYaw, p.pitch + this.recoil.pitch + this.suppression.flinchPitch];
       const cone = sway * this.suppression.swayScale;
       const dir = w.aim(aim[0], aim[1], cone, this.dispersion);
@@ -800,7 +901,7 @@ export class Session {
         this.throwShot(muzzle, arm.spec.flash);
         const kick = this.recoil.kickPitch;
         this.recoil.shot(this.recoilRng);
-        this.viewKick.shot(this.recoil.kickPitch - kick, this.viewKickRng);
+        this.viewKick.shot(this.recoil.kickPitch - kick, this.viewKickRng, this.cameraRng);
         this.shots.push({ origin: eye, dir, aim, tracer });
         const mark = encodeShotMark({ tracer, kind, suppressed: arm.spec.suppressed, gun: arm.spec.gun.key });
         this.events.shots.push({ tick: this.ticks, origin: eye, dir, tracer, muzzle, mark, flash: arm.spec.flash, report: arm.spec.report });
@@ -841,26 +942,36 @@ export class Session {
     }
     // The front's shells: heard coming in whistle_s before they land.
     const shells = this.artillery.tick(dt, eye);
-    for (const sh of shells.announced) {
-      const top = groundTop(this.map, sh.x / this.voxel, sh.z / this.voxel);
-      if (top !== null) this.events.incoming.push({ tick: this.ticks, at: [sh.x, top * this.voxel, sh.z], landsInS: this.artillery.t.whistleS });
-    }
+    for (const sh of shells.announced) this.whistle(sh.x, sh.z, this.artillery.t.whistleS);
     for (const sh of shells.landed) this.land(sh.x, sh.z, sh.radiusM, sh.seed);
+  }
+
+  /** A shell heard coming in to (x, z) (metres), landing in `landsInS`: an incoming event at the top of the ground there; none off the map. */
+  whistle(x: number, z: number, landsInS: number): void {
+    const v = this.voxel;
+    const top = groundTop(this.map, x / v, z / v);
+    if (top !== null) this.events.incoming.push({ tick: this.ticks, at: [x, top * v, z], landsInS });
   }
 
   /**
    * A shell of `radiusM` landing at (x, z) (metres) on the top of the ground there, its crater cut
    * with `seed`: its blast now, its crater queued (an event once it is in the world). Its id, or null
    * where there is no ground (off the map).
+   *
+   * In a room its crater is cut on the ground where it is when the crater goes out (sim/destruction.ts),
+   * and while the player is alive its blast harms them by its distance from their chest, times
+   * cover_share if its way there is blocked (combat/harm.ts). `quiet` (a shell long overdue, a match
+   * over) queues its crater alone: no blast, no particles, debris, shake, suppression or harm.
    */
-  land(x: number, z: number, radiusM: number, seed: number): number | null {
+  land(x: number, z: number, radiusM: number, seed: number, quiet = false): number | null {
     const v = this.voxel;
     const top = groundTop(this.map, x / v, z / v);
     if (top === null) return null;
+    const id = this.destruction.shell([x / v, top, z / v], radiusM / v, seed, this.room);
+    if (quiet) return id;
     const material = this.map.get(Math.floor(x / v), top - 1, Math.floor(z / v));
-    const id = this.destruction.shell([x / v, top, z / v], radiusM / v, seed);
     const at: [number, number, number] = [x, top * v, z];
-    this.events.blasts.push({ tick: this.ticks, at, radiusM, material, crater: id });
+    this.events.blasts.push({ tick: this.ticks, at, radiusM, material, crater: id, seed });
     if (kindOf(material) === K.WATER) {
       const k = radiusM / 3;
       this.events.splashes.push({ tick: this.ticks, at, energyJ: this.splashEnergyJ * k * k * k, kind: 'shell' });
@@ -870,7 +981,29 @@ export class Session {
     const d = hypot(at[0] - p.position.x, at[1] - (p.position.y + this.controller.eyeHeight(p)), at[2] - p.position.z);
     this.blastShake.kick(d);
     this.suppression.blast(d);
+    if (this.room && this.alive) {
+      // To the chest, from a voxel over the struck ground: covered if that way is blocked.
+      const chest = toWorld(this.ownBody().torso, CHEST);
+      const covered = this.sight([x, at[1] + v, z], chest) !== null;
+      const amount = blastHarm(hypot(chest[0] - at[0], chest[1] - at[1], chest[2] - at[2]), radiusM, covered, this.harmT);
+      if (amount > 0) this.events.harms.push({ tick: this.ticks, amount, cause: 'shell' });
+    }
     return id;
+  }
+
+  /**
+   * A voxel ray from `from` to `to` (metres): where it meets solid (metres) a voxel or more short of
+   * `to`, or null if it gets that far. A blast's cover; the front's view of the player is the same ray.
+   */
+  private sight(from: readonly [number, number, number], to: readonly [number, number, number]): V3 | null {
+    const v = this.voxel;
+    const o: V3 = [from[0] / v, from[1] / v, from[2] / v];
+    const d = [to[0] / v - o[0], to[1] / v - o[1], to[2] / v - o[2]];
+    const length = hypot(d[0], d[1], d[2]);
+    if (length <= 1) return null;
+    const dir: V3 = [d[0] / length, d[1] / length, d[2] / length];
+    const hit = raycast(this.map, o, dir, length - 1);
+    return hit ? [(o[0] + dir[0] * hit.t) * v, (o[1] + dir[1] * hit.t) * v, (o[2] + dir[2] * hit.t) * v] : null;
   }
 
   /**
@@ -1038,22 +1171,50 @@ export class Session {
     return this.prevPosition.lerp(this.player.position, alpha);
   }
 
+  /** How far the foot has risen at its own speed (`risen`) between the last two ticks, `alpha` of the way to the latest, as the foot is. */
+  risenAt(alpha = this.clock.alpha): number {
+    return this.prevRisen + (this.risen - this.prevRisen) * alpha;
+  }
+
+  /**
+   * The eye's dip on a landing (metres, down negative) between the last two ticks' dips, `alpha` of
+   * the way to the latest, as the foot is: the camera's (camera-rig.ts), which the drawn gun is held in.
+   * The muzzle placed on a tick (rifleToWorld) carries that tick's.
+   */
+  landingDipAt(alpha = this.clock.alpha): number {
+    const from = this.landingDipOf(this.prevLandingImpact);
+    return from + (this.landingDipOf(this.player.landingImpact) - from) * alpha;
+  }
+
+  /**
+   * The eye's dip (metres, down negative) for a landing at `impact` m/s: [camera] landing_dip by its
+   * share of a hard one, at [handling] landing_hard_mps or faster. That is the gun's full-dip speed
+   * too: a landing is as hard for the eye as for the gun.
+   */
+  private landingDipOf(impact: number): number {
+    const hard = this.handling.t.landingHardMps;
+    return (-Math.min(impact, hard) / hard) * this.landingDip;
+  }
+
   /** The view's offsets between the last two ticks, `alpha` of the way to the latest. */
   viewAt(alpha = this.clock.alpha): ViewOffsets {
     const a = this.prevView;
     const b = this.view();
+    const at = (from: number, to: number) => from + (to - from) * alpha;
     return {
-      yaw: a.yaw + (b.yaw - a.yaw) * alpha,
-      pitch: a.pitch + (b.pitch - a.pitch) * alpha,
-      roll: a.roll + (b.roll - a.roll) * alpha,
-      fov: a.fov + (b.fov - a.fov) * alpha,
+      yaw: at(a.yaw, b.yaw),
+      pitch: at(a.pitch, b.pitch),
+      roll: at(a.roll, b.roll),
+      fov: at(a.fov, b.fov),
+      shake: [at(a.shake[0], b.shake[0]), at(a.shake[1], b.shake[1]), at(a.shake[2], b.shake[2])],
     };
   }
 
   /**
-   * The rifle's pose between the last two ticks, `alpha` of the way to the latest, with the
-   * walk's sway (metres, as the camera's) and a run's share of full speed, which the camera has,
-   * moved by the hands between the same two ticks (none while they are held still).
+   * The rifle's pose between the last two ticks, `alpha` of the way to the latest, with a sideways
+   * sway (metres) and a run's share of full speed, which the camera has, moved by the hands between
+   * the same two ticks (none while they are held still). The rig passes no sway in play: the hands'
+   * figure eight is the gun's only stride motion, and the sway's term is kept for the pinned poses.
    */
   viewmodelAt(alpha = this.clock.alpha, sway = 0, speedRatio = 0): ViewmodelPose {
     const a = this.prevKick;
@@ -1082,7 +1243,7 @@ export class Session {
     return aimRangeM(this.map, this.voxel, eye, dir, this.tracerConverge[0], this.tracerConverge[1], (u, m) => this.rounds.bodies?.(owner, eye, u, m)?.t ?? null);
   }
 
-  /** The gun's muzzle in world metres, as the last tick left the view, the kick and the hands: where the flash and the tracers start. */
+  /** The gun's muzzle in world metres, as the last tick left the view, the eye's landing dip, the kick and the hands: where the flash and the tracers start. */
   muzzle(): [number, number, number] {
     return this.rifleToWorld(this.arm.spec.muzzle);
   }
@@ -1092,14 +1253,21 @@ export class Session {
     return this.rifleToWorld(this.arm.spec.port);
   }
 
-  /** A rifle point (model metres) in the world, from the eye along the view with its offsets and the hands' as the last tick left them; the walk's sway and dip (a centimetre) are the camera's. */
+  /**
+   * A rifle point (model metres) in the world, from the eye along the view with its offsets and the
+   * hands' as the last tick left them: the gun is held in the view, so a shot's shake and a landing's
+   * dip (the tick's own; the frames between ticks ease it, landingDipAt), which move the eye, carry it
+   * too. No round leaves from here: they leave the undipped eye (combat()). The stride's motion (the
+   * eye's bob and lean, the gun's run dip, a centimetre or so) and the eye's easing over steps are
+   * the camera's alone.
+   */
   private rifleToWorld(point: readonly number[]): [number, number, number] {
     const p = this.player;
     const view = this.view();
     const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
     const hands = this.handsStill ? ZERO_HANDS : this.handling.delta;
     const v = modelToView(heldPose(this.viewmodel, this.holding(), this.kick(), 0, 0, this.raised, this.aimed, this.ready, this.stroke, hands), point);
-    const eye = [p.position.x, p.position.y + this.controller.eyeHeight(p), p.position.z];
+    const eye = [p.position.x + view.shake[0], p.position.y + this.controller.eyeHeight(p) + this.landingDipOf(p.landingImpact) + view.shake[1], p.position.z + view.shake[2]];
     return [0, 1, 2].map((k) => eye[k] + right[k] * v[0] + up[k] * v[1] + forward[k] * v[2]) as [number, number, number];
   }
 
@@ -1109,14 +1277,22 @@ export class Session {
     return { back: k.back, up: k.up, side: k.side, pitch: k.pitch, yaw: k.yaw, roll: k.roll };
   }
 
-  /** The view's offsets as the last tick left them. */
+  /**
+   * The view's offsets as the last tick left them. The view kick's camera roll and shake add to the
+   * camera's alone: the roll to the shakes' roll, and a shot's shake to the turn and the eye. The
+   * roll, all three together, is held within roll_max_deg (the shots spec's 3°): the camera's, so
+   * no round is moved by it.
+   */
   private view(): ViewOffsets {
     const shake = this.suppression.shake;
+    const camera = this.viewKick;
+    const roll = shake.roll + this.blastShake.roll + camera.camRoll;
     return {
-      yaw: this.recoil.yaw + this.suppression.flinchYaw,
-      pitch: this.recoil.pitch + this.suppression.flinchPitch + shake.pitch + this.blastShake.pitch,
-      roll: shake.roll + this.blastShake.roll,
-      fov: this.viewKick.fovOffset,
+      yaw: this.recoil.yaw + this.suppression.flinchYaw + camera.shake.yaw,
+      pitch: this.recoil.pitch + this.suppression.flinchPitch + shake.pitch + this.blastShake.pitch + camera.shake.pitch,
+      roll: Math.max(-this.rollMaxDeg, Math.min(this.rollMaxDeg, roll)),
+      fov: camera.fovOffset,
+      shake: [camera.shake.offset[0], camera.shake.offset[1], camera.shake.offset[2]],
     };
   }
 
@@ -1136,7 +1312,14 @@ export class Session {
     p.embedded = 0;
     p.bobPhase = 0;
     this.prevPosition = p.position;
+    // Nor a landing where it was for the eye to dip by between ticks, or to follow down: the move
+    // here is no rise of the body's own, and the body's own stops where the frames showed it.
+    this.prevLandingImpact = 0;
+    this.risen = this.prevRisen = this.risenAt();
+    this.landedTick = -1;
     // Put there facing the way given: no turn of the view for the hands to trail.
     this.look = [yaw, pitch];
+    // Nor its body as posed where it was: a shell landing before the next tick harms it here.
+    this.ownFrames = null;
   }
 }

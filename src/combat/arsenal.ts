@@ -314,7 +314,10 @@ export function loadoutArms(tun: Tunables, l: Loadout): ArmSpec[] {
   return [l.primary, l.secondary].map((g) => armSpec(tun, g, fitOf(l, g)));
 }
 
-/** A gun's numbers as the loadout compares them, each 0 to 1 against the arsenal's best. */
+/**
+ * A gun's numbers as the loadout compares them, each 0 to 1 against the arsenal's best. Its recoil
+ * control is its kick and two shots' climb against `[loadout] control_span`.
+ */
 export interface GunStats {
   damage: number;
   rate: number;
@@ -325,7 +328,7 @@ export interface GunStats {
   mobility: number;
 }
 
-export function gunStats(a: ArmSpec, damageScale: number): GunStats {
+export function gunStats(tun: Tunables, a: ArmSpec, damageScale: number): GunStats {
   const w = a.weapon;
   const clamp = (v: number) => Math.max(0.04, Math.min(1, v));
   const aimedMoa = w.dispersionMoa * a.adsSpread * (w.pellets > 1 ? 0.25 : 1);
@@ -333,7 +336,7 @@ export function gunStats(a: ArmSpec, damageScale: number): GunStats {
     damage: clamp((damageScale * w.pellets) / 2.2),
     rate: clamp(w.rpm / 900),
     accuracy: clamp(1 - aimedMoa / 8),
-    control: clamp(1 - (a.recoil.kickPitchDeg + a.recoil.climbPerShotDeg * 2) / 4.5),
+    control: clamp(1 - (a.recoil.kickPitchDeg + a.recoil.climbPerShotDeg * 2) / tun.f('loadout.control_span')),
     range: clamp(w.projectile.muzzleVelocity / 950),
     handling: clamp(1 - (a.adsTimeS - 0.1) / 0.45 - (w.reloadS - 1.5) / 12),
     mobility: clamp((a.move - 0.75) / 0.35),

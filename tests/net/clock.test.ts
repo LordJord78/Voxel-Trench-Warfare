@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ServerClock } from '../../src/net/clock';
+import { battleStep, matchHours, matchSeconds, ServerClock, SILENT_STEP_S } from '../../src/net/clock';
 import { BARE, encodeGear } from '../../src/net/gear';
 import { INTERP_DELAY_MS, SnapshotBuffer } from '../../src/net/interp';
 import type { PlayerState } from '../../src/net/protocol';
@@ -16,6 +16,23 @@ describe("the room's clock", () => {
     expect(c.rtt).toBe(40);
     expect(c.serverAt(3000)).toBeCloseTo(8000, 6);
     expect(c.localAt(8000)).toBeCloseTo(3000, 6);
+  });
+
+  it("reckons the match's seconds from the room's clock, never before its start", () => {
+    expect(matchSeconds(10_500, 4_000)).toBe(6.5);
+    expect(matchSeconds(3_000, 4_000)).toBe(0);
+  });
+
+  it("keeps the match's hours: the config's start, run on by its lapse", () => {
+    expect(matchHours({ timeOfDay: 19.5, lapse: 0 }, 600)).toBe(19.5);
+    expect(matchHours({ timeOfDay: 23.5, lapse: 2 }, 900)).toBeCloseTo(5.5, 9); // 30 game hours on, round the clock
+  });
+
+  it("runs the battle on to the room's time, never back, and a jump past a second silently", () => {
+    expect(SILENT_STEP_S).toBe(1);
+    expect(battleStep(10, 10.25)).toEqual({ stepS: 0.25, silent: false });
+    expect(battleStep(10, 9.9)).toEqual({ stepS: 0, silent: false });
+    expect(battleStep(10, 14)).toEqual({ stepS: 4, silent: true });
   });
 });
 

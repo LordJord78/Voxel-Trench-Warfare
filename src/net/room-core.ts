@@ -19,10 +19,20 @@
  * is away (so are those who say so): not drawn, and later not targeted. The match's rules
  * (match-rules.ts) take the shooters' claims of hits and the battle's hurts, and say who died, who
  * is back, and the score; the match won, the room goes back to its lobby OVER_MS later.
+ *
+ * The battle (the shared-battle spec): the room runs the match's shelling (shelling.ts) over its
+ * map's pinned field, telling everyone each shell SHELLING.leadS before it lands, and relays each
+ * player's scoops to the others, stamped with its clock. It keeps both in its log, which every
+ * welcome carries, so a player joining or reloading builds the same world. The log is the world's,
+ * not the match's: a rematch on the same map starts on the cratered ground, so it lives until the
+ * map changes or the last player leaves, and the shells are numbered on across matches. Past
+ * LOG_CHARS_MAX its oldest scoops leave it, never a shell.
  */
 
 import { MatchRules, type MatchEvent } from './match-rules';
-import { cleanName, defaultConfig, MAX_PLAYERS, parseClient, PROTOCOL, type ClientMsg, type MatchInfo, type Phase, type RoomConfig, type RoomMsg, type Seat, type Team, type WireState } from './protocol';
+import { cleanName, defaultConfig, encodeShell, MAX_PLAYERS, parseClient, PROTOCOL, type ClientMsg, type MatchInfo, type MatchLog, type Phase, type RoomConfig, type RoomMsg, type Seat, type Team, type WireDig, type WireShell, type WireState } from './protocol';
+import { SHELL_FIELDS } from './shell-fields';
+import { SHELLING, Shelling, shellingSeed } from './shelling';
 
 export interface Conn {
   send(text: string): void;
@@ -43,6 +53,18 @@ const BURST = 120;
 
 /** Each map's world seed: every player generates the same world from it. */
 export const MAP_SEEDS: Record<string, number> = { ravine: 7, corridor: 11 };
+/** The log's most characters, counting each entry's JSON and a separator: a welcome stays under protocol.ts ROOM_TEXT_MAX. */
+export const LOG_CHARS_MAX = 900_000;
+
+/** The room's log of its world: the shells told and the scoops relayed, their characters, and the next shell's id. */
+interface RoomLog extends MatchLog {
+  chars: number;
+  nextId: number;
+}
+
+function emptyLog(): RoomLog {
+  return { shells: [], digs: [], chars: 0, nextId: 1 };
+}
 
 interface Member {
   conn: Conn;
@@ -65,6 +87,10 @@ export class RoomCore {
   match: MatchInfo | null = null;
   /** The match's rules while one is on. */
   rules: MatchRules | null = null;
+  /** The match's shelling while one is on (none when off), and the match second it has been told through. */
+  private shelling: Shelling | null = null;
+  private toldS = 0;
+  private log: RoomLog = emptyLog();
   /** When a won match goes back to the lobby. */
   private overAt: number | null = null;
   private build: string | null = null;
@@ -106,6 +132,8 @@ export class RoomCore {
       this.phase = 'lobby';
       this.match = null;
       this.rules = null;
+      this.shelling = null;
+      this.log = emptyLog();
       this.overAt = null;
       this.build = null;
       this.ownerId = -1;
@@ -150,6 +178,7 @@ export class RoomCore {
       return;
     }
     if (this.rules) this.apply(this.rules.tick(now));
+    if (this.overAt === null) this.tellShells(now);
     let changed = false;
     for (const m of this.seated()) {
       const away = m.saysAway || now - m.heardAt > AWAY_MS;
@@ -181,7 +210,7 @@ export class RoomCore {
     m.seat = { id, name: cleanName(msg.name), team, ready: false, away: false };
     m.joinedAt = now;
     this.chooseOwner();
-    this.send(m, { t: 'welcome', you: id, room: this.code, owner: this.ownerId, seats: this.seats(), config: { ...this.config }, phase: this.phase, match: this.match, now });
+    this.send(m, { t: 'welcome', you: id, room: this.code, owner: this.ownerId, seats: this.seats(), config: { ...this.config }, phase: this.phase, match: this.match, now, log: { shells: this.log.shells, digs: this.log.digs } });
     this.broadcastRoster(m);
     // Late to a match: in it, and told the score.
     if (this.rules) {
@@ -231,6 +260,13 @@ export class RoomCore {
       case 'hurt':
         if (this.rules && this.match && now >= this.match.startAt) this.apply(this.rules.hurt(seat.id, msg.a, msg.c, now));
         return;
+      case 'dig':
+        if (this.phase === 'playing' && this.match && now >= this.match.startAt) {
+          const d: WireDig = [seat.id, now, ...msg.c];
+          this.record(this.log.digs, d);
+          this.broadcast({ t: 'dig', d }, m);
+        }
+        return;
       case 'team':
         // Sides are chosen in the lobby: a match's teams are its own.
         if (seat.team === msg.team || this.phase !== 'lobby') return;
@@ -244,6 +280,8 @@ export class RoomCore {
         return;
       case 'config':
         if (!owner || this.phase !== 'lobby') return;
+        // Another map is another world: its log starts afresh.
+        if (msg.config.map !== undefined && msg.config.map !== this.config.map) this.log = emptyLog();
         this.config = { ...this.config, ...msg.config };
         this.broadcast({ t: 'config', config: { ...this.config } });
         return;
@@ -252,6 +290,11 @@ export class RoomCore {
         this.phase = 'playing';
         this.match = { startAt: now + COUNTDOWN_MS, seed: MAP_SEEDS[this.config.map] ?? MAP_SEEDS.ravine, config: { ...this.config } };
         this.rules = new MatchRules(this.config.killTarget, this.config.respawnS * 1000);
+        this.shelling =
+          this.config.intensity === 'off'
+            ? null
+            : new Shelling(SHELL_FIELDS[this.config.map] ?? SHELL_FIELDS.ravine, shellingSeed(this.match.startAt, this.match.seed), this.config.intensity, this.log.nextId);
+        this.toldS = 0;
         this.overAt = null;
         for (const s of this.seated()) {
           s.state = null;
@@ -270,11 +313,36 @@ export class RoomCore {
     }
   }
 
+  /** Every shell landing within the lead of now not yet told: logged, and told to everyone. */
+  private tellShells(now: number): void {
+    if (!this.shelling || !this.match) return;
+    const throughS = (now - this.match.startAt) / 1000 + SHELLING.leadS;
+    if (throughS <= this.toldS) return;
+    for (const shell of this.shelling.between(this.toldS, throughS)) {
+      const s = encodeShell(shell, this.match.startAt);
+      this.log.nextId = shell.id + 1;
+      this.record(this.log.shells, s);
+      this.broadcast({ t: 'shell', s });
+    }
+    this.toldS = throughS;
+  }
+
+  /** An entry into the log, and the oldest scoops out while it is over LOG_CHARS_MAX. */
+  private record(into: WireShell[] | WireDig[], entry: number[]): void {
+    into.push(entry);
+    const log = this.log;
+    log.chars += JSON.stringify(entry).length + 1;
+    let drop = 0;
+    while (log.chars > LOG_CHARS_MAX && drop < log.digs.length) log.chars -= JSON.stringify(log.digs[drop++]).length + 1;
+    if (drop > 0) log.digs.splice(0, drop);
+  }
+
   /** The match over: everyone back in the lobby, unready. */
   private toLobby(): void {
     this.phase = 'lobby';
     this.match = null;
     this.rules = null;
+    this.shelling = null;
     this.overAt = null;
     for (const s of this.seated()) {
       s.state = null;

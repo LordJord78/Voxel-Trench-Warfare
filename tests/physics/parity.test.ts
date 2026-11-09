@@ -80,16 +80,19 @@ describe('movement parity with the Python controller', () => {
 
   it("replays Python's rules: the fixtures leave out every addition of the port's own", () => {
     // The mantle, the air step and the unstick watchdog are the port's own (the multiplayer spec's
-    // M1); without their tunables, as in Python's fixtures, the controller does none of them. The
+    // M1), and so is a landing recorded once, as the body comes down (G4's: Python's records one
+    // every tick a body stands, and none for a fall the ground probe sets down, a jump's included);
+    // without their tunables, as in Python's fixtures, the controller does none of them. The
     // game's own numbers have moved on from Python's since (the firing step's speed, the prone
     // transition, the mantle's reach), so the scenarios run on the numbers Python recorded.
     const game = controllerTunables(loadTunables());
     expect(game.climbM).toBeGreaterThan(game.stepUp);
     expect(game.airStepUp).toBeGreaterThan(0);
     expect(game.unstickTicks).toBeGreaterThan(0);
+    expect(game.landsOnce).toBe(true);
     for (const fx of fixtures) {
-      for (const key of ['climbM', 'climbSpeed', 'airStepUp', 'unstickTicks', 'unstickM'] as const) expect(fx.controller[key]).toBeUndefined();
-      expect(Object.keys(fx.controller).sort()).toEqual(Object.keys(game).filter((k) => !['climbM', 'climbSpeed', 'airStepUp', 'unstickTicks', 'unstickM'].includes(k)).sort());
+      for (const key of ['climbM', 'climbSpeed', 'airStepUp', 'unstickTicks', 'unstickM', 'landsOnce'] as const) expect(fx.controller[key]).toBeUndefined();
+      expect(Object.keys(fx.controller).sort()).toEqual(Object.keys(game).filter((k) => !['climbM', 'climbSpeed', 'airStepUp', 'unstickTicks', 'unstickM', 'landsOnce'].includes(k)).sort());
     }
   });
 });

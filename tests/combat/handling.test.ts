@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Handling, ZERO_HANDS, gunClass, handlingTunables, type GunClass, type HandlingCue, type HandlingInput, type HandsDelta } from '../../src/combat/handling';
 import { weaponSpec } from '../../src/combat/weapon';
 import { TAU } from '../../src/core/dmath';
@@ -70,6 +70,8 @@ describe('handling', () => {
       shellPushM: [0, 0.02, 0], shellPitchDeg: 6, shellBaseS: 0.5, shellEachS: 0.5,
       pumpAfterS: 0.12, pumpBackM: 0.035, pumpStrokeS: 0.12,
       dryReloadS: 0.25,
+      // The shots spec's §3: an aim-in overshoots.
+      aimOvershootDeg: 0.4, aimOvershootRiseS: 0.05, aimOvershootS: 0.15,
     });
   });
 
@@ -257,6 +259,69 @@ describe('handling', () => {
     expect(soft.tick({ ...REST, landingImpact: 2 }).delta.offset[1]).toBeCloseTo((-0.03 * 2) / 8, 12);
     // Standing, an impact the body still carries is no landing.
     for (const r of run(new Handling(t), 10, () => ({ landingImpact: 9 }))) expect(r.delta).toEqual(ZERO_HANDS);
+  });
+
+  it('an aim-in overshoots: the muzzle carried 0.4° past the aim as the sights arrive, from nothing and never a step, and back by 0.15 s', () => {
+    // The shots spec's §3, carried through rather than popped: the sights arrive with no speed (the
+    // aim's blend is smoothed), so the overshoot rises from nothing. Held at breathing's zero (time 0),
+    // nothing else moves the gun: none of it while the sights come up (over 0.2 s); from the tick they
+    // arrive (the aim's blend reaching 1), the gun's pitch alone, muzzle up.
+    const up = Math.round(0.2 / TICK);
+    const coming = run(new Handling(t), 40, (k) => ({ aimed: Math.min(1, (k + 1) / up) })).map((r) => r.delta);
+    const arrived = up - 1;
+    for (let k = 0; k < arrived; k++) expect(coming[k], `tick ${k}`).toEqual(ZERO_HANDS);
+    for (let k = arrived; k < 40; k++) expect([...coming[k].offset, coming[k].yaw, coming[k].roll], `tick ${k}`).toEqual([0, 0, 0, 0, 0]);
+    const pitch = coming.map((d) => d.pitch);
+    // Not one tick moves it more than 0.15°, the sights' own arrival included.
+    for (let k = 1; k < 40; k++) expect(Math.abs(pitch[k] - pitch[k - 1]), `tick ${k}`).toBeLessThanOrEqual(0.15);
+    // Moving from the arrival's own tick, up every tick to its peak of 0.4° ± 0.02 within about
+    // 0.04 s (0.4° at no more than 0.15° a tick takes three ticks: 0.05 s), then down every tick,
+    // never past the aim.
+    const peak = Math.max(...pitch);
+    const top = pitch.indexOf(peak);
+    expect(Math.abs(peak - 0.4)).toBeLessThanOrEqual(0.02);
+    expect(pitch[arrived]).toBeGreaterThan(0);
+    expect(top - arrived + 1).toBeLessThanOrEqual(3);
+    for (let k = arrived + 1; k <= top; k++) expect(pitch[k], `tick ${k}`).toBeGreaterThan(pitch[k - 1]);
+    for (let k = top + 1; pitch[k - 1] > 0; k++) {
+      expect(pitch[k], `tick ${k}`).toBeLessThan(pitch[k - 1]);
+      expect(pitch[k], `tick ${k}`).toBeGreaterThanOrEqual(0);
+    }
+    // Within 0.02° 0.15 s after the last tick the sights were short of the eye, and none at all
+    // 0.15 s after the tick they arrived: the hands at rest again, exactly.
+    for (let k = arrived; k < 40; k++) {
+      if ((k - arrived + 1) * TICK >= t.aimOvershootS - 1e-9) expect(Math.abs(pitch[k]), `tick ${k}`).toBeLessThanOrEqual(0.02);
+      if ((k - arrived) * TICK >= t.aimOvershootS) expect(coming[k], `tick ${k}`).toEqual(ZERO_HANDS);
+    }
+    // Only an arrival: the sights brought most of the way up (to 0.9) and down again move nothing.
+    for (const r of run(new Handling(t), 61, (k) => ({ aimed: Math.max(0, 0.9 - Math.abs(k - 30) * 0.03) }))) expect(r.delta).toEqual(ZERO_HANDS);
+    // Up (arriving on the first tick), held, down and up again: once each time they arrive, the same
+    // each time, and not as they leave.
+    const once = pitch.slice(arrived, arrived + 10);
+    expect(once[once.length - 1]).toBe(0);
+    const script = (k: number) => (k < 30 ? 1 : k < 42 ? 1 - (k - 29) / 12 : Math.min(1, (k - 41) / 12));
+    const pitches = run(new Handling(t), 80, (k) => ({ aimed: script(k) })).map((r) => r.delta.pitch);
+    expect(pitches.slice(0, once.length)).toEqual(once);
+    expect(pitches.slice(53, 53 + once.length)).toEqual(once);
+    pitches.forEach((p, k) => {
+      if (k >= once.length && (k < 53 || k >= 53 + once.length)) expect(p, `tick ${k}`).toBe(0);
+    });
+  });
+
+  it('an arrival while the overshoot is still drawn carries on from where it is: up to its peak again, never a step', () => {
+    // The sights arrive, drop off the eye for a tick past the peak (to 0.95) and arrive again: the
+    // muzzle rises once more from where it was to 0.4°, and settles from there as one arrival's does.
+    const first = run(new Handling(t), 30, () => ({ aimed: 1 })).map((r) => r.delta.pitch);
+    const again = run(new Handling(t), 30, (k) => ({ aimed: k === 3 ? 0.95 : 1 })).map((r) => r.delta.pitch);
+    expect(again.slice(0, 4)).toEqual(first.slice(0, 4));
+    expect(again[3]).toBeLessThan(first[2]);
+    for (let k = 1; k < 30; k++) expect(Math.abs(again[k] - again[k - 1]), `tick ${k}`).toBeLessThanOrEqual(0.15);
+    for (let k = 4; again[k] < 0.4 - 1e-12; k++) expect(again[k], `tick ${k}`).toBeGreaterThan(again[k - 1]);
+    expect(Math.max(...again.slice(4))).toBeCloseTo(0.4, 12);
+    // And from its second peak, the first's settling, tick for tick.
+    const tail = again.slice(again.indexOf(Math.max(...again.slice(4)), 4));
+    expect(tail.length).toBeGreaterThan(10);
+    expect(tail).toEqual(first.slice(first.indexOf(Math.max(...first))).slice(0, tail.length));
   });
 
   it("a long gun's reload passes mag-out at 0.28, mag-in at 0.62 and bolt at 0.82, each once", () => {
@@ -499,5 +564,61 @@ describe('handling', () => {
     b.offset[0] = 1;
     expect(h.delta.offset[0]).not.toBe(1);
     expect(ZERO_HANDS).toEqual({ offset: [0, 0, 0], pitch: 0, yaw: 0, roll: 0 });
+  });
+
+  it('reset() leaves the hands as a fresh pair from any state: a reload under way and one easing back, the overshoot running, in the air, and the pump to come', () => {
+    // A deploy starts the hands clean (the session's equip and respawn). Worked first so that every
+    // field of their state differs from a fresh pair's as reset() is called: sprinting and turning
+    // fast throughout, striding (in the second stride of a pair); down hard, then in the air again;
+    // the sights arriving, their overshoot running; a long gun's reload part-way, let go as the
+    // shotgun is taken (easing back), whose own reload is under way (a shell being pushed) and whose
+    // shot was 4 ticks ago (its pump to come).
+    const h = new Handling(t);
+    const work = (g: number): Partial<HandlingInput> => ({
+      time: g * TICK,
+      sprinting: true,
+      yawRate: 300,
+      pitchRate: -200,
+      speedRatio: 1,
+      bobPhase: (g * 0.2) % TAU,
+      onGround: g < 30 || (g >= 35 && g < 44),
+      landingImpact: g === 35 ? 9 : 0,
+      aimed: Math.min(1, Math.max(0, (g - 37) / 5)),
+      gun: g < 44 ? 'long' : 'pump',
+      reload: g < 10 ? null : g < 44 ? { phase: (g - 10) / 60, shells: 0 } : { phase: 0.4, shells: 3 },
+      sinceShot: g < 44 ? 10 : (g - 43) * TICK,
+    });
+    run(h, 48, work);
+    // Each of the 19 fields of the state (the tunables and what the constructor makes of them aside)
+    // differs from a fresh pair's, so reset() is held to every one.
+    const fresh = new Handling(t);
+    const made = ['t', 'swayOmega', 'landOmega', 'curves'];
+    const state = Object.keys(fresh).filter((k) => !made.includes(k));
+    const field = (x: Handling, k: string) => (x as unknown as Record<string, unknown>)[k];
+    expect(state).toHaveLength(19);
+    for (const k of state) expect(field(h, k), k).not.toEqual(field(fresh, k));
+    h.reset();
+    // Every field as a fresh pair's, and drawn at rest between ticks.
+    expect(h).toEqual(new Handling(t));
+    expect(h.sprint).toBe(0);
+    for (const alpha of [0, 0.5, 1]) expect(h.at(alpha)).toEqual(ZERO_HANDS);
+    // From there it moves as a fresh pair does, tick for tick, and is one 60 ticks on. A fresh gun's
+    // shot clock (long since a shot) is no pump: the last gun's shot is forgotten.
+    const twin = new Handling(t);
+    const script = (k: number): Partial<HandlingInput> => ({ gun: 'pump', sinceShot: 1 + k * TICK, time: k * TICK, yawRate: k < 10 ? 120 : 0, onGround: k !== 20, landingImpact: k === 21 ? 4 : 0 });
+    for (let k = 0; k < 60; k++) expect(h.tick({ ...REST, ...script(k) }), `tick ${k}`).toEqual(twin.tick({ ...REST, ...script(k) }));
+    expect(h).toEqual(twin);
+  });
+
+  it("the hands' state is declared once: the constructor makes a fresh pair by reset(), so the two cannot drift", () => {
+    const reset = vi.spyOn(Handling.prototype, 'reset');
+    try {
+      const h = new Handling(t);
+      expect(reset).toHaveBeenCalledTimes(1);
+      expect(h.delta).toEqual(ZERO_HANDS);
+      expect(h.sprint).toBe(0);
+    } finally {
+      reset.mockRestore();
+    }
   });
 });

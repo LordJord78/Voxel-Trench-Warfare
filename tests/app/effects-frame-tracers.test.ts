@@ -17,7 +17,7 @@ import { P } from '../../src/world/materials';
 // brighter by day.
 const tun = loadTunables();
 const t = effectsTunables(tun);
-const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [] });
+const none = (): CombatEvents => ({ shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [], harms: [] });
 type V3 = [number, number, number];
 const close = (got: readonly number[], want: readonly number[], digits: number, what = '') => want.forEach((w, k) => expect(got[k], `${what}[${k}]`).toBeCloseTo(w, digits));
 

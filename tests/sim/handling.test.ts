@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Loadout } from '../../src/combat/arsenal';
 import { gunClass, Handling, handlingTunables, ZERO_HANDS, type HandlingCue, type HandsDelta } from '../../src/combat/handling';
 import { heldPose, viewBasis, viewmodelTunables } from '../../src/combat/viewmodel';
-import { loadTunables } from '../../src/core/tunables';
+import { loadTunables, Tunables } from '../../src/core/tunables';
 import type { GunKey } from '../../src/net/gear';
 import { Stance, type MoveIntent } from '../../src/physics/character';
 import { idleIntent, Session, SHOVEL_HELD, type CombatEvents } from '../../src/sim/session';
@@ -28,8 +28,8 @@ function arena(): BrickMap {
 }
 
 /** A player settled at the near end facing `yaw` (+z at 0), carrying `loadout`'s guns if given. */
-function stand(loadout?: Loadout, yaw = 0, seed = 7): Session {
-  const s = Session.create({ map: arena(), plan: null, spawn: { position: [12.8, 0.4, 2] } }, tun, seed, yaw);
+function stand(loadout?: Loadout, yaw = 0, seed = 7, t: Tunables = tun): Session {
+  const s = Session.create({ map: arena(), plan: null, spawn: { position: [12.8, 0.4, 2] } }, t, seed, yaw);
   if (loadout) s.equip(loadout);
   for (let k = 0; k < 40; k++) s.tick();
   s.drainEvents();
@@ -77,6 +77,51 @@ const sprintTick = (s: Session, fire: boolean) => {
   s.intent = { ...idleIntent(), forward: 1, sprint: true, fire };
   s.tick();
 };
+/**
+ * A timber tread with a bench `h` voxels (10 cm each) over it at z 8.0–8.5 m and a clay parapet
+ * behind: 6.5 m from the spawn to walk or sprint at it. Walked into, the bench is climbed.
+ */
+function benchAhead(h: number): BrickMap {
+  const map = new BrickMap({ x: 64, y: 64, z: 128 });
+  map.fillBox(0, 0, 0, 64, 4, 128, P.TIMBER);
+  map.fillBox(0, 4, 80, 64, 4 + h, 85, P.TIMBER);
+  map.fillBox(0, 3 + h, 80, 64, 4 + h, 85, P.BENCH);
+  map.fillBox(0, 4, 85, 64, 18 + h, 128, P.CLAY);
+  return map;
+}
+/** A player settled at the spawn facing the bench `h` voxels high, carrying `loadout`'s guns if given. */
+function facingBench(h: number, loadout?: Loadout): Session {
+  const s = Session.create({ map: benchAhead(h), plan: null, spawn: { position: [3.2, 0.4, 1.5] } }, tun, 7, 0);
+  if (loadout) s.equip(loadout);
+  for (let k = 0; k < 40; k++) s.tick();
+  s.drainEvents();
+  return s;
+}
+/**
+ * `ticks` ticks of `s`, tick k's intent `intent(k)`: the ticks a shot left on and a dry click was
+ * heard on, each tick's sprint blend, the climb's first tick, and the tick it ended on (the first
+ * whose combat finds no climb under way); -1 for none.
+ */
+function throughClimb(s: Session, ticks: number, intent: (k: number) => MoveIntent) {
+  const shots: number[] = [];
+  const dry: number[] = [];
+  const blends: number[] = [];
+  let began = -1;
+  let ended = -1;
+  for (let k = 0; k < ticks; k++) {
+    s.intent = intent(k);
+    const was = s.player.climbTo;
+    s.tick();
+    if (was === null && s.player.climbTo !== null && began < 0) began = k;
+    if (was !== null && s.player.climbTo === null && ended < 0) ended = k;
+    if (s.shots.length > 0) shots.push(k);
+    for (const c of s.drainEvents().handling) if (c.cue === 'dry') dry.push(k);
+    blends.push(s.handling.sprint);
+  }
+  return { shots, dry, blends, began, ended };
+}
+/** W held, the trigger as given, and a gun asked for by its place if one is. */
+const walkAt = (fire: boolean, swap?: number): MoveIntent => ({ ...idleIntent(), forward: 1, fire, ...(swap === undefined ? {} : { swap }) });
 
 describe('the gun in the hands, in play', () => {
   it('with fire held the player never sprints, and the first shot leaves within 0.12 s of the press out of a full sprint', () => {
@@ -243,6 +288,65 @@ describe('the gun in the hands, in play', () => {
     }
   });
 
+  it("a deploy starts the hands clean: the last gun's pump is not heard after it, the gun comes up out of no sprint, and no reload's pose is carried", () => {
+    // With no tick between it and the last life's ticks (main.ts runs none in 'ready'): the next
+    // match's deploy (equip, then respawn), a loadout taken in a pause (equip), or a life begun
+    // afresh (respawn). Each starts the hands as a fresh pair's.
+    const takes: [string, (s: Session, loadout: Loadout) => void][] = [
+      [
+        'equip, then respawn',
+        (s, loadout) => {
+          s.equip(loadout);
+          s.respawn([12.8, 0.4, 2], 0);
+        },
+      ],
+      ['equip', (s, loadout) => s.equip(loadout)],
+      ['respawn', (s) => s.respawn([12.8, 0.4, 2], 0)],
+    ];
+    for (const [label, take] of takes) {
+      // The shotgun fired three ticks before the deploy, its pump (0.12 s on) still to come: none is
+      // heard after it, at the new spawn or anywhere.
+      const g = stand(bare('m870'));
+      g.intent = { ...idleIntent(), fire: true };
+      g.tick();
+      expect(g.shots, label).toHaveLength(1);
+      g.intent = idleIntent();
+      for (let k = 0; k < 2; k++) g.tick();
+      expect(g.drainEvents().handling, label).toEqual([]);
+      take(g, bare('m870'));
+      for (let k = 0; k < 60; k++) {
+        g.tick();
+        expect(g.drainEvents().handling, `${label}, tick ${k}`).toEqual([]);
+      }
+      // A full sprint, then the deploy: drawn at rest before any tick runs, and the first tick's delta
+      // has none of the sprint's pose (the yaw is the sprint's alone; the pitch the sprint's or a landing's).
+      const s = sprinting();
+      expect(s.handling.delta.yaw, label).toBe(ht.sprintYawDeg);
+      take(s, bare('ak74'));
+      for (const alpha of [0, 0.5, 1]) expect(s.handling.at(alpha), `${label}, alpha ${alpha}`).toEqual(ZERO_HANDS);
+      s.intent = idleIntent();
+      s.tick();
+      expect(s.handling.sprint, label).toBe(0);
+      expect([s.handling.delta.yaw, s.handling.delta.pitch], label).toEqual([0, 0]);
+      // The AK part-way through its reload, tilted over, then the deploy: the first tick's pitch and
+      // roll carry none of the reload's pose, with nothing let go to ease back from (the gun in the
+      // hands after it, a fresh one or the same one rearmed, is not reloading).
+      const r = stand(bare('ak74'));
+      r.weapon.rounds = 10;
+      r.intent = { ...idleIntent(), reload: true };
+      r.tick();
+      r.intent = idleIntent();
+      for (let k = 0; k < 40; k++) r.tick();
+      expect(r.weapon.reloading, label).toBe(true);
+      expect(r.handling.delta.roll, label).toBeGreaterThan(20);
+      expect(r.handling.delta.pitch, label).toBeGreaterThan(5);
+      take(r, bare('ak74'));
+      r.tick();
+      expect(r.weapon.reloading, label).toBe(false);
+      expect([r.handling.delta.pitch, r.handling.delta.roll], label).toEqual([0, 0]);
+    }
+  });
+
   it("killed, the hands are quiet: a reload under way and the shotgun's pump to come are not heard, and the gun eases to rest", () => {
     // Each gun killed part-way through its reload, its first mark heard and more to come: the AK, the
     // M249, the M870 (three shells) and the pistol. The reload runs out while the player is dead.
@@ -263,8 +367,9 @@ describe('the gun in the hands, in play', () => {
       s.tick();
       s.intent = idleIntent();
       s.drainEvents();
+      // Bounded, so a mark never heard fails the expect below rather than hanging the worker.
       let first: HandlingCue[] = [];
-      while (first.length === 0) {
+      for (let k = 0; k < 8 * 60 && first.length === 0; k++) {
         s.tick();
         first = s.drainEvents().handling.map((c) => c.cue);
       }
@@ -372,6 +477,171 @@ describe('the gun in the hands, in play', () => {
       s.tick();
       expect(s.handling.sprint, button).toBeCloseTo(1 - TICK / ht.sprintOutS, 12);
     }
+  });
+
+  it('mid-climb neither the trigger nor the sights are taken: both wait out the climb, and a press held through it fires as it ends', () => {
+    // The gun-up rule lives once (session.ts gunUp): the trigger, the sights, and either button's drop
+    // of the sprint wait out a climb, the hands on the parapet. A timber tread, a bench 1 m over it at
+    // z 3.0–3.5 m and a clay parapet behind: walked into, the bench is climbed. The trigger held: the AK
+    // (automatic) and the SVD (a shot a press, so the press must still be one when the climb ends).
+    const map = new BrickMap({ x: 64, y: 64, z: 64 });
+    map.fillBox(0, 0, 0, 64, 4, 64, P.TIMBER);
+    map.fillBox(0, 4, 30, 64, 14, 35, P.TIMBER);
+    map.fillBox(0, 13, 30, 64, 14, 35, P.BENCH);
+    map.fillBox(0, 4, 35, 64, 28, 64, P.CLAY);
+    const cases: [string, 'fire' | 'aim', Loadout | null][] = [
+      ['the AK, fire held', 'fire', null],
+      ['the SVD, fire held', 'fire', bare('svd')],
+      ['the sights held', 'aim', null],
+    ];
+    for (const [label, button, loadout] of cases) {
+      const s = Session.create({ map, plan: null, spawn: { position: [3.2, 0.4, 1.5] } }, tun, 7, 0);
+      if (loadout) s.equip(loadout);
+      for (let k = 0; k < 40; k++) s.tick();
+      s.intent = { ...idleIntent(), forward: 1 };
+      for (let k = 0; k < 240 && s.player.climbTo === null; k++) s.tick();
+      expect(s.player.climbTo, label).not.toBeNull();
+      // The button held from the climb's first tick: no shot leaves, and the sights do not rise.
+      s.intent = { ...idleIntent(), forward: 1, [button]: true };
+      let climbing = 0;
+      for (let k = 0; k < 240; k++) {
+        s.tick();
+        if (s.player.climbTo === null) break;
+        climbing++;
+        expect(s.shots, `${label}, ${climbing} ticks into the climb`).toHaveLength(0);
+        expect(s.aimed, `${label}, ${climbing} ticks into the climb`).toBe(0);
+      }
+      expect(s.player.climbTo, label).toBeNull();
+      expect(s.player.position.y, label).toBeCloseTo(1.4, 6);
+      expect(climbing, label).toBeGreaterThan(10);
+      // On the bench, the climb over (the first tick whose combat finds none under way): the press
+      // held through it fires there, its first shot, and the sights begin to come up.
+      if (button === 'fire') expect([s.shots.length, s.weapon.shotsFired], label).toEqual([1, 1]);
+      else expect([s.shots.length, s.aimed > 0], label).toEqual([0, true]);
+    }
+  });
+
+  it('a press taken before a climb is not taken again as it ends: held through it, a gun that fires once a press neither fires nor clicks empty; let go and pressed, it is a press again', () => {
+    // The climb holds the shot; it does not let go of the trigger. Before the ruling the trigger was
+    // taken mid-climb, so a press held through it stayed the one press, and it still does. Fire held
+    // from a standstill, walking at the bench: the press is taken on its first tick, then held
+    // through the climb and on along the bench. The SVD, the AK switched to single shots (B), and the
+    // SVD on its last round, which that press empties: held, it does not click.
+    const cases: [string, Loadout | undefined, (s: Session) => void][] = [
+      ['the SVD', bare('svd'), () => {}],
+      [
+        'the AK in single shots',
+        undefined,
+        (s) => {
+          s.intent = { ...idleIntent(), mode: true };
+          s.tick();
+          expect(s.weapon.semi).toBe(true);
+        },
+      ],
+      ['the SVD on its last round', bare('svd'), (s) => (s.weapon.rounds = 1)],
+    ];
+    for (const [label, loadout, prep] of cases) {
+      const s = facingBench(10, loadout);
+      prep(s);
+      s.drainEvents();
+      const last = s.weapon.rounds === 1;
+      const held = throughClimb(s, 180, () => walkAt(true));
+      expect(held.began, label).toBeGreaterThan(0);
+      expect(held.ended, label).toBeGreaterThan(held.began + 10);
+      expect(held.ended, label).toBeLessThan(150);
+      expect(s.player.position.y, label).toBeCloseTo(1.4, 6);
+      // Its one shot, on the press's tick: none mid-climb, none as the climb ends, none on the bench.
+      expect([held.shots, held.dry, s.weapon.shotsFired], label).toEqual([[0], [], 1]);
+      expect(s.weapon.reloading, label).toBe(false);
+      // Let go for a tick and pressed again on the bench: a press, so a shot, or on an empty magazine a click.
+      const again = throughClimb(s, 10, (k) => walkAt(k > 0));
+      expect([again.shots, again.dry], label).toEqual(last ? [[], [1]] : [[1], []]);
+    }
+  });
+
+  it('a climb lets a tap go, as the sights do: a tap waiting out a sprint as it begins, or made mid-climb and let go, fires nothing; a press made mid-climb and held as it ends fires once, then; a gun put down mid-climb lets a press go', () => {
+    // A climb waits out a press held through it and lets every tap go: fired as the climb ended, up to
+    // a second after it was made, a tap's round would leave along wherever the view had turned since.
+    // A press taken before the climb stays taken while held (the test above). When the climb begins
+    // with nothing pressed, sessions alike run alike up to the press.
+    const climbOf = (h: number, intent: (k: number) => MoveIntent, loadout?: Loadout) => throughClimb(facingBench(h, loadout), 180, intent);
+    const sprintAt = (fire: boolean): MoveIntent => ({ ...idleIntent(), forward: 1, sprint: true, fire });
+
+    // A tap in a full sprint's last ticks before the bench, 1 to 3 ticks before a twin's climb begins:
+    // still waiting as the climb begins (the gun swung low, the blend at or over sprint_blocks_fire),
+    // it is let go there. Nothing fires, through the climb's end and 30 ticks on.
+    const sprinted = climbOf(10, () => sprintAt(false)).began;
+    for (const ahead of [1, 2, 3]) {
+      const label = `a tap ${ahead} ticks before the climb`;
+      const out = climbOf(10, (k) => sprintAt(k === sprinted - ahead));
+      expect(out.blends[sprinted - ahead - 1], label).toBe(1);
+      expect(out.began, label).toBeGreaterThanOrEqual(sprinted);
+      expect(out.blends[out.began - 1], label).toBeGreaterThanOrEqual(ht.sprintBlocksFire);
+      expect(out.ended, label).toBeGreaterThan(out.began + 10);
+      expect(out.ended, label).toBeLessThan(150);
+      expect([out.shots, out.dry], label).toEqual([[], []]);
+    }
+
+    // A press held from the climb's first tick, Shift and W held: it fires as the climb ends. It holds
+    // the sprint off only while a gun is up to take it, so the climb's last tick, on the bench's top,
+    // brings a tick's share of the sprint back; the AK fires on at its rate.
+    const held = climbOf(10, (k) => sprintAt(k >= sprinted));
+    expect(held.blends[sprinted - 3]).toBe(1);
+    expect(held.began).toBeGreaterThanOrEqual(sprinted);
+    expect(held.blends[held.began - 1]).toBeGreaterThanOrEqual(ht.sprintBlocksFire);
+    expect(held.ended).toBeGreaterThan(held.began + 10);
+    expect(held.shots[0]).toBe(held.ended);
+    expect(held.blends[held.ended]).toBeCloseTo(TICK / ht.sprintInS, 12);
+
+    // A tap mid-climb, of a tick or of five, let go before the climb ends: gone, as a tap of the sights
+    // mid-climb raises nothing later. Nothing fires, through the climb's end and 30 ticks on.
+    const walked = climbOf(10, () => walkAt(false));
+    for (const tap of [1, 5]) {
+      const label = `a ${tap}-tick tap mid-climb`;
+      const mid = climbOf(10, (k) => walkAt(k >= walked.began + 3 && k < walked.began + 3 + tap));
+      expect([mid.began, mid.ended], label).toEqual([walked.began, walked.ended]);
+      expect(mid.ended, label).toBeGreaterThan(walked.began + 3 + tap);
+      expect(mid.ended, label).toBeLessThan(150);
+      expect([mid.shots, mid.dry], label).toEqual([[], []]);
+    }
+
+    // A press made mid-climb and still held as the climb ends is taken there, on the end tick, once:
+    // the AK's let go after that tick; the SVD's (a shot a press) held on along the bench; and the AK's
+    // on an empty magazine, a click there instead.
+    const pressed: [string, Loadout | undefined, boolean][] = [
+      ['the AK', undefined, false],
+      ['the SVD', bare('svd'), false],
+      ['the AK, empty', undefined, true],
+    ];
+    for (const [label, loadout, empty] of pressed) {
+      const twin = climbOf(10, () => walkAt(false), loadout);
+      const s = facingBench(10, loadout);
+      if (empty) s.weapon.rounds = 0;
+      const out = throughClimb(s, 180, (k) => walkAt(k >= twin.began + 3 && (loadout !== undefined || k <= twin.ended)));
+      expect([out.began, out.ended], label).toEqual([twin.began, twin.ended]);
+      expect([out.shots, out.dry], label).toEqual(empty ? [[], [twin.ended]] : [[twin.ended], []]);
+    }
+
+    // The SVD's press taken before the climb, let go mid-climb and pressed again and held: that is a
+    // press made mid-climb, and it fires as the climb ends.
+    const svd = climbOf(10, () => walkAt(true), bare('svd')).began;
+    const re = throughClimb(facingBench(10, bare('svd')), 180, (k) => walkAt(k < svd + 3 || k >= svd + 6));
+    expect(re.began).toBe(svd);
+    expect(re.shots).toEqual([0, re.ended]);
+
+    // A tap mid-climb up a bench 1.5 m high, then the pistol asked for: the AK goes down, which lets
+    // the press go as any gun put down does, and the pistol is up before the climb ends. Nothing
+    // fires: the press was not made for it.
+    const tall = climbOf(15, () => walkAt(false)).began;
+    const put = facingBench(15);
+    const lead = throughClimb(put, tall + 30, (k) => walkAt(k === tall + 2, k === tall + 3 ? 1 : undefined));
+    expect(lead.began).toBe(tall);
+    expect(put.player.climbTo).not.toBeNull();
+    expect([put.held, put.ready]).toEqual([1, 1]);
+    const rest = throughClimb(put, 60, () => walkAt(false));
+    expect(rest.ended).toBeGreaterThan(0);
+    expect(put.player.position.y).toBeCloseTo(1.9, 6);
+    expect([lead.shots, rest.shots, put.weapon.shotsFired]).toEqual([[], [], 0]);
   });
 
   it('a press on an empty magazine clicks once and starts a reload 0.25 s later', () => {
@@ -535,6 +805,56 @@ describe('the gun in the hands, in play', () => {
     for (const f of froms[1]) expect(b.map((e) => e.muzzle)).toContainEqual(f);
   });
 
+  it("after a jump the drawn muzzle carries the eye's landing dip, and no round does: the shots are a dipless session's", () => {
+    // Two sessions alike but that one has no landing dip at all ([camera] landing_dip 0: the muzzle as
+    // it was placed before it carried one). Both stand firing the AK, jump, and fire on through the
+    // landing and the dip's recovery. Every round leaves the undipped eye along the same line and
+    // strikes where the other's does; the drawn muzzle and port (the flash, the tracer's start, the
+    // brass, the cues) are carried down with the eye, by the camera's dip for the tick's landing
+    // (landing_dip by its share of a hard landing, [handling] landing_hard_mps's, the gun's: as
+    // camera-rig.ts draws it), along the world's up.
+    const raw = tun.raw();
+    (raw.camera as Record<string, unknown>).landing_dip = 0;
+    const dipped = stand();
+    const flat = stand(undefined, 0, 7, new Tunables(raw));
+    const dipOf = (s: Session) => (-Math.min(s.player.landingImpact, ht.landingHardMps) / ht.landingHardMps) * tun.f('camera.landing_dip');
+    let landed = -1;
+    let landedDip = 0;
+    let deep = 0;
+    for (let k = 0; k < 90; k++) {
+      for (const s of [dipped, flat]) {
+        s.intent = { ...idleIntent(), fire: true, jump: k === 10 };
+        s.tick();
+      }
+      // The bodies are the same: only where the gun is drawn differs.
+      expect(dipped.player.position, `tick ${k}`).toEqual(flat.player.position);
+      expect(dipped.player.landingImpact, `tick ${k}`).toBe(flat.player.landingImpact);
+      const dip = dipOf(dipped);
+      if (landed < 0 && k > 10 && dipped.player.onGround) [landed, landedDip] = [k, dip];
+      for (const [a, b] of [[dipped.muzzle(), flat.muzzle()], [dipped.port(), flat.port()]]) {
+        expect(a[0], `tick ${k}`).toBe(b[0]);
+        expect(a[1] - b[1], `tick ${k}`).toBeCloseTo(dip, 12);
+        expect(a[2], `tick ${k}`).toBe(b[2]);
+      }
+      // Where the rounds leave and go: the undipped eye and the view's line, the same in each.
+      expect(dipped.shots, `tick ${k}`).toEqual(flat.shots);
+      for (const shot of dipped.shots) expect(shot.origin, `tick ${k}`).toEqual(eyeOf(dipped));
+      expect(struck(dipped), `tick ${k}`).toEqual(struck(flat));
+      expect(dipped.rounds.count, `tick ${k}`).toBe(flat.rounds.count);
+      for (let i = 0; i < dipped.rounds.count; i++) expect(dipped.rounds.position(i), `tick ${k}`).toEqual(flat.rounds.position(i));
+      // Each shot's event: the same round, its flash and tracer at its own session's muzzle.
+      const [ea, eb] = [dipped.drainEvents().shots, flat.drainEvents().shots];
+      expect(ea.map((e) => [e.origin, e.dir, e.tracer]), `tick ${k}`).toEqual(eb.map((e) => [e.origin, e.dir, e.tracer]));
+      ea.forEach((e, i) => expect(e.muzzle[1] - eb[i].muzzle[1], `tick ${k}`).toBeCloseTo(dip, 12));
+      if (dip < -0.01) deep += ea.length;
+    }
+    // It came down off its jump with the eye dipped most of 6 cm, and rounds left while it was still
+    // dipped over a centimetre.
+    expect(landed).toBeGreaterThan(20);
+    expect(landedDip).toBeLessThan(-0.04);
+    expect(deep).toBeGreaterThanOrEqual(2);
+  });
+
   it('aimed, breathing still moves the drawn gun, a third of it, and never the round', () => {
     // The SVD under its scope: at 0.85 aimed the scope hides the gun, but the gun still breathes.
     const scoped: Loadout = { primary: 'svd', secondary: 'pm', fits: { svd: { optic: 'scope', muzzle: 'none', under: 'none', side: 'none' } } };
@@ -543,21 +863,42 @@ describe('the gun in the hands, in play', () => {
     still.handsStill = true;
     for (const s of [moving, still]) s.intent = { ...idleIntent(), aim: true };
     const ups: number[] = [];
+    let arrived: number | null = null;
+    let overshoot = 0;
     for (let k = 0; k < 240; k++) {
       for (const s of [moving, still]) s.tick();
       if (moving.aimed < 1) continue;
+      arrived ??= k;
       // Still and aimed, the hands' delta is breathing alone, at 0.35 of it, carried along the view.
+      // For aim_overshoot_s from the tick the sights are up, the overshoot as well (the shots spec's
+      // §3): the hands' pitch, muzzle up, which turns the gun about its own right and so moves the
+      // drawn muzzle up and forward, never aside. What it cannot move holds all the while.
       const hands = moving.handling.delta;
-      expect([hands.offset[2], hands.pitch, hands.yaw, hands.roll]).toEqual([0, 0, 0, 0]);
-      expect(Math.abs(hands.offset[1])).toBeLessThanOrEqual(0.0025 * 0.35);
-      expect(Math.abs(hands.offset[0])).toBeLessThanOrEqual(0.0015 * 0.35);
+      expect([hands.offset[2], hands.yaw, hands.roll], `tick ${k}`).toEqual([0, 0, 0]);
+      expect(Math.abs(hands.offset[1]), `tick ${k}`).toBeLessThanOrEqual(0.0025 * 0.35);
+      expect(Math.abs(hands.offset[0]), `tick ${k}`).toBeLessThanOrEqual(0.0015 * 0.35);
       const { forward, right, up } = basisOf(moving);
       const d = sub(moving.muzzle(), still.muzzle());
-      expect(dot(d, right)).toBeCloseTo(hands.offset[0], 12);
+      expect(dot(d, right), `tick ${k}`).toBeCloseTo(hands.offset[0], 12);
+      if ((k - arrived) * TICK < ht.aimOvershootS) {
+        expect(hands.pitch, `tick ${k}`).toBeGreaterThanOrEqual(0);
+        expect(hands.pitch, `tick ${k}`).toBeLessThanOrEqual(ht.aimOvershootDeg);
+        overshoot = Math.max(overshoot, hands.pitch);
+        // Turned by a about the gun's own origin, its muzzle (m, model metres) moves beyond breathing
+        // up by m_z sin a + m_y (cos a − 1) and forward by m_z (cos a − 1) − m_y sin a.
+        const a = (hands.pitch * Math.PI) / 180;
+        const [, my, mz] = moving.arm.spec.muzzle;
+        expect(dot(d, up) - hands.offset[1], `tick ${k}`).toBeCloseTo(mz * Math.sin(a) + my * (Math.cos(a) - 1), 9);
+        expect(dot(d, forward), `tick ${k}`).toBeCloseTo(mz * (Math.cos(a) - 1) - my * Math.sin(a), 9);
+        continue;
+      }
+      expect(hands.pitch, `tick ${k}`).toBe(0);
       expect(dot(d, up)).toBeCloseTo(hands.offset[1], 12);
       expect(dot(d, forward)).toBeCloseTo(0, 12);
       ups.push(hands.offset[1]);
     }
+    // The sights' arrival carried the drawn gun its whole overshoot.
+    expect(overshoot).toBeCloseTo(ht.aimOvershootDeg, 12);
     expect(ups.length).toBeGreaterThan(180);
     expect(Math.max(...ups) - Math.min(...ups)).toBeGreaterThan(0.0005);
     // A shot from each: the same round, from the eye, and the same where it lands.
@@ -575,6 +916,63 @@ describe('the gun in the hands, in play', () => {
     const [a, b] = [moving.drainEvents().shots, still.drainEvents().shots];
     expect(froms[0]).toEqual([a[0].muzzle]);
     expect(froms[1]).toEqual([b[0].muzzle]);
+  });
+
+  it('a round fired while the sights overshoot leaves along the aim, exactly as with the hands held still', () => {
+    // The AK on full auto from the tick the sights arrive: its rounds leave as the overshoot carries
+    // the drawn gun up past the aim, as it eases back, and after. Each leaves the eye along the view
+    // plus recoil, to the bit the still hands' round, and lands where it does; and so with no
+    // overshoot at all (aim_overshoot_deg 0), which no hands, still or not, can carry.
+    const raw = tun.raw();
+    (raw.handling as Record<string, unknown>).aim_overshoot_deg = 0;
+    const moving = stand();
+    const still = stand();
+    const flat = stand(undefined, 0, 7, new Tunables(raw));
+    still.handsStill = true;
+    const ads = moving.arm.spec.adsTimeS;
+    let firing = false;
+    let was = 0;
+    const left = { rising: 0, easing: 0, after: 0 };
+    // Each session's strikes' drawn starts, and the muzzles its shots left as drawn (see `struck`).
+    const froms: [number, number, number][][] = [[], [], []];
+    const muzzles: [number, number, number][][] = [[], [], []];
+    for (let k = 0; k < 60; k++) {
+      // As the session raises the sights: this tick's blend reaches 1, and the trigger is pulled with it.
+      firing ||= Math.min(1, moving.aimed + TICK / ads) >= 1;
+      for (const s of [moving, still, flat]) {
+        s.intent = { ...idleIntent(), aim: true, fire: firing };
+        s.tick();
+      }
+      const pitch = moving.handling.delta.pitch;
+      expect(flat.handling.delta.pitch, `tick ${k}`).toBe(0);
+      for (const other of [still, flat]) {
+        expect(moving.shots, `tick ${k}`).toEqual(other.shots);
+        expect(struck(moving), `tick ${k}`).toEqual(struck(other));
+      }
+      [moving, still, flat].forEach((s, j) => froms[j].push(...drawnFrom(s)));
+      for (const shot of moving.shots) expect(shot.origin).toEqual(eyeOf(moving));
+      const events = [moving, still, flat].map((s) => s.drainEvents().shots);
+      events.forEach((es, j) => muzzles[j].push(...es.map((e) => e.muzzle)));
+      const [a, b, c] = events.map((es) => es.map((e) => [e.origin, e.dir, e.tracer]));
+      expect(a, `tick ${k}`).toEqual(b);
+      expect(a, `tick ${k}`).toEqual(c);
+      if (a.length > 0) {
+        expect(firing).toBe(true);
+        if (pitch > was) left.rising++;
+        else if (pitch > 0) left.easing++;
+        else left.after++;
+      }
+      was = pitch;
+    }
+    // Rounds left on the overshoot's way up, on its way back, and after it.
+    expect(left.rising).toBeGreaterThan(0);
+    expect(left.easing).toBeGreaterThan(0);
+    expect(left.after).toBeGreaterThan(0);
+    // Their strikes' last streaks start where their own session's gun was drawn as each round left.
+    expect(froms[0].length).toBeGreaterThan(0);
+    froms.forEach((fs, j) => {
+      for (const f of fs) expect(muzzles[j]).toContainEqual(f);
+    });
   });
 
   it('handling is deterministic: two sessions, same intents, same muzzles', () => {
@@ -764,11 +1162,34 @@ describe('the gun in the hands, in play', () => {
     expect(peak).toBeGreaterThan(0.99 * ht.bobUpM * ratio);
   });
 
+  it("the hands' share of a run is the body's speed over [handling] run_mps: at a run_mps of 8, a walk bobs 0.008 m × (speed / 8)", () => {
+    // Every other test runs at 5, the literal the share was once divided by: this one is not.
+    const raw = tun.raw();
+    (raw.handling as Record<string, unknown>).run_mps = 8;
+    const t8 = new Tunables(raw);
+    const h8 = handlingTunables(t8);
+    expect(h8.runMps).toBe(8);
+    const s = stand(undefined, 0, 7, t8);
+    const walk = s.controller.t.stances[Stance.STANDING].speed * s.arm.spec.move;
+    s.intent = { ...idleIntent(), forward: 1 };
+    let peak = -1;
+    for (let k = 0; k < 200; k++) {
+      s.tick();
+      if (k < 80) continue;
+      // At a steady walk, breathing (what is left of it) taken out: the up-down bob alone.
+      expect(s.player.velocity.horizontalLength, `tick ${k}`).toBeCloseTo(walk, 9);
+      const breath = (1 - walk / 8) * h8.breathUpM * Math.sin(2 * Math.PI * h8.breathUpHz * s.ticks * TICK);
+      peak = Math.max(peak, s.handling.delta.offset[1] - breath);
+    }
+    // At the stride's top: 0.008 m by the walk's share of a run of 8 (4.1 / 8).
+    expect(peak).toBeLessThanOrEqual(h8.bobUpM * (walk / 8) + 1e-9);
+    expect(peak).toBeGreaterThan(0.99 * h8.bobUpM * (walk / 8));
+  });
+
   it('a landing dips the gun on the tick it lands, by its share of a hard one: 0.03 m and 4° × min(1, landingImpact / 8)', () => {
     // A jump, and falls of 1 m (most of a hard landing) and 3 m (more than one: the full dip). A jump
-    // on flat ground ends its last tick in the air inside the ground probe's 0.06 m (character.ts),
-    // which sets the body down without its landing speed, so its share is only what standing left:
-    // it lands by the same rule all the same.
+    // on flat ground comes down at about its jump speed (5 m/s), set down by the ground probe as its
+    // last tick in the air ends within 0.06 m of the ground (character.ts): about half a hard one.
     for (const [how, drop] of [['a jump', 0], ['a fall of 1 m', 1], ['a fall of 3 m', 3]] as const) {
       const s = stand();
       if (drop > 0) s.teleport([12.8, 0.4 + drop, 2], 0, 0);
@@ -787,6 +1208,10 @@ describe('the gun in the hands, in play', () => {
         expect(d.offset[1] - breath, how).toBeCloseTo(-ht.landingDropM * share, 9);
       }
       expect(share, how).toBeGreaterThanOrEqual(0);
+      if (drop === 0) {
+        expect(share, how).toBeGreaterThan(0.4);
+        expect(share, how).toBeLessThan(1);
+      }
       if (drop === 1) {
         expect(share, how).toBeGreaterThan(0.5);
         expect(share, how).toBeLessThan(1);
