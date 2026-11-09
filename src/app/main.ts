@@ -511,9 +511,9 @@ async function start(): Promise<void> {
     // In a match a char waits while any crater is still to be cut there, queued too: its crater goes out
     // on the ground as it is then, and says what it struck there, the same on every client.
     chars.make(session.map, (box) => (together.inMatch ? session.destruction.overlapsPending(box) : session.destruction.overlapsOut(box)));
-    // While the battle catches up on the match's clock, what is shown of it is held as it was: a past
-    // moment of it, run through a few seconds a frame, would strobe.
-    if (!(matchNow !== null && battleClock.behind)) showBattle();
+    // While the battle catches up on the match's clock, or the page on the room's log, what is shown of
+    // it is held as it was: a past moment of it, run through seconds a frame, would strobe.
+    if (!(matchNow !== null && battleClock.holdsShown(together.caughtUp))) showBattle();
     renderer.setLights(lit, sky.flares, eye);
     renderer.setHorizon(horizon);
     renderer.setWater(water);
@@ -1085,8 +1085,8 @@ async function start(): Promise<void> {
       craterWaiters.delete(c.id);
     }
     // The battle seen (its flares, flashes, smoke, tracers, and fires' flames and plumes) as the lights last showed it; none at rest.
-    // Held as it was while the battle catches up on the match's clock, as the lights are (light()).
-    if (!(matchNow !== null && battleClock.behind)) seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
+    // Held as it was while the battle catches up on the match's clock, or the page on the room's log, as the lights are (light()).
+    if (!(matchNow !== null && battleClock.holdsShown(together.caughtUp))) seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
     // The dummies after any others: the renderer has eight soldiers' slots.
     if (dummies.length > 0) {
       soldiers.length = 0;

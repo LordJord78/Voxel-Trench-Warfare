@@ -80,6 +80,16 @@ export class BattleClock {
     return this.catching;
   }
 
+  /**
+   * Whether what is shown of the battle (its lights, its flares and fires drawn) is held as it last was:
+   * while it is behind, or while the page is not `caughtUp` on the room's log (the catch-up runs it
+   * along the log, seconds an entry, behind the deploy sheet). Either is a past moment run through
+   * fast, which would strobe.
+   */
+  holdsShown(caughtUp: boolean): boolean {
+    return this.catching || !caughtUp;
+  }
+
   /** The match's start: none given, nothing held. */
   reset(): void {
     this.given = 0;

@@ -135,3 +135,17 @@ describe("the battle as a catch-up on the room's log runs it", () => {
     expect(made).toHaveLength(6);
   });
 });
+
+describe("what is shown of the battle on a room's match clock", () => {
+  it('is held while the battle catches up, and while the page catches up on the room\'s log: either runs a past moment of it through fast, which would strobe', () => {
+    const clock = new BattleClock(CHUNKS);
+    const quiet: ClockedBattle = { tick: () => noBattleEvents() };
+    expect(clock.holdsShown(true)).toBe(false);
+    // A late join's catch-up on the log: the battle run along it, behind the deploy sheet.
+    expect(clock.holdsShown(false)).toBe(true);
+    // A tab back from hidden: behind the room's clock by more than SILENT_STEP_S.
+    clock.frame(quiet, 30, inputsAt, [], []);
+    expect(clock.behind).toBe(true);
+    expect(clock.holdsShown(true)).toBe(true);
+  });
+});
