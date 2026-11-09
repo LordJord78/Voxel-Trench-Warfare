@@ -15,7 +15,9 @@
  * leaves from where the source says (an enemy bay's crest in a generated
  * world; a line at a set distance in a test's), and its scatter is taken
  * across its line of fire, so a bay far along the line scatters as one
- * straight ahead does.
+ * straight ahead does. Each is aimed higher by its own fall that far
+ * (Rounds.dropM), so the scatter is about the head, and light's ring that far
+ * from it, where the rounds pass: at the Corridor's 185 m a round falls 0.26 m.
  *
  * In a room (the shared-battle spec's "The front in a room", `room`) it fires
  * to hurt: light's rounds are scattered about the head as heavy's are, at
@@ -23,7 +25,9 @@
  * muzzle cannot see the head is aimed `crest_clear_m` over where that sight was
  * stopped, and higher by its own fall that far, so it crosses there
  * `crest_clear_m` over at any range; scattered sideways only, it cracks over
- * the crest in front of the player and does not hit them.
+ * the crest in front of the player and does not hit them. A sight stopped
+ * within `sight_near_m` of the muzzle is no stop: a muzzle in the ground fires
+ * at the head, into what it is in, not steeply over a crest at its mouth.
  */
 
 import { cos, hypot, log, sin } from '../core/dmath';
@@ -47,6 +51,8 @@ export interface FrontTunables {
   reachM: number;
   /** [room_battle]: how far over where its sight was stopped a round at a player it cannot see crosses it (m); it is aimed higher by its fall. */
   crestClearM: number;
+  /** [room_battle]: a sight stopped nearer its muzzle than this (m) is no stop (a muzzle in the ground). */
+  sightNearM: number;
 }
 
 export function frontTunables(tun: Tunables): FrontTunables {
@@ -62,6 +68,7 @@ export function frontTunables(tun: Tunables): FrontTunables {
     spreadVertical: tun.f('front.spread_vertical'),
     reachM: tun.f('front.reach_m'),
     crestClearM: tun.f('room_battle.crest_clear_m'),
+    sightNearM: tun.f('room_battle.sight_near_m'),
   };
 }
 
@@ -119,7 +126,8 @@ export class Front {
 
   /**
    * One tick: the rounds this intensity owes, fired at `target` (the head) into `rounds`; how many
-   * left. With a `sight` (in a room), a round whose muzzle cannot see the head goes over the crest.
+   * left. With a `sight` (in a room), a round whose muzzle cannot see the head goes over the crest,
+   * unless what stops its sight is within sight_near_m of the muzzle.
    */
   tick(dt: number, target: readonly [number, number, number], rounds: Rounds, spec: ProjectileSpec, sight?: FrontSight): number {
     let shots = 0;
@@ -149,8 +157,9 @@ export class Front {
     for (let k = 0; k < shots; k++) {
       const origin = this.source(target, this.rng);
       if (!origin) continue;
-      const stopped = sight ? sight(origin, target) : null;
-      const aim = stopped ? this.overCrest(origin, target, stopped, rounds, spec) : this.aimAt(origin, target);
+      const stop = sight ? sight(origin, target) : null;
+      const stopped = stop && hypot(stop[0] - origin[0], stop[1] - origin[1], stop[2] - origin[2]) >= this.t.sightNearM ? stop : null;
+      const aim = stopped ? this.overCrest(origin, target, stopped, rounds, spec) : this.aimAt(origin, target, rounds, spec);
       const d = [aim[0] - origin[0], aim[1] - origin[1], aim[2] - origin[2]];
       const len = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
       if (!(len > 0)) continue;
@@ -171,9 +180,11 @@ export class Front {
    * Where a round from `origin` is aimed: about the head, across the line of fire — sideways
    * (level) and up. Heavy scatters within ±spread_m by ±spread_vertical of it; light, solo, picks a
    * point on the ring light_miss_m to light_miss_m + spread_m out, so it passes no nearer; in a
-   * room, light scatters as heavy does.
+   * room, light scatters as heavy does. The point is raised by as much as the round of `spec` falls
+   * by it (Rounds.dropM), so in flight it passes there: the scatter about the head, the ring its
+   * distance from it.
    */
-  private aimAt(origin: readonly [number, number, number], target: readonly [number, number, number]): [number, number, number] {
+  private aimAt(origin: readonly [number, number, number], target: readonly [number, number, number], rounds: Rounds, spec: ProjectileSpec): [number, number, number] {
     const f = [target[0] - origin[0], target[1] - origin[1], target[2] - origin[2]];
     const level = Math.sqrt(f[0] * f[0] + f[2] * f[2]);
     const len = Math.sqrt(level * level + f[1] * f[1]);
@@ -191,7 +202,9 @@ export class Front {
       across = this.rng.uniform(-this.t.spreadM, this.t.spreadM);
       rise = this.rng.uniform(-this.t.spreadVertical * this.t.spreadM, this.t.spreadVertical * this.t.spreadM);
     }
-    return [target[0] + side[0] * across + up[0] * rise, target[1] + side[1] * across + up[1] * rise, target[2] + side[2] * across + up[2] * rise];
+    const at = [target[0] + side[0] * across + up[0] * rise, target[1] + side[1] * across + up[1] * rise, target[2] + side[2] * across + up[2] * rise];
+    const fall = rounds.dropM(spec, hypot(at[0] - origin[0], at[1] - origin[1], at[2] - origin[2]));
+    return [at[0], at[1] + fall, at[2]];
   }
 
   /**

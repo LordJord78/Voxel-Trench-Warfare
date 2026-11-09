@@ -116,6 +116,17 @@ export function decodeShot(w: unknown): ShotState | null {
   return { tick: w[0] as number, origin: [(w[1] as number) / 1000, (w[2] as number) / 1000, (w[3] as number) / 1000], dir: [d[0] / l, d[1] / l, d[2] / l], tracer: (word & 1) === 1, ...(word > 1 ? { mark: word } : {}) };
 }
 
+/**
+ * A shot as it goes out: its words, and the shot they say (to the millimetre, and its direction to
+ * 1e-4 and made a unit again), which every other client flies. In a room the shooter flies that too,
+ * so the round is the same everywhere. A shot whose words would say nothing (no room believes them)
+ * is itself.
+ */
+export function sent(shot: ShotState): { wire: number[]; shot: ShotState } {
+  const wire = encodeShot(shot);
+  return { wire, shot: decodeShot(wire) ?? shot };
+}
+
 /** Where a round struck a body. */
 export type Zone = 'head' | 'torso' | 'limb';
 const ZONES: readonly Zone[] = ['head', 'torso', 'limb'];

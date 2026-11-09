@@ -649,6 +649,9 @@ crest_clear_m       = 0.3      # the front at a player whose head its muzzle can
                                # the round crosses where its sight was stopped this far over it (aimed
                                # higher by its own fall, 0.26 m at the Corridor's 185 m), scattered
                                # sideways only, so it cracks over the crest and does not hit
+sight_near_m        = 3.0      # its sight stopped nearer its muzzle than this is no stop: a muzzle in
+                               # the ground (spoil heaped over its bay) fires at the head, into what
+                               # it is in, not steeply up or sideways over a crest at its own mouth
 
 [range]
 # Solo play's firing range (the shots spec's §5, combat/range.ts): dummies and

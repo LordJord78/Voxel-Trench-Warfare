@@ -14,7 +14,7 @@
 import { holdOf, muzzleOf } from '../combat/arsenal';
 import { hitParts, pose, toWorld, type Flinch } from '../combat/soldier-rig';
 import { decodeGear, encodeGear, teamTracer } from '../net/gear';
-import { MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type MatchInfo, type PlayerState, type RoomConfig, type ShotState, type Team, type Zone } from '../net/protocol';
+import { encodeShot, MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type MatchInfo, type PlayerState, type RoomConfig, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
 import type { RoomBattle } from '../sim/room-battle';
@@ -182,8 +182,8 @@ export class Together {
   /** This player killed: by whom (null, the battle) and when. */
   private fallen: { by: { name: string; team: Team } | null; at: number } | null = null;
   private winner: { winner: Team; red: number; blue: number } | null = null;
-  /** This player's shots not yet sent. */
-  private shotsOut: ShotState[] = [];
+  /** This player's shots not yet sent, as their words: in a room, the words each flew as (Session sent). */
+  private shotsOut: number[][] = [];
   /** Where this player stood and looked at the last frame, for where harm came from. */
   private self: { position: readonly number[]; yaw: number } | null = null;
   /** Tab held: the board shown. */
@@ -325,6 +325,8 @@ export class Together {
     const draws = this.gaits.pose(figures, dt);
     session.together = this.inMatch || extra.length > 0;
     session.room = this.inMatch;
+    // Its shots' pellets are seeded by its seat, as the others seed them from its rounds' owner.
+    session.seat = this.inMatch ? this.net!.you : -1;
     session.bodies = draws.filter((_, i) => figures[i].deadFor === null).map((d) => ({ id: d.seat, frames: d.frames, feet: d.feet }));
     if (this.net && this.inMatch) {
       const battle = (this.battle ??= this.hooks.battle());
@@ -338,7 +340,7 @@ export class Together {
         // From the muzzle of the gun they are drawn with.
         const g = decodeGear(d?.gear ?? 0);
         const muzzle = d && g.gun !== null ? toWorld(d.frames.rifle, muzzleOf(g.gun, g.fit)) : shot.origin;
-        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark, shotTracer(seat, draws, this.net.seats));
+        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark, shotTracer(seat, draws, this.net.seats), shot.tick);
       }
     }
     return draws;
@@ -351,7 +353,7 @@ export class Together {
   after(session: Session, events: CombatEvents, draws: readonly SoldierDraw[], now: number): void {
     const net = this.net;
     if (!net || !this.inMatch) return;
-    for (const s of events.shots) if (this.shotsOut.length < 2 * SHOTS_MAX) this.shotsOut.push({ tick: s.tick, origin: s.origin, dir: s.dir, tracer: s.tracer, ...(s.mark === undefined ? {} : { mark: s.mark }) });
+    for (const s of events.shots) if (this.shotsOut.length < 2 * SHOTS_MAX) this.shotsOut.push(s.wire ?? encodeShot({ tick: s.tick, origin: s.origin, dir: s.dir, tracer: s.tracer, ...(s.mark === undefined ? {} : { mark: s.mark }) }));
     for (const h of events.hits) {
       if (h.owner !== 0 || h.body < 0 || h.body >= MAX_PLAYERS) continue;
       net.hit(h.body, h.zone, h.gun);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NetClient, type NetEvents } from '../../src/app/net-client';
-import { defaultConfig } from '../../src/net/protocol';
+import { defaultConfig, encodeState, type PlayerState } from '../../src/net/protocol';
 
 // One player's line to their room (net-client.ts), spoken through a stub socket the test opens and
 // answers, on a page clock the test sets: the welcome is the hello's reply, so it is the room's clock's
@@ -31,6 +31,11 @@ class StubSocket {
   }
   say(msg: Record<string, unknown>): void {
     for (const fn of this.listeners.get('message') ?? []) fn({ data: JSON.stringify(msg) });
+  }
+  /** The line goes, not by the client's doing. */
+  drop(reason = ''): void {
+    this.readyState = 3;
+    for (const fn of this.listeners.get('close') ?? []) fn({ reason });
   }
 }
 
@@ -100,5 +105,46 @@ describe("a player's line to the room", () => {
       { t: 'shell', shell: { id: 8, landAt: 5_004_000, at: [-1.25, 20], radius: 2.2, seed: 43 } },
     ]);
     expect(client.takeEdits()).toEqual([]);
+  });
+
+  it('sends its shots as their words, as given', () => {
+    const client = joined();
+    page = 1040;
+    StubSocket.last!.say(welcome(5_000_000));
+    const state: PlayerState = { tick: 50, position: [1, 2, 3], velocity: [0, 0, 0], yaw: 10, pitch: -2, stance: 0, height: 1.8, flags: 1 };
+    const words = [[49, 1000, 2000, 3000, 0, 0, 10000, 3], [50, 1001, 2000, 3000, 0, 6000, 8000, 1]];
+    client.state(state, words);
+    client.state(state, []);
+    expect(StubSocket.last!.sent.slice(-2)).toEqual([{ t: 's', s: encodeState(state), sh: words }, { t: 's', s: encodeState(state) }]);
+  });
+
+  it("a line lost mid-match ends the match for this page before it says why; in the lobby it only says why", () => {
+    const LOST = 'The connection to the game was lost. Reload the page to rejoin.';
+    const heard: string[] = [];
+    const on: NetEvents = { ...quiet, ended: () => heard.push(`ended: ${client.phase}, ${client.match === null ? 'no match' : 'a match'}`), lost: (why) => heard.push(why) };
+    const client: NetClient = joined(on);
+    page = 1040;
+    StubSocket.last!.say(welcome(5_000_000, { startAt: 4_990_000, seed: 3, config: defaultConfig() }));
+    expect(client.phase).toBe('playing');
+    StubSocket.last!.drop();
+    // As if the owner had ended it (the page's battle is the visitor's again: together.ts ended), then the line's note.
+    expect(heard).toEqual(['ended: lobby, no match', LOST]);
+    expect([client.phase, client.match]).toEqual(['lobby', null]);
+    // In the lobby, no match to end.
+    heard.length = 0;
+    const lobby = joined({ ...quiet, ended: () => heard.push('ended'), lost: (why) => heard.push(why) });
+    StubSocket.last!.say(welcome(5_000_000));
+    StubSocket.last!.drop();
+    expect(heard).toEqual([LOST]);
+    expect(lobby.phase).toBe('lobby');
+    // Closed by the player, or refused for being full, nothing is said.
+    heard.length = 0;
+    const leaving = joined({ ...quiet, ended: () => heard.push('ended'), lost: (why) => heard.push(why) });
+    StubSocket.last!.say(welcome(5_000_000, { startAt: 4_990_000, seed: 3, config: defaultConfig() }));
+    leaving.close();
+    StubSocket.last!.drop('left');
+    joined({ ...quiet, ended: () => heard.push('ended'), lost: (why) => heard.push(why) });
+    StubSocket.last!.drop('full');
+    expect(heard).toEqual([]);
   });
 });

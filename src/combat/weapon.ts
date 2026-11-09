@@ -18,10 +18,17 @@
  * Dispersion is decided at the muzzle, as the reference does it: a uniform
  * disc of the cone's half-angle (MOA / 60 degrees, times the caller's sway) in
  * yaw and pitch, drawn angle first, then radius, from the caller's stream.
+ *
+ * A shotgun's other pellets spread about its first by the gun's own cone (the
+ * stance's widening of it is the shooter's, and the first pellet's alone),
+ * drawn from the shot's own seed: its shooter's seat and the tick it left on
+ * (pelletSeed). Every client that hears the shot draws the same pellets, so
+ * they chip the same voxels everywhere (the shared-battle spec's "Edits").
  */
 
-import { cos, sin } from '../core/dmath';
-import type { Rng } from '../core/rng';
+import { cos, hypot, radians, sin, TAU } from '../core/dmath';
+import { hash32 } from '../core/hash';
+import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import { fromYawPitch } from '../physics/vec';
 import { projectileSpec, type ProjectileSpec } from './ballistics';
@@ -206,4 +213,46 @@ export class Weapon {
     const n = this.spec.tracerEvery;
     return n > 0 && (this.shotsFired + 1) % n === 0;
   }
+}
+
+/**
+ * A shot's seed: its shooter's seat (−1 solo) and the tick it left on. A gun fires at most once a
+ * tick, so the two name one shot, and the shot's words carry both (the room's frame its seat).
+ */
+export function pelletSeed(seat: number, tick: number): number {
+  return hash32(seat, tick);
+}
+
+/**
+ * `count` directions about unit `dir` (a shot's first pellet), each uniform over the disc of the cone
+ * of `coneDeg` about it, drawn angle first, then radius, from `seed`'s own stream (pelletSeed): the
+ * same seed, the same pellets, on every client.
+ */
+export function pelletDirs(dir: readonly number[], count: number, coneDeg: number, seed: number): [number, number, number][] {
+  if (count <= 0) return [];
+  const rng = Rng.root(seed);
+  // Two directions square to it: across it (level), and up from it (dir × across); +x across a shot
+  // straight up or down.
+  let ux = dir[2];
+  let uz = -dir[0];
+  const level = hypot(ux, uz);
+  if (level < 1e-9) {
+    ux = 1;
+    uz = 0;
+  } else {
+    ux /= level;
+    uz /= level;
+  }
+  const w = [dir[1] * uz, dir[2] * ux - dir[0] * uz, -dir[1] * ux];
+  const cone = radians(coneDeg);
+  const out: [number, number, number][] = [];
+  for (let k = 0; k < count; k++) {
+    const a = rng.uniform(0, TAU);
+    // Its tangent: the pellet is atan(r) off the first, within the cone's half-angle.
+    const r = cone * Math.sqrt(rng.float());
+    const d = [dir[0] + (ux * cos(a) + w[0] * sin(a)) * r, dir[1] + w[1] * sin(a) * r, dir[2] + (uz * cos(a) + w[2] * sin(a)) * r];
+    const n = hypot(d[0], d[1], d[2]);
+    out.push([d[0] / n, d[1] / n, d[2] / n]);
+  }
+  return out;
 }

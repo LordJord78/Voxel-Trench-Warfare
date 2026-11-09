@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { CLIENT_TEXT_MAX, cleanConfig, cleanName, decodeDig, decodeShell, decodeShot, decodeState, defaultConfig, DIG_CELLS_MAX, encodeShot, encodeState, HURT_MAX, NAME_MAX, parseClient, parseRoom, PROTOCOL, ROOM_TEXT_MAX, SHOTS_MAX, type PlayerState, type WireDig } from '../../src/net/protocol';
+import { Rng } from '../../src/core/rng';
+import { encodeShotMark } from '../../src/net/gear';
+import { CLIENT_TEXT_MAX, cleanConfig, cleanName, decodeDig, decodeShell, decodeShot, decodeState, defaultConfig, DIG_CELLS_MAX, encodeShot, encodeState, HURT_MAX, NAME_MAX, parseClient, parseRoom, PROTOCOL, ROOM_TEXT_MAX, sent, SHOTS_MAX, type PlayerState, type ShotState, type WireDig } from '../../src/net/protocol';
 
 const state: PlayerState = { tick: 1234, position: [128.4567, 13.05, 105.2], velocity: [-4.1, 0, 0.25], yaw: 271.25, pitch: -12.5, stance: 3, height: 1.8, flags: 33 };
 
@@ -73,6 +75,38 @@ describe('the protocol', () => {
     expect(parseClient(JSON.stringify({ t: 'hurt', a: HURT_MAX + 0.5, c: 'shell' }))).toBeNull();
     // A hurt names its cause as the kill feed does: a blast's is 'shell'.
     expect(parseClient(JSON.stringify({ t: 'hurt', a: 10, c: 'blast' }))).toBeNull();
+  });
+
+  it('a shot flown as sent is what its words say', () => {
+    // A shot is flown as the others will fly it (sent): the words it goes out as, and the shot they
+    // say, which is the shot every other client decodes from the room's frame ([seat, ...words]).
+    const rng = Rng.root(11).derive('protocol.sent');
+    const guns = ['ak74', 'm4', 'mp5', 'svd', 'm249', 'm870', 'm17', 'pm'] as const;
+    let moved = 0;
+    for (let k = 0; k < 50; k++) {
+      const d = [rng.normal(), rng.normal(), rng.normal()];
+      const l = Math.hypot(d[0], d[1], d[2]);
+      const tracer = rng.chance(0.5);
+      const s: ShotState = {
+        tick: rng.randint(0, 2_000_000),
+        origin: [rng.uniform(-50, 300), rng.uniform(-5, 40), rng.uniform(-50, 300)],
+        dir: [d[0] / l, d[1] / l, d[2] / l],
+        tracer,
+        ...(rng.chance(0.8) ? { mark: encodeShotMark({ tracer, kind: rng.randint(0, 4), suppressed: rng.chance(0.5), gun: rng.choice(guns) }) } : {}),
+      };
+      const out = sent(s);
+      expect(out.wire).toEqual(encodeShot(s));
+      const seat = rng.randint(0, 8);
+      const frame = parseRoom(JSON.stringify({ t: 'f', s: 5, ps: [], sh: [[seat, ...out.wire]] }));
+      expect(frame).toMatchObject({ t: 'f' });
+      const relayed = (frame as Extract<typeof frame, { t: 'f' }>).sh;
+      expect(relayed).toHaveLength(1);
+      expect(relayed[0][0]).toBe(seat);
+      expect(decodeShot(relayed[0].slice(1)), `shot ${k}`).toEqual(out.shot);
+      // Rounded to the millimetre and to 1e-4 of a unit: not the shot as aimed.
+      if (out.shot.origin.some((v, i) => v !== s.origin[i]) || out.shot.dir.some((v, i) => v !== s.dir[i])) moved++;
+    }
+    expect(moved).toBe(50);
   });
 
   it("takes a room's message up to a mebibyte, a player's still not past 4,096 characters", () => {

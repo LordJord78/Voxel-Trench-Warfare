@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { GUN_DEFS } from '../../src/combat/arsenal';
 import type { GunKey } from '../../src/net/gear';
-import { Weapon, weaponSpec, type WeaponSpec } from '../../src/combat/weapon';
+import { pelletDirs, pelletSeed, Weapon, weaponSpec, type WeaponSpec } from '../../src/combat/weapon';
+import { hash32 } from '../../src/core/hash';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
 
@@ -157,6 +158,44 @@ describe('the rifle', () => {
     };
     expect(burst(5)).toEqual(burst(5));
     expect(burst(6)).not.toEqual(burst(5));
+  });
+
+  it("a shot's pellets come from its seed: the same seed the same, another others, each within the gun's cone of the first", () => {
+    // The m870's cone (160 MOA, 2.67°) about a first pellet aimed off every axis; and straight up, where
+    // "level and across" has no direction of its own.
+    const cone = weaponSpec(tun, 'm870').dispersionMoa / 60;
+    const first = (() => {
+      const d = [0.31, -0.12, 0.94];
+      const l = Math.hypot(d[0], d[1], d[2]);
+      return d.map((v) => v / l);
+    })();
+    const angle = (a: readonly number[], b: readonly number[]) => (Math.acos(Math.min(1, (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / Math.hypot(a[0], a[1], a[2]) / Math.hypot(b[0], b[1], b[2]))) * 180) / Math.PI;
+    // The seed names the shot: its shooter's seat and the tick it left on.
+    expect(pelletSeed(2, 1234)).toBe(hash32(2, 1234));
+    expect(pelletSeed(-1, 1234)).toBe(hash32(-1, 1234));
+    const seed = pelletSeed(2, 1234);
+    const pellets = pelletDirs(first, 8, cone, seed);
+    expect(pellets).toHaveLength(8);
+    expect(pelletDirs(first, 8, cone, seed)).toEqual(pellets);
+    // Another tick's, another seat's: other pellets, and no two of a shot the same.
+    expect(pelletDirs(first, 8, cone, pelletSeed(2, 1235))).not.toEqual(pellets);
+    expect(pelletDirs(first, 8, cone, pelletSeed(3, 1234))).not.toEqual(pellets);
+    expect(new Set(pellets.map((d) => d.join())).size).toBe(8);
+    expect(pelletDirs(first, 0, cone, seed)).toEqual([]);
+    for (const dir of [first, [0, 1, 0]]) {
+      // Many from one seed: each a unit within the cone of the first, uniform over its disc (a quarter
+      // within half its angle), its sides all reached.
+      const many = pelletDirs(dir, 4000, cone, pelletSeed(5, 77));
+      for (const d of many) {
+        expect(Math.hypot(d[0], d[1], d[2])).toBeCloseTo(1, 12);
+        expect(angle(d, dir)).toBeLessThanOrEqual(cone + 1e-9);
+      }
+      const inner = many.filter((d) => angle(d, dir) <= cone / 2).length / many.length;
+      expect(Math.abs(inner - 0.25)).toBeLessThanOrEqual(0.03);
+      expect(Math.max(...many.map((d) => angle(d, dir)))).toBeGreaterThan(0.97 * cone);
+      const mean = [0, 1, 2].map((k) => many.reduce((a, d) => a + d[k], 0) / many.length);
+      expect(angle(mean, dir)).toBeLessThan(0.05 * cone);
+    }
   });
 
   it('the shotgun reloads 1 shell in 1.0 s and 7 in 4.0 s', () => {

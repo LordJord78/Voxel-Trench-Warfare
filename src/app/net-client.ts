@@ -8,7 +8,7 @@
  */
 
 import { matchSeconds, ServerClock } from '../net/clock';
-import { decodeShell, decodeShot, defaultConfig, encodeShot, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type Dig, type MatchInfo, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type RoomShell, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
+import { decodeShell, decodeShot, defaultConfig, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type Dig, type MatchInfo, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type RoomShell, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
 import { RemotePlayers } from './net-players';
 
 export interface NetEvents {
@@ -99,7 +99,11 @@ export class NetClient {
     this.ws.addEventListener('message', (e) => this.receive(e.data));
     this.ws.addEventListener('close', (e) => {
       if (this.pinger) clearInterval(this.pinger);
-      if (!this.closedByUs && e.reason !== 'version' && e.reason !== 'full' && e.reason !== 'no-room') this.on.lost(this.joined ? 'The connection to the game was lost. Reload the page to rejoin.' : 'The game could not be reached.');
+      if (this.closedByUs || e.reason === 'version' || e.reason === 'full' || e.reason === 'no-room') return;
+      // A match the line went in is over for this page, as if the owner had ended it: the battle is
+      // the visitor's again (together.ts ended), not the room's carried on alone.
+      if (this.phase === 'playing') this.endMatch();
+      this.on.lost(this.joined ? 'The connection to the game was lost. Reload the page to rejoin.' : 'The game could not be reached.');
     });
   }
 
@@ -151,9 +155,9 @@ export class NetClient {
     if (!away) this.burst();
   }
 
-  /** This player's state, and the shots they fired since the last. */
-  state(s: PlayerState, shots: readonly ShotState[] = []): void {
-    this.send({ t: 's', s: encodeState(s), ...(shots.length ? { sh: shots.map(encodeShot) } : {}) });
+  /** This player's state, and the shots they fired since the last, as their words (protocol.ts encodeShot, or sent's: what they flew). */
+  state(s: PlayerState, shots: readonly number[][]): void {
+    this.send({ t: 's', s: encodeState(s), ...(shots.length ? { sh: [...shots] } : {}) });
   }
 
   /** This player's round struck seat `victim`'s `zone`. */
@@ -184,6 +188,15 @@ export class NetClient {
     this.closedByUs = true;
     if (this.pinger) clearInterval(this.pinger);
     this.ws.close(1000, 'left');
+  }
+
+  /** The match over: back to the lobby. */
+  private endMatch(): void {
+    this.phase = 'lobby';
+    this.match = null;
+    this.players.clear();
+    this.on.changed();
+    this.on.ended();
   }
 
   private send(msg: ClientMsg): void {
@@ -246,11 +259,7 @@ export class NetClient {
         this.on.started(m.match);
         return;
       case 'end':
-        this.phase = 'lobby';
-        this.match = null;
-        this.players.clear();
-        this.on.changed();
-        this.on.ended();
+        this.endMatch();
         return;
       case 'pong':
         this.clock.sample(m.c, m.s, this.now());
