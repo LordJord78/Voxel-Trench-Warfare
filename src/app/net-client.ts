@@ -35,11 +35,19 @@ export interface NetEvents {
   over(winner: Team, red: number, blue: number): void;
 }
 
-/** A shot another player fired, as the room relayed it. */
+/** A shot another player fired, as the room relayed it, and the room's clock (ms) of the frame it came in. */
 export interface RemoteShot {
   seat: number;
   shot: ShotState;
+  at: number;
 }
+
+/**
+ * The most of the others' shots kept until the game takes them: a hidden tab runs no frame, and a page
+ * catching up on the room's log fires none, so theirs wait (Together flies them once it can, silently
+ * when old). Past it the oldest go.
+ */
+export const SHOT_QUEUE_MAX = 2048;
 
 /** An edit of the room's to the world: a shell it told, or a scoop a player dug. */
 export type RoomEdit = { t: 'shell'; shell: RoomShell } | { t: 'dig'; dig: Dig };
@@ -81,7 +89,7 @@ export class NetClient {
   /** Scoops this player sent (`dig` calls), and the others' the room relayed to it, this visit (for the tests). */
   digsSent = 0;
   digsHeard = 0;
-  /** Others' shots heard since the game last took them. */
+  /** Others' shots heard and not yet taken by the game, oldest first, at most SHOT_QUEUE_MAX. */
   private shots: RemoteShot[] = [];
   /** The room's edits heard since the game last took them, in the order they came. */
   private edits: RoomEdit[] = [];
@@ -186,11 +194,11 @@ export class NetClient {
     this.send({ t: 'dig', c: [...cells] });
   }
 
-  /** Others' shots heard since the last call. */
-  takeShots(): RemoteShot[] {
-    const out = this.shots;
-    this.shots = [];
-    return out;
+  /** Others' shots heard and not yet taken, oldest first, for as long as `fits` takes each (all of them, by default). */
+  takeShots(fits: (shot: RemoteShot) => boolean = () => true): RemoteShot[] {
+    let n = 0;
+    while (n < this.shots.length && fits(this.shots[n])) n++;
+    return this.shots.splice(0, n);
   }
 
   /** The room's edits heard since the last call, in the order they came. */
@@ -286,8 +294,9 @@ export class NetClient {
         this.players.frame(m.s, m.ps);
         for (const p of m.sh) {
           const shot = decodeShot(p.slice(1));
-          if (shot && p[0] !== this.you && this.shots.length < 64) this.shots.push({ seat: p[0], shot });
+          if (shot && p[0] !== this.you) this.shots.push({ seat: p[0], shot, at: m.s });
         }
+        if (this.shots.length > SHOT_QUEUE_MAX) this.shots.splice(0, this.shots.length - SHOT_QUEUE_MAX);
         return;
       case 'shell': {
         const shell = decodeShell(m.s);

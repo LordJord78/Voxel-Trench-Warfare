@@ -73,6 +73,12 @@ describe('the sound of a frame', () => {
     expect(beyond).toEqual([]);
   });
 
+  it("a silent round's impact (another's shot long overdue) is not heard", () => {
+    const near = impact([12, 2, 10], P.SOD);
+    expect(planVoices(t, { ...none(), impacts: [near] }, ear)).toHaveLength(1);
+    expect(planVoices(t, { ...none(), impacts: [{ ...near, silent: true }] }, ear)).toEqual([]);
+  });
+
   it("a frame's events make one voice each", () => {
     const events: CombatEvents = {
       shots: [shot([10.2, 1.8, 11]), shot([10.2, 1.8, 11])],

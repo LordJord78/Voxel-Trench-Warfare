@@ -517,22 +517,28 @@ export class Session {
    * pelletSeed: their seat and `tick`, the tick it left on), as the shooter spread them. Without one,
    * the AK's, amber. `kind`, where given, is the tracer's colour whatever the mark says (their seat's
    * team); a shot that is not a tracer draws none. Every pellet takes the shot's kind.
+   *
+   * `silent` (a backlog: a shot more than SILENT_STEP_S old, from a tab back from hidden or a page
+   * caught up on the room's log): its rounds draw no tracer, crack nothing, pass unheard and their
+   * strikes suppress no one (Rounds.fire); no remoteShots event and no muzzle flash. Its chips and
+   * body strikes are a loud one's, so every page's world takes them alike.
    */
-  fireRemote(owner: number, origin: readonly [number, number, number], dir: readonly [number, number, number], tracer: boolean, muzzle: readonly [number, number, number], mark?: number, kind?: number, tick = 0): void {
+  fireRemote(owner: number, origin: readonly [number, number, number], dir: readonly [number, number, number], tracer: boolean, muzzle: readonly [number, number, number], mark?: number, kind?: number, tick = 0, silent = false): void {
     const m = mark === undefined ? null : decodeShotMark(mark);
     const gun = m ? this.remoteGun(m.gun, m.suppressed) : { spec: this.frontProjectile, pellets: 1, coneDeg: 0 };
     const spec = gun.spec;
     const v = spec.muzzleVelocity;
-    const round = !tracer ? TRACER_KIND.none : kind ?? (m ? m.kind : TRACER_KIND.amber);
+    const round = !tracer || silent ? TRACER_KIND.none : kind ?? (m ? m.kind : TRACER_KIND.amber);
     const from: [number, number, number] = [muzzle[0], muzzle[1], muzzle[2]];
     const reach = this.aimRange(owner, origin, dir);
     // Lit in as the draw's own (a hip shot's): a shot's word does not say how far its shooter had
     // aimed, and a pellet gun's share in it is its pattern's, not the sights'.
     const drawn = { from, convergeM: reach };
-    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, drawn) < 0) return;
+    if (this.rounds.fire([origin[0], origin[1], origin[2]], [dir[0] * v, dir[1] * v, dir[2] * v], spec, owner, round, drawn, undefined, silent) < 0) return;
     for (const d of pelletDirs(dir, gun.pellets - 1, gun.coneDeg * (m ? m.share : 1), pelletSeed(owner - 2, tick))) {
-      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, round, drawn);
+      this.rounds.fire([origin[0], origin[1], origin[2]], [d[0] * v, d[1] * v, d[2] * v], spec, owner, round, drawn, undefined, silent);
     }
+    if (silent) return;
     const flashShare = m?.suppressed ? 0.12 : 1;
     this.events.remoteShots.push({
       tick: this.ticks, owner, origin: [origin[0], origin[1], origin[2]], dir: [dir[0], dir[1], dir[2]], tracer, muzzle: from,
@@ -540,6 +546,18 @@ export class Session {
     });
     const { flash } = this.kinds;
     this.particles.emit(muzzle, [dir[0] * flash.speed, dir[1] * flash.speed + flash.lift, dir[2] * flash.speed], flash, Math.round(flash.count * flashShare), this.particleRng);
+  }
+
+  /** Rounds the pool has room for now: Together fires no more of others' shots a frame than fit. */
+  roundRoom(): number {
+    return this.rounds.room;
+  }
+
+  /** The rounds another's shot with the word `mark` fires: its gun's pellets; one without a word. */
+  shotRounds(mark?: number): number {
+    if (mark === undefined) return 1;
+    const m = decodeShotMark(mark);
+    return this.remoteGun(m.gun, m.suppressed).pellets;
   }
 
   /**
@@ -980,7 +998,7 @@ export class Session {
       // In a room the front's rounds chip nothing: each page's front is its own, and the world is
       // everyone's. Their dust and suppression stay.
       if (!(this.room && hit.owner === 1)) this.destruction.mark(hit.cell[0], hit.cell[1], hit.cell[2], hit.energyJ, this.chipEnergyJ);
-      if (hit.owner !== 0) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
+      if (hit.owner !== 0 && !hit.silent) this.suppression.impact(hypot(hit.position[0] - eye[0], hit.position[1] - eye[1], hit.position[2] - eye[2]));
       this.events.impacts.push({ ...hit, tick: this.ticks });
       this.throwImpact(hit);
     }

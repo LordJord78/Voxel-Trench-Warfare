@@ -15,6 +15,7 @@
 
 import { holdOf, muzzleOf } from '../combat/arsenal';
 import { hitParts, pose, toWorld, type Flinch } from '../combat/soldier-rig';
+import { SILENT_STEP_S } from '../net/clock';
 import { decodeGear, encodeGear, teamTracer } from '../net/gear';
 import { encodeShot, MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type Dig, type MatchInfo, type MatchLog, type PlayerState, type RoomConfig, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
@@ -25,7 +26,7 @@ import { Lobby } from '../ui/lobby';
 import { MatchHud, type BoardRow } from '../ui/match-hud';
 import { MAP_NAMES, isMapId, type MapId } from '../world/generation/params';
 import type { FigureOverlay, HitFeedback } from './hit-feedback';
-import { makeRoom, NetClient, type RoomEdit } from './net-client';
+import { makeRoom, NetClient, type RemoteShot, type RoomEdit } from './net-client';
 import type { RemotePlayer } from './net-players';
 
 /** States sent a second. */
@@ -363,8 +364,9 @@ export class Together {
    * test stands in the world) posed, each flinching and falling as its hits say; the living among
    * them given to the session for rounds to strike; their shots fired, each from its shooter's eye,
    * its tracer and flash at their soldier's muzzle, the tracer in their seat's team's colour
-   * (shotTracer). In a match, the room's shells heard and landed on its clock, once the clock has its
-   * first sample and the room's log is caught up. What to draw.
+   * (shotTracer), once the room's log is caught up, no more a frame than the round pool has room for,
+   * and silent once more than SILENT_STEP_S old. In a match, the room's shells heard and landed on its
+   * clock, once the clock has its first sample and the room's log is caught up. What to draw.
    */
   prepare(session: Session, dt: number, extra: readonly Figure[] = [], now = performance.now()): SoldierDraw[] {
     this.session = session;
@@ -386,12 +388,26 @@ export class Together {
           battle.tick(nowMs);
         }
       }
-      for (const { seat, shot } of this.net.takeShots()) {
-        const d = draws.find((x) => x.seat === seat);
-        // From the muzzle of the gun they are drawn with.
-        const g = decodeGear(d?.gear ?? 0);
-        const muzzle = d && g.gun !== null ? toWorld(d.frames.rifle, muzzleOf(g.gun, g.fit)) : shot.origin;
-        session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark, shotTracer(seat, draws, this.net.seats), shot.tick);
+      // Their shots once the world is the room's (until then they wait in the net's queue, as its
+      // edits do: their chips go on the world the room's craters have made), in the order they came,
+      // as many as the round pool has room for (the rest the next frames); one more than SILENT_STEP_S
+      // old (a backlog) flies silent, for its chips alone.
+      if (this.caughtUp) {
+        const nowMs = this.net.serverNow();
+        let room = session.roundRoom();
+        const fits = (s: RemoteShot) => {
+          const rounds = session.shotRounds(s.shot.mark);
+          if (rounds > room) return false;
+          room -= rounds;
+          return true;
+        };
+        for (const { seat, shot, at } of this.net.takeShots(fits)) {
+          const d = draws.find((x) => x.seat === seat);
+          // From the muzzle of the gun they are drawn with.
+          const g = decodeGear(d?.gear ?? 0);
+          const muzzle = d && g.gun !== null ? toWorld(d.frames.rifle, muzzleOf(g.gun, g.fit)) : shot.origin;
+          session.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, muzzle, shot.mark, shotTracer(seat, draws, this.net.seats), shot.tick, nowMs - at > 1000 * SILENT_STEP_S);
+        }
       }
     }
     return draws;

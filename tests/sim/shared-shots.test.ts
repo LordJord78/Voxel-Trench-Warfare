@@ -199,6 +199,59 @@ describe("another's shot on every client", () => {
   });
 });
 
+describe("another's shot flown silent (a backlog, more than SILENT_STEP_S old)", () => {
+  it('draws no tracer, flashes and says nothing, cracks nothing and suppresses no one; it chips and strikes as one flown aloud', () => {
+    // Another's AK round passing half a metre from B's eye, into the sod wall 5 m ahead: once flown
+    // aloud, once silent, each on a page of its own.
+    const page = (silent: boolean) => {
+      const b = stand(arena(true), shotgun());
+      const p = b.player;
+      const eye = [p.position.x, p.position.y + b.controller.eyeHeight(p), p.position.z];
+      const origin: [number, number, number] = [eye[0] + 0.5, eye[1], 0.5];
+      const mark = encodeShotMark({ tracer: true, kind: TRACER_KIND.blue, suppressed: false, gun: 'ak74' });
+      const particles = b.particles.count;
+      b.fireRemote(5, origin, [0, 0, 1], true, origin, mark, TRACER_KIND.blue, 40, silent);
+      const flashed = b.particles.count - particles;
+      const tracer = b.rounds.count === 1 && b.rounds.isTracer(0);
+      const events = [];
+      for (let k = 0; k < 30; k++) {
+        b.tick();
+        events.push(b.drainEvents());
+      }
+      return { b, flashed, tracer, events };
+    };
+    const aloud = page(false);
+    const silent = page(true);
+    expect(aloud.tracer).toBe(true);
+    expect(aloud.flashed).toBeGreaterThan(0);
+    expect(aloud.events.flatMap((e) => e.remoteShots)).toHaveLength(1);
+    expect(aloud.events.flatMap((e) => e.cracks).length).toBeGreaterThan(0);
+    expect(aloud.b.suppression.level).toBeGreaterThan(0);
+    expect(aloud.events.flatMap((e) => e.impacts)).toHaveLength(1);
+    expect(silent.tracer).toBe(false);
+    expect(silent.flashed).toBe(0);
+    expect(silent.events.flatMap((e) => e.remoteShots)).toEqual([]);
+    expect(silent.events.flatMap((e) => e.cracks)).toEqual([]);
+    expect(silent.b.suppression.level).toBe(0);
+    // Its strike is there, unheard (the audio plan skips it); and the same chip in the same world.
+    const [impact] = silent.events.flatMap((e) => e.impacts);
+    expect(impact).toMatchObject({ silent: true, kind: TRACER_KIND.none });
+    expect(sameWorld(aloud.b.map, silent.b.map)).toBe(true);
+    expect(sameWorld(silent.b.map, arena(true))).toBe(false);
+  });
+
+  it("the round pool's room, and the rounds another's shot takes: its gun's pellets, one without a word", () => {
+    const b = stand(arena(true), shotgun());
+    const capacity = b.roundRoom();
+    expect(capacity).toBe(tun.i('ballistics.pool_capacity'));
+    expect(b.shotRounds()).toBe(1);
+    expect(b.shotRounds(encodeShotMark({ tracer: false, kind: 0, suppressed: false, gun: 'ak74' }))).toBe(1);
+    expect(b.shotRounds(encodeShotMark({ tracer: false, kind: 0, suppressed: true, gun: 'm870', share: 1 }))).toBe(tun.i('weapon.m870.pellets'));
+    b.fireRemote(5, [12.8, 2, 2], [0, 1, 0], false, [12.8, 2, 2], encodeShotMark({ tracer: false, kind: 0, suppressed: false, gun: 'm870', share: 1 }), undefined, 17);
+    expect(b.roundRoom()).toBe(capacity - tun.i('weapon.m870.pellets'));
+  });
+});
+
 describe("a shotgun's pattern is the aim's", () => {
   // The M870's cone is 160 MOA; aimed, its share is ads_spread 0.8, put to the step 0.7. Before Task
   // 5b the first pellet carried the stance's cone and the other eight spread about it by the whole

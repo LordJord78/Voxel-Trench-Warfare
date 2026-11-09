@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NetClient, type NetEvents } from '../../src/app/net-client';
-import { defaultConfig, encodeState, type PlayerState } from '../../src/net/protocol';
+import { NetClient, SHOT_QUEUE_MAX, type NetEvents, type RemoteShot } from '../../src/app/net-client';
+import { defaultConfig, encodeShot, encodeState, type PlayerState } from '../../src/net/protocol';
 
 // One player's line to their room (net-client.ts), spoken through a stub socket the test opens and
 // answers, on a page clock the test sets: the welcome is the hello's reply, so it is the room's clock's
@@ -162,6 +162,24 @@ describe("a player's line to the room", () => {
     expect(StubSocket.last!.sent.slice(-2)).toEqual([{ t: 'dig', c: [412_345, 412_346] }, { t: 'dig', c: [7] }]);
     expect(client.digsSent).toBe(2);
     expect(client.digsHeard).toBe(2);
+  });
+
+  it("keeps the others' shots until the game takes them, each with its frame's time: past SHOT_QUEUE_MAX the oldest go; taken in order while they fit", () => {
+    // A tab hidden for a while runs no frame, and a page catching up on the log fires none: their shots wait.
+    expect(SHOT_QUEUE_MAX).toBe(2048);
+    const client = joined();
+    page = 1040;
+    StubSocket.last!.say(welcome(5_000_000, { startAt: 4_990_000, seed: 3, config: defaultConfig() }));
+    const shot = (tick: number) => encodeShot({ tick, origin: [1, 2, 3], dir: [0, 0, 1], tracer: false });
+    for (let k = 0; k < SHOT_QUEUE_MAX + 10; k++) StubSocket.last!.say({ t: 'f', s: 5_000_000 + k, ps: [], sh: [[1, ...shot(k)], ...(k === 5 ? [[0, ...shot(k)]] : [])] });
+    // Up to a hundred: the oldest ten gone, the player's own never kept.
+    let n = 0;
+    const first = client.takeShots(() => n++ < 100);
+    expect(first.map((s: RemoteShot) => [s.seat, s.shot.tick, s.at])).toEqual(Array.from({ length: 100 }, (_, k) => [1, k + 10, 5_000_010 + k]));
+    const rest = client.takeShots();
+    expect(rest).toHaveLength(SHOT_QUEUE_MAX - 100);
+    expect(rest.at(-1)!.shot.tick).toBe(SHOT_QUEUE_MAX + 9);
+    expect(client.takeShots()).toEqual([]);
   });
 
   it('sends its shots as their words, as given', () => {

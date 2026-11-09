@@ -6,7 +6,7 @@ import { packCell } from '../../src/combat/entrenching';
 import { pose, type PoseInput, type V3 } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
 import { decodeGear, TRACER_KIND } from '../../src/net/gear';
-import { defaultConfig, type Dig, type RoomShell, type Seat } from '../../src/net/protocol';
+import { defaultConfig, encodeShot, type Dig, type RoomShell, type Seat } from '../../src/net/protocol';
 import { RoomBattle } from '../../src/sim/room-battle';
 import { fallenLine, MatchHud } from '../../src/ui/match-hud';
 import { P } from '../../src/world/materials';
@@ -456,6 +456,46 @@ describe("a page catching up on the room's log while the room plays on", () => {
     together.frame(roomClient(trenchArena(), PLAYER).session, false);
     expect(doc.getElementById('lobby-status').textContent).toContain(boom.message);
     expect(doc.getElementById('deploy-line').textContent).not.toBe('Catching up on the battle…');
+  });
+
+  it("flies others' shots only once caught up: a backlog all of it, in order, no more a frame than the round pool has room for, and silent once more than SILENT_STEP_S old", async () => {
+    let finish!: () => void;
+    const { b, together } = await welcomed(() => new Promise<void>((resolve) => (finish = resolve)), () => {}, false);
+    const fired = vi.spyOn(b.session, 'fireRemote');
+    // Sam fires 300 rounds, from 0.6 m over the clay straight down into it, stamped from the room's
+    // 9 000 (the welcome's time) on; 2 s later the page is still catching up, and fires none.
+    for (let k = 0; k < 300; k++) {
+      const shot = encodeShot({ tick: k, origin: [10 + (k % 100) * 0.05, 7.0, 20 + Math.floor(k / 100)], dir: [0, -1, 0], tracer: true });
+      StubSocket.last!.say({ t: 'f', s: 9_000 + k, ps: [], sh: [[1, ...shot]] });
+    }
+    page = 3_000;
+    together.prepare(b.session, 1 / 60);
+    expect(fired).not.toHaveBeenCalled();
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(together.caughtUp).toBe(true);
+    // Caught up: the backlog flies, as many a frame as the pool has room for, the rest the next frames.
+    const capacity = b.session.roundRoom();
+    const perFrame: number[] = [];
+    for (let f = 0; f < 10 && fired.mock.calls.length < 300; f++) {
+      const before = fired.mock.calls.length;
+      together.prepare(b.session, 1 / 60);
+      perFrame.push(fired.mock.calls.length - before);
+      b.session.advance(1 / 60);
+    }
+    expect(perFrame[0]).toBe(capacity);
+    expect(perFrame.reduce((a, n) => a + n, 0)).toBe(300);
+    expect(b.session.rounds.dropped).toBe(0);
+    expect(fired.mock.calls.map((c) => c[7])).toEqual(Array.from({ length: 300 }, (_, k) => k));
+    // Each more than SILENT_STEP_S old: silent, so nothing said of any.
+    expect(fired.mock.calls.every((c) => c[8] === true)).toBe(true);
+    expect(b.session.drainEvents().remoteShots).toEqual([]);
+    // One fresh: aloud.
+    StubSocket.last!.say({ t: 'f', s: together.net!.serverNow(), ps: [], sh: [[1, ...encodeShot({ tick: 300, origin: [12, 7, 22], dir: [0, -1, 0], tracer: true })]] });
+    together.prepare(b.session, 1 / 60);
+    expect(fired.mock.calls.at(-1)![8]).toBe(false);
+    expect(b.session.drainEvents().remoteShots).toHaveLength(1);
   });
 
   it("a kill whose killer is seated nowhere the room has said reads as a plain kill, not the line's", async () => {
