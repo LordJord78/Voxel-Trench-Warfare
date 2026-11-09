@@ -14,9 +14,11 @@
  * - **Dug** (`dug`, spec note 9): another's scoop, stamped with the room's clock, comes after every
  *   heard shell due by its stamp (they land first) and before every one after it. It is held while a
  *   crater's region it touches is pending (Session.applyDig), or an earlier held scoop overlaps it,
- *   then dug in the order the scoops came. The player's own scoop waits while a heard shell would
- *   take its ground (`reserves`, which the session asks), so it is never made between a shell's
- *   telling and its crater.
+ *   then dug in the order the scoops came. A later shell's crater over it waits to go out until it
+ *   is in (`holds`, which Destruction.waits asks), so a tab back from hidden, or a worker slow to
+ *   hand an earlier crater back, still cuts that crater after the scoop, as its digger did. The
+ *   player's own scoop waits while a heard shell would take its ground (`reserves`, which the session
+ *   asks), so it is never made between a shell's telling and its crater.
  * - **Told** (`outgoing`): the battle's harm to the player, as hurts for the room, and the player's
  *   own scoops, while in play.
  * - **Over** (`finish`): the match ended, every shell still in the air lands at once, quietly; the
@@ -40,6 +42,13 @@ const HURT_LEAST = 1;
 /** Whether two boxes overlap across x and z, as Destruction asks of its regions. */
 const across = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
 
+/** Another's scoop, held: its box (scoopBox), and the last crater id the session had given when it was put in order, which it comes after (every later crater comes after it). */
+interface Held {
+  dig: Dig;
+  box: Box;
+  after: number;
+}
+
 export class RoomBattle {
   /** Every shell id heard: each is taken once. */
   private readonly heard = new Set<number>();
@@ -50,13 +59,14 @@ export class RoomBattle {
   /** Each of its shells' craters, by the crater's id: the shell's seed, until its strike is made. */
   private readonly seeds = new Map<number, number>();
   /** Others' scoops given to `dug` and not yet dug, in the order they came. */
-  private digs: Dig[] = [];
+  private digs: Held[] = [];
 
   constructor(
     readonly session: Session,
     private readonly fireT: FireTunables,
   ) {
     session.reserved = (box) => this.reserves(box);
+    session.destruction.waits = (id, box) => this.holds(id, box);
   }
 
   /** The shells heard and not yet landed, in id order. */
@@ -71,7 +81,7 @@ export class RoomBattle {
 
   /** Others' scoops given to `dug` and not yet dug, in the order they came. */
   get held(): readonly Dig[] {
-    return this.digs;
+    return this.digs.map((h) => h.dig);
   }
 
   /** A shell the room told, heard at `nowMs`: whistling for the time it has left, if it has any. */
@@ -87,11 +97,17 @@ export class RoomBattle {
    * Another's scoop, given at `nowMs` (this page's room clock, as `tick`'s): every heard shell due by
    * its stamp lands first, in id order, as `tick` lands them (quietly, one more than SILENT_STEP_S
    * overdue at `nowMs`: a tab back from hidden feeds its queued scoops before it ticks); then it is
-   * held, to be dug by `tick`.
+   * held, to be dug by `tick`, after every crater the session has given an id by now and before
+   * every later one.
    */
   dug(dig: Dig, nowMs: number): void {
     this.landDue(dig.at, nowMs);
-    this.digs.push(dig);
+    this.digs.push({ dig, box: scoopBox(this.session.map.dims, dig.cells), after: this.session.destruction.lastId });
+  }
+
+  /** Whether crater `id`'s job, over `box`, waits to go out: a scoop held that comes before it overlaps it across x and z. */
+  holds(id: number, box: Box): boolean {
+    return this.digs.some((h) => h.after < id && across(h.box, box));
   }
 
   /** Whether ground in `box` would be taken by a shell heard and not yet landed: its crater's region overlaps it across x and z. */
@@ -151,7 +167,7 @@ export class RoomBattle {
     const all = this.air;
     this.air = [];
     for (const s of all) this.land(s, true);
-    return this.digs.splice(0);
+    return this.digs.splice(0).map((h) => h.dig);
   }
 
   /** Every heard shell due by `byMs` lands, in id order; quietly, one more than SILENT_STEP_S overdue at `nowMs`. */
@@ -162,18 +178,12 @@ export class RoomBattle {
     for (const s of due) this.land(s, nowMs - s.landAt > 1000 * SILENT_STEP_S);
   }
 
-  /** Each held scoop dug, in the order they came, unless a crater pending holds it (Session.applyDig) or an earlier one still held overlaps it. */
+  /** Each held scoop dug, in the order they came, unless a crater pending before it holds it (Session.applyDig) or an earlier one still held overlaps it. */
   private dig(): void {
     if (this.digs.length === 0) return;
-    const dims = this.session.map.dims;
-    const held: Dig[] = [];
-    const boxes: Box[] = [];
-    for (const d of this.digs) {
-      const box = scoopBox(dims, d.cells);
-      if (boxes.some((b) => across(b, box)) || !this.session.applyDig(d.cells)) {
-        held.push(d);
-        boxes.push(box);
-      }
+    const held: Held[] = [];
+    for (const h of this.digs) {
+      if (held.some((e) => across(e.box, h.box)) || !this.session.applyDig(h.dig.cells, h.after)) held.push(h);
     }
     this.digs = held;
   }

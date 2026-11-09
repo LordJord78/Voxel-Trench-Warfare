@@ -27,6 +27,11 @@
  * not the match's: a rematch on the same map starts on the cratered ground, so it lives until the
  * map changes or the last player leaves, and the shells are numbered on across matches. Past
  * LOG_CHARS_MAX its oldest scoops leave it, never a shell.
+ *
+ * A scoop is the world's for the same reason: from the start of the first match on it until the map
+ * changes, a player's scoop is stamped, logged and relayed in any phase. One sent just before a match
+ * ended reaches the room after it, and its digger has dug it: dropped, it would be in their world
+ * alone, there for the rematch.
  */
 
 import { MatchRules, type MatchEvent } from './match-rules';
@@ -56,14 +61,15 @@ export const MAP_SEEDS: Record<string, number> = { ravine: 7, corridor: 11 };
 /** The log's most characters, counting each entry's JSON and a separator: a welcome stays under protocol.ts ROOM_TEXT_MAX. */
 export const LOG_CHARS_MAX = 900_000;
 
-/** The room's log of its world: the shells told and the scoops relayed, their characters, and the next shell's id. */
+/** The room's log of its world: the shells told and the scoops relayed, their characters, the next shell's id, and whether a match has begun on it (from then its scoops are taken). */
 interface RoomLog extends MatchLog {
   chars: number;
   nextId: number;
+  played: boolean;
 }
 
 function emptyLog(): RoomLog {
-  return { shells: [], digs: [], chars: 0, nextId: 1 };
+  return { shells: [], digs: [], chars: 0, nextId: 1, played: false };
 }
 
 interface Member {
@@ -261,7 +267,9 @@ export class RoomCore {
         if (this.rules && this.match && now >= this.match.startAt) this.apply(this.rules.hurt(seat.id, msg.a, msg.c, now));
         return;
       case 'dig':
-        if (this.phase === 'playing' && this.match && now >= this.match.startAt) {
+        // In any phase once a match has begun on this world (a scoop sent before the end comes after
+        // it); never one of a world the room has left (the map changed since, and no match yet).
+        if (this.log.played) {
           const d: WireDig = [seat.id, now, ...msg.c];
           this.record(this.log.digs, d);
           this.broadcast({ t: 'dig', d }, m);
@@ -296,6 +304,7 @@ export class RoomCore {
             : new Shelling(SHELL_FIELDS[this.config.map] ?? SHELL_FIELDS.ravine, shellingSeed(this.match.startAt, this.match.seed), this.config.intensity, this.log.nextId);
         this.toldS = 0;
         this.overAt = null;
+        this.log.played = true;
         for (const s of this.seated()) {
           s.state = null;
           s.shots.length = 0;

@@ -92,6 +92,8 @@ export interface RoomClient {
    * hands the frame's drained events to `each`.
    */
   step(roomMs: number, each?: (events: CombatEvents) => void): void;
+  /** Its tab hidden until room time `roomMs`: no frame runs, and the next `step`'s first frame is the first after it. */
+  skip(roomMs: number): void;
 }
 
 /**
@@ -116,6 +118,9 @@ export function roomClient(map: BrickMap, spawn: [number, number, number], offse
         const events = session.drainEvents();
         each?.(events);
       }
+    },
+    skip(roomMs) {
+      frames = Math.max(frames, Math.floor(roomMs / (frameS * 1000)));
     },
   };
   return client;

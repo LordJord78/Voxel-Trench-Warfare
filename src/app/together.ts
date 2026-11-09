@@ -201,7 +201,9 @@ export class Together {
   /**
    * The others' scoops the last match's battle still held when it ended (RoomBattle.finish), behind
    * craters not yet in: the next match's battle is given them before its first tick. The world, and
-   * so they, are the page's until it is reloaded for another map or left.
+   * so they, are the page's until it is reloaded for another map or left. Scoops the room relays in
+   * the lobby (sent before the end reached their digger: net/room-core.ts) wait in the net's queue,
+   * and are fed after these, with the next match's first edits.
    */
   private carried: Dig[] = [];
 

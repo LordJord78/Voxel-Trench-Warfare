@@ -224,19 +224,51 @@ describe("a room's shelling and its log", () => {
     expect(room.seats()).toEqual([]);
   });
 
-  it("relays a dig to the others, stamped with the room's clock, and logs it", () => {
+  it("relays a dig to the others, stamped with the room's clock, and logs it, from a match's start on its world until the map changes", () => {
     const room = new RoomCore('DIGS');
     const a = join(room, 'a');
     const b = join(room, 'b');
-    // Not in the lobby, nor in the countdown.
+    const relayed = () => b.got.flatMap((m) => (m.t === 'dig' ? [m.d] : []));
+    // None before a match has begun on the room's world.
     say(room, a, { t: 'dig', c: [9] }, 100);
+    expect(relayed()).toEqual([]);
+    // From its start, the countdown too (a digger whose clock runs a little ahead of the room's).
     say(room, a, { t: 'start' }, 1000);
     say(room, a, { t: 'dig', c: [8] }, 1000 + COUNTDOWN_MS - 1);
     say(room, a, { t: 'dig', c: [1, 2, 3] }, 12_000);
-    expect(b.got.filter((m) => m.t === 'dig')).toEqual([{ t: 'dig', d: [0, 12_000, 1, 2, 3] }]);
+    expect(relayed()).toEqual([[0, 1000 + COUNTDOWN_MS - 1, 8], [0, 12_000, 1, 2, 3]]);
     expect(a.last('dig')).toBeUndefined();
-    const c = join(room, 'c', 12_500);
-    expect(c.last('welcome')!.log).toEqual({ shells: [], digs: [[0, 12_000, 1, 2, 3]] });
+    // The owner ends the match. A scoop its digger sent before the end reached them comes after it: the
+    // digger dug it, and the world is the room's still, so it is stamped, relayed and logged.
+    say(room, a, { t: 'end' }, 13_000);
+    expect(room.phase).toBe('lobby');
+    say(room, a, { t: 'dig', c: [4] }, 13_080);
+    expect(relayed().at(-1)).toEqual([0, 13_080, 4]);
+    // The same after a match won, back in the lobby OVER_MS after its winning kill.
+    say(room, a, { t: 'config', config: { killTarget: 1, intensity: 'off' } }, 13_500);
+    say(room, a, { t: 'start' }, 14_000);
+    const killAt = 14_000 + COUNTDOWN_MS + PROTECT_MS + 100;
+    say(room, a, { t: 'hit', v: 1, z: 'head' }, killAt);
+    expect(a.last('over')).toMatchObject({ winner: 'red' });
+    const overAt = killAt + OVER_MS;
+    tickTo(room, overAt - 100, overAt + 50, a);
+    expect(room.phase).toBe('lobby');
+    say(room, b, { t: 'dig', c: [6] }, overAt + 100);
+    expect(a.got.filter((m) => m.t === 'dig').at(-1)).toEqual({ t: 'dig', d: [1, overAt + 100, 6] });
+    const c = join(room, 'c', overAt + 200);
+    expect(c.last('welcome')!.log).toEqual({
+      shells: [],
+      digs: [[0, 1000 + COUNTDOWN_MS - 1, 8], [0, 12_000, 1, 2, 3], [0, 13_080, 4], [1, overAt + 100, 6]],
+    });
+    // Another map is another world: a scoop of the last one's, still on its way, is dropped, until a
+    // match begins on the new one.
+    say(room, a, { t: 'config', config: { map: 'corridor' } }, overAt + 300);
+    say(room, b, { t: 'dig', c: [7] }, overAt + 400);
+    expect(a.got.filter((m) => m.t === 'dig').at(-1)).toEqual({ t: 'dig', d: [1, overAt + 100, 6] });
+    expect(join(room, 'e', overAt + 500).last('welcome')!.log).toEqual({ shells: [], digs: [] });
+    say(room, a, { t: 'start' }, overAt + 600);
+    say(room, b, { t: 'dig', c: [5] }, overAt + 700);
+    expect(a.got.filter((m) => m.t === 'dig').at(-1)).toEqual({ t: 'dig', d: [1, overAt + 700, 5] });
   });
 
   it('welcomes a late joiner with the log so far, a shell still in the air among it', () => {

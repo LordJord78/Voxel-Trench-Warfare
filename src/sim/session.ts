@@ -733,11 +733,14 @@ export class Session {
    * Another's scoop of `cells` (combat/entrenching.ts packCell), dug in this world as its digger dug
    * it: held (false) while a crater's region pending overlaps its box, which would undo it or be cut
    * from the ground before it; else dug (applyScoop) and the body lifted out of anything it slumped
-   * into. It is no event: `events.scoops` stays the player's own, which the page sends every one of
-   * (as fireRemote's shots are remoteShots, never shots), and another's scoop makes no scrape here.
+   * into. A scoop that comes `after` crater id `after` (Destruction.lastId when it was put in order)
+   * is not held by a later crater still queued, which waits for it (Destruction.waits): only by one
+   * of those up to `after`, or one out. It is no event: `events.scoops` stays the player's own, which
+   * the page sends every one of (as fireRemote's shots are remoteShots, never shots), and another's
+   * scoop makes no scrape here.
    */
-  applyDig(cells: readonly number[]): boolean {
-    if (this.destruction.overlapsPending(scoopBox(this.map.dims, cells))) return false;
+  applyDig(cells: readonly number[], after = Number.POSITIVE_INFINITY): boolean {
+    if (this.destruction.overlapsPendingBy(scoopBox(this.map.dims, cells), after)) return false;
     applyScoop(this.map, cells, this.entrenching.waterTable);
     this.liftOut();
     return true;

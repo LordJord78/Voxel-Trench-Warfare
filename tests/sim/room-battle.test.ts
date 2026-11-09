@@ -403,6 +403,67 @@ describe("the room's shells on a page", () => {
     expect(sameWorld(a.session.map, b.session.map)).toBe(true);
   }, 30_000);
 
+  it("a dig between two craters stays between them on a tab back from hidden and behind a slow worker: the digger's world and the receivers' agree", () => {
+    // S1 lands on the bank 2.6 m ahead of A; A digs in its rim once its crater is in; S2, told after
+    // that, lands over the scoop. A's world is S1, the dig, then S2.
+    const S1 = shell(1, 3_000, 12.8, 7.0, 1.5, 505);
+    const S2 = shell(2, 6_000, 12.4, 6.6, 1.5, 506);
+    const a = roomClient(heaped(), DIGGER);
+    a.step(1_530);
+    a.battle.hear(S1, 1_530);
+    a.step(2_000);
+    const made = digOnce(a, 2_000);
+    expect(made.ms).toBeLessThan(S2.landAt - 1_500);
+    a.step(4_530);
+    a.battle.hear(S2, 4_530);
+    a.step(12_000);
+    const d: Dig = { seat: 0, at: Math.round(made.ms) + 30, cells: made.cells };
+    const box = scoopBox(a.session.map.dims, d.cells);
+    const loosen = tun.f('destruction.loosen_radius_scale');
+    const region = (s: RoomShell) => detonationRegion(a.session.map.dims, [s.at[0] / V, 0, s.at[1] / V], s.radius / V, loosen)!;
+    expect([across(box, region(S1)), across(box, region(S2))]).toEqual([true, true]);
+    /** What `r` does from here to room time 14 000: each crater as it lands, and the dig as it goes in. */
+    const order = (r: RoomClient) => {
+      const seen: string[] = [];
+      r.step(14_000, (e) => {
+        if (r.battle.held.length === 0 && !seen.includes('dig')) seen.push('dig');
+        for (const c of e.craters) seen.push(`crater ${c.id}`);
+      });
+      return seen;
+    };
+    // B: its tab hidden from room time 1 000 to 8 000. Back, it is fed the three edits it queued, in
+    // the room's order, before its first tick: S1, the dig (which lands S1, quietly), then S2.
+    const b = roomClient(heaped(), AWAY, -200);
+    b.step(1_000);
+    b.skip(8_000);
+    b.battle.hear(S1, 8_000 + b.offsetMs);
+    b.battle.dug(d, 8_000 + b.offsetMs);
+    b.battle.hear(S2, 8_000 + b.offsetMs);
+    expect(b.battle.landed).toEqual([S1]);
+    expect(b.battle.held).toEqual([d]);
+    expect(order(b)).toEqual(['crater 1', 'dig', 'crater 2']);
+    // C: its frames run on, but its craters come back 240 ticks (4 s) after they go out, so S1's is
+    // still being cut when S2 lands, and the dig is held behind it all that while.
+    const c = roomClient(heaped(), AWAY, -200, 1 / 45, lateRunner(240));
+    c.step(1_560);
+    c.battle.hear(S1, 1_560 + c.offsetMs);
+    c.step(d.at + 30);
+    c.battle.dug(d, d.at + 30 + c.offsetMs);
+    c.step(4_530);
+    c.battle.hear(S2, 4_530 + c.offsetMs);
+    c.step(S2.landAt - c.offsetMs + 100);
+    expect(c.battle.landed).toEqual([S1, S2]);
+    expect(c.battle.held).toEqual([d]);
+    expect(c.session.destruction.pending).toBe(2);
+    expect(order(c)).toEqual(['crater 1', 'dig', 'crater 2']);
+    for (const r of [b, c]) {
+      expect(r.battle.held).toEqual([]);
+      expect(r.session.destruction.pending).toBe(0);
+    }
+    expect(sameWorld(a.session.map, b.session.map)).toBe(true);
+    expect(sameWorld(a.session.map, c.session.map)).toBe(true);
+  }, 30_000);
+
   it('a dig that lands a shell more than SILENT_STEP_S overdue lands it quietly', () => {
     // A hidden tab back: its queued edits are fed before its tick. The player 2 m from the shell,
     // heard at 9 000; the dig, stamped 10 200, fed at `back`.
