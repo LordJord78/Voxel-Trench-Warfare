@@ -209,13 +209,36 @@ describe('the camera rig', () => {
 
 describe('the eye over steps', () => {
   const FRAME = 1 / 60;
-  /** A frame of the game running: its clock moves on, the player's foot goes straight to y (as a tick that snapped it would), and it is drawn. */
-  function snapTo(s: Session, rig: CameraRig, y: number, vy = 0) {
+  /**
+   * A frame of the game running: its clock moves on, the player's foot goes straight to y (as a tick
+   * that snapped it would), standing, and it is drawn. No tick runs, so the session's account of the
+   * body's own rise has none of the move: the eye takes it as a step.
+   */
+  function snapTo(s: Session, rig: CameraRig, y: number) {
     s.clock.advance(FRAME);
     const p = s.player.position;
     s.prevPosition = new Vec3(p.x, y, p.z);
     s.player.position = new Vec3(p.x, y, p.z);
-    s.player.velocity = new Vec3(0, vy, 0);
+    s.player.velocity = new Vec3(0, 0, 0);
+    return rig.pose(s, FRAME).position[1];
+  }
+  /**
+   * A body let fall from 20 m up and half a second on its way down (about 10 m/s), run as the game
+   * runs it (Session.advance: each tick the clock lets through), and a rig that has drawn it there.
+   */
+  function falling(): { s: Session; rig: CameraRig } {
+    const s = standing();
+    s.teleport([3.2, 20, 3.2], 0, 0);
+    for (let k = 0; k < 30; k++) expect(s.advance(FRAME)).toBe(1);
+    expect(s.player.onGround).toBe(false);
+    expect(s.player.velocity.y).toBeLessThan(-9);
+    const rig = new CameraRig(rigTunables(tun));
+    rig.pose(s, FRAME);
+    return { s, rig };
+  }
+  /** A frame of that game at 60 Hz: one tick, run, and drawn. */
+  function frame(s: Session, rig: CameraRig) {
+    expect(s.advance(FRAME)).toBe(1);
     return rig.pose(s, FRAME).position[1];
   }
 
@@ -252,37 +275,24 @@ describe('the eye over steps', () => {
   });
 
   it('follows a fall exactly: continuous motion is not a step', () => {
-    const s = standing();
-    const rig = new CameraRig(rigTunables(tun));
-    snapTo(s, rig, 20);
-    for (let f = 1; f <= 30; f++) {
-      const y = 20 - 10 * f * FRAME;
-      expect(Math.abs(snapTo(s, rig, y, -10) - (y + 1.62))).toBeLessThan(0.01);
-    }
+    const { s, rig } = falling();
+    for (let f = 1; f <= 30; f++) expect(Math.abs(frame(s, rig) - (s.footAt().y + 1.62))).toBeLessThan(0.01);
   });
 
   it('holds still while the game is paused, even mid-fall', () => {
-    const s = standing();
-    const rig = new CameraRig(rigTunables(tun));
-    snapTo(s, rig, 20);
-    const falling = snapTo(s, rig, 20 - 10 * FRAME, -10);
+    const { s, rig } = falling();
+    const eye = frame(s, rig);
     // Paused: frames are drawn, but the clock and the player stand still.
-    for (let f = 0; f < 30; f++) expect(rig.pose(s, FRAME).position[1]).toBe(falling);
+    for (let f = 0; f < 30; f++) expect(rig.pose(s, FRAME).position[1]).toBe(eye);
   });
 
   it('follows a fall through a hitch the simulation could not keep up with', () => {
-    const s = standing();
-    const rig = new CameraRig(rigTunables(tun));
-    snapTo(s, rig, 20, -10);
+    const { s, rig } = falling();
+    frame(s, rig);
     // A 0.3 s frame: the clock runs at most five ticks of it, and the app's frame time is capped at 0.1 s.
-    const before = s.clock.simTime + s.clock.alpha * s.clock.dt;
-    s.clock.advance(0.3);
-    const ran = s.clock.simTime + s.clock.alpha * s.clock.dt - before;
-    const y = 20 - 10 * ran;
-    const p = s.player.position;
-    s.prevPosition = new Vec3(p.x, y, p.z);
-    s.player.position = new Vec3(p.x, y, p.z);
-    expect(Math.abs(rig.pose(s, 0.1).position[1] - (y + 1.62))).toBeLessThan(0.01);
+    expect(s.advance(0.3)).toBe(5);
+    expect(s.player.onGround).toBe(false);
+    expect(Math.abs(rig.pose(s, 0.1).position[1] - (s.footAt().y + 1.62))).toBeLessThan(0.01);
   });
 
   it('snaps to a teleport', () => {
@@ -387,6 +397,56 @@ describe('the eye over steps', () => {
       expect(rise, label).toBeCloseTo(0.6, 9);
       expect(there, label).toBeLessThan(-rise / 2);
       expect(Math.abs(after), label).toBeLessThan(0.005);
+    }
+  });
+
+  it('a step walked up or down is eased as the game runs it: up a 0.3 m step in the stride and off a 0.5 m one by the probe, the eye trails each and is there in half a second, at 60 Hz and at 30 to 240', () => {
+    // A body on the ground ends every tick standing (its velocity.y 0): a rise up to [player] step_up
+    // stepped up onto in the stride, and the grounded probe's step down off one, are none of its own
+    // motion, and the session's account of its rise (Session.risen) takes neither. So the eye eases
+    // them as it eases a step it is shown by hand (above). One rig, kept as the game keeps it, drawing
+    // every frame at `hz`, the ticks run as Session.advance runs them; the eye's trail is the kept
+    // rig's eye less a fresh rig's, as in overTheRise.
+    for (const hz of [60, 120, 144, 240, 30]) {
+      // Facing +z, walking: the ground 0.4 m high, a platform 0.3 m over it from 4 m on to 10 m, and
+      // past it the ground 0.2 m high.
+      const map = new BrickMap({ x: 64, y: 64, z: 256 });
+      map.fillBox(0, 0, 0, 64, 2, 256, P.SOD);
+      map.fillBox(0, 2, 0, 64, 4, 40, P.SOD);
+      map.fillBox(0, 2, 40, 64, 7, 100, P.SOD);
+      const s = Session.create({ map, plan: null, spawn: { position: [3.2, 0.4, 2] } }, tun, 7, 0);
+      for (let k = 0; k < 10; k++) s.tick();
+      s.intent = { ...idleIntent(), forward: 1 };
+      const rig = new CameraRig(rigTunables(tun));
+      // Each step: how far its tick moved the foot and to where, the first frame that draws the foot
+      // there, and the eye's trail on that frame and half a second after it.
+      const steps: { rise: number; to: number; at: number; there: number; after: number }[] = [];
+      for (let f = 0; f < 5 * hz && !(steps.length === 2 && !Number.isNaN(steps[1].after)); f++) {
+        const ticks = s.clock.advance(1 / hz);
+        for (let i = 0; i < ticks; i++) {
+          const [y, grounded] = [s.player.position.y, s.player.onGround];
+          s.tick();
+          const rise = s.player.position.y - y;
+          if (grounded && s.player.onGround && Math.abs(rise) > 0.1) steps.push({ rise, to: s.player.position.y, at: -1, there: NaN, after: NaN });
+        }
+        const trail = rig.pose(s, 1 / hz).position[1] - new CameraRig(rigTunables(tun)).pose(s, 1 / hz).position[1];
+        for (const step of steps) {
+          if (step.at < 0 && Math.abs(s.footAt().y - step.to) < 1e-9) [step.at, step.there] = [f, trail];
+          if (step.at >= 0 && f === step.at + 0.5 * hz) step.after = trail;
+        }
+      }
+      const label = `${hz} Hz`;
+      // Up onto the platform and down off it, on the ground before and after each, the second step
+      // more than half a second after the first was drawn.
+      expect(steps.map((step) => step.rise.toFixed(3)), label).toEqual(['0.300', '-0.500']);
+      expect(steps[1].at - steps[0].at, label).toBeGreaterThan(0.5 * hz);
+      for (const { rise, there, after } of steps) {
+        // The frame that first draws the foot at the step's height draws the eye most of the step
+        // short of it, as any step is drawn; and the eye is there in half a second.
+        const which = `${label}, ${rise > 0 ? 'up' : 'down'} ${Math.abs(rise).toFixed(1)} m`;
+        expect(there * Math.sign(rise), which).toBeLessThan(-Math.abs(rise) / 2);
+        expect(Math.abs(after), which).toBeLessThan(0.005);
+      }
     }
   });
 });

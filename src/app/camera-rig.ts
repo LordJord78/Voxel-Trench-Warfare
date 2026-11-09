@@ -61,13 +61,8 @@ export class CameraRig {
   /** Where the eye is drawn relative to where the body puts it, easing to 0. */
   private trail = 0;
   private lastEye: number | null = null;
-  /** The simulation time the last frame showed, interpolated between ticks as the foot is. */
-  private lastSimTime = 0;
   /** How far the body had risen at its own speed (Session.risenAt) as the last frame showed it. */
   private lastRisen = 0;
-  /** The ticks the session had run, and its clock had let through, when the last frame was drawn: in play the two keep step (Session.advance). */
-  private lastTicks = 0;
-  private lastClockTick = 0;
   /** Where the rifle was drawn the last frame it was. */
   private lastRifle: Float32Array | null = null;
 
@@ -95,8 +90,6 @@ export class CameraRig {
     // flash, the tracer's start, the brass) carries the tick's own.
     const dip = session.landingDipAt();
     const body = foot.y + eye;
-    const clock = session.clock;
-    const simTime = clock.simTime + clock.alpha * clock.dt;
     const risen = session.risenAt();
     if (this.lastEye !== null) {
       // The motion the body made at its own speed, which the eye follows exactly: the session's own
@@ -108,21 +101,15 @@ export class CameraRig {
       // standstill). Neither a takeoff nor a landing is a step. A step, a stand, a climb or a teleport
       // is none of the body's own motion, nor is a step taken on a landing tick (a lip stepped up onto
       // in the air as the fall meets it, the controller's unstick: the account takes no rise there),
-      // so the eye eases or snaps it as it always has. A session moved on by hand, its clock letting
-      // through ticks it ran none of (never in play, where Session.advance runs each tick the clock
-      // lets through), has no account of that time: its velocity over the clock's time explains such a
-      // frame, as it did before the account.
-      const byHand = clock.tick - this.lastClockTick > session.ticks - this.lastTicks;
-      const moved = byHand ? player.velocity.y * (simTime - this.lastSimTime) : risen - this.lastRisen;
+      // so the eye eases or snaps it as it always has. So too a move of the foot that no tick made
+      // (one set by hand): the account has none of it.
+      const moved = risen - this.lastRisen;
       const jump = body - this.lastEye - moved;
       if (Math.abs(jump) > TELEPORT_M) this.trail = 0;
       else if (Math.abs(jump) > JUMP_M) this.trail -= jump;
     }
     this.lastEye = body;
-    this.lastSimTime = simTime;
     this.lastRisen = risen;
-    this.lastTicks = session.ticks;
-    this.lastClockTick = clock.tick;
     this.trail = Math.min(TRAIL_M, Math.max(-TRAIL_M, this.trail * Math.exp(-Math.max(0, frameDt) / EASE_S)));
     const target = session.controller.fovScale(player);
     this.fovScale += (target - this.fovScale) * Math.min(1, this.t.fovLerpPerS * Math.max(1e-4, frameDt));
