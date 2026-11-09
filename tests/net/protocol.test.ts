@@ -4,13 +4,7 @@ import { loadTunables } from '../../src/core/tunables';
 import { encodeShotMark } from '../../src/net/gear';
 import { CLIENT_TEXT_MAX, cleanConfig, cleanName, decodeDig, decodeShell, decodeShot, decodeState, defaultConfig, DIG_CELLS_MAX, DIG_SPAN_MAX, encodeShot, encodeState, HURT_MAX, NAME_MAX, parseClient, parseRoom, PROTOCOL, ROOM_TEXT_MAX, sent, SHOTS_MAX, WORLD_DIMS, type PlayerState, type ShotState, type WireDig } from '../../src/net/protocol';
 import { genParams, MAP_IDS } from '../../src/world/generation/params';
-
-/** A voxel of the world packed as a scoop's cell is, (z·Y + y)·X + x. */
-const cell = (x: number, y: number, z: number) => (z * WORLD_DIMS.y + y) * WORLD_DIMS.x + x;
-/** The world's last cell, at its far corner. */
-const LAST = WORLD_DIMS.x * WORLD_DIMS.y * WORLD_DIMS.z - 1;
-/** DIG_CELLS_MAX cells at the world's far corner, eight by eight: the most a scoop may carry, packed as large as they come. */
-const MOST = Array.from({ length: DIG_CELLS_MAX }, (_, i) => cell(WORLD_DIMS.x - 1 - (i % 8), WORLD_DIMS.y - 1 - Math.floor(i / 8), WORLD_DIMS.z - 1));
+import { LAST_CELL as LAST, MOST_CELLS as MOST, worldCell as cell } from '../support/cells';
 
 const state: PlayerState = { tick: 1234, position: [128.4567, 13.05, 105.2], velocity: [-4.1, 0, 0.25], yaw: 271.25, pitch: -12.5, stance: 3, height: 1.8, flags: 33 };
 

@@ -8,6 +8,7 @@ import { loadTunables } from '../../src/core/tunables';
 import { decodeGear, TRACER_KIND } from '../../src/net/gear';
 import { defaultConfig, encodeShot, type Dig, type RoomShell, type Seat } from '../../src/net/protocol';
 import { RoomBattle } from '../../src/sim/room-battle';
+import { idleIntent } from '../../src/sim/session';
 import { fallenLine, MatchHud } from '../../src/ui/match-hud';
 import { P } from '../../src/world/materials';
 import { roomClient, sameWorld, trenchArena } from '../support/worlds';
@@ -510,6 +511,64 @@ describe("a page catching up on the room's log while the room plays on", () => {
     together.prepare(b.session, 1 / 60);
     expect(fired.mock.calls.at(-1)![8]).toBe(false);
     expect(b.session.drainEvents().remoteShots).toHaveLength(1);
+  });
+
+  it("leaves the player's own trigger room after a backlog: the drain fills the round pool to three quarters at most, and an M870's nine pellets all fly on the next tick", async () => {
+    let finish!: () => void;
+    const { b, together } = await welcomed(() => new Promise<void>((resolve) => (finish = resolve)), () => {}, false);
+    // The player's M870 up, settled a second.
+    b.session.equip({ primary: 'm870', secondary: 'm17', fits: {} });
+    b.session.intent = idleIntent();
+    for (let k = 0; k < 60; k++) b.session.tick();
+    b.session.drainEvents();
+    // Sam's backlog, more rounds than the pool holds, flies once the page is caught up.
+    const capacity = tun.i('ballistics.pool_capacity');
+    for (let k = 0; k < capacity + 44; k++) {
+      const shot = encodeShot({ tick: k, origin: [10 + (k % 100) * 0.05, 7.0, 20 + Math.floor(k / 100)], dir: [0, -1, 0], tracer: true });
+      StubSocket.last!.say({ t: 'f', s: 9_000 + k, ps: [], sh: [[1, ...shot]] });
+    }
+    page = 3_000;
+    finish();
+    await together.catchingUp;
+    const remote = vi.spyOn(b.session, 'fireRemote');
+    together.prepare(b.session, 1 / 60);
+    expect(remote).toHaveBeenCalledTimes(Math.floor(0.75 * capacity));
+    // The next tick, the player pulls the trigger: every pellet of it flies, none dropped.
+    const fire = vi.spyOn(b.session.rounds, 'fire');
+    b.session.intent = { ...idleIntent(), fire: true };
+    b.session.tick();
+    expect(b.session.drainEvents().shots).toHaveLength(1);
+    const own = fire.mock.calls.flatMap((c, i) => (c[3] === 0 ? [fire.mock.results[i].value as number] : []));
+    expect(own).toHaveLength(tun.i('weapon.m870.pellets'));
+    expect(own.every((slot) => slot >= 0)).toBe(true);
+    expect(b.session.rounds.dropped).toBe(0);
+  });
+
+  it("a line lost while the page catches up keeps saying why as the catch-up says how far it has come", async () => {
+    let report!: (done: number, total: number) => void;
+    let finish!: () => void;
+    const { doc, together } = await welcomed(
+      (_room, _log, _match, _now, progress) => {
+        report = progress;
+        return new Promise<void>((resolve) => (finish = resolve));
+      },
+      () => {},
+      false,
+    );
+    const status = () => doc.getElementById('lobby-status').textContent;
+    report(0, 400);
+    expect(status()).toBe('Catching up on the battle… 0 of 400');
+    StubSocket.last!.drop();
+    const LOST = 'The connection to the game was lost. Reload the page to rejoin.';
+    expect(status()).toBe(LOST);
+    // The catch-up goes on (the page is still its own world), and says how far: not over the reason.
+    report(120, 400);
+    expect(status()).toBe(LOST);
+    report(400, 400);
+    expect(status()).toBe(LOST);
+    finish();
+    await together.catchingUp;
+    expect(status()).toBe(LOST);
   });
 
   it("a line lost while the page catches up still says why once it is done, not that the host will start", async () => {

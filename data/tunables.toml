@@ -229,6 +229,11 @@ substeps_per_tick   = 4        # 240 Hz integration under a 60 Hz tick: a rifle
                                # substep (37 voxels at 10 cm); hits are found
                                # along each substep's segment, not at its end
 pool_capacity       = 256      # rounds in the air at once; full is full
+others_fill         = 0.75     # others' shots (a room's) fill the pool to this
+                               # share of it at most: the rest is the player's
+                               # own and the front's, so a backlog flown at once
+                               # (a catch-up, a tab back from hidden) never
+                               # refuses the player's trigger
 max_range_m         = 400.0    # wider than the 256 m map, so nothing vanishes
                                # mid-flight over open ground
 max_flight_time_s   = 4.0

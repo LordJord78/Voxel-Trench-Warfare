@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { entrenchingTunables } from '../../src/combat/entrenching';
 import { loadTunables } from '../../src/core/tunables';
-import { DIG_CELLS_MAX, encodeShell, encodeShot, encodeState, parseRoom, PROTOCOL, WORLD_DIMS, type RoomMsg, type WireShell } from '../../src/net/protocol';
+import { encodeShell, encodeShot, encodeState, parseRoom, PROTOCOL, WORLD_DIMS, type RoomMsg, type WireShell } from '../../src/net/protocol';
 import { PROTECT_MS } from '../../src/net/match-rules';
 import { AWAY_MS, COUNTDOWN_MS, DIG_BURST, DIG_RATE, LOBBY_DIGS_MAX, LOG_CHARS_MAX, OVER_MS, RoomCore, type Conn } from '../../src/net/room-core';
 import { SHELL_FIELDS } from '../../src/net/shell-fields';
 import { Shelling, shellingSeed } from '../../src/net/shelling';
+import { MOST_CELLS, worldCell } from '../support/cells';
 
 class Fake implements Conn {
   readonly got: RoomMsg[] = [];
@@ -286,14 +287,13 @@ describe("a room's shelling and its log", () => {
     const a = join(room, 'a');
     const b = join(room, 'b');
     const relayed = () => b.got.flatMap((m) => (m.t === 'dig' ? [m.d] : []));
-    const cell = (x: number, y: number, z: number) => (z * WORLD_DIMS.y + y) * WORLD_DIMS.x + x;
-    const corners = [cell(0, 150, 0), cell(WORLD_DIMS.x - 1, 150, WORLD_DIMS.z - 1)];
+    const corners = [worldCell(0, 150, 0), worldCell(WORLD_DIMS.x - 1, 150, WORLD_DIMS.z - 1)];
     say(room, a, { t: 'start' }, 1_000);
     say(room, a, { t: 'dig', c: corners }, 5_000);
-    say(room, a, { t: 'dig', c: [cell(100, 150, 100), cell(101, 150, 100)] }, 5_100);
+    say(room, a, { t: 'dig', c: [worldCell(100, 150, 100), worldCell(101, 150, 100)] }, 5_100);
     say(room, a, { t: 'end' }, 6_000);
     say(room, a, { t: 'dig', c: corners }, 6_100);
-    expect(relayed()).toEqual([[0, 5_100, cell(100, 150, 100), cell(101, 150, 100)]]);
+    expect(relayed()).toEqual([[0, 5_100, worldCell(100, 150, 100), worldCell(101, 150, 100)]]);
     expect(join(room, 'c', 7_000).last('welcome')!.log.digs).toEqual(relayed());
     expect(a.closed).toBeNull();
   });
@@ -376,6 +376,42 @@ describe("a room's shelling and its log", () => {
     expect(log.digs.filter((d) => d[0] === 0)).toEqual(from(0));
   });
 
+  it("keeps a seat's dig bucket when it reconnects (to the same seat), so a flood after it relays no more than the bucket allows; the room emptied, every seat's is full again", () => {
+    const room = new RoomCore('REFIL');
+    let a = join(room, 'a');
+    let b = join(room, 'b');
+    let c = join(room, 'c');
+    const from = (seat: number) => c.got.flatMap((m) => (m.t === 'dig' && m.d[0] === seat ? [m.d] : []));
+    say(room, a, { t: 'start' }, 1_000);
+    // B drains its bucket: sixty scoops a second for a second, within the room's message rate.
+    let now = 5_000;
+    for (let k = 0; k < 60; k++) say(room, b, { t: 'dig', c: [k] }, (now += 17));
+    const drained = from(1).length;
+    const drainedAt = now;
+    expect(drained).toBeGreaterThanOrEqual(DIG_BURST + DIG_RATE - 1);
+    expect(drained).toBeLessThanOrEqual(DIG_BURST + DIG_RATE + 1);
+    // Its line drops and it comes back at once, to its own seat, and floods again for half a second:
+    // only what the bucket has filled since it was drained goes, not a fresh burst.
+    room.close(b);
+    b = join(room, 'b', (now += 50));
+    expect(b.last('welcome')!.you).toBe(1);
+    for (let k = 0; k < 30; k++) say(room, b, { t: 'dig', c: [k] }, (now += 17));
+    const refilled = ((now - drainedAt) / 1000) * DIG_RATE;
+    expect(b.closed).toBeNull();
+    expect(from(1).length - drained).toBeLessThanOrEqual(Math.ceil(refilled));
+    expect(from(1).length - drained).toBeGreaterThanOrEqual(Math.floor(refilled) - 1);
+    // Everyone gone and back at once, and a new match: the room has forgotten the buckets with its
+    // log, and B's flood takes a whole burst.
+    for (const p of [a, b, c]) room.close(p);
+    expect(room.empty).toBe(true);
+    a = join(room, 'a', (now += 10));
+    b = join(room, 'b', now);
+    c = join(room, 'c', now);
+    say(room, a, { t: 'start' }, (now += 10));
+    for (let k = 0; k < 20; k++) say(room, b, { t: 'dig', c: [k] }, (now += 5));
+    expect(from(1).length).toBeGreaterThanOrEqual(DIG_BURST);
+  });
+
   it('welcomes a late joiner with the log so far, a shell still in the air among it', () => {
     const { room, a } = match('LATER', 'heavy');
     tickTo(room, 0, 23_000, a);
@@ -436,8 +472,7 @@ describe("a room's shelling and its log", () => {
     tickTo(room, 0, 30_000, a);
     expect(shells(a).length).toBeGreaterThan(5);
     // The most cells a scoop carries, at the world's far corner, eight by eight: packed as large as they come.
-    const cell = (x: number, y: number, z: number) => (z * WORLD_DIMS.y + y) * WORLD_DIMS.x + x;
-    const cells = Array.from({ length: DIG_CELLS_MAX }, (_, i) => cell(WORLD_DIMS.x - 1 - (i % 8), WORLD_DIMS.y - 1 - Math.floor(i / 8), WORLD_DIMS.z - 1));
+    const cells = MOST_CELLS;
     const entry = JSON.stringify([0, 30_000, ...cells]).length + 1;
     const sent = Math.ceil(LOG_CHARS_MAX / entry) + 50;
     // Two seats at DIG_RATE a second each, and the shelling ticking on through them; C hears them all.

@@ -240,15 +240,22 @@ describe("another's shot flown silent (a backlog, more than SILENT_STEP_S old)",
     expect(sameWorld(silent.b.map, arena(true))).toBe(false);
   });
 
-  it("the round pool's room, and the rounds another's shot takes: its gun's pellets, one without a word", () => {
+  it("the round pool's room for others' shots, up to three quarters of it (the rest the player's own and the front's), and the rounds another's shot takes: its gun's pellets, one without a word", () => {
     const b = stand(arena(true), shotgun());
-    const capacity = b.roundRoom();
-    expect(capacity).toBe(tun.i('ballistics.pool_capacity'));
+    const capacity = tun.i('ballistics.pool_capacity');
+    expect(tun.f('ballistics.others_fill')).toBe(0.75);
+    const share = Math.floor(0.75 * capacity);
+    expect(b.roundRoom()).toBe(share);
     expect(b.shotRounds()).toBe(1);
     expect(b.shotRounds(encodeShotMark({ tracer: false, kind: 0, suppressed: false, gun: 'ak74' }))).toBe(1);
     expect(b.shotRounds(encodeShotMark({ tracer: false, kind: 0, suppressed: true, gun: 'm870', share: 1 }))).toBe(tun.i('weapon.m870.pellets'));
     b.fireRemote(5, [12.8, 2, 2], [0, 1, 0], false, [12.8, 2, 2], encodeShotMark({ tracer: false, kind: 0, suppressed: false, gun: 'm870', share: 1 }), undefined, 17);
-    expect(b.roundRoom()).toBe(capacity - tun.i('weapon.m870.pellets'));
+    expect(b.roundRoom()).toBe(share - tun.i('weapon.m870.pellets'));
+    // Every round in the pool counts against it (the player's own and the front's too): past three
+    // quarters full, it is none, never less; the pool itself still has the rest.
+    while (b.rounds.count < share + 10) b.fireRemote(5, [12.8, 2, 2], [0, 1, 0], false, [12.8, 2, 2]);
+    expect(b.roundRoom()).toBe(0);
+    expect(b.rounds.room).toBe(capacity - share - 10);
   });
 });
 

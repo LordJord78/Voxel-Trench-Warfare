@@ -75,7 +75,8 @@ export const LOBBY_DIGS_MAX = 16;
  * The scoops a second a seat may send, in any phase, and how many at once: the shovel's fastest is
  * about 3.9 a second. Past it a scoop is dropped (neither relayed nor logged) and the socket kept, so
  * one seat cannot push every honest scoop out of the log (LOG_CHARS_MAX) or make every page dig sixty
- * a second.
+ * a second. The bucket is the seat's, as LOBBY_DIGS_MAX's count is: kept across a reconnect (to its
+ * own seat), so dropping the line does not refill it, and forgotten when the room empties.
  */
 export const DIG_RATE = 8;
 export const DIG_BURST = 16;
@@ -103,9 +104,6 @@ interface Member {
   shots: number[][];
   tokens: number;
   tokensAt: number;
-  /** Its scoops' own bucket (DIG_RATE, DIG_BURST). */
-  digTokens: number;
-  digTokensAt: number;
 }
 
 export class RoomCore {
@@ -121,6 +119,8 @@ export class RoomCore {
   private log: RoomLog = emptyLog();
   /** Each seat's scoops taken since the last match ended (none counted in a match), by seat id. */
   private readonly lobbyDigs = new Map<number, number>();
+  /** Each seat's scoops' bucket (DIG_RATE, DIG_BURST): its tokens, and when they were last filled; by seat id, full until it digs. */
+  private readonly digBuckets = new Map<number, { tokens: number; at: number }>();
   /** When a won match goes back to the lobby. */
   private overAt: number | null = null;
   private build: string | null = null;
@@ -153,7 +153,7 @@ export class RoomCore {
   }
 
   open(conn: Conn, now: number): void {
-    this.members.set(conn, { conn, seat: null, openedAt: now, joinedAt: now, heardAt: now, saysAway: false, state: null, shots: [], tokens: BURST, tokensAt: now, digTokens: DIG_BURST, digTokensAt: now });
+    this.members.set(conn, { conn, seat: null, openedAt: now, joinedAt: now, heardAt: now, saysAway: false, state: null, shots: [], tokens: BURST, tokensAt: now });
   }
 
   close(conn: Conn): void {
@@ -170,6 +170,7 @@ export class RoomCore {
       this.shelling = null;
       this.log = emptyLog();
       this.lobbyDigs.clear();
+      this.digBuckets.clear();
       this.overAt = null;
       this.build = null;
       this.ownerId = -1;
@@ -255,6 +256,17 @@ export class RoomCore {
     }
   }
 
+  /** Whether seat `id`'s bucket has a scoop's token at `now`, filled at DIG_RATE to DIG_BURST since it was last drawn on: taken if so. */
+  private digTaken(id: number, now: number): boolean {
+    let b = this.digBuckets.get(id);
+    if (!b) this.digBuckets.set(id, (b = { tokens: DIG_BURST, at: now }));
+    b.tokens = Math.min(DIG_BURST, b.tokens + ((now - b.at) / 1000) * DIG_RATE);
+    b.at = now;
+    if (b.tokens < 1) return false;
+    b.tokens -= 1;
+    return true;
+  }
+
   private refuse(m: Member, reason: 'version' | 'full'): void {
     this.send(m, { t: 'refused', reason });
     m.conn.close(1008, reason);
@@ -297,11 +309,8 @@ export class RoomCore {
         if (this.rules && this.match && now >= this.match.startAt) this.apply(this.rules.hurt(seat.id, msg.a, msg.c, now));
         return;
       case 'dig':
-        // No faster than a shovel, in any phase: past the seat's bucket, dropped.
-        m.digTokens = Math.min(DIG_BURST, m.digTokens + ((now - m.digTokensAt) / 1000) * DIG_RATE);
-        m.digTokensAt = now;
-        if (m.digTokens < 1) return;
-        m.digTokens -= 1;
+        // No faster than a shovel, in any phase: past the seat's bucket (its own across a reconnect), dropped.
+        if (!this.digTaken(seat.id, now)) return;
         // In any phase once a match has begun on this world (a scoop sent before the end comes after
         // it); never one of a world the room has left (the map changed since, and no match yet).
         // Between matches, no more than LOBBY_DIGS_MAX a seat.

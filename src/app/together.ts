@@ -375,9 +375,11 @@ export class Together {
    * test stands in the world) posed, each flinching and falling as its hits say; the living among
    * them given to the session for rounds to strike; their shots fired, each from its shooter's eye,
    * its tracer and flash at their soldier's muzzle, the tracer in their seat's team's colour
-   * (shotTracer), once the room's log is caught up, no more a frame than the round pool has room for,
-   * and silent once more than SILENT_STEP_S old. In a match, the room's shells heard and landed on its
-   * clock, once the clock has its first sample and the room's log is caught up. What to draw.
+   * (shotTracer), once the room's log is caught up, no more a frame than the round pool has room for
+   * (Session.roundRoom: the pool filled to three quarters at most, the rest the player's own and the
+   * front's), and silent once more than SILENT_STEP_S old. In a match, the room's shells heard and
+   * landed on its clock, once the clock has its first sample and the room's log is caught up. What
+   * to draw.
    */
   prepare(session: Session, dt: number, extra: readonly Figure[] = [], now = performance.now()): SoldierDraw[] {
     this.session = session;
@@ -401,8 +403,9 @@ export class Together {
       }
       // Their shots once the world is the room's (until then they wait in the net's queue, as its
       // edits do: their chips go on the world the room's craters have made), in the order they came,
-      // as many as the round pool has room for (the rest the next frames); one more than SILENT_STEP_S
-      // old (a backlog) flies silent, for its chips alone.
+      // as many as the round pool has room for (the rest the next frames), with the player's trigger
+      // and the front's left theirs (Session.roundRoom); one more than SILENT_STEP_S old (a backlog)
+      // flies silent, for its chips alone.
       if (this.caughtUp) {
         const nowMs = this.net.serverNow();
         let room = session.roundRoom();
@@ -669,10 +672,11 @@ export class Together {
     this.progress = null;
     const battle = (this.battle ??= this.hooks.battle());
     this.show();
-    // How far it has come, said as it goes: in the lobby's status now, and on the way in at the next frame.
+    // How far it has come, said as it goes: in the lobby's status now, and on the way in at the next
+    // frame; but never over why the line went, once it has.
     const progress = (done: number, total: number) => {
       this.progress = { done, total };
-      if (!this.caughtUp && !this.failure) this.lobby.status(this.catching());
+      if (!this.caughtUp && !this.failure && !this.lostWhy) this.lobby.status(this.catching());
     };
     // The room's clock as the catch-up reads it: after every time once the match is over, as its end
     // gives the match's last edits, so the shells still in the air are heard with none left to whistle.

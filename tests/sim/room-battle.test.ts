@@ -200,6 +200,30 @@ describe("the room's shells on a page", () => {
     expect(roomStrike(c.session.map, ownCraters[0], 4_244, V, fireT)).not.toBeNull();
   });
 
+  it("a strike's second is the match's, from the room's start of it: (landAt − startAt) / 1000, however late its crater goes in", () => {
+    // The timber floor beyond the parapet; the match began at room time 1 250, and two shells on the
+    // timber land 0.75 s and 1.85 s into it. One page's worker hands each crater back 90 ticks late.
+    const map = () => {
+      const m = trenchArena();
+      m.fillBox(20, 64, 180, 100, 74, 250, P.TIMBER);
+      return m;
+    };
+    const START = 1_250;
+    const S1 = shell(1, 2_000, 6.0, 21.5, 2.2, 4_242);
+    const S2 = shell(2, 3_100, 3.0, 24.0, 2.2, 4_244);
+    for (const late of [undefined, 90]) {
+      const c = client(1_000, map(), 0, 1 / 60, late);
+      c.battle.hear(S1, 1_000);
+      c.battle.hear(S2, 1_000);
+      const struck: Strike[] = [];
+      c.step(8_000, (e) => struck.push(...c.battle.strikes(e, START)));
+      expect(struck.map((s) => [s.seed, s.atS]), `late ${late}`).toEqual([
+        [4_242, 0.75],
+        [4_244, 1.85],
+      ]);
+    }
+  });
+
   it("a fire stands from its shell's landing, on the match's clock: on two pages whose craters go in 1.5 s apart it grows alike, and chars at the same second", () => {
     // A shell on the timber wall whose seed rolls a fire; the match began at room time 0. One page's
     // worker hands its crater back 1.5 s after the other's: each lights the fire when its crater is in,

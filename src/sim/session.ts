@@ -370,6 +370,8 @@ export class Session {
   private readonly remoteGuns = new Map<string, { spec: ProjectileSpec; pellets: number; coneDeg: number }>();
   /** A suppressor's share of its gun's muzzle velocity ([attachment.suppressor] velocity). */
   private readonly suppressorVelocity: number;
+  /** The most rounds in the pool that others' shots fill it to: [ballistics] others_fill of its capacity (roundRoom). */
+  private readonly othersMax: number;
   private readonly chipEnergyJ: number;
   /** A shell's splash's energy, at a crater of 3 m: by the cube of its radius. */
   private readonly splashEnergyJ: number;
@@ -419,6 +421,7 @@ export class Session {
     this.suppressionRng = this.streams.derive('combat.suppression');
     this.chipEnergyJ = tun.f('destruction.chip_energy_j');
     this.suppressorVelocity = attachmentTerms(tun, 'suppressor').velocity;
+    this.othersMax = Math.floor(tun.f('ballistics.others_fill') * tun.i('ballistics.pool_capacity'));
     this.splashEnergyJ = tun.f('artillery.splash_energy_j');
     this.harmT = harmTunables(tun);
     this.debris = {
@@ -549,9 +552,13 @@ export class Session {
     this.particles.emit(muzzle, [dir[0] * flash.speed, dir[1] * flash.speed + flash.lift, dir[2] * flash.speed], flash, Math.round(flash.count * flashShare), this.particleRng);
   }
 
-  /** Rounds the pool has room for now: Together fires no more of others' shots a frame than fit. */
+  /**
+   * Rounds others' shots may take now: the pool filled to [ballistics] others_fill of it at most
+   * (othersMax), every round in it counted. Together fires no more of others' shots a frame than
+   * fit, so a backlog flown at once leaves the rest for the player's trigger and the front's.
+   */
   roundRoom(): number {
-    return this.rounds.room;
+    return Math.max(0, this.othersMax - this.rounds.count);
   }
 
   /** The rounds another's shot with the word `mark` fires: its gun's pellets; one without a word. */
