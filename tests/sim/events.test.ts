@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BILLBOARD_FLOATS } from '../../src/combat/particles';
+import { BILLBOARD_FLOATS, CASING_BILLBOARD, particleSpec, SMOKE_BILLBOARD } from '../../src/combat/particles';
 import { lineSource, type FrontSource } from '../../src/combat/front';
 import { loadTunables } from '../../src/core/tunables';
 import { Session } from '../../src/sim/session';
@@ -117,7 +117,7 @@ describe("a frame's combat events", () => {
     expect(craters[0].bricks).toBeGreaterThan(50);
   });
 
-  it('a shot throws one flash at the muzzle and one brass from the port', () => {
+  it('a shot throws one flash at the muzzle, one casing from the port and a puff of smoke at the muzzle, not held to the drawn gun', () => {
     // No wall: the round's own dust would land in the same tick.
     const s = stand(7, undefined, P.AIR);
     s.intent = { ...s.intent, fire: true };
@@ -126,14 +126,38 @@ describe("a frame's combat events", () => {
     s.tick();
     expect(s.drainEvents().shots.length).toBe(1);
     const out = new Float32Array(s.particles.capacity * BILLBOARD_FLOATS);
-    const n = s.particles.billboards(out);
-    const all = Array.from({ length: n }, (_, i) => out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS));
-    const flashes = all.filter((b) => b[8] === 1);
-    const brass = all.filter((b) => b[8] === 0);
-    expect([flashes.length, brass.length]).toEqual([1, 1]);
+    const kinds = (drift?: number[][]) => {
+      const n = s.particles.billboards(out, drift, 0.15);
+      const all = Array.from({ length: n }, (_, i) => out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS));
+      return { flashes: all.filter((b) => b[8] === 1), brass: all.filter((b) => b[8] === CASING_BILLBOARD), smoke: all.filter((b) => b[8] === SMOKE_BILLBOARD) };
+    };
+    const { flashes, brass, smoke } = kinds();
+    expect([flashes.length, brass.length, smoke.length]).toEqual([1, 1, 1]);
     const near = (b: Float32Array, p: number[], within: number) => expect(Math.hypot(b[0] - p[0], b[1] - p[1], b[2] - p[2])).toBeLessThan(within);
     near(flashes[0], muzzle, 0.05);
     near(brass[0], port, 0.1);
+    near(smoke[0], muzzle, 0.05);
+    // [particles.muzzle_smoke]'s: grey at alpha 0.18, a tick into its life, lit (not emissive).
+    const smokeSpec = particleSpec(tun, 'muzzle_smoke');
+    expect(smoke[0][7]).toBeCloseTo(0.18 * (1 - 1 / 60 / smokeSpec.lifeS), 5);
+    // Drawn where the simulation holds it, whatever the drawn gun's drift: it is not anchored.
+    const drifted = kinds([[0.1, 0.1, 0.1], [0.1, 0.1, 0.1]]);
+    expect(Array.from(drifted.smoke[0].slice(0, 3))).toEqual(Array.from(smoke[0].slice(0, 3)));
+    expect(drifted.flashes[0][0]).not.toBe(flashes[0][0]);
+  });
+
+  it('a suppressed shot throws two puffs of smoke', () => {
+    const s = stand(7, undefined, P.AIR);
+    s.equip({ primary: 'm4', secondary: 'm17', fits: { m4: { optic: 'iron', muzzle: 'suppressor', under: 'none', side: 'none' } } });
+    for (let k = 0; k < 60; k++) s.tick();
+    s.drainEvents();
+    s.intent = { ...s.intent, fire: true };
+    s.tick();
+    expect(s.drainEvents().shots.length).toBe(1);
+    const out = new Float32Array(s.particles.capacity * BILLBOARD_FLOATS);
+    const n = s.particles.billboards(out);
+    const smoke = Array.from({ length: n }, (_, i) => out[i * BILLBOARD_FLOATS + 8]).filter((k) => k === SMOKE_BILLBOARD);
+    expect(smoke.length).toBe(2);
   });
 
   it('an impact on soil throws dust of its colour, and on a picket sparks too', () => {

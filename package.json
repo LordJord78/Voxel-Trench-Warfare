@@ -18,6 +18,7 @@
     "tracers": "node tools/tracer-captures.mjs",
     "range-captures": "node tools/range-captures.mjs",
     "hit-captures": "node tools/hit-captures.mjs",
+    "hands-captures": "node tools/hands-captures.mjs",
     "sounds": "node tools/render-sounds.mjs"
   },
   "devDependencies": {

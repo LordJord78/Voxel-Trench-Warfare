@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { hitFeedbackTunables } from '../../src/app/hit-feedback';
-import { audioTunables, planFeedback } from '../../src/audio/plan';
+import { audioTunables, planFeedback, planVoices } from '../../src/audio/plan';
 import { reportShape, voiceLength } from '../../src/audio/voices';
 import { rangeTunables } from '../../src/combat/range';
 import { loadTunables } from '../../src/core/tunables';
@@ -20,6 +20,8 @@ const report = reportShape(tun);
 const list = renders(tun);
 const byName = (name: string) => list.find((r) => r.name === name)!;
 const EARS = ['hit', 'head', 'gush', 'kill', 'ding', 'hurt'] as const;
+/** The hands' cues (combat/handling.ts), each heard at the ear (audio/plan.ts). */
+const CUES = ['mag-out', 'mag-in', 'bolt', 'cover', 'shell', 'pump', 'dry'] as const;
 
 describe("the sounds' proof: what it renders", () => {
   it('48 kHz, a voice 10 ms in and its file 100 ms past its end; a frame at 60 Hz', () => {
@@ -44,13 +46,23 @@ describe("the sounds' proof: what it renders", () => {
     }
   });
 
-  it('every render is held, none only reported: the voices, the far rings and the headshot that kills', () => {
-    expect(list.map((r) => r.name)).toEqual([...EARS, 'ding-30m', 'ding-85m', 'headshot-kill']);
+  it('every render is held, none only reported: the voices, the far rings, the headshot that kills and the hands\' cues', () => {
+    expect(list.map((r) => r.name)).toEqual([...EARS, 'ding-30m', 'ding-85m', 'headshot-kill', ...CUES]);
     for (const r of list) expect(r.gated, r.name).toBe(true);
   });
 
+  it("each of the hands' cues, by its name, at the ear: placed as planVoices places a cue, whole and at once, at hands_gain", () => {
+    for (const cue of CUES) {
+      const r = byName(cue);
+      const placed = planVoices(t, { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [{ tick: 1, cue, at: [0.2, -0.1, -0.5] }], harms: [] }, [0, 0, 0]);
+      expect(r.plans, cue).toEqual(placed);
+      expect(r.plans[0], cue).toMatchObject({ kind: cue, at: [0, 0, 0], delayS: 0, gain: t.handsGain, lowpassHz: t.openLowpassHz });
+      expect(r.lengthS, cue).toBeCloseTo(LEAD_S + voiceLength(placed[0], report) + TAIL_S, 9);
+    }
+  });
+
   it('every voice at the ear is held to the small speaker: at least a quarter of its energy over 400 Hz', () => {
-    for (const kind of EARS) expect(byName(kind).rules?.high, kind).toBe(0.25);
+    for (const kind of [...EARS, ...CUES]) expect(byName(kind).rules?.high, kind).toBe(0.25);
     for (const name of ['ding-30m', 'ding-85m', 'headshot-kill']) expect(byName(name).rules?.high, name).toBeUndefined();
   });
 

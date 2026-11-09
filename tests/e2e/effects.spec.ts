@@ -255,16 +255,20 @@ test("a shot's flash and light last two frames", async ({ page }) => {
     await h.waitFrames(20);
     h.freeze();
     h.trigger(true);
-    const out: [number, number][] = [];
+    const out: [number, number, number][] = [];
     for (let k = 0; k < 4; k++) {
       await h.stepFrames(1);
       if (k === 0) h.trigger(false);
       const e = h.effects();
-      out.push([e.stars, e.lights]);
+      out.push([e.stars, e.cores, e.lights]);
     }
     return out;
   });
-  expect(seen).toEqual([[3, 1], [3, 1], [0, 0], [0, 0]]);
+  // Its star (3 to 5 prongs, drawn from the shot's hash: the same in both its frames) and its core.
+  const prongs = seen[0][0];
+  expect(prongs).toBeGreaterThanOrEqual(3);
+  expect(prongs).toBeLessThanOrEqual(5);
+  expect(seen).toEqual([[prongs, 1, 1], [prongs, 1, 1], [0, 0, 0], [0, 0, 0]]);
   expect(errors).toEqual([]);
 });
 

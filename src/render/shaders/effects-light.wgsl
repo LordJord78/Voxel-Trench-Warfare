@@ -13,7 +13,12 @@
 // BLOOD_BILLBOARD) is lit as a mote is, but never darker than its floor (look.bloodFloor, a share of
 // the light the present pass shows as 1: so at dusk and at night it reads dark red, not soot) and is
 // handed on no smaller than look.bloodMinPx pixels across, so a droplet at 25 m is not a pixel lost,
-// and with 2 added to its alpha (2 to 3), for the draw to give it a firm edge (effects.wgsl).
+// and with 2 added to its alpha (2 to 3), for the draw to give it a firm edge (effects.wgsl). A casing
+// (kind 6, particles.ts CASING_BILLBOARD: the brass) is lit as a mote is, and handed on with its way (the
+// billboard's last three floats) for the draw to lay it along. The muzzle's smoke (kind 7, particles.ts
+// SMOKE_BILLBOARD) is lit as a mote is, but by only look.smokeFlash of the shots' light; a shot's flash's
+// core (kind 8, effects.ts FLASH_CORE_BILLBOARD) is emissive; each is handed on marked soft (its way's w),
+// for the draw to fade it to its rim.
 #include "scene.wgsl"
 #include "sky.wgsl"
 #include "camera.wgsl"
@@ -33,6 +38,8 @@ struct EffectsLight {
   // exposure, and the share of the sharpened image it shows.
   bias: f32,
   sharpShare: f32,
+  // The share of a shot's light (flashesAt) the muzzle's smoke takes ([effects] smoke_flash_share).
+  smokeFlash: f32,
 }
 
 struct Lit {
@@ -41,11 +48,13 @@ struct Lit {
   // Premultiplied; alpha 0 adds light, as the emissive do (-1 to -2: a tracer's head, -3 to -4 an
   // ember, which add light; less -1 or -3, their whiteness).
   colour: vec4f,
+  // A casing's way (unit), and 1 for a casing; (0, 0, 0, 2) smoke, (0, 0, 0, 3) a flash's core; zero for the rest.
+  way: vec4f,
 }
 
 // Group 1 after the light cells' grid and cells (light-cells.wgsl); group 3 is the haze's.
 @group(1) @binding(2) var<uniform> look: EffectsLight;
-// Nine floats a billboard (particles.ts): centre, half its size, colour premultiplied, emissive.
+// Twelve floats a billboard (particles.ts): centre, half its size, colour premultiplied, its kind, a casing's way.
 @group(1) @binding(3) var<storage, read> billboards: array<f32>;
 @group(1) @binding(4) var<storage, read_write> lit: array<Lit>;
 @group(1) @binding(5) var gDepth: texture_2d<f32>;
@@ -55,8 +64,12 @@ struct Lit {
 // taken): x this frame's base, y the last frame's correction.
 @group(1) @binding(7) var<uniform> exposureState: array<vec4f, 2>;
 
-const BILLBOARD_FLOATS: u32 = 9u;
+const BILLBOARD_FLOATS: u32 = 12u;
 const BLOOD: f32 = 5.0;
+const CASING: f32 = 6.0;
+// The muzzle's smoke (particles.ts SMOKE_BILLBOARD), lit; a shot's flash's core (effects.ts FLASH_CORE_BILLBOARD), emissive.
+const SMOKE: f32 = 7.0;
+const CORE: f32 = 8.0;
 // The nearest a billboard's pixel is reckoned, in voxels (effects.wgsl's NEAR).
 const NEAR_PX: f32 = 0.5;
 // Within NEAR_FULL metres of a face a mote takes all of the face's light, past NEAR_NONE none.
@@ -161,11 +174,15 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let head = kind == 3.0;
   let ember = kind == 4.0;
   let blood = kind == BLOOD;
-  if (kind != 1.0 && !head && !ember) {
+  let core = kind == CORE;
+  if (kind != 1.0 && !core && !head && !ember) {
     let p = centre / frame.voxel;
     let near = nearLight(p);
     let around = skyAround() * look.dustSky + cellLightsAt(p);
-    var light = frame.keyColour * keyLit(p) * look.dustKey + flashesAt(p) + mix(around, near.rgb, near.a);
+    // The muzzle's smoke takes only its share of the shots' light: a puff a hand from the eye, lit whole by
+    // a light standing for a millisecond's flash held two frames, strobed a white ball over the view.
+    let flashes = flashesAt(p) * select(1.0, look.smokeFlash, kind == SMOKE);
+    var light = frame.keyColour * keyLit(p) * look.dustKey + flashes + mix(around, near.rgb, near.a);
     if (blood) {
       // No darker than its floor: the light the present pass shows as bloodFloor.
       let shown = look.bias * exposureState[0].x * exp2(exposureState[0].y) * look.sharpShare;
@@ -186,5 +203,9 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   }
   let white = clamp(colour.a, 0.0, 1.0);
   let alpha = select(select(select(out.a, 2.0 + out.a, blood), -1.0 - white, head), -3.0 - white, ember);
-  lit[i] = Lit(centre, select(half, -half, kind == 2.0), vec4f(out.rgb * haze.a + haze.rgb * out.a, alpha));
+  let casing = kind == CASING;
+  // Its way's w says how it is drawn: 1 a casing (its way along), 2 smoke and 3 a core (soft, effects.wgsl).
+  let soft = select(select(0.0, 2.0, kind == SMOKE), 3.0, core);
+  let way = select(vec4f(0.0, 0.0, 0.0, soft), vec4f(billboards[o + 9u], billboards[o + 10u], billboards[o + 11u], 1.0), casing);
+  lit[i] = Lit(centre, select(half, -half, kind == 2.0), vec4f(out.rgb * haze.a + haze.rgb * out.a, alpha), way);
 }

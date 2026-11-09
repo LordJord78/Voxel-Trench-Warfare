@@ -38,14 +38,28 @@ describe('gear on the wire', () => {
 
   it("marks a shot with its gun, its tracer's colour and a suppressor; bit 0 is still the tracer", () => {
     const mark = encodeShotMark({ tracer: true, kind: TRACER_KIND.blue, suppressed: true, gun: 'svd' });
-    expect(decodeShotMark(mark)).toEqual({ tracer: true, kind: TRACER_KIND.blue, suppressed: true, gun: 'svd' });
+    expect(decodeShotMark(mark)).toEqual({ tracer: true, kind: TRACER_KIND.blue, suppressed: true, gun: 'svd', comp: false });
     const shot = { tick: 4, origin: [1, 1.6, 2] as [number, number, number], dir: [0, 0, 1] as [number, number, number], tracer: true, mark };
     const back = decodeShot(encodeShot(shot))!;
     expect(back.tracer).toBe(true);
     expect(back.mark).toBe(mark);
     // A bare word of 1 (a tracer, said as it always was): the battle's amber, from the AK.
-    expect(decodeShotMark(1)).toEqual({ tracer: true, kind: TRACER_KIND.amber, suppressed: false, gun: 'ak74' });
+    expect(decodeShotMark(1)).toEqual({ tracer: true, kind: TRACER_KIND.amber, suppressed: false, gun: 'ak74', comp: false });
     expect(decodeShot(encodeShot({ ...shot, mark: undefined }))!.mark).toBeUndefined();
+  });
+
+  it('marks a compensator in bit 8, its flash drawn from it; bits 9–11 are left free', () => {
+    const bare = encodeShotMark({ tracer: true, kind: TRACER_KIND.red, suppressed: false, gun: 'm4' });
+    const comp = encodeShotMark({ tracer: true, kind: TRACER_KIND.red, suppressed: false, gun: 'm4', comp: true });
+    expect(comp - bare).toBe(1 << 8);
+    expect(comp >> 9).toBe(0);
+    expect(decodeShotMark(comp)).toEqual({ tracer: true, kind: TRACER_KIND.red, suppressed: false, gun: 'm4', comp: true });
+    expect(decodeShotMark(bare).comp).toBe(false);
+    // Through the wire as it is.
+    const back = decodeShot(encodeShot({ tick: 4, origin: [1, 1.6, 2], dir: [0, 0, 1], tracer: true, mark: comp }))!;
+    expect(decodeShotMark(back.mark!).comp).toBe(true);
+    // Bits above it (M6's pellet share, 9–11) do not read as a compensator.
+    expect(decodeShotMark(bare | (5 << 9)).comp).toBe(false);
   });
 
   it("scales a hit's damage by its gun, and a claim says which", () => {

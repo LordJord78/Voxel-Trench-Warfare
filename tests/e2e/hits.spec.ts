@@ -18,7 +18,7 @@ type Fed = Hooks & {
     player: { position: { x: number; y: number; z: number }; yaw: number; pitch: number };
     controller: { eyeHeight(p: unknown): number };
     weapon: { shotsFired: number; semi: boolean };
-    particles: { capacity: number; billboards(out: Float32Array): number };
+    particles: { capacity: number; floats: number; billboards(out: Float32Array): number };
   };
 };
 
@@ -140,11 +140,11 @@ test('a torso hit on a dummy: the white marker, a hit voice, blood particles', a
       const tick = document.querySelector<HTMLElement>('#hud .marker i')!;
       // Blood is dark red and lit (not emissive), its own kind: its droplets and mist within a metre and a half.
       const parts = h.session.particles;
-      const out = new Float32Array(parts.capacity * 9);
+      const out = new Float32Array(parts.capacity * parts.floats);
       const n = parts.billboards(out);
       let blood = 0;
       for (let i = 0; i < n; i++) {
-        const o = i * 9;
+        const o = i * parts.floats;
         const a = out[o + 7];
         if (out[o + 8] !== bloodKind || a <= 0) continue;
         const [r, g, b] = [out[o + 4] / a, out[o + 5] / a, out[o + 6] / a];

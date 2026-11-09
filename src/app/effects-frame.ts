@@ -7,10 +7,13 @@
  * and its tracer reaches across to it), and each round that struck in the
  * frame's ticks once more, by the same law, ending where it struck (so one
  * whose whole flight fitted in the ticks is seen), held as a live round is in
- * each frame until the next tick runs; and each shot's flash
- * — a star of three ribbons from the drawn muzzle along its bore and a
- * transient light there — for `flash_s` of the world's time, so as long at any
- * frame rate and held while paused (spec §4). The simulation's muzzle is the
+ * each frame until the next tick runs; and each shot's flash — a white-hot
+ * core, a star of 3 to 5 prongs about its bore at their own rolls and lengths,
+ * none toward the eye's line (a compensator's two side prongs instead), all
+ * drawn from a hash of the shot
+ * (flashDraw), and a transient light there — at the drawn muzzle for `flash_s`
+ * of the world's time, so as long at any frame rate and held while paused
+ * (spec §4; the shots spec §2). The simulation's muzzle is the
  * bare eye's at the tick; the drawn rifle's follows the interpolated, bobbing
  * eye, centimetres away while walking.
  *
@@ -42,10 +45,10 @@ import type { StrikeDraw } from '../combat/ballistics';
 import { BILLBOARD_FLOATS, BLOOD_BILLBOARD } from '../combat/particles';
 import { toWorld } from '../combat/soldier-rig';
 import type { Tunables } from '../core/tunables';
-import { decodeGear, TRACER_KIND } from '../net/gear';
+import { decodeGear, decodeShotMark, TRACER_KIND } from '../net/gear';
 import type { SoldierDraw } from '../render/soldiers';
 import { raycast } from '../world/raycast';
-import { EMBER_BILLBOARD, HEAD_BILLBOARD, MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, RIBBON_STYLE, type EffectsFrame, type SmokePuff, type TransientLight } from '../render/effects';
+import { EMBER_BILLBOARD, FLASH_CORE_BILLBOARD, HEAD_BILLBOARD, MAX_BILLBOARDS, MAX_RIBBONS, RIBBON_FLOATS, RIBBON_STYLE, type EffectsFrame, type SmokePuff, type TransientLight } from '../render/effects';
 import { MAX_PUFFS } from '../render/frame-uniforms';
 import { throughPose, type RiflePose } from '../render/rifle';
 import { MUZZLE_ANCHOR, PORT_ANCHOR, SHOVEL_HELD, type CombatEvents, type Session } from '../sim/session';
@@ -126,7 +129,17 @@ export interface EffectsTunables {
   ricochet: RicochetTunables;
   flashS: number;
   particleAttachS: number;
-  flashStarLengthM: number;
+  /** A shot's flash (flashDraw): its core's size across (m), colour and brightness over the prongs'; its prongs, how many, how long (m), how far off the bore and the arc they leave clear toward the eye (degrees); a compensator's side prongs' length (m), angle off the bore (degrees) and brightness at their tips; each prong's width (m). */
+  flashCoreM: [number, number];
+  flashCoreColour: V3;
+  flashCoreGain: number;
+  flashProngs: [number, number];
+  flashProngM: [number, number];
+  flashProngSplayDeg: [number, number];
+  flashProngGapDeg: number;
+  flashCompProngM: [number, number];
+  flashCompSplayDeg: number;
+  flashCompTip: number;
   flashStarWidthM: number;
   flashColour: V3;
   flashIntensity: number;
@@ -190,7 +203,16 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     ricochet: ricochetTunables(tun),
     flashS: f('flash_s'),
     particleAttachS: f('particle_attach_s'),
-    flashStarLengthM: f('flash_star_length_m'),
+    flashCoreM: tun.pair('effects.flash_core_m'),
+    flashCoreColour: rgb(tun, 'effects.flash_core_colour'),
+    flashCoreGain: f('flash_core_gain'),
+    flashProngs: tun.pair('effects.flash_prongs'),
+    flashProngM: tun.pair('effects.flash_prong_m'),
+    flashProngSplayDeg: tun.pair('effects.flash_prong_splay_deg'),
+    flashProngGapDeg: f('flash_prong_gap_deg'),
+    flashCompProngM: tun.pair('effects.flash_comp_prong_m'),
+    flashCompSplayDeg: f('flash_comp_splay_deg'),
+    flashCompTip: f('flash_comp_tip'),
     flashStarWidthM: f('flash_star_width_m'),
     flashColour: rgb(tun, 'effects.flash_colour'),
     flashIntensity: f('flash_intensity'),
@@ -247,8 +269,8 @@ export interface BuiltEffects {
   blasts: TransientLight[];
   /** Their smoke in the haze, and the fires' plumes: the nearest MAX_PUFFS puffs, nearest first (renderer.setSmoke). */
   smoke: SmokePuff[];
-  /** The session's tracers and the battle's, the heads drawn on every tracer and the embers (a test's too); the ricochets and embers by their tracer's kind too (indexed by TRACER_KIND). */
-  counts: { billboards: number; tracers: number; stars: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number; ricochetsByKind: number[]; embersByKind: number[] };
+  /** The session's tracers and the battle's, the flashes' prongs (`stars`) and cores, the heads drawn on every tracer and the embers (a test's too); the ricochets and embers by their tracer's kind too (indexed by TRACER_KIND). */
+  counts: { billboards: number; tracers: number; stars: number; cores: number; lights: number; battleTracers: number; flames: number; heads: number; ricochets: number; embers: number; ricochetsByKind: number[]; embersByKind: number[] };
   /**
    * The session's own tracers as drawn this frame (their offsets applied), metres: for a test to find
    * them on the image. `headDrawn`: the burning head is drawn (past tracer_head_from_m); `joinsM`: how
@@ -299,12 +321,74 @@ const unit = (a: readonly number[]): V3 => {
   const n = Math.hypot(a[0], a[1], a[2]);
   return n > 0 ? [a[0] / n, a[1] / n, a[2] / n] : [0, 0, 1];
 };
-/** The flash's star: forward, and two rays 60° either side of it, a little up, each 0.6 as long. */
-const STAR_SIDE = 60 * RAD;
-const STAR_SIDE_LENGTH = 0.6;
-const STAR_LIFT = 0.3;
 /** A star's ray's look across it: its style, and nothing of a tracer's core and glow. */
 const STAR_LOOK = [RIBBON_STYLE.star, 0, 0, 0] as const;
+/** How far a prong's roll strays either way from an even spread round the bore, as a share of the spread. */
+const PRONG_ROLL_JITTER = 0.2;
+/** Where the flash's core is drawn: this share of its size out along the bore from the muzzle. */
+const CORE_AHEAD = 0.25;
+
+/**
+ * A shot's flash as drawn: its core's size across (m), and its prongs, each its roll about the bore
+ * (radians), its angle off the bore (radians) and its length (m); `comp`, a compensator's side prongs.
+ * A bare gun's prongs roll from the roll toward the eye's line (the build's, each frame); a
+ * compensator's from the gun's side toward its up.
+ */
+export interface FlashDraw {
+  coreM: number;
+  prongs: { roll: number; splay: number; lengthM: number }[];
+  comp: boolean;
+}
+
+/** murmur3's finaliser: a 32-bit word mixed through. */
+function fmix(h: number): number {
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/**
+ * A shot's flash (the shots spec §2), drawn from a hash of the shot, its tick and its muzzle (to the
+ * millimetre), so the same shot draws the same flash every frame it shows, in any builder, and the
+ * next shot its own: a core flash_core_m across; and flash_prongs prongs, each flash_prong_m long and
+ * flash_prong_splay_deg off the bore, at its own roll, spread round the arc about the bore that leaves
+ * flash_prong_gap_deg clear about the roll toward the eye's line (each within a fifth of an even
+ * spread of its place): a prong there crossed the reticle and lay along the tracer leaving, drawn as
+ * wide as the tracer near the gun. Or, with a compensator, two side prongs flash_comp_prong_m long and
+ * flash_comp_splay_deg off the bore, out to the gun's sides (rolls 0 and π).
+ */
+export function flashDraw(tick: number, muzzle: readonly number[], comp: boolean, t: Pick<EffectsTunables, 'flashCoreM' | 'flashProngs' | 'flashProngM' | 'flashProngSplayDeg' | 'flashProngGapDeg' | 'flashCompProngM' | 'flashCompSplayDeg'>): FlashDraw {
+  let h = 0x9e3779b9;
+  for (const word of [tick, Math.round(muzzle[0] * 1000), Math.round(muzzle[1] * 1000), Math.round(muzzle[2] * 1000)]) h = fmix(h ^ Math.imul(word | 0, 0xcc9e2d51));
+  // mulberry32 from it: uniform in [0, 1).
+  let a = h;
+  const next = () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let x = a;
+    x = Math.imul(x ^ (x >>> 15), x | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  const within = (r: readonly [number, number]) => r[0] + (r[1] - r[0]) * next();
+  const coreM = within(t.flashCoreM);
+  if (comp) {
+    const splay = t.flashCompSplayDeg * RAD;
+    return { coreM, prongs: [0, Math.PI].map((roll) => ({ roll, splay, lengthM: within(t.flashCompProngM) })), comp: true };
+  }
+  const [least, most] = t.flashProngs;
+  const n = Math.min(most, least + Math.floor(next() * (most - least + 1)));
+  const clear = t.flashProngGapDeg * RAD;
+  const spread = (TAU - clear) / n;
+  const prongs = Array.from({ length: n }, (_, k) => ({
+    roll: clear / 2 + (k + 0.5 + (next() * 2 - 1) * PRONG_ROLL_JITTER) * spread,
+    splay: within(t.flashProngSplayDeg) * RAD,
+    lengthM: within(t.flashProngM),
+  }));
+  return { coreM, prongs, comp: false };
+}
 /** How far a test's tracer has flown: far past its lighting in. */
 const LONG_FLOWN = Infinity;
 
@@ -327,8 +411,8 @@ export class EffectsFrameBuilder {
   hideBurst = false;
   private readonly billboards = new Float32Array(MAX_BILLBOARDS * BILLBOARD_FLOATS);
   private readonly ribbons = new Float32Array(MAX_RIBBONS * RIBBON_FLOATS);
-  /** Shots' flashes, aging: the player's at the drawn rifle's muzzle; another player's (`remote`) at their own; each its `share` of a bare gun's. */
-  private flashes: { muzzle: V3; dir: V3; age: number; remote?: boolean; share: number }[] = [];
+  /** Shots' flashes, aging: the player's at the drawn rifle's muzzle; another player's (`remote`) at their own; each its `share` of a bare gun's, and its draw (flashDraw). */
+  private flashes: { muzzle: V3; dir: V3; age: number; remote?: boolean; share: number; draw: FlashDraw }[] = [];
   /** Shells landed, aged as the flashes are, while their light or their smoke lasts. */
   private landed: { at: V3; radiusM: number; age: number }[] = [];
   /** The world's time the last frame showed. */
@@ -363,8 +447,10 @@ export class EffectsFrameBuilder {
     this.shown = shown;
     for (const f of this.flashes) f.age += elapsed;
     this.flashes = this.flashes.filter((f) => f.age < t.flashS);
-    for (const shot of events.shots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0, share: shot.flash ?? 1 });
-    for (const shot of events.remoteShots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0, remote: true, share: shot.flash ?? 1 });
+    // Each shot's flash drawn once, from its hash: a compensator's if its mark says one is fitted.
+    const drawOf = (shot: CombatEvents['shots'][number]) => flashDraw(shot.tick, shot.muzzle, shot.mark !== undefined && decodeShotMark(shot.mark).comp, t);
+    for (const shot of events.shots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0, share: shot.flash ?? 1, draw: drawOf(shot) });
+    for (const shot of events.remoteShots) this.flashes.push({ muzzle: shot.muzzle, dir: shot.dir, age: 0, remote: true, share: shot.flash ?? 1, draw: drawOf(shot) });
     this.ricochets.step(elapsed);
     for (const hit of events.impacts) if (hit.kind !== TRACER_KIND.none) this.ricochets.strike(hit, hit.kind);
     for (const b of this.landed) b.age += elapsed;
@@ -591,31 +677,57 @@ export class EffectsFrameBuilder {
       if (f.kind >= 0 && f.kind < ricochetsByKind.length) ricochetsByKind[f.kind]++;
     }
 
-    // Each live flash: its star and its light, at the drawn muzzle (where the shot left it when
-    // the rifle is not drawn).
+    // Each live flash: its core, its star and its light, at the drawn muzzle (where the shot left it
+    // when the rifle is not drawn), its prongs about the drawn bore by the drawn gun's own side and up.
     let stars = 0;
+    let cores = 0;
     const lights: TransientLight[] = [];
     const flash = t.flashColour.map((c) => c * t.flashIntensity);
+    // The core: emissive (FLASH_CORE_BILLBOARD, a peaked glow), flash_core_gain of the star's brightness
+    // through the light pass's glow.
+    const core = t.flashCoreColour.map((c) => (c * t.flashIntensity * t.flashCoreGain) / t.particleGlow);
     for (const f of this.flashes) {
       const at = f.remote ? f.muzzle : (muzzle ?? f.muzzle);
       const d = f.remote ? f.dir : (bore ?? f.dir);
-      let side: V3 = [d[2], 0, -d[0]];
-      const level = Math.hypot(side[0], side[2]);
-      side = level > 1e-6 ? [side[0] / level, 0, side[2] / level] : [1, 0, 0];
-      const up: V3 = [d[1] * side[2] - d[2] * side[1], d[2] * side[0] - d[0] * side[2], d[0] * side[1] - d[1] * side[0]];
-      // A suppressed shot: no star, and a glimmer of its light.
-      const rays: [V3, number][] = f.share < 0.5 ? [] : [[d, t.flashStarLengthM * Math.min(1.4, f.share)]];
-      if (f.share >= 0.5) {
-        for (const sign of [1, -1]) {
-          const r = [0, 1, 2].map((k) => d[k] * Math.cos(STAR_SIDE) + sign * side[k] * Math.sin(STAR_SIDE) + up[k] * STAR_LIFT);
-          const n = Math.hypot(r[0], r[1], r[2]);
-          rays.push([[r[0] / n, r[1] / n, r[2] / n], t.flashStarLengthM * STAR_SIDE_LENGTH * Math.min(1.4, f.share)]);
-        }
-      }
-      for (const [r, length] of rays) {
-        if (ribbon(at, at.map((v, k) => v + r[k] * length), t.flashStarWidthM, flash, 1, 0)) stars++;
+      let side: V3;
+      let up: V3;
+      if (!f.remote && rifle && bore) {
+        side = unit([rifle.toWorld[0], rifle.toWorld[1], rifle.toWorld[2]]);
+        up = unit([rifle.toWorld[3], rifle.toWorld[4], rifle.toWorld[5]]);
+      } else {
+        side = [d[2], 0, -d[0]];
+        const level = Math.hypot(side[0], side[2]);
+        side = level > 1e-6 ? [side[0] / level, 0, side[2] / level] : [1, 0, 0];
+        up = [d[1] * side[2] - d[2] * side[1], d[2] * side[0] - d[0] * side[2], d[0] * side[1] - d[1] * side[0]];
       }
       lights.push({ position: at, radiusM: t.flashLightRadiusM, colour: t.flashLightColour, intensity: t.flashLightIntensity * f.share });
+      // A suppressed shot: no core and no star, a glimmer of its light.
+      if (f.share < 0.5) continue;
+      // A prong fades to nothing at its tip; a compensator's short side prongs, most of them inside the
+      // core, keep flash_comp_tip of it there, so they show past it.
+      const tip = f.draw.comp ? t.flashCompTip : 0;
+      // A compensator's prongs roll from the gun's side toward its up; a bare gun's from the roll toward
+      // the eye's line (where the eye is off the bore, across it), so that arc stays clear (flashDraw).
+      let from = side;
+      let to = up;
+      if (!f.draw.comp) {
+        const toEye = sub(eyeAt, at);
+        const along = toEye[0] * d[0] + toEye[1] * d[1] + toEye[2] * d[2];
+        const off = [toEye[0] - d[0] * along, toEye[1] - d[1] * along, toEye[2] - d[2] * along];
+        from = Math.hypot(off[0], off[1], off[2]) > 1e-6 ? unit(off) : up;
+        to = [d[1] * from[2] - d[2] * from[1], d[2] * from[0] - d[0] * from[2], d[0] * from[1] - d[1] * from[0]];
+      }
+      for (const p of f.draw.prongs) {
+        const across = [0, 1, 2].map((k) => Math.cos(p.roll) * from[k] + Math.sin(p.roll) * to[k]);
+        const r = [0, 1, 2].map((k) => d[k] * Math.cos(p.splay) + across[k] * Math.sin(p.splay));
+        if (ribbon(at, at.map((v, k) => v + r[k] * p.lengthM), t.flashStarWidthM, flash, 1, tip)) stars++;
+      }
+      if (billboards < MAX_BILLBOARDS) {
+        const ahead = f.draw.coreM * CORE_AHEAD;
+        this.billboards.set([at[0] + d[0] * ahead, at[1] + d[1] * ahead, at[2] + d[2] * ahead, f.draw.coreM / 2, core[0], core[1], core[2], 1, FLASH_CORE_BILLBOARD], billboards * BILLBOARD_FLOATS);
+        billboards++;
+        cores++;
+      }
     }
 
     // The guns' lights and lasers, switched on: the player's from the drawn gun along its bore, each
@@ -709,7 +821,7 @@ export class EffectsFrameBuilder {
       lights,
       blasts,
       smoke,
-      counts: { billboards, tracers, stars, lights: lights.length, battleTracers, flames, heads, ricochets, embers, ricochetsByKind, embersByKind },
+      counts: { billboards, tracers, stars, cores, lights: lights.length, battleTracers, flames, heads, ricochets, embers, ricochetsByKind, embersByKind },
       drawn,
     };
   }

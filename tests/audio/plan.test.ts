@@ -218,6 +218,22 @@ describe('the sound of a frame', () => {
     expect(v[0].lengthS).toBe(t.blastRumbleS);
   });
 
+  it("the hands' cues (handling.ts) are heard at the ear, at once and whole, at [audio] hands_gain (0.5), one voice each of its own kind", () => {
+    const tun = loadTunables();
+    expect(t.handsGain).toBe(tun.f('audio.hands_gain'));
+    expect(t.handsGain).toBe(0.5);
+    const cues = ['mag-out', 'mag-in', 'bolt', 'cover', 'shell', 'pump', 'dry'] as const;
+    const muzzle: [number, number, number] = [10.3, 1.7, 10.6];
+    const plans = planVoices(t, { ...none(), handling: cues.map((cue, k) => ({ tick: 3 + k, cue, at: muzzle })) }, ear);
+    expect(plans.map((v) => v.kind)).toEqual([...cues]);
+    for (const v of plans) {
+      expect(v).toEqual({ kind: v.kind, at: ear, delayS: 0, gain: 0.5, lowpassHz: t.openLowpassHz });
+      expect(v.at).not.toBe(ear);
+    }
+    // None without a cue.
+    expect(planVoices(t, none(), ear)).toEqual([]);
+  });
+
   it("a round of the player's into a body is the hit feedback's to sound (app/hit-feedback.ts): planVoices knocks no more", () => {
     const hit = { tick: 1, owner: 0, body: 3, zone: 'torso' as const, position: [12, 2, 20] as [number, number, number], dir: [0, 0, 1] as const, distance: 10 };
     expect(planVoices(t, { ...none(), hits: [hit, { ...hit, body: 200, zone: 'head' }] }, ear)).toEqual([]);

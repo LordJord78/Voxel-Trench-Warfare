@@ -14,12 +14,15 @@
  * spawn at the range's nearest and farthest plates too, the farthest held to a floor: its ring is the
  * shooter's only word of a hit there. And a headshot that kills, as its shooter hears it on the range,
  * the crack and the gush and a frame later the kill: the gush is not lost in it, a good share of its
- * first 300 ms in 400 Hz–2 kHz. More kinds (the reports, the hands' cues) join the list as theirs are
- * made; one only reported (`gated` false) says what fails of it and does not fail the run.
+ * first 300 ms in 400 Hz–2 kHz. The hands' cues (combat/handling.ts), each at the ear as planVoices
+ * places it, at hands_gain, held to the peak range and the small speaker. More kinds (the reports) join
+ * the list as theirs are made; one only reported (`gated` false) says what fails of it and does not
+ * fail the run.
  */
 
 import { hitFeedbackTunables } from '../../src/app/hit-feedback';
-import { audioTunables, planFeedback, type FeedbackKind, type VoicePlan } from '../../src/audio/plan';
+import { audioTunables, planFeedback, planVoices, type FeedbackKind, type VoicePlan } from '../../src/audio/plan';
+import type { HandlingCue } from '../../src/combat/handling';
 import { reportShape, voiceLength } from '../../src/audio/voices';
 import { rangeTunables } from '../../src/combat/range';
 import type { Tunables } from '../../src/core/tunables';
@@ -52,6 +55,8 @@ export interface Render {
 }
 
 const EARS: readonly FeedbackKind[] = ['hit', 'head', 'gush', 'kill', 'ding', 'hurt'];
+/** The hands' cues, each its own render. */
+const CUES: readonly HandlingCue[] = ['mag-out', 'mag-in', 'bolt', 'cover', 'shell', 'pump', 'dry'];
 /** The small speaker: at least this share of a voice's energy over 400 Hz. */
 const SMALL_SPEAKER = 0.25;
 /** The gush gushes: at least this share of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill thud's (the kill's part under 400 Hz, apart from its chime). */
@@ -84,5 +89,10 @@ export function renders(tun: Tunables): Render[] {
   // A headshot that kills, as its shooter hears it on the range: the crack and the gush, and a frame later the kill's thud and chime.
   const [kill] = atEar(['kill']);
   out.push(of('headshot-kill', [...atEar(['head', 'gush']), { ...kill, delayS: FRAME_S }], HEADSHOT_KILL));
+  // The hands' cues, each as planVoices places it (at the ear, whatever the muzzle it came from).
+  for (const cue of CUES) {
+    const events = { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [{ tick: 1, cue, at: [0.2, -0.1, -0.5] as [number, number, number] }], harms: [] };
+    out.push(of(cue, planVoices(t, events, ear), { high: SMALL_SPEAKER }));
+  }
   return out;
 }

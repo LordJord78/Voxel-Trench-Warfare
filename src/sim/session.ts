@@ -379,7 +379,9 @@ export class Session {
   private debrisFalling: { tick: number; at: [number, number, number] }[] = [];
   private events: CombatEvents = noEvents();
   private readonly particleRng: Rng;
-  private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris' | 'blood' | 'mist' | 'entry', ParticleSpec>;
+  private readonly kinds: Record<'flash' | 'brass' | 'smoke' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris' | 'blood' | 'mist' | 'entry', ParticleSpec>;
+  /** The muzzle's smoke's own draws, so the rest of the particles draw as they did before it. */
+  private readonly smokeRng: Rng;
   /** [hits]: a critical hit's droplets and mist, a helmet's sparks, how many rounds a body bleeds (and its head spatters) a tick at most, and how far before the hit its entry puff is thrown (m). */
   private readonly bleeding: { criticalDroplets: number; criticalMist: number; helmetSparks: number; burstsPerTick: number; entryBackM: number };
   /** [hits]: a critical hit's spatter, its rays on along the round and falling, their cones and reaches (in voxels), and how they pack. */
@@ -437,9 +439,11 @@ export class Session {
     this.look = [this.player.yaw, this.player.pitch];
     this.particles = new Particles(tun.i('particles.pool_capacity'));
     this.particleRng = this.streams.derive('effects.particles');
+    this.smokeRng = this.streams.derive('effects.muzzle_smoke');
     this.kinds = {
       flash: particleSpec(tun, 'muzzle_flash'),
       brass: particleSpec(tun, 'brass'),
+      smoke: particleSpec(tun, 'muzzle_smoke'),
       dust: particleSpec(tun, 'dust'),
       spark: particleSpec(tun, 'spark'),
       blastFlash: particleSpec(tun, 'blast_flash'),
@@ -527,6 +531,7 @@ export class Session {
     });
     const { flash } = this.kinds;
     this.particles.emit(muzzle, [dir[0] * flash.speed, dir[1] * flash.speed + flash.lift, dir[2] * flash.speed], flash, Math.round(flash.count * flashShare), this.particleRng);
+    this.throwSmoke(muzzle, dir, m?.suppressed ?? false);
   }
 
   /**
@@ -914,12 +919,12 @@ export class Session {
           this.rounds.fire(eye, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, drawn, this.ticks);
         }
         w.shot();
-        this.throwShot(muzzle, arm.spec.flash);
+        this.throwShot(muzzle, arm.spec.flash, arm.spec.suppressed);
         const kick = this.recoil.kickPitch;
         this.recoil.shot(this.recoilRng);
         this.viewKick.shot(this.recoil.kickPitch - kick, this.viewKickRng, this.cameraRng);
         this.shots.push({ origin: eye, dir, aim, tracer });
-        const mark = encodeShotMark({ tracer, kind, suppressed: arm.spec.suppressed, gun: arm.spec.gun.key });
+        const mark = encodeShotMark({ tracer, kind, suppressed: arm.spec.suppressed, gun: arm.spec.gun.key, comp: arm.spec.fit.muzzle === 'compensator' });
         this.events.shots.push({ tick: this.ticks, origin: eye, dir, tracer, muzzle, mark, flash: arm.spec.flash, report: arm.spec.report });
       }
     }
@@ -1077,8 +1082,8 @@ export class Session {
     this.particles.emit(at, up(debris), debris, debris.count, this.particleRng, this.tints[material]);
   }
 
-  /** A shot's flash out along the bore from the muzzle (`share` of it: a suppressor's wisp), and its brass out of the port, to the right and up (the reference's view kick). */
-  private throwShot(muzzle: readonly number[], share = 1): void {
+  /** A shot's flash out along the bore from the muzzle (`share` of it: a suppressor's wisp), its brass out of the port, to the right and up (the reference's view kick), and its smoke at the muzzle. */
+  private throwShot(muzzle: readonly number[], share = 1, suppressed = false): void {
     const p = this.player;
     const view = this.view();
     const { forward, right, up } = viewBasis(p.yaw + view.yaw, p.pitch + view.pitch, view.roll);
@@ -1086,6 +1091,18 @@ export class Session {
     const { flash, brass } = this.kinds;
     this.particles.emit(muzzle, along(flash, forward), flash, Math.round(flash.count * share), this.particleRng, undefined, MUZZLE_ANCHOR);
     this.particles.emit(this.port(), along(brass, right), brass, brass.count, this.particleRng, undefined, PORT_ANCHOR);
+    this.throwSmoke(muzzle, forward, suppressed);
+  }
+
+  /**
+   * A shot's smoke ([particles.muzzle_smoke]) at `muzzle` along the unit `bore`: its count of puffs, a
+   * suppressed gun's twice that; left where it is thrown (not held to the drawn gun), to rise and drift
+   * on the wind.
+   */
+  private throwSmoke(muzzle: readonly number[], bore: readonly number[], suppressed: boolean): void {
+    const { smoke } = this.kinds;
+    const v = [bore[0] * smoke.speed, bore[1] * smoke.speed + smoke.lift, bore[2] * smoke.speed];
+    this.particles.emit(muzzle, v, smoke, smoke.count * (suppressed ? 2 : 1), this.smokeRng);
   }
 
   /** What a round throws where it strikes: dust of the struck material off its face, and sparks off metal. */

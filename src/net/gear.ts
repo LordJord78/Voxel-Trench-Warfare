@@ -85,25 +85,26 @@ export function decodeGear(n: number): Gear {
   };
 }
 
-/** A shot's word: whether a tracer and its kind (TRACER_KIND), whether suppressed, and which gun. */
+/** A shot's word: whether a tracer and its kind (TRACER_KIND), whether suppressed, which gun, and whether a compensator is fitted (its flash's side prongs; none said, none). */
 export interface ShotMark {
   tracer: boolean;
   kind: number;
   suppressed: boolean;
   gun: GunKey;
+  comp?: boolean;
 }
 
-/** Bit 0 a tracer (as the word was before it said more), bits 1–2 its kind, bit 3 suppressed, bits 4–7 the gun. */
+/** Bit 0 a tracer (as the word was before it said more), bits 1–2 its kind, bit 3 suppressed, bits 4–7 the gun, bit 8 a compensator; bits 9–11 are kept free (a shotgun's pellet share). */
 export function encodeShotMark(m: ShotMark): number {
-  return (m.tracer ? 1 : 0) | ((m.kind & 3) << 1) | ((m.suppressed ? 1 : 0) << 3) | (Math.max(0, GUNS.indexOf(m.gun)) << 4);
+  return (m.tracer ? 1 : 0) | ((m.kind & 3) << 1) | ((m.suppressed ? 1 : 0) << 3) | (Math.max(0, GUNS.indexOf(m.gun)) << 4) | ((m.comp ? 1 : 0) << 8);
 }
 
-export function decodeShotMark(n: number): ShotMark {
+export function decodeShotMark(n: number): ShotMark & { comp: boolean } {
   const bits = Number.isInteger(n) && n >= 0 ? n : 0;
   const tracer = (bits & 1) === 1;
   // A word from before kinds were sent says only "a tracer": the battle's amber.
   const kind = (bits >> 1) & 3;
-  return { tracer, kind: tracer && kind === 0 ? TRACER_KIND.amber : kind, suppressed: ((bits >> 3) & 1) === 1, gun: GUNS[(bits >> 4) & 15] ?? 'ak74' };
+  return { tracer, kind: tracer && kind === 0 ? TRACER_KIND.amber : kind, suppressed: ((bits >> 3) & 1) === 1, gun: GUNS[(bits >> 4) & 15] ?? 'ak74', comp: ((bits >> 8) & 1) === 1 };
 }
 
 /** A hit's damage: the zone's, times the gun's scale (none given: the zone's alone). */

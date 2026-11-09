@@ -210,7 +210,9 @@ describe("a tracer's look", () => {
     const s = stand();
     const built = new EffectsFrameBuilder(t).build(s, shoot(s));
     expect(built.counts.tracers).toBe(1);
-    expect(built.counts.stars).toBe(3);
+    const prongs = built.counts.stars;
+    expect(prongs).toBeGreaterThanOrEqual(3);
+    expect(prongs).toBeLessThanOrEqual(5);
     const tracer = ribbon(built.frame.ribbons, 0);
     expect(tracer.style).toBe(1);
     // Drawn as wide as its glow (0.22 m), its core 0.035 m of that, the glow at 0.35 of the core's
@@ -221,11 +223,12 @@ describe("a tracer's look", () => {
     expect(tracer.white).toBeCloseTo(0.65, 6);
     // The player's in solo: red [1.0, 0.04, 0.018] at 70, by night.
     close(tracer.rgb, [70, 2.8, 1.26], 4, 'red');
-    // The star's three rays after the tracer's ribbons (in its first frame two: lit in part way along).
-    for (let i = built.frame.ribbonCount - 3; i < built.frame.ribbonCount; i++) {
+    // The star's prongs after the tracer's ribbons (in its first frame two: lit in part way along).
+    for (let i = built.frame.ribbonCount - prongs; i < built.frame.ribbonCount; i++) {
       const star = ribbon(built.frame.ribbons, i);
       expect(star.style, `ray ${i}`).toBe(0);
-      expect(star.width, `ray ${i}`).toBeCloseTo(0.06, 6);
+      // Each prong flash_star_width_m wide: 0.025 m, a spike, where the old star's 0.06 m rays read as bars half a metre off.
+      expect(star.width, `ray ${i}`).toBeCloseTo(0.025, 6);
     }
     expect(tracerRibbons(built).every((r) => r.width === tracer.width && r.coreShare === tracer.coreShare)).toBe(true);
   });

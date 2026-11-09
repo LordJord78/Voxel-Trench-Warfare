@@ -24,8 +24,8 @@ import { reportShape } from '../audio/voices';
 import { cleanLoadout, type Loadout } from '../combat/arsenal';
 import { gunModel, shovelModel } from '../combat/gun-models';
 import { traceRifle } from '../combat/rifle-model';
-import { projectToPixel, rayDir, type CameraPose } from '../render/camera';
-import type { SmokePuff, TransientLight } from '../render/effects';
+import { cameraBasis, projectToPixel, rayDir, type CameraPose } from '../render/camera';
+import { LIT_FLOATS, type SmokePuff, type TransientLight } from '../render/effects';
 import { FLAGS, horizonTerms, type HorizonFlash } from '../render/frame-uniforms';
 import { throughPose, type RifleDrawn, type RiflePose } from '../render/rifle';
 import { createGpu, GpuUnavailable, type Gpu } from '../render/device';
@@ -310,7 +310,7 @@ async function start(): Promise<void> {
   const hearing = audioTunables(tun);
   const audio = new AudioEngine(hearing, reportShape(tun));
   let builtDrawn: BuiltEffects['drawn'] = [];
-  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0, ricochets: 0, embers: 0, ricochetsByKind: [0, 0, 0, 0], embersByKind: [0, 0, 0, 0] };
+  let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, cores: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0, ricochets: 0, embers: 0, ricochetsByKind: [0, 0, 0, 0], embersByKind: [0, 0, 0, 0] };
   /** Whether the rifle is in hand (tests put it down to read the world behind it). */
   let rifleHeld = true;
   const input = new Input();
@@ -912,6 +912,15 @@ async function start(): Promise<void> {
   let frozen = false;
   let steps = 0;
   let still = 0;
+  /** How far apart a frozen loop's frames are (ms): a sixtieth of a second unless a test asks for a faster display's. */
+  let frozenMs = 1000 / 60;
+  /** For tests: the view turned this many degrees a second, as the mouse turns it; swinging as a sine of `periodS` if given (a look back and forth). */
+  let turning: { degPerS: number; periodS: number; since: number } | null = null;
+  /**
+   * For tests: each frame's drawn gun as the camera sees it (its 3 × 4 transform in the camera's right,
+   * up and forward, metres), the frame's time, and the session's tick and its share of the next.
+   */
+  let gunFrames: { left: number; out: { ms: number; ticks: number; alpha: number; m: number[] | null }[]; done: (frames: { ms: number; ticks: number; alpha: number; m: number[] | null }[]) => void } | null = null;
   // Each of the last MAIN_FRAMES frames' main-thread time (the hooks' mainMs).
   const MAIN_FRAMES = 600;
   const mainMs = new Float64Array(MAIN_FRAMES);
@@ -923,7 +932,7 @@ async function start(): Promise<void> {
       return;
     }
     if (frozen) steps--;
-    const advance = frozen && still > 0 ? 0 : 1000 / 60;
+    const advance = frozen && still > 0 ? 0 : frozenMs;
     if (frozen && still > 0) still--;
     try {
       const t0 = performance.now();
@@ -977,10 +986,20 @@ async function start(): Promise<void> {
       const runs = live || (mode === 'ready' && together.begun);
       if (runs) {
         if (mode === 'playing') {
+          if (turning) {
+            const swing = turning.periodS > 0 ? Math.sin((2 * Math.PI * (now - turning.since)) / 1000 / turning.periodS) : 1;
+            input.mouse((turning.degPerS * swing * dt) / (settings.sensitivity * aimTurn()), 0);
+          }
           input.look(session.player, settings.sensitivity * aimTurn(), pitchLimit);
           session.intent = input.intent();
         } else {
           session.intent = idleIntent();
+        }
+        // The battle's wind as the lights last showed it carries the loose smoke, dust and blood; none at rest, as the water is still.
+        if (lightsHeld === 'rest' || lights !== planned) session.particles.wind = [0, 0, 0];
+        else {
+          const [wx, wz] = shownBattle.wind.at(shownBattle.seconds);
+          session.particles.wind = [wx, 0, wz];
         }
         if (session.advance(ms / 1000) > 0 && mode === 'playing') input.ticked();
         if (!session.player.onFiringStep) input.lowerPeriscope();
@@ -1009,6 +1028,22 @@ async function start(): Promise<void> {
     if (rifleHeld && session.alive && !scoped && (mode === 'playing' || mode === 'paused') && session.player.stance !== Stance.PERISCOPE) rifle = rig.rifle(session, pose);
     else rig.hideRifle();
     renderer.setRifle(rifle);
+    if (gunFrames) {
+      // The drawn gun in the camera's frame: its axes and its place along the camera's right, up and forward.
+      let m: number[] | null = null;
+      if (rifle) {
+        const b = cameraBasis(pose.yaw, pose.pitch, pose.roll ?? 0);
+        const w = rifle.toWorld;
+        const rel = (v: readonly number[]) => [b.right, b.up, b.forward].map((a) => a[0] * v[0] + a[1] * v[1] + a[2] * v[2]);
+        m = [...rel([w[0], w[1], w[2]]), ...rel([w[3], w[4], w[5]]), ...rel([w[6], w[7], w[8]]), ...rel([w[9] - pose.position[0], w[10] - pose.position[1], w[11] - pose.position[2]])];
+      }
+      gunFrames.out.push({ ms: dt * 1000, ticks: session.ticks, alpha: session.clock.alpha, m });
+      if (--gunFrames.left <= 0) {
+        const g = gunFrames;
+        gunFrames = null;
+        g.done(g.out);
+      }
+    }
     // Under fire the picture greys and closes in, while playing (and paused); not flying, unless a test asks.
     const shaken = mode === 'playing' || mode === 'paused' || suppressionAlways;
     renderer.setSuppressionLook(shaken ? session.suppression.desaturation : 0, shaken ? session.suppression.vignette : 0);
@@ -1436,8 +1471,34 @@ async function start(): Promise<void> {
     aim(held: boolean) {
       input.aim(held);
     },
-    /** What is in the hands: the gun's or the shovel's, how far up, how far aimed, the light. */
-    hands: () => ({ held: session.held, ready: session.ready, aimed: session.aimed, gun: session.arm.spec.gun.key, light: session.lightOn, model: renderer.rifleModel().dims }),
+    /**
+     * What is in the hands: the gun's or the shovel's, how far up, how far aimed, the light; the sprint's
+     * blend, the reload's phase (null, none), the rounds in the magazine, and the box the last frame drew
+     * the gun in (corner and size, pixels of the internal image) and that image's size.
+     */
+    hands: () => {
+      const g = renderer.rifleState();
+      return {
+        held: session.held,
+        ready: session.ready,
+        aimed: session.aimed,
+        gun: session.arm.spec.gun.key,
+        light: session.lightOn,
+        model: renderer.rifleModel().dims,
+        sprint: session.handling.sprint,
+        reload: session.weapon.reloadPhase,
+        rounds: session.weapon.rounds,
+        drawn: g.visible,
+        box: g.box,
+        res: g.res,
+      };
+    },
+    /** The view turned `degPerS` degrees a second while playing, as the mouse turns it, swinging as a sine of `periodS` if given; 0 stops it. */
+    turn(degPerS: number, periodS = 0) {
+      turning = degPerS === 0 ? null : { degPerS, periodS, since: performance.now() };
+    },
+    /** The next `n` frames' drawn gun as the camera sees it (null where none is drawn), each frame's time (ms) and the session's tick and share of the next. */
+    gunFrames: (n: number) => new Promise((resolve) => (gunFrames = { left: Math.max(1, n), out: [], done: resolve })),
     /** Suppression's look at the session's level in every mode, the flying camera's too (a test's fixed vantage); false: only while playing and paused, as the game has it. */
     suppressionLook(always: boolean) {
       suppressionAlways = always;
@@ -1491,7 +1552,7 @@ async function start(): Promise<void> {
     sharpAt: async (box: [number, number, number, number]) => Array.from(await renderer.readColour(box, 'sharp')),
     debugLit: async () => {
       const lit = await renderer.readEffectsLit(effects.debugAt, effects.debug.length);
-      return Array.from({ length: lit.length / 8 }, (_, i) => Array.from(lit.subarray(i * 8 + 4, i * 8 + 8)));
+      return Array.from({ length: lit.length / LIT_FLOATS }, (_, i) => Array.from(lit.subarray(i * LIT_FLOATS + 4, i * LIT_FLOATS + 8)));
     },
     depthAt: (points: [number, number][]) => renderer.readDepth(points),
     hazeAt: (points: [number, number][]) => renderer.readHaze(points),
@@ -1615,9 +1676,11 @@ async function start(): Promise<void> {
     sunElevation: () => skyNow().sunElevationDeg,
     frames: () => frames,
     waitFrames,
-    freeze() {
+    /** Frozen: frames drawn only when stepped, `hz` of them a second of the world's time (60 unless given: a faster display's, as a test asks). */
+    freeze(hz = 60) {
       frozen = true;
       steps = 0;
+      frozenMs = 1000 / hz;
     },
     thaw() {
       frozen = false;

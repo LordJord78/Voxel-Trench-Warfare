@@ -15,9 +15,14 @@
  * A hit's feedback (app/hit-feedback.ts says which; planFeedback places them): the shooter's thwack,
  * crack, gush and kill at the ear, at once and whole; another's hit on a body where it struck, and a
  * steel plate's ring at the plate, each as any voice afar is.
+ *
+ * The hands' cues (combat/handling.ts: a reload's magazine out and in, its bolt, the machine gun's
+ * feed cover, the shotgun's shells and pump, an empty trigger's click) at the ear, at once and whole,
+ * at `hands_gain`: the gun is in the player's own hands.
  */
 
 import type { BattleEvents } from '../battle/director';
+import type { HandlingCue } from '../combat/handling';
 import type { Tunables } from '../core/tunables';
 import type { CombatEvents } from '../sim/session';
 import { K, kindOf } from '../world/materials';
@@ -25,7 +30,7 @@ import { K, kindOf } from '../world/materials';
 /** A hit's feedback (the shots spec's §4): a body hit's thwack, a headshot's crack and its gush, a kill's thud and chime, a steel plate's ring, being hit. */
 export type FeedbackKind = 'hit' | 'head' | 'gush' | 'kill' | 'ding' | 'hurt';
 
-export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare' | 'rumble' | 'thump' | 'chatter' | 'crackle' | 'splash' | FeedbackKind;
+export type VoiceKind = 'report' | 'crack' | 'impact-soil' | 'impact-timber' | 'impact-metal' | 'whistle' | 'blast' | 'scrape' | 'flare' | 'rumble' | 'thump' | 'chatter' | 'crackle' | 'splash' | FeedbackKind | HandlingCue;
 
 /** A hit's feedback to sound (app/hit-feedback.ts): where (metres; null, at the ear) and how loud there. */
 export interface FeedbackVoice {
@@ -75,6 +80,8 @@ export interface AudioTunables {
   blastRumbleS: number;
   scrapeGain: number;
   flareGain: number;
+  /** The hands' cues, at the ear. */
+  handsGain: number;
   /** A distant shell heard: its gain at the near end of its shells' range (metres), its lowpass and length over that range. */
   rumble: DistantVoice;
   thump: DistantVoice;
@@ -122,6 +129,7 @@ export function audioTunables(tun: Tunables): AudioTunables {
     blastRumbleS: f('blast_rumble_s'),
     scrapeGain: f('scrape_gain'),
     flareGain: f('flare_gain'),
+    handsGain: f('hands_gain'),
     rumble: { gain: f('rumble_gain'), rangeM: tun.pair('battle.barrages.distance_m'), lowpassHz: tun.pair('audio.rumble_lowpass_hz'), lengthS: tun.pair('audio.rumble_length_s') },
     thump: { gain: f('thump_gain'), rangeM: tun.pair('battle.far_shells.distance_m'), lowpassHz: tun.pair('audio.thump_lowpass_hz'), lengthS: tun.pair('audio.thump_length_s') },
     chatter: { gain: f('chatter_gain'), rangeM: tun.pair('audio.chatter_range_m'), lowpassHz: tun.pair('audio.chatter_lowpass_hz') },
@@ -199,6 +207,8 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
   for (const s of events.incoming) out.push({ ...afar(s.at, t.whistleGain, 'whistle'), delayS: 0, lengthS: s.landsInS, fromHz: t.whistleFromHz, toHz: t.whistleToHz });
   for (const b of events.blasts) out.push({ ...afar(b.at, t.blastGain, 'blast'), lengthS: t.blastRumbleS });
   for (const s of events.scoops) out.push(afar(s.at, t.scrapeGain, 'scrape'));
+  // The hands' cues: the gun is in the player's own hands, heard at the ear, at once and whole.
+  for (const h of events.handling) out.push({ kind: h.cue, at: [listener[0], listener[1], listener[2]], delayS: 0, gain: t.handsGain, lowpassHz: t.openLowpassHz });
   for (const w of events.splashes) {
     if (w.kind === 'shell') out.push({ ...afar(w.at, t.splashShellGain, 'splash'), lengthS: t.splashShellS });
     else if (distance(w.at) <= t.impactWithinM) out.push(afar(w.at, t.splashGain, 'splash'));

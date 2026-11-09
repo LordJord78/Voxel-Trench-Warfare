@@ -40,14 +40,22 @@ export const RIBBON_STYLE = { star: 0, tracer: 1 } as const;
 export const HEAD_BILLBOARD = 3;
 /** A tracer strike's ember: emissive, kept at its hue as a tracer's head is (effects.wgsl keepHue), and held no smaller than MIN_HEAD_PX, its light kept, as a head is; and near the eye no wider than its own cap ([effects.ricochet] ember_max_px), narrowed and not brightened, a cap never under that floor. */
 export const EMBER_BILLBOARD = 4;
-/** A billboard's floats, as particles.ts writes them. */
-const BILLBOARD_FLOATS = 9;
-/** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4). */
-const LIT_BYTES = 32;
-/** effects-light.wgsl's EffectsLight: the count and seven floats. */
-const LIGHT_PARAMS_BYTES = 32;
-/** effects.wgsl's EffectsDraw: two counts and ten floats, 16 bytes a row. */
-const DRAW_PARAMS_BYTES = 48;
+/**
+ * A shot's flash's core (effects-frame.ts), after particles.ts's 5 (blood), 6 (a casing) and 7 (smoke):
+ * emissive, and drawn as a peaked glow (effects.wgsl), white-hot in its middle and gone at its rim. A
+ * firm emissive disc that bright read as a white ball a hand across round the muzzle, and the tracer
+ * leaving through its rim was drawn as wide as it.
+ */
+export const FLASH_CORE_BILLBOARD = 8;
+/** A billboard's floats, as particles.ts writes them (BILLBOARD_FLOATS): its centre, half size, colour, kind and a casing's way. */
+const BILLBOARD_FLOATS = 12;
+/** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4), and a casing's way (3) and whether it is one (1). */
+export const LIT_FLOATS = 12;
+const LIT_BYTES = LIT_FLOATS * 4;
+/** effects-light.wgsl's EffectsLight: the count and eight floats, rounded up to 16 bytes a row. */
+const LIGHT_PARAMS_BYTES = 48;
+/** effects.wgsl's EffectsDraw: two counts and twelve floats, rounded up to 16 bytes a row. */
+const DRAW_PARAMS_BYTES = 64;
 /** The particle pool, room for test quads, the battle's allowance (its flares, far shells' flashes and smoke, and fires' flames, embers and smoke), and a head for each tracer drawn. */
 export const MAX_BILLBOARDS = 4096 + 64 + 1024 + 2048;
 /** Every round in flight a tracer, the battle's nearest, and a few shots' stars. */
@@ -101,7 +109,9 @@ export interface SmokePuff {
  * the sun is up ([effects] tracer_cover; the frame's `cover` is its share by the sun). And blood's
  * (particles.ts BLOOD_BILLBOARD): the least light it takes, as a share of what the present pass's
  * exposure shows as 1 through its tone curve (so at dusk and at night it reads dark red, not soot,
- * and lit as dust is above it), and the fewest pixels across it is drawn.
+ * and lit as dust is above it), and the fewest pixels across it is drawn. And a casing's (particles.ts
+ * CASING_BILLBOARD): its width as a share of its length, and the most pixels its length is drawn. And
+ * the share of a shot's light the muzzle's smoke (particles.ts SMOKE_BILLBOARD) takes.
  */
 export interface EffectsLook {
   glow: number;
@@ -116,6 +126,20 @@ export interface EffectsLook {
   tracerWhiteNearM: number;
   tracerWhiteFarM: number;
   tracerCover: number;
+  casingWidthShare: number;
+  casingMaxPx: number;
+  smokeFlashShare: number;
+}
+
+/**
+ * A casing as effects.wgsl draws it: `lengthM` long (its billboard's size) along its way, its width
+ * casing_width_share of that; where a pixel is `pixelM` metres across (its distance from the eye), its
+ * length held to casing_max_px pixels and its width with it, so near the eye it is a small bright
+ * sliver and not a soft disc across the view.
+ */
+export function casingDrawn(lengthM: number, pixelM: number, look: Pick<EffectsLook, 'casingWidthShare' | 'casingMaxPx'>): { lengthM: number; widthM: number } {
+  const length = Math.min(lengthM, look.casingMaxPx * pixelM);
+  return { lengthM: length, widthM: length * look.casingWidthShare };
 }
 
 export function effectsLook(tun: Tunables): EffectsLook {
@@ -133,6 +157,9 @@ export function effectsLook(tun: Tunables): EffectsLook {
     tracerWhiteNearM: tun.f('effects.tracer_white_near_m'),
     tracerWhiteFarM: tun.f('effects.tracer_white_far_m'),
     tracerCover: tun.f('effects.tracer_cover'),
+    casingWidthShare: tun.f('effects.casing_width_share'),
+    casingMaxPx: tun.f('effects.casing_max_px'),
+    smokeFlashShare: tun.f('effects.smoke_flash_share'),
   };
 }
 
@@ -296,13 +323,15 @@ export class Effects {
     new Uint32Array(light, 0, 1)[0] = this.billboardCount;
     new Float32Array(light, 4, 5).set([this.look.glow, this.look.dustKey, this.look.dustSky, this.look.bloodLightFloor, this.look.bloodMinPx]);
     queue.writeBuffer(this.lightParams, 0, light);
+    // After the present pass's tone (encode's): the share of a shot's light the muzzle's smoke takes.
+    queue.writeBuffer(this.lightParams, 32, new Float32Array([this.look.smokeFlashShare]));
     // effects.wgsl's EffectsDraw: the counts; the widest a tracer's glow and its head are drawn, and
     // the narrowest its glow is; where its core's whiteness starts to fall and where it is gone; the
-    // tone's (encode's), how white a tracer's core is at least, how much its light covers, and the
-    // widest a strike's ember is drawn.
+    // tone's (encode's), how white a tracer's core is at least, how much its light covers, the widest a
+    // strike's ember is drawn, and a casing's width over its length and the most pixels it is long.
     new Uint32Array(this.draw, 0, 2).set([this.billboardCount, this.ribbonCount]);
     new Float32Array(this.draw, 8, 5).set([this.look.tracerGlowMaxPx, this.look.tracerHeadMaxPx, this.look.tracerGlowMinPx, this.look.tracerWhiteNearM, this.look.tracerWhiteFarM]);
-    new Float32Array(this.draw, 36, 3).set([frame.whiteFloor ?? 0, this.look.tracerCover * Math.min(1, Math.max(0, frame.cover ?? 0)), this.look.emberMaxPx]);
+    new Float32Array(this.draw, 36, 5).set([frame.whiteFloor ?? 0, this.look.tracerCover * Math.min(1, Math.max(0, frame.cover ?? 0)), this.look.emberMaxPx, this.look.casingWidthShare, this.look.casingMaxPx]);
   }
 
   /**
@@ -345,7 +374,7 @@ export class Effects {
     p.end();
   }
 
-  /** The last frame's lit billboards `first` to `first + count`: eight floats each, as Lit. */
+  /** The last frame's lit billboards `first` to `first + count`: LIT_FLOATS each, as Lit. */
   async readLit(first: number, count: number): Promise<Float32Array> {
     const n = Math.max(0, Math.min(count, MAX_BILLBOARDS - first));
     const staging = this.device.createBuffer({ size: Math.max(LIT_BYTES, n * LIT_BYTES), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });

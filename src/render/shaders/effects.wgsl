@@ -18,7 +18,14 @@
 // MIN_HEAD_PX nor wider than headMaxPx, a cap never under that floor) carries it. A strike's ember is
 // held so too, between MIN_HEAD_PX and its own cap, emberMaxPx. Blood (its alpha 2 more, from
 // effects-light.wgsl) is a firm disc, its edge only softened over its outer BLOOD_EDGE: a dust mote's
-// fades over its outer half, which at the 2 to 8 pixels blood is at 25 m left half of it unseen.
+// fades over its outer half, which at the 2 to 8 pixels blood is at 25 m left half of it unseen. A
+// casing (the brass, its way handed on with it) is laid along its way, draw.casingWidthShare of its
+// length across, its length held to draw.casingMaxPx pixels and its width with it (effects.ts
+// casingDrawn): a small, firm sliver of brass near the eye, not a soft disc across the view. The
+// muzzle's smoke and a shot's flash's core (handed on soft, their way's w 2 and 3) fade from their
+// middles to nothing at their rims: smoke a broad puff, (1 - r²)², the core a peaked glow, (1 - r²)⁴,
+// white-hot in its middle. A mote's firm disc, full out to half its radius, read near the eye as a
+// bright ball: the smoke lit by the shot's own light, the core by its own brightness.
 
 // The tracers' light (their ribbons, heads and embers, the battle's and the ricochets' too) is lit to
 // keep its hue through the present pass's per-channel tone curve (keepHue): far off and in its glow a
@@ -35,6 +42,8 @@ struct Lit {
   centre: vec3f,
   half: f32,
   colour: vec4f,
+  // A casing's way (unit), and 1 for a casing; (0, 0, 0, 2) smoke, (0, 0, 0, 3) a flash's core; zero for the rest.
+  way: vec4f,
 }
 
 // Metres; the colour linear and emissive; alpha from the tail to the head. Its style (0 a star, 1 a
@@ -74,6 +83,9 @@ struct EffectsDraw {
   cover: f32,
   // The widest a strike's ember is drawn, in pixels ([effects.ricochet] ember_max_px).
   emberMaxPx: f32,
+  // A casing's width over its length, and the most pixels its length is drawn ([effects] casing_*).
+  casingWidthShare: f32,
+  casingMaxPx: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -102,6 +114,9 @@ const CORE_MAX_SHARE: f32 = 0.45;
 const TONE_TOP: f32 = 0.9999;
 // Blood's disc is softened over this outer share of its radius.
 const BLOOD_EDGE: f32 = 0.2;
+// A casing's edges are softened over these outer shares of its width and its length.
+const CASING_EDGE_ACROSS: f32 = 0.35;
+const CASING_EDGE_ALONG: f32 = 0.2;
 
 const CORNERS = array(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
 
@@ -112,7 +127,8 @@ struct Fragment {
   // A billboard's corner in [-1, 1]²; a ribbon's (across, along from tail 0 to head 1).
   @location(1) uv: vec2f,
   @location(2) colour: vec4f,
-  // A ribbon's alpha at its tail and head; (-1, -1) for a billboard.
+  // A ribbon's alpha at its tail and head; for a billboard -1 (a disc), -2 (a square), -3 (blood), -4 (a casing),
+  // -5 (smoke) or -6 (a flash's core).
   @location(3) alphas: vec2f,
   // A tracer's glow, and its core's width over the width drawn; zero for the rest.
   @location(4) glow: vec4f,
@@ -200,6 +216,22 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
   var f: Fragment;
   if (i < draw.billboards) {
     let b = lit[i];
+    if (b.way.w > 0.5 && b.way.w < 1.5) {
+      // A casing: along its way (up, still), its length held to casingMaxPx pixels, its width a share of it.
+      let pixel = pixelAt(b.centre * toVoxels) * frame.voxel;
+      let lengthDrawn = min(2.0 * abs(b.half), draw.casingMaxPx * pixel);
+      let widthDrawn = lengthDrawn * draw.casingWidthShare;
+      let along = select(frame.cam.up, normalize(b.way.xyz), dot(b.way.xyz, b.way.xyz) > 0.25);
+      let side = cross(along, b.centre * toVoxels - frame.cam.origin);
+      let across = select(frame.cam.right, normalize(side), dot(side, side) > 1e-12);
+      let p = (b.centre + along * (corner.y * 0.5 * lengthDrawn) + across * (corner.x * 0.5 * widthDrawn)) * toVoxels;
+      f.clip = toClip(p);
+      f.world = p;
+      f.uv = corner;
+      f.colour = b.colour;
+      f.alphas = vec2f(-4.0);
+      return f;
+    }
     var half = abs(b.half);
     var colour = b.colour;
     var tone = vec2f(0.0);
@@ -230,8 +262,9 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
     f.uv = corner;
     f.colour = colour;
     f.tone = tone;
-    // A disc (-1), a square (-2: its half size came negative), or blood's firm disc (-3).
-    f.alphas = vec2f(select(select(-1.0, -2.0, b.half < 0.0), -3.0, blood));
+    // A disc (-1), a square (-2: its half size came negative), blood's firm disc (-3), or soft: smoke
+    // (-5) or a flash's core (-6), their way's w 2 and 3.
+    f.alphas = vec2f(select(select(select(-1.0, -2.0, b.half < 0.0), -3.0, blood), -3.0 - b.way.w, b.way.w > 1.5));
     return f;
   }
   let r = ribbons[i - draw.billboards];
@@ -301,6 +334,19 @@ fn fs(f: Fragment) -> @location(0) vec4f {
     // Soft across, fading from the head back to the tail.
     let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.uv.x * f.uv.x);
     return vec4f(f.colour.rgb * a, 0.0);
+  }
+  if (f.alphas.x < -4.5) {
+    // Soft: the light falling from the middle to nothing at the rim; smoke a broad puff, a flash's core
+    // peaked, white-hot only in its middle.
+    let fall = 1.0 - min(dot(f.uv, f.uv), 1.0);
+    let puff = fall * fall;
+    return f.colour * select(puff, puff * puff, f.alphas.x < -5.5);
+  }
+  if (f.alphas.x < -3.5) {
+    // A casing: firm, its edges softened a little.
+    let across = 1.0 - smoothstep(1.0 - CASING_EDGE_ACROSS, 1.0, abs(f.uv.x));
+    let along = 1.0 - smoothstep(1.0 - CASING_EDGE_ALONG, 1.0, abs(f.uv.y));
+    return f.colour * (across * along);
   }
   if (f.alphas.x < -2.5) {
     return f.colour * (1.0 - smoothstep(1.0 - BLOOD_EDGE, 1.0, length(f.uv)));

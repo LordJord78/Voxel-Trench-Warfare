@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, particleSpec, Particles, type ParticleSpec } from '../../src/combat/particles';
+import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, CASING_BILLBOARD, particleSpec, Particles, SMOKE_BILLBOARD, type ParticleSpec } from '../../src/combat/particles';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
+import { casingDrawn, effectsLook } from '../../src/render/effects';
 
 // The reference's particle pool (combat/particles.py): struct-of-arrays, per-second drag then
 // gravity then the move, removal in order at the end of life, and billboards whose size and
@@ -133,7 +134,128 @@ describe('particles', () => {
     p.emit([0, 1, 0], [0, 0, 0], spec(), 1);
     expect(billboards(p).map((b) => b[8])).toEqual([5, 0, 0]);
     for (const kind of ['blood', 'blood_mist', 'blood_entry']) expect(particleSpec(tun, kind).blood, kind).toBe(true);
-    for (const kind of ['muzzle_flash', 'brass', 'dust', 'spark', 'blast_flash', 'shell_soil', 'debris']) expect(particleSpec(tun, kind).blood ?? false, kind).toBe(false);
+    for (const kind of ['muzzle_flash', 'brass', 'dust', 'spark', 'blast_flash', 'shell_soil', 'debris', 'muzzle_smoke']) expect(particleSpec(tun, kind).blood ?? false, kind).toBe(false);
+  });
+
+  it("muzzle smoke ([particles.muzzle_smoke]): a lit grey puff rising and slowing, growing 0.05 to 0.35 m and fading from 0.18 over 1.4 s, one a shot", () => {
+    const smoke = particleSpec(tun, 'muzzle_smoke');
+    expect([smoke.lifeS, smoke.gravity, smoke.drag, smoke.sizeStartM, smoke.sizeEndM]).toEqual([1.4, 0.25, 1.5, 0.05, 0.35]);
+    expect(smoke.colourStart).toEqual([0.55, 0.55, 0.55, 0.18]);
+    expect(smoke.colourEnd).toEqual([0.55, 0.55, 0.55, 0.0]);
+    expect([smoke.emissive, smoke.square, smoke.casing ?? false, smoke.blood ?? false, smoke.smoke ?? false]).toEqual([false, false, false, false, true]);
+    expect([smoke.count, smoke.speed, smoke.spread]).toEqual([1, 0.6, 0.4]);
+    // It rises: thrown still, it climbs.
+    const p = new Particles(4);
+    p.emit([0, 1, 0], [0, 0, 0], smoke, 1);
+    // Lit as dust is, but of its own kind: a soft puff (effects.wgsl), not a mote's firm disc, which the
+    // shot's own light showed as a bright ball near the eye.
+    expect(SMOKE_BILLBOARD).toBe(7);
+    expect(billboards(p)[0][8]).toBe(SMOKE_BILLBOARD);
+    // No way to be drawn along: that is a casing's.
+    expect(Array.from(billboards(p)[0].slice(9, 12))).toEqual([0, 0, 0]);
+    for (let k = 0; k < 30; k++) p.step(DT);
+    expect(billboards(p)[0][1]).toBeGreaterThan(1);
+    // Only the muzzle's smoke is a puff: the rest are as they were.
+    for (const kind of ['muzzle_flash', 'brass', 'dust', 'spark', 'blast_flash', 'shell_soil', 'debris', 'blood']) expect(particleSpec(tun, kind).smoke ?? false, kind).toBe(false);
+  });
+
+  it("the wind (`wind`, m/s) carries the lit particles that are not held to the drawn gun, added to their own velocity as they move; not the emissive, not the anchored, and none by default", () => {
+    const still = spec({ gravity: 0, drag: 2 });
+    const p = new Particles(8);
+    expect(p.wind).toEqual([0, 0, 0]);
+    p.emit([0, 1, 0], [1, 0, 0], still, 1);
+    p.emit([0, 1, 0], [1, 0, 0], spec({ gravity: 0, drag: 2, emissive: true }), 1);
+    p.emit([0, 1, 0], [1, 0, 0], still, 1, undefined, undefined, 2);
+    p.emit([0, 1, 0], [1, 0, 0], spec({ gravity: 0, drag: 2, blood: true }), 1);
+    p.emit([0, 1, 0], [1, 0, 0], spec({ gravity: 0, drag: 2, smoke: true }), 1);
+    p.wind = [2, 0, -1];
+    p.step(DT);
+    const own = (1 - 2 * DT) * DT;
+    const at = billboards(p).map((b) => Array.from(b.slice(0, 3)));
+    const expectAt = (got: number[], want: number[], what: string) => got.forEach((v, k) => expect(v, `${what}.${k}`).toBeCloseTo(want[k], 6));
+    expectAt(at[0], [own + 2 * DT, 1, -DT], 'lit');
+    expectAt(at[1], [own, 1, 0], 'emissive');
+    expectAt(at[2], [own, 1, 0], 'anchored');
+    expectAt(at[3], [own + 2 * DT, 1, -DT], 'blood');
+    // The muzzle's smoke (its own kind, a soft puff) drifts with it.
+    expectAt(at[4], [own + 2 * DT, 1, -DT], 'smoke');
+    // It is not their velocity: their own drag does not eat it, and with it gone they move as before.
+    for (let k = 0; k < 30; k++) p.step(DT);
+    const before = billboards(p)[0][0];
+    p.step(DT);
+    const v = 1 * (1 - 2 * DT) ** 32;
+    expect(billboards(p)[0][0] - before).toBeCloseTo((v + 2) * DT, 6);
+    p.wind = [0, 0, 0];
+    const calm = billboards(p)[0][0];
+    p.step(DT);
+    expect(billboards(p)[0][0] - calm).toBeCloseTo(v * (1 - 2 * DT) * DT, 6);
+  });
+
+  it("the brass is a casing (its table's `casing = true`): its own kind, its long axis along its way as it flies and falls", () => {
+    expect(CASING_BILLBOARD).toBe(6);
+    // Twelve floats a billboard now, its way the last three; the pool says so for what reads it in the page.
+    expect(BILLBOARD_FLOATS).toBe(12);
+    expect(new Particles(1).floats).toBe(BILLBOARD_FLOATS);
+    const brass = particleSpec(tun, 'brass');
+    expect(brass.casing).toBe(true);
+    for (const kind of ['muzzle_flash', 'dust', 'spark', 'debris', 'blood', 'muzzle_smoke']) expect(particleSpec(tun, kind).casing ?? false, kind).toBe(false);
+    const p = new Particles(4);
+    p.emit([0, 1.5, 0], [2.6, 1.5, 0.3], brass, 1);
+    p.emit([0, 1.5, 0], [2.6, 1.5, 0.3], spec(), 1);
+    const axis = () => {
+      const [casing, mote] = billboards(p);
+      expect(casing[8]).toBe(CASING_BILLBOARD);
+      // A mote has no way to be drawn along.
+      expect(Array.from(mote.slice(9, 12))).toEqual([0, 0, 0]);
+      return Array.from(casing.slice(9, 12));
+    };
+    const unit = (v: number[]) => v.map((x) => x / Math.hypot(v[0], v[1], v[2]));
+    // Thrown out and up, then falling: its axis is its velocity's way each step.
+    const prev = [0, 1.5, 0];
+    let falling = false;
+    for (let k = 0; k < 40; k++) {
+      p.step(DT);
+      const [b] = billboards(p);
+      const now = Array.from(b.slice(0, 3));
+      const way = unit(now.map((x, i) => x - prev[i]));
+      const a = axis();
+      expect(Math.hypot(a[0], a[1], a[2])).toBeCloseTo(1, 5);
+      // Its velocity this step is the way it moved (the move is its velocity × dt).
+      a.forEach((x, i) => expect(x, `step ${k}.${i}`).toBeCloseTo(way[i], 3));
+      if (a[1] < -0.5) falling = true;
+      prev.splice(0, 3, ...now);
+    }
+    expect(falling).toBe(true);
+  });
+
+  it("a casing is drawn about 1 cm × 3 cm, its length held to casing_max_px pixels near the eye, its width with it (effects.wgsl)", () => {
+    const look = effectsLook(tun);
+    const brass = particleSpec(tun, 'brass');
+    expect(brass.sizeStartM).toBeGreaterThanOrEqual(0.025);
+    expect(brass.sizeStartM).toBeLessThanOrEqual(0.035);
+    // Far enough off, as it is: about 3 cm along and 1 cm across.
+    const far = casingDrawn(brass.sizeStartM, 0.01, look);
+    expect(far.lengthM).toBe(brass.sizeStartM);
+    expect(far.widthM).toBeGreaterThanOrEqual(0.008);
+    expect(far.widthM).toBeLessThanOrEqual(0.012);
+    // At the port, 0.4 m from the eye at 1600 px across a 90° view, a pixel is 0.5 mm: 56 px long
+    // unheld, the soft disc the flash lit; held to casing_max_px, its width in proportion.
+    const pixelM = (2 * 0.4) / 1600;
+    const near = casingDrawn(brass.sizeStartM, pixelM, look);
+    expect(brass.sizeStartM / pixelM).toBeGreaterThan(look.casingMaxPx);
+    expect(near.lengthM / pixelM).toBeCloseTo(look.casingMaxPx, 6);
+    expect(near.widthM / near.lengthM).toBeCloseTo(far.widthM / far.lengthM, 6);
+    expect(look.casingMaxPx).toBeGreaterThanOrEqual(8);
+    expect(look.casingMaxPx).toBeLessThanOrEqual(24);
+  });
+
+  it("the muzzle's smoke takes [effects] smoke_flash_share of a shot's light (effects-light.wgsl): some of it, not all; the rest of what is lit takes it whole", () => {
+    const look = effectsLook(tun);
+    expect(look.smokeFlashShare).toBe(tun.f('effects.smoke_flash_share'));
+    // Lit by it (the flash is seen in its smoke), but a puff a hand from the eye lit whole by a light
+    // that stands for a millisecond's flash held two frames strobed a white ball over the view.
+    expect(look.smokeFlashShare).toBeGreaterThan(0);
+    expect(look.smokeFlashShare).toBeLessThan(0.5);
   });
 
   it('the same seed throws the same brass', () => {

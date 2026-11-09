@@ -919,17 +919,38 @@ speed_jitter        = 0.0
 life_s              = 1.30
 gravity             = -9.81
 drag                = 0.35
-size_start_m        = 0.028
-size_end_m          = 0.028
+size_start_m        = 0.028    # a casing's length: drawn along its way, [effects] casing_width_share
+size_end_m          = 0.028    # of it across (about 1 cm), and held to casing_max_px near the eye
 colour_start        = [0.86, 0.68, 0.30, 1.0]
 colour_end          = [0.70, 0.55, 0.24, 0.0]
 emissive            = false
 square              = false
+casing              = true     # drawn as a casing (particles.ts CASING_BILLBOARD), not a disc
 count               = 1
 speed               = 2.6      # to the right
 lift                = 1.5
 spread              = 0.55
 speed_jitter        = 0.2
+
+# A shot's smoke at the muzzle (the shots spec §2): a lit grey puff thrown along the bore, rising
+# (gravity up) and slowing, growing and fading out; it drifts on the battle's wind (Particles.wind). A
+# suppressed gun throws two.
+[particles.muzzle_smoke]
+life_s              = 1.4
+gravity             = 0.25     # it rises
+drag                = 1.5
+size_start_m        = 0.05
+size_end_m          = 0.35
+colour_start        = [0.55, 0.55, 0.55, 0.18]
+colour_end          = [0.55, 0.55, 0.55, 0.0]
+emissive            = false
+square              = false
+smoke               = true     # drawn as a soft puff (particles.ts SMOKE_BILLBOARD), not a firm disc
+count               = 1        # 2 with a suppressor
+speed               = 0.6      # along the bore
+lift                = 0.0
+spread              = 0.4
+speed_jitter        = 0.0
 
 [particles.dust]
 life_s              = 0.90
@@ -1106,6 +1127,8 @@ blast_gain          = 1.0      # a shell landing, heard at any distance
 blast_rumble_s      = 1.8
 scrape_gain         = 0.5      # a scoop dug: the blade's scrape and the spoil landing
 flare_gain          = 0.4      # a flare fired: the pistol's pop and the flare's hiss as it climbs
+hands_gain          = 0.5      # the hands' cues (combat/handling.ts: the magazine out and in, the bolt,
+                               # the feed cover, a shell, the pump, a dry click), at the ear
 # The distant guns (the battle spec's §3): a barrage's shell beyond the map rumbles, a far shell thumps,
 # each late by its distance; quieter as the near end of its shells' range over the distance, and over
 # that range duller (geometrically, from the second lowpass to the first) and longer.
@@ -1212,8 +1235,27 @@ flash_s             = 0.03     # a shot's flash star and its light, in the world
                                # seconds: two frames at 60 Hz, five at 144
 particle_attach_s   = 0.15     # the shot's flash and brass leave the rifle as drawn,
                                # joining their own paths over this
-flash_star_length_m = 0.22
-flash_star_width_m  = 0.06
+# A shot's flash (the shots spec §2), all of it drawn from a hash of the shot (its tick and its muzzle):
+# a white-hot core, an emissive disc this wide, a little out along the bore; and its star, this many
+# prongs, each this long and this far off the bore, each at its own roll about it, spread round it. A
+# compensator's two short side prongs instead, out to the gun's sides, this far off the bore; a
+# suppressor's only a glimmer of its light.
+flash_core_m        = [0.10, 0.16]
+flash_core_colour   = [1.0, 0.97, 0.90]
+flash_core_gain     = 0.25     # the core's brightness over the prongs' (flash_intensity): at night a
+                               # core as bright as them read as a white ball, its prongs lost round it
+flash_prongs        = [3, 5]
+flash_prong_m       = [0.15, 0.30]
+flash_prong_splay_deg = [30.0, 60.0]   # off the bore: nearer it, from the eye behind the gun a prong
+                               # is end on, a short stub
+flash_prong_gap_deg = 60.0     # the arc about the bore left clear about the roll toward the eye's line
+                               # (the gun's left from the hip, its top aimed): a prong there crossed
+                               # the reticle and lay along the tracer leaving, as wide as a tracer
+flash_comp_prong_m  = [0.08, 0.12]
+flash_comp_splay_deg = 80.0
+flash_comp_tip      = 0.7      # a side prong's brightness at its tip (a prong's else fades to nothing):
+                               # most of it lies inside the core, and faded it was lost there
+flash_star_width_m  = 0.025    # each prong's width: at 0.06 a prong half a metre off was a bar
 flash_colour        = [1.0, 0.86, 0.55]
 flash_intensity     = 60.0
 flash_light_radius_m  = 6.0    # a shot's light: warm, falling to nothing at this
@@ -1242,6 +1284,14 @@ blood_light_floor   = 0.5      # blood ([particles.blood*]) is lit as dust is, b
                                # dusk and at night it reads dark red, not soot
 blood_min_px        = 2.0      # and is drawn at least this many pixels across: a
                                # 3 cm droplet at 25 m was a pixel (G3 Task 4)
+casing_width_share  = 0.36     # a casing ([particles.brass] casing): drawn along its way, this share
+casing_max_px       = 16.0     # of its length across, its length held to this many pixels of the
+                               # internal image near the eye (its width with it): at the port, 0.4 m
+                               # off, a 2.8 cm casing is 56 px, which the flash lit as a soft disc
+smoke_flash_share   = 0.25     # the muzzle's smoke ([particles.muzzle_smoke]) takes this share of a shot's
+                               # light (flash_light_*), which stands for a millisecond's flash held
+                               # flash_s: on a wall it reads so, but a puff a hand from the eye, lit
+                               # whole, strobed a white ball over the view with every round
 
 # Ricochets and embers (src/app/ricochets.ts): a tracer that strikes leaves an ember, and a graze
 # (within max_deg of the face's plane) sometimes glances off and flies on, burning.

@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { CameraRig, rigTunables } from '../../src/app/camera-rig';
-import { EffectsFrameBuilder, effectsTunables, NO_BATTLE, type ShownBattle } from '../../src/app/effects-frame';
+import { EffectsFrameBuilder, effectsTunables, flashDraw, NO_BATTLE, type ShownBattle } from '../../src/app/effects-frame';
 import { farShellTunables } from '../../src/battle/far-shells';
 import { fireFlames, firePlume, fireTunables, type Fire } from '../../src/battle/fires';
 import { Wind, windTunables } from '../../src/battle/wind';
 import { tracerTunables, type TracerState } from '../../src/battle/tracers';
 import { flareTunables, type FlareState } from '../../src/battle/flares';
 import { projectileSpec } from '../../src/combat/ballistics';
-import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, particleSpec } from '../../src/combat/particles';
+import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, CASING_BILLBOARD, particleSpec, SMOKE_BILLBOARD } from '../../src/combat/particles';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../../src/combat/rifle-model';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
-import { MAX_BILLBOARDS, RIBBON_FLOATS } from '../../src/render/effects';
+import { decodeShotMark, encodeShotMark, TRACER_KIND } from '../../src/net/gear';
+import { FLASH_CORE_BILLBOARD, MAX_BILLBOARDS, RIBBON_FLOATS } from '../../src/render/effects';
 import { MAX_PUFFS } from '../../src/render/frame-uniforms';
 import { HAZE_PUFFS } from '../../src/render/quality';
 import { throughPose, type RiflePose } from '../../src/render/rifle';
@@ -84,6 +85,17 @@ function ribbon(r: Float32Array, i: number): { tail: number[]; head: number[] } 
   return { tail: [r[o], r[o + 1], r[o + 2]], head: [r[o + 4], r[o + 5], r[o + 6]] };
 }
 
+/** A shot's flash as its event says to draw it: from its tick and muzzle, a compensator's if its mark says so. */
+const drawOf = (shot: CombatEvents['shots'][number]) => flashDraw(shot.tick, shot.muzzle, shot.mark !== undefined && decodeShotMark(shot.mark).comp, t);
+const dot = (a: readonly number[], b: readonly number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+/** The flash's prongs, the frame's last `n` ribbons: each its way from the muzzle (unit) and its length. */
+const prongsOf = (built: { frame: { ribbons: Float32Array; ribbonCount: number } }, n: number) =>
+  Array.from({ length: n }, (_, k) => {
+    const r = ribbon(built.frame.ribbons, built.frame.ribbonCount - n + k);
+    const d = sub(r.head, r.tail);
+    return { tail: r.tail, dir: unit(d), lengthM: Math.hypot(...d) };
+  });
+
 describe('a frame of effects', () => {
   it("a shot's flash star and light show for flash_s of the world's time, at 30, 60 or 144 frames a second, then not", () => {
     // The review's case: flash_frames frames were 33 ms at 60 Hz and 14 ms at 144 Hz.
@@ -97,15 +109,18 @@ describe('a frame of effects', () => {
       expect(built.lights[0].position).toEqual(events.shots[0].muzzle);
       expect(built.lights[0].radiusM).toBe(t.flashLightRadiusM);
       expect(built.lights[0].intensity).toBe(t.flashLightIntensity);
+      const prongs = drawOf(events.shots[0]).prongs.length;
       let frames = 0;
       while (built.lights.length > 0 && frames < 100) {
-        expect(built.counts.stars).toBe(3);
+        expect(built.counts.stars).toBe(prongs);
+        expect(built.counts.cores).toBe(1);
         frames++;
         s.advance(1 / rate);
         built = b.build(s, s.drainEvents());
       }
       expect(frames, `${rate} Hz`).toBe(Math.ceil(t.flashS * rate));
       expect(built.counts.stars).toBe(0);
+      expect(built.counts.cores).toBe(0);
     }
   });
 
@@ -116,7 +131,7 @@ describe('a frame of effects', () => {
     for (let k = 0; k < 10; k++) expect(b.build(s, none()).lights.length).toBe(1);
   });
 
-  it("the flash's star and light are at the drawn rifle's muzzle, along its bore, and follow it while they show", () => {
+  it("the flash's star and light are at the drawn rifle's muzzle, about its bore, and follow it while they show", () => {
     const { s, events, rifle } = walkAndShoot();
     const drawn = throughPose(rifle.toWorld, RIFLE_MUZZLE);
     const gap = Math.hypot(...sub(events.shots[0].muzzle, drawn));
@@ -125,11 +140,25 @@ describe('a frame of effects', () => {
     let built = b.build(s, events, rifle);
     expect(built.lights.length).toBe(1);
     close(built.lights[0].position, drawn, 5, 'light');
-    const n = built.frame.ribbonCount;
-    expect(built.counts.stars).toBe(3);
-    for (let i = n - 3; i < n; i++) close(ribbon(built.frame.ribbons, i).tail, drawn, 5, `ray ${i}`);
-    const forward = ribbon(built.frame.ribbons, n - 3);
-    close(unit(sub(forward.head, forward.tail)), unit([rifle.toWorld[6], rifle.toWorld[7], rifle.toWorld[8]]), 4, 'bore');
+    const draw = drawOf(events.shots[0]);
+    expect(built.counts.stars).toBe(draw.prongs.length);
+    // Each prong from the drawn muzzle, its own length, at its own angle off the drawn bore.
+    const bore = unit([rifle.toWorld[6], rifle.toWorld[7], rifle.toWorld[8]]);
+    prongsOf(built, draw.prongs.length).forEach((p, k) => {
+      close(p.tail, drawn, 5, `prong ${k}`);
+      expect(p.lengthM, `prong ${k}`).toBeCloseTo(draw.prongs[k].lengthM, 4);
+      expect(Math.acos(Math.min(1, dot(p.dir, bore))), `prong ${k}`).toBeCloseTo(draw.prongs[k].splay, 3);
+    });
+    // Its core: emissive, of its own kind (effects.wgsl draws it a peaked glow, white-hot in the middle and
+    // gone at its rim, not a firm white ball), just out along the bore from the drawn muzzle, as wide as drawn.
+    expect(FLASH_CORE_BILLBOARD).toBe(8);
+    const out = built.frame.billboards;
+    const cores = Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS))).filter((q) => q[8] === FLASH_CORE_BILLBOARD && Math.abs(q[3] - draw.coreM / 2) < 1e-6);
+    expect(cores.length).toBe(1);
+    const ahead = sub(cores[0].slice(0, 3), drawn);
+    expect(dot(ahead, bore)).toBeGreaterThan(0);
+    expect(Math.hypot(...ahead)).toBeLessThan(draw.coreM / 2);
+    expect(Math.hypot(...sub(ahead, bore.map((v) => v * dot(ahead, bore))))).toBeLessThan(1e-5);
     // Drawn elsewhere the next frame, the flash goes with it.
     const moved = new Float32Array(rifle.toWorld);
     moved[9] += 0.05;
@@ -146,19 +175,25 @@ describe('a frame of effects', () => {
     const free = Array.from(loose.billboards.slice(0, loose.billboardCount * BILLBOARD_FLOATS));
     const built = new EffectsFrameBuilder(t).build(s, events, rifle);
     const held = built.frame;
-    // The shot's flash and brass, and after them its tracer's head.
+    // The shot's flash, casing and smoke, and after them its tracer's head and its flash's core.
     expect(built.counts.heads).toBe(1);
-    expect(held.billboardCount).toBe(3);
+    expect(built.counts.cores).toBe(1);
+    expect(held.billboardCount).toBe(5);
     // Thrown in the shot's tick and stepped once with it.
     const share = 1 - 1 / 60 / t.particleAttachS;
-    const drift = { 1: sub(throughPose(rifle.toWorld, RIFLE_MUZZLE), s.muzzle()), 0: sub(throughPose(rifle.toWorld, RIFLE_PORT), s.port()) };
-    for (let i = 0; i < 2; i++) {
+    const drift: Record<number, V3> = { 1: sub(throughPose(rifle.toWorld, RIFLE_MUZZLE), s.muzzle()), [CASING_BILLBOARD]: sub(throughPose(rifle.toWorld, RIFLE_PORT), s.port()) };
+    const kinds: number[] = [];
+    for (let i = 0; i < 3; i++) {
       const o = i * BILLBOARD_FLOATS;
-      const emissive = held.billboards[o + 8] as 0 | 1;
-      const want = drift[emissive].map((d) => d * share);
-      expect(Math.hypot(...want), emissive ? 'flash' : 'brass').toBeGreaterThan(0.005);
-      close(sub(Array.from(held.billboards.slice(o, o + 3)), free.slice(o, o + 3)), want, 5, emissive ? 'flash' : 'brass');
+      const kind = held.billboards[o + 8];
+      kinds.push(kind);
+      const what = kind === 1 ? 'flash' : kind === CASING_BILLBOARD ? 'brass' : 'smoke';
+      // The smoke is not held to the drawn gun: it stays where the simulation threw it.
+      const want = kind === SMOKE_BILLBOARD ? [0, 0, 0] : drift[kind].map((d) => d * share);
+      if (kind !== SMOKE_BILLBOARD) expect(Math.hypot(...want), what).toBeGreaterThan(0.005);
+      close(sub(Array.from(held.billboards.slice(o, o + 3)), free.slice(o, o + 3)), want, 5, what);
     }
+    expect(kinds).toEqual([1, CASING_BILLBOARD, SMOKE_BILLBOARD]);
   });
 
   it('two shots in one frame show two stars and two lights', () => {
@@ -166,8 +201,149 @@ describe('a frame of effects', () => {
     const one = shoot(s);
     const two: CombatEvents = { ...none(), shots: [one.shots[0], { ...one.shots[0], tick: one.shots[0].tick + 1 }] };
     const built = new EffectsFrameBuilder(t).build(s, two);
-    expect(built.counts.stars).toBe(6);
+    expect(built.counts.stars).toBe(drawOf(two.shots[0]).prongs.length + drawOf(two.shots[1]).prongs.length);
+    expect(built.counts.cores).toBe(2);
     expect(built.lights.length).toBe(2);
+  });
+
+  it("a shot's flash is drawn from a hash of the shot (its tick and muzzle): a core 0.10–0.16 m across and 3 to 5 prongs 0.15–0.30 m long, each at its own roll", () => {
+    expect([t.flashCoreM, t.flashProngs, t.flashProngM]).toEqual([
+      [0.1, 0.16],
+      [3, 5],
+      [0.15, 0.3],
+    ]);
+    const seen = new Set<number>();
+    const lengths = new Set<string>();
+    for (let tick = 0; tick < 300; tick++) {
+      const d = flashDraw(tick, [12.8, 1.5, 2.3], false, t);
+      expect(d.coreM).toBeGreaterThanOrEqual(0.1);
+      expect(d.coreM).toBeLessThanOrEqual(0.16);
+      expect(d.prongs.length).toBeGreaterThanOrEqual(3);
+      expect(d.prongs.length).toBeLessThanOrEqual(5);
+      seen.add(d.prongs.length);
+      // Each its own roll about the bore, from the roll toward the eye's line: round the arc that leaves
+      // flash_prong_gap_deg clear about that roll, none in it and none bunched on another.
+      const clear = (t.flashProngGapDeg * Math.PI) / 180;
+      const spacing = (2 * Math.PI - clear) / d.prongs.length;
+      const rolls = d.prongs.map((p) => p.roll).sort((a, b) => a - b);
+      expect(rolls[0], `tick ${tick}`).toBeGreaterThan(clear / 2);
+      expect(rolls[rolls.length - 1], `tick ${tick}`).toBeLessThan(2 * Math.PI - clear / 2);
+      for (let k = 1; k < rolls.length; k++) expect(rolls[k] - rolls[k - 1], `tick ${tick}`).toBeGreaterThan(0.5 * spacing);
+      for (const p of d.prongs) {
+        expect(p.lengthM).toBeGreaterThanOrEqual(0.15);
+        expect(p.lengthM).toBeLessThanOrEqual(0.3);
+        expect(p.splay).toBeGreaterThanOrEqual((t.flashProngSplayDeg[0] * Math.PI) / 180 - 1e-9);
+        expect(p.splay).toBeLessThanOrEqual((t.flashProngSplayDeg[1] * Math.PI) / 180 + 1e-9);
+        lengths.add(p.lengthM.toFixed(4));
+      }
+    }
+    // Every count drawn, and lengths of every kind.
+    expect([...seen].sort()).toEqual([3, 4, 5]);
+    expect(lengths.size).toBeGreaterThan(200);
+  });
+
+  it("no prong lies toward the eye's line, where it would cross the reticle and lie along the tracer leaving: from the hip none toward the gun's left, aimed none toward its top", () => {
+    const { s, events, rifle } = walkAndShoot();
+    const drawn = throughPose(rifle.toWorld, RIFLE_MUZZLE);
+    const bore = unit([rifle.toWorld[6], rifle.toWorld[7], rifle.toWorld[8]]);
+    const side = unit([rifle.toWorld[0], rifle.toWorld[1], rifle.toWorld[2]]);
+    const up = unit([rifle.toWorld[3], rifle.toWorld[4], rifle.toWorld[5]]);
+    const across = (v: readonly number[]) => unit(sub(v, bore.map((b) => b * dot(v, bore))));
+    const clear = (t.flashProngGapDeg * Math.PI) / 180;
+    expect(clear).toBeGreaterThan(0);
+    // The eye as the hip holds the gun (the session's, behind the muzzle and to its left), and as the
+    // sights do (straight behind it and over it).
+    const hip = [s.player.position.x, s.player.position.y + s.controller.eyeHeight(s.player), s.player.position.z];
+    const aimed = [0, 1, 2].map((k) => drawn[k] - bore[k] * 0.4 + up[k] * 0.06);
+    const toward = { hip: across(sub(hip, drawn)), aimed: across(sub(aimed, drawn)) };
+    expect(dot(toward.hip, side), 'from the hip the eye is off the gun\'s left').toBeLessThan(-0.5);
+    expect(dot(toward.aimed, up), 'aimed the eye is over it').toBeGreaterThan(0.9);
+    let prongs = 0;
+    for (const [name, eye] of [['hip', hip], ['aimed', aimed]] as const) {
+      for (let tick = 0; tick < 40; tick++) {
+        const shot = { ...events.shots[0], tick };
+        const built = new EffectsFrameBuilder(t).build(s, { ...events, shots: [shot] }, rifle, eye);
+        const n = drawOf(shot).prongs.length;
+        expect(built.counts.stars).toBe(n);
+        for (const p of prongsOf(built, n)) {
+          const off = Math.acos(Math.max(-1, Math.min(1, dot(across(p.dir), toward[name]))));
+          expect(off, `${name}, tick ${tick}`).toBeGreaterThan(clear / 2 - 1e-6);
+          prongs++;
+        }
+      }
+    }
+    expect(prongs).toBeGreaterThan(200);
+  });
+
+  it("a shot's flash is the same for the same shot, every frame it shows and in any builder, and another shot's is its own", () => {
+    const at: V3 = [12.8, 1.5, 2.3];
+    expect(flashDraw(40, at, false, t)).toEqual(flashDraw(40, at, false, t));
+    const other = (d: ReturnType<typeof flashDraw>) => JSON.stringify(d) !== JSON.stringify(flashDraw(40, at, false, t));
+    expect(other(flashDraw(41, at, false, t))).toBe(true);
+    expect(other(flashDraw(40, [12.81, 1.5, 2.3], false, t))).toBe(true);
+    // Built: the same ribbons from two builders, and from one frame to the next while it shows.
+    const s = stand();
+    const events = shoot(s);
+    const a = new EffectsFrameBuilder(t);
+    const first = a.build(s, events);
+    const n = first.counts.stars;
+    const rays = (built: typeof first) => prongsOf(built, n).map((p) => [...p.tail, ...p.dir, p.lengthM]);
+    const once = rays(first);
+    expect(rays(new EffectsFrameBuilder(t).build(s, events))).toEqual(once);
+    s.advance(1 / 144);
+    const next = a.build(s, s.drainEvents());
+    expect(next.counts.stars).toBe(n);
+    expect(rays(next)).toEqual(once);
+  });
+
+  it("a compensator's flash: two short prongs, 0.08–0.12 m, out to the gun's sides instead of the forward ones", () => {
+    expect(t.flashCompProngM).toEqual([0.08, 0.12]);
+    for (let tick = 0; tick < 50; tick++) {
+      const d = flashDraw(tick, [12.8, 1.5, 2.3], true, t);
+      expect(d.prongs.length).toBe(2);
+      for (const p of d.prongs) {
+        expect(p.lengthM).toBeGreaterThanOrEqual(0.08);
+        expect(p.lengthM).toBeLessThanOrEqual(0.12);
+      }
+    }
+    const { s, events, rifle } = walkAndShoot();
+    const shot = events.shots[0];
+    const mark = encodeShotMark({ tracer: true, kind: TRACER_KIND.red, suppressed: false, gun: 'm4', comp: true });
+    const built = new EffectsFrameBuilder(t).build(s, { ...events, shots: [{ ...shot, mark, flash: 1.4 }] }, rifle);
+    expect(built.counts.stars).toBe(2);
+    expect(built.counts.cores).toBe(1);
+    const bore = unit([rifle.toWorld[6], rifle.toWorld[7], rifle.toWorld[8]]);
+    const side = unit([rifle.toWorld[0], rifle.toWorld[1], rifle.toWorld[2]]);
+    const [left, right] = prongsOf(built, 2);
+    for (const p of [left, right]) {
+      // Out to the side more than along the bore, and not up or down off the gun's sides.
+      expect(Math.abs(dot(p.dir, side))).toBeGreaterThan(0.9);
+      expect(Math.abs(dot(p.dir, bore))).toBeLessThan(0.45);
+      expect(p.lengthM).toBeLessThanOrEqual(0.12 + 1e-6);
+    }
+    // One to each side.
+    expect(dot(left.dir, side) * dot(right.dir, side)).toBeLessThan(0);
+    // Most of each lies inside the core: they keep flash_comp_tip of their light to their tips, where a
+    // bare gun's prongs fade to nothing.
+    const alphas = (built: { frame: { ribbons: Float32Array; ribbonCount: number } }, n: number) =>
+      Array.from({ length: n }, (_, k) => {
+        const o = (built.frame.ribbonCount - n + k) * RIBBON_FLOATS;
+        return [built.frame.ribbons[o + 7], built.frame.ribbons[o + 11]];
+      });
+    expect(t.flashCompTip).toBeGreaterThan(0);
+    for (const [tail, tip] of alphas(built, 2)) expect([tail, tip]).toEqual([1, expect.closeTo(t.flashCompTip, 6)]);
+    const bare = new EffectsFrameBuilder(t).build(s, events, rifle);
+    for (const [tail, tip] of alphas(bare, bare.counts.stars)) expect([tail, tip]).toEqual([1, 0]);
+  });
+
+  it("a suppressed shot's flash is today's wisp: no core and no prongs, a glimmer of its light", () => {
+    const s = stand();
+    const events = shoot(s);
+    const built = new EffectsFrameBuilder(t).build(s, { ...events, shots: [{ ...events.shots[0], flash: 0.12 }] });
+    expect(built.counts.stars).toBe(0);
+    expect(built.counts.cores).toBe(0);
+    expect(built.lights.length).toBe(1);
+    expect(built.lights[0].intensity).toBeCloseTo(t.flashLightIntensity * 0.12, 9);
   });
 
   it("the player's tracer leaves the muzzle and joins the round's path where it was aimed", () => {
@@ -347,9 +523,9 @@ describe('a frame of effects', () => {
     const hiding = new EffectsFrameBuilder(t);
     hiding.hideBurst = true;
     const hidden = kindsOf(hiding);
-    // The dust, the brass and the flare's disc, as they were.
+    // The dust, the brass (a casing) and the flare's disc, as they were.
     expect(hidden).toEqual([...shown.slice(0, 2), shown[shown.length - 2], shown[shown.length - 1]]);
-    expect(hidden.map((q) => q[8])).toEqual([0, 0, 0, 1]);
+    expect(hidden.map((q) => q[8])).toEqual([0, 0, CASING_BILLBOARD, 1]);
   });
 
   it("the battle's billboards keep their allowance under a full pool", () => {
@@ -374,12 +550,13 @@ describe('a frame of effects', () => {
     expect(b.debugAt).toBe(s.particles.capacity);
   });
 
-  it("the session's particles are the frame's billboards, and its tracers' heads after them", () => {
+  it("the session's particles are the frame's billboards, and its tracers' heads after them, then its flash's core", () => {
     const s = stand();
     const built = new EffectsFrameBuilder(t).build(s, shoot(s));
     expect(built.counts.heads).toBe(1);
-    expect(built.counts.billboards).toBe(s.particles.count + 1);
-    expect(built.frame.billboardCount).toBe(s.particles.count + 1);
+    expect(built.counts.cores).toBe(1);
+    expect(built.counts.billboards).toBe(s.particles.count + 2);
+    expect(built.frame.billboardCount).toBe(s.particles.count + 2);
     // The head last, emissive and held to its pixels (kind 3), at its tracer's head as drawn (still
     // joining the round's path).
     const head = Array.from(built.frame.billboards.slice(s.particles.count * BILLBOARD_FLOATS, (s.particles.count + 1) * BILLBOARD_FLOATS));

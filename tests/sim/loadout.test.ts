@@ -44,9 +44,17 @@ describe('the loadout in the hands', () => {
     s.tick();
     const shot = s.drainEvents().shots[0];
     expect(shot).toBeDefined();
-    expect(decodeShotMark(shot.mark!)).toMatchObject({ gun: 'm4', suppressed: true });
+    expect(decodeShotMark(shot.mark!)).toMatchObject({ gun: 'm4', suppressed: true, comp: false });
     expect(shot.report!).toBeLessThan(0.5);
     expect(shot.flash!).toBeLessThan(0.5);
+  });
+
+  it("marks a compensated gun's shot with its compensator (its flash's side prongs)", () => {
+    const s = stand({ primary: 'm4', secondary: 'm17', fits: { m4: { optic: 'iron', muzzle: 'compensator', under: 'none', side: 'none' } } });
+    s.intent = { ...idleIntent(), fire: true };
+    s.tick();
+    const shot = s.drainEvents().shots[0];
+    expect(decodeShotMark(shot.mark!)).toMatchObject({ gun: 'm4', suppressed: false, comp: true });
   });
 
   it('brings up the pistol on its number, and nothing fires while the guns change', () => {

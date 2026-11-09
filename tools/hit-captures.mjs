@@ -111,13 +111,15 @@ async function open(page) {
           const d = st.dummies.find((x) => x.id === id);
           const chest = [d.position[0], d.position[1] + 1.3, d.position[2]];
           const parts = h.session.particles;
-          const out = new Float32Array(parts.capacity * 9);
+          // A billboard's floats as the build lays them out (particles.ts BILLBOARD_FLOATS; 9 before a casing's way).
+          const F = parts.floats ?? 9;
+          const out = new Float32Array(parts.capacity * F);
           const n = parts.billboards(out);
           let droplets = 0;
           let mist = 0;
           let mistM = 0;
           for (let i = 0; i < n; i++) {
-            const o = i * 9;
+            const o = i * F;
             const a = out[o + 7];
             // Blood: its own kind (particles.ts BLOOD_BILLBOARD, 5), or a lit disc before it had one.
             if ((out[o + 8] !== 5 && out[o + 8] !== 0) || a <= 0) continue;
@@ -310,11 +312,12 @@ async function fire(page, shot, dummyId, feet) {
       const drawn = await page.evaluate((feet) => {
         const h = window.__trenchline;
         const parts = h.session.particles;
-        const out = new Float32Array(parts.capacity * 9);
+        const F = parts.floats ?? 9;
+        const out = new Float32Array(parts.capacity * F);
         const n = parts.billboards(out);
         const blood = [];
         for (let i = 0; i < n; i++) {
-          const o = i * 9;
+          const o = i * F;
           const a = out[o + 7];
           const at = [out[o], out[o + 1], out[o + 2]];
           // The burst's: blood (its own kind, or a red lit disc before it had one) and a helmet's

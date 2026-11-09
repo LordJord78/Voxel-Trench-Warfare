@@ -12,10 +12,13 @@
  * them. Billboards run size and colour from start to end by age, for the
  * renderer (effects.ts), which lights the ones not emissive, and blood (its
  * own kind) no darker than a floor and no smaller than a few pixels, so it reads
- * at range and at dusk. A particle may be
+ * at range and at dusk; a casing (the brass, its own kind) is drawn along its
+ * way, its billboard carrying its velocity's direction. A particle may be
  * anchored to a point the renderer draws elsewhere than the simulation holds it
  * (the shot's flash and brass, to the drawn rifle): its billboard starts off by
- * that point's drift and joins its own path as it ages.
+ * that point's drift and joins its own path as it ages. The wind (`wind`, set
+ * each frame from the battle's) carries the lit particles not so anchored (the
+ * muzzle's smoke, dust, blood): a velocity added to their own as they move.
  */
 
 import { pow } from '../core/dmath';
@@ -39,6 +42,10 @@ export interface ParticleSpec {
   square: boolean;
   /** Blood (its table's `blood = true`): a lit disc of its own kind, BLOOD_BILLBOARD. */
   blood?: boolean;
+  /** A casing (its table's `casing = true`, the brass): lit, of its own kind, CASING_BILLBOARD, drawn along its way. */
+  casing?: boolean;
+  /** Smoke (its table's `smoke = true`, the muzzle's): lit, of its own kind, SMOKE_BILLBOARD, drawn as a soft puff. */
+  smoke?: boolean;
   /** How it is thrown: how many; speed along its direction, plus lift upward; spread and jitter. */
   count: number;
   speed: number;
@@ -64,6 +71,10 @@ export function particleSpec(tun: Tunables, kind: string): ParticleSpec {
   if (typeof square !== 'boolean') throw new TypeError(`tunable '${k}.square' is not true or false`);
   const blood = tun.has(`${k}.blood`) ? tun.get(`${k}.blood`) : false;
   if (typeof blood !== 'boolean') throw new TypeError(`tunable '${k}.blood' is not true or false`);
+  const casing = tun.has(`${k}.casing`) ? tun.get(`${k}.casing`) : false;
+  if (typeof casing !== 'boolean') throw new TypeError(`tunable '${k}.casing' is not true or false`);
+  const smoke = tun.has(`${k}.smoke`) ? tun.get(`${k}.smoke`) : false;
+  if (typeof smoke !== 'boolean') throw new TypeError(`tunable '${k}.smoke' is not true or false`);
   return {
     lifeS: tun.f(`${k}.life_s`),
     gravity: tun.f(`${k}.gravity`),
@@ -76,6 +87,8 @@ export function particleSpec(tun: Tunables, kind: string): ParticleSpec {
     emissive,
     square,
     blood,
+    casing,
+    smoke,
     count: tun.i(`${k}.count`),
     speed: tun.f(`${k}.speed`),
     lift: tun.f(`${k}.lift`),
@@ -84,19 +97,40 @@ export function particleSpec(tun: Tunables, kind: string): ParticleSpec {
   };
 }
 
-/** A billboard's floats: centre (3), half its size (1), colour premultiplied by its alpha (4), and its kind: 0 a lit disc, 1 emissive, 2 a lit square, BLOOD_BILLBOARD blood. */
-export const BILLBOARD_FLOATS = 9;
+/**
+ * A billboard's floats: centre (3), half its size (1), colour premultiplied by its alpha (4), its kind
+ * (0 a lit disc, 1 emissive, 2 a lit square, BLOOD_BILLBOARD blood, CASING_BILLBOARD a casing,
+ * SMOKE_BILLBOARD smoke), and a casing's way, the unit direction it is drawn along (3; zero for the
+ * rest, and unread).
+ */
+export const BILLBOARD_FLOATS = 12;
 /**
  * Blood's kind of billboard, after effects.ts's 3 (a tracer's head) and 4 (an ember): a lit disc, lit
  * no darker than [effects] blood_light_floor and drawn no smaller than blood_min_px across
  * (effects-light.wgsl), so a droplet at 25 m is not a pixel of soot.
  */
 export const BLOOD_BILLBOARD = 5;
+/**
+ * A casing's kind of billboard (the brass): lit as a mote is, and drawn as a casing (effects.wgsl): its
+ * half size half its length, along its way (the billboard's last three floats), [effects]
+ * casing_width_share of it across, its length held to casing_max_px pixels (effects.ts casingDrawn).
+ */
+export const CASING_BILLBOARD = 6;
+/**
+ * Smoke's kind of billboard (the muzzle's): lit as a mote is, and drawn as a soft puff (effects.wgsl), its
+ * light falling away from its middle to nothing at its rim. A mote's firm disc, lit by the shot's own light a
+ * hand from the eye, read as a bright ball over the view and widened the tracer it hung about.
+ */
+export const SMOKE_BILLBOARD = 7;
 
 export class Particles {
   count = 0;
   /** Particles a full pool refused. */
   dropped = 0;
+  /** The wind (m/s), added to the velocity of the lit particles not anchored as they move: the battle's, set each frame (app/main.ts); none unless set. */
+  wind: [number, number, number] = [0, 0, 0];
+  /** A billboard's floats (BILLBOARD_FLOATS), for what reads them in the page (the capture tools, the e2e tests). */
+  readonly floats = BILLBOARD_FLOATS;
   private readonly pos: Float64Array;
   private readonly vel: Float64Array;
   private readonly age: Float64Array;
@@ -108,7 +142,7 @@ export class Particles {
   private readonly sizeEase: Float64Array;
   private readonly colourStart: Float64Array;
   private readonly colourEnd: Float64Array;
-  /** 0 lit, 1 emissive, 2 lit and square, BLOOD_BILLBOARD blood: the billboard's kind. */
+  /** 0 lit, 1 emissive, 2 lit and square, BLOOD_BILLBOARD blood, CASING_BILLBOARD a casing, SMOKE_BILLBOARD smoke: the billboard's kind. */
   private readonly kind: Uint8Array;
   private readonly anchor: Uint8Array;
 
@@ -166,7 +200,7 @@ export class Particles {
         this.colourStart[i * 4 + c] = spec.colourStart[c] * t;
         this.colourEnd[i * 4 + c] = spec.colourEnd[c] * t;
       }
-      this.kind[i] = spec.emissive ? 1 : spec.blood ? BLOOD_BILLBOARD : spec.square ? 2 : 0;
+      this.kind[i] = spec.emissive ? 1 : spec.blood ? BLOOD_BILLBOARD : spec.casing ? CASING_BILLBOARD : spec.smoke ? SMOKE_BILLBOARD : spec.square ? 2 : 0;
       this.anchor[i] = anchor;
     }
     return n;
@@ -174,11 +208,14 @@ export class Particles {
 
   step(dt: number): void {
     let w = 0;
+    const wind = this.wind;
     for (let i = 0; i < this.count; i++) {
       const keep = Math.max(0, 1 - this.drag[i] * dt);
       for (let k = 0; k < 3; k++) this.vel[i * 3 + k] *= keep;
       this.vel[i * 3 + 1] += this.gravity[i] * dt;
-      for (let k = 0; k < 3; k++) this.pos[i * 3 + k] += this.vel[i * 3 + k] * dt;
+      // The wind carries what is lit and loose: not the emissive (a flash, sparks), nor what is held to the drawn gun.
+      const carried = this.kind[i] !== 1 && this.anchor[i] === 0;
+      for (let k = 0; k < 3; k++) this.pos[i * 3 + k] += (this.vel[i * 3 + k] + (carried ? wind[k] : 0)) * dt;
       this.age[i] += dt;
       if (this.age[i] >= this.life[i]) continue;
       if (w !== i) this.move(i, w);
@@ -205,6 +242,20 @@ export class Particles {
       for (let c = 0; c < 3; c++) out[o + 4 + c] = (this.colourStart[i * 4 + c] + (this.colourEnd[i * 4 + c] - this.colourStart[i * 4 + c]) * t) * alpha;
       out[o + 7] = alpha;
       out[o + 8] = this.kind[i];
+      // A casing's way: its velocity's direction (none while it is still).
+      let ax = 0;
+      let ay = 0;
+      let az = 0;
+      if (this.kind[i] === CASING_BILLBOARD) {
+        const vx = this.vel[i * 3];
+        const vy = this.vel[i * 3 + 1];
+        const vz = this.vel[i * 3 + 2];
+        const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+        if (speed > 0) [ax, ay, az] = [vx / speed, vy / speed, vz / speed];
+      }
+      out[o + 9] = ax;
+      out[o + 10] = ay;
+      out[o + 11] = az;
     }
     return n;
   }
