@@ -1003,6 +1003,25 @@ describe("the room's log caught up on a page that joins or reloads", () => {
     expect([j.battle.landed, j.battle.waiting, j.battle.held]).toEqual([[S1, S2], [], [D]]);
   });
 
+  it("a log holding a scoop that spans the map (a hostile client's) catches up to the world of the same log without it", async () => {
+    // The shovel reaches 1.6 m: a scoop's cells are never more than DIG_SPAN_MAX voxels apart. This
+    // one's are the parapet's spoil at its two ends, 25.5 m apart: shovel work for no shovel, and a
+    // settle over the whole map. Every page drops it, as the room would have.
+    const dims = trenchArena().dims;
+    const S1 = shell(1, 2_000, 11.0, 15.0, 2.0, 871);
+    const honest: Dig = { seat: 1, at: 3_000, cells: [packCell(dims, 230, 75, 150), packCell(dims, 231, 75, 150)] };
+    const hostile: Dig = { seat: 2, at: 2_500, cells: [packCell(dims, 0, 64, 140), packCell(dims, 255, 64, 160)] };
+    const without = client(1_000);
+    await without.battle.catchUp(logOf([S1], [honest]), 1_000, () => 4_000, null, noYield);
+    const j = client(1_000);
+    await j.battle.catchUp(logOf([S1], [hostile, honest]), 1_000, () => 4_000, null, noYield);
+    expect(j.battle.held).toEqual([]);
+    expect(j.session.destruction.pending).toBe(0);
+    expect([j.session.map.get(0, 64, 140), j.session.map.get(255, 64, 160)]).toEqual([P.SPOIL, P.SPOIL]);
+    expect(j.session.map.get(230, 75, 150)).toBe(P.AIR);
+    expect(sameWorld(without.session.map, j.session.map)).toBe(true);
+  });
+
   it('a catch-up whose crater never comes back fails loudly, naming it, rather than waiting for ever', async () => {
     const lost: DetonationRunner = { post: () => {}, take: () => [] };
     const j = roomClient(trenchArena(), PLAYER, 0, 1 / 60, lost);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DIG_CELLS_MAX, encodeShell, encodeShot, encodeState, parseRoom, PROTOCOL, type RoomMsg, type WireShell } from '../../src/net/protocol';
+import { DIG_CELLS_MAX, encodeShell, encodeShot, encodeState, parseRoom, PROTOCOL, WORLD_DIMS, type RoomMsg, type WireShell } from '../../src/net/protocol';
 import { PROTECT_MS } from '../../src/net/match-rules';
 import { AWAY_MS, COUNTDOWN_MS, LOBBY_DIGS_MAX, LOG_CHARS_MAX, OVER_MS, RoomCore, type Conn } from '../../src/net/room-core';
 import { SHELL_FIELDS } from '../../src/net/shell-fields';
@@ -271,6 +271,23 @@ describe("a room's shelling and its log", () => {
     expect(a.got.filter((m) => m.t === 'dig').at(-1)).toEqual({ t: 'dig', d: [1, overAt + 700, 5] });
   });
 
+  it('neither relays nor logs a scoop whose cells span the map, in a match or out of one', () => {
+    const room = new RoomCore('CORNR');
+    const a = join(room, 'a');
+    const b = join(room, 'b');
+    const relayed = () => b.got.flatMap((m) => (m.t === 'dig' ? [m.d] : []));
+    const cell = (x: number, y: number, z: number) => (z * WORLD_DIMS.y + y) * WORLD_DIMS.x + x;
+    const corners = [cell(0, 150, 0), cell(WORLD_DIMS.x - 1, 150, WORLD_DIMS.z - 1)];
+    say(room, a, { t: 'start' }, 1_000);
+    say(room, a, { t: 'dig', c: corners }, 5_000);
+    say(room, a, { t: 'dig', c: [cell(100, 150, 100), cell(101, 150, 100)] }, 5_100);
+    say(room, a, { t: 'end' }, 6_000);
+    say(room, a, { t: 'dig', c: corners }, 6_100);
+    expect(relayed()).toEqual([[0, 5_100, cell(100, 150, 100), cell(101, 150, 100)]]);
+    expect(join(room, 'c', 7_000).last('welcome')!.log.digs).toEqual(relayed());
+    expect(a.closed).toBeNull();
+  });
+
   it("caps each seat's digs between matches: past LOBBY_DIGS_MAX they are dropped, neither relayed nor logged, until the next match", () => {
     // A minute of the shovel's fastest work (a scoop every 0.26 s): far above the few an honest page
     // sends after the end, dug before the end reached it.
@@ -361,7 +378,9 @@ describe("a room's shelling and its log", () => {
     const { room, a, b } = match('FULLS', 'heavy');
     tickTo(room, 0, 30_000, a);
     expect(shells(a).length).toBeGreaterThan(5);
-    const cells = Array.from({ length: DIG_CELLS_MAX }, (_, i) => 2147483647 - i);
+    // The most cells a scoop carries, at the world's far corner, eight by eight: packed as large as they come.
+    const cell = (x: number, y: number, z: number) => (z * WORLD_DIMS.y + y) * WORLD_DIMS.x + x;
+    const cells = Array.from({ length: DIG_CELLS_MAX }, (_, i) => cell(WORLD_DIMS.x - 1 - (i % 8), WORLD_DIMS.y - 1 - Math.floor(i / 8), WORLD_DIMS.z - 1));
     const entry = JSON.stringify([0, 30_000, ...cells]).length + 1;
     const sent = Math.ceil(LOG_CHARS_MAX / entry) + 50;
     // Fifty scoops a second, within the room's rate, and the shelling ticking on through them.

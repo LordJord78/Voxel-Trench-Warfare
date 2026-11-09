@@ -340,13 +340,15 @@ describe("a page catching up on the room's log while the room plays on", () => {
 
   it("a scoop the room relays before the end, stamped after two shells in the air, lands them on the room's ground, though the page's frames have set it off the room", async () => {
     // S4 lands at 9 800 this time, before the end, and S3's crater is under its centre. Another
-    // player scoops the parapet's crest 11 m along it, stamped 9 900: on the page that was there S3
-    // and S4 land live, each centred on the ground as it is when its crater goes out. Here the end
-    // waits for the catch-up, by when the lobby's frames have set the session off the room; the
-    // scoop, given at the end, lands S3 and S4 together, before S3's crater is cut.
+    // player scoops four voxels in a row along the parapet's crest 11 m along it, stamped 9 900 (a row
+    // along x: the arena's cells are packed by its own dims, and the wire checks a scoop's span by the
+    // world's): on the page that was there S3 and S4 land live, each centred on the ground as it is
+    // when its crater goes out. Here the end waits for the catch-up, by when the lobby's frames have
+    // set the session off the room; the scoop, given at the end, lands S3 and S4 together, before
+    // S3's crater is cut.
     const S4e = shell(4, 9_800, 12.0, 14.8, 864);
     const dims = trenchArena().dims;
-    const D: Dig = { seat: 1, at: 9_900, cells: [[230, 75, 150], [231, 75, 150], [230, 74, 150], [231, 74, 150]].map(([x, y, z]) => packCell(dims, x, y, z)) };
+    const D: Dig = { seat: 1, at: 9_900, cells: [[230, 75, 150], [231, 75, 150], [232, 75, 150], [233, 75, 150]].map(([x, y, z]) => packCell(dims, x, y, z)) };
     const a = stayed(S4e, D);
     const { b, together, made } = await joining((room) => {
       room.say({ t: 'shell', s: wire(S4e) });

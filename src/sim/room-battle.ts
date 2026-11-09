@@ -168,7 +168,9 @@ export class RoomBattle {
     session.room = true;
     const nowMs = now();
     const shells = log.shells.map((w) => decodeShell(w)).filter((s): s is RoomShell => s !== null);
-    const digs = log.digs.map((w) => decodeDig(w)).filter((d): d is Dig => d !== null);
+    // Each scoop's cells checked as the world's (the welcome's parse checked them by WORLD_DIMS, which
+    // is the world's); one that spans more than a shovel reaches is dropped, as the room drops it.
+    const digs = log.digs.map((w) => decodeDig(w, session.map.dims)).filter((d): d is Dig => d !== null);
     const entries: Entry[] = [
       ...shells.map((shell): Entry => ({ at: shell.landAt, rank: 0, n: shell.id, shell })),
       ...digs.map((dig, n): Entry => ({ at: dig.at, rank: 1, n, dig })),
