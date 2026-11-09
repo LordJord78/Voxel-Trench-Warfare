@@ -1013,6 +1013,56 @@ describe("the room's log caught up on a page that joins or reloads", () => {
     expect(sameWorld(without.session.map, j.session.map)).toBe(true);
   });
 
+  it('lets the page breathe after every 32 scoops and after each run of the battle of 10 s or more, and says how far it has come after each entry', async () => {
+    // The match began at 1 000. Seventy scoops in its first 7 s (in the clay, which no shovel takes:
+    // nothing dug), a shell at 30 s and one at 33 s; the page welcomed at 51 000. A scoop has no settle
+    // to yield in, and a long run of the battle is many Director steps, so the page breathes after them.
+    const dims = trenchArena().dims;
+    const digs = Array.from({ length: 70 }, (_, k): Dig => ({ seat: 1, at: 1_000 + 100 * (k + 1), cells: [packCell(dims, 10 + k, 30, 10)] }));
+    const S1 = shell(1, 31_000, 11.0, 15.0, 2.0, 901);
+    const S2 = shell(2, 34_000, 12.0, 15.0, 2.0, 902);
+    const j = client(1_000);
+    const trace: string[] = [];
+    const spy = spyBattle((s) => trace.push(`run ${s}`));
+    // A breath with a crater pending is a settle's, between its ticks: not counted here.
+    const yieldNow = async () => void (j.session.destruction.pending === 0 && trace.push('breathe'));
+    await j.battle.catchUp(logOf([S1, S2], digs), 1_000, () => 51_000, spy, yieldNow, { progress: (done, total) => trace.push(`${done}/${total}`) });
+    const expected = ['0/72'];
+    for (let k = 1; k <= 70; k++) {
+      expected.push(`run ${k / 10}`, `${k}/72`);
+      if (k % 32 === 0) expected.push('breathe');
+    }
+    expected.push('run 30', 'breathe', 'run 30', '71/72', 'run 33', 'run 33', '72/72', 'run 50', 'breathe');
+    expect(trace).toEqual(expected);
+    expect(j.battle.landed).toEqual([S1, S2]);
+  });
+
+  it("waits for a crater slow to come back as long as a minute of the page's clock, however quickly the page yields", async () => {
+    // The page yields through a MessageChannel, not a timer a hidden tab throttles: a yield takes
+    // microseconds, so 30 000 of them, while the worker cuts a big crater, are no sign of one lost.
+    let clock = 0;
+    const slow = roomClient(trenchArena(), PLAYER, 0, 1 / 60, lateRunner(30_000));
+    let yields = 0;
+    await slow.battle.catchUp(logOf([shell(1, 2_000, 12.8, 15.0)]), null, () => 3_000, null, async () => {
+      yields++;
+      clock += 0.01;
+    }, { clock: () => clock });
+    expect(yields).toBeGreaterThan(20_000);
+    expect(slow.session.destruction.pending).toBe(0);
+    // One that never comes back is given up on, loudly, once a minute of the page's clock is gone too.
+    const lost: DetonationRunner = { post: () => {}, take: () => [] };
+    const j = roomClient(trenchArena(), PLAYER, 0, 1 / 60, lost);
+    clock = 0;
+    yields = 0;
+    const caught = j.battle.catchUp(logOf([shell(4, 2_000, 12.8, 15.0)]), null, () => 3_000, null, async () => {
+      yields++;
+      clock += 10;
+    }, { clock: () => clock });
+    await expect(caught).rejects.toThrow(/crater 1 is still out/);
+    expect(clock).toBeGreaterThanOrEqual(60_000);
+    expect(yields).toBeGreaterThan(19_000);
+  });
+
   it('a catch-up whose crater never comes back fails loudly, naming it, rather than waiting for ever', async () => {
     const lost: DetonationRunner = { post: () => {}, take: () => [] };
     const j = roomClient(trenchArena(), PLAYER, 0, 1 / 60, lost);

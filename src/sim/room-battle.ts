@@ -47,12 +47,22 @@ import type { CombatEvents, Session } from './session';
 const HURT_LEAST = 1;
 
 /**
- * The most ticks a catch-up's settle gives its craters before it gives up, loudly: a crater whose
- * bricks never come back, or one that waits on something nothing will do. A crater takes a few ticks
- * once its worker hands it back, and the page yields to the worker between ticks (at least 4 ms
- * each, in a browser), so this is a minute and more of one crater not going in.
+ * How long a catch-up's settle gives its craters before it gives up, loudly: a crater whose bricks
+ * never come back, or one that waits on something nothing will do. A crater takes a few ticks once its
+ * worker hands it back, and the page yields to the worker between ticks; a yield may take microseconds
+ * (main.ts's MessageChannel, which a hidden tab does not throttle), so with the page's own clock
+ * (CatchUpPage.clock) it is SETTLE_TICKS_MAX ticks and SETTLE_MS_MAX of that clock both, a minute and
+ * more of one crater not going in; without one (a test's), the ticks alone.
  */
 const SETTLE_TICKS_MAX = 20_000;
+const SETTLE_MS_MAX = 60_000;
+/**
+ * A catch-up lets the page breathe after this many of the log's scoops in a row (each dug at once,
+ * with no settle to yield in), and after each run of the battle around the page of this many seconds
+ * or more (a dark heavy second is 60 Director steps of tens of microseconds each).
+ */
+const SCOOPS_A_BREATH = 32;
+const RUN_A_BREATH_S = 10;
 
 /**
  * The battle around the page (main.ts's Director) as the catch-up runs it: `runTo(s, strikes)` gives
@@ -62,6 +72,14 @@ const SETTLE_TICKS_MAX = 20_000;
  */
 export interface BattleCatchUp {
   runTo(s: number, strikes: readonly Strike[]): void;
+}
+
+/** The page a catch-up runs on, beyond its yield: its own clock, and where it says how far it has come. */
+export interface CatchUpPage {
+  /** The page's own clock (ms: performance.now in a browser), which a settle's patience is measured on (SETTLE_MS_MAX). */
+  clock?(): number;
+  /** How far the catch-up has come: `done` of the log's `total` entries due, said at the start and after each. */
+  progress?(done: number, total: number): void;
 }
 
 /** A log's entry: a shell at its landing, or a scoop at its stamp; ranked so a shell comes before a scoop of the same ms (`dug` lands the shells due by its stamp first). */
@@ -162,8 +180,12 @@ export class RoomBattle {
    * room's edits wait in its queue. A match that ends meanwhile waits for it too (together.ts ended):
    * `now` is then after every time, so the shells still in the air are heard with none left, and the
    * match's end lands them, quietly, after the log.
+   *
+   * The page breathes (`yieldNow`) between a settle's ticks, after every SCOOPS_A_BREATH scoops, and
+   * after each run of the battle of RUN_A_BREATH_S or more; and is told how far the catch-up has come
+   * (`page.progress`), at the start and after each entry due.
    */
-  async catchUp(log: MatchLog, startAt: number | null, now: () => number, battle: BattleCatchUp | null, yieldNow: () => Promise<void>): Promise<void> {
+  async catchUp(log: MatchLog, startAt: number | null, now: () => number, battle: BattleCatchUp | null, yieldNow: () => Promise<void>, page: CatchUpPage = {}): Promise<void> {
     const { session } = this;
     session.room = true;
     const nowMs = now();
@@ -176,36 +198,54 @@ export class RoomBattle {
       ...digs.map((dig, n): Entry => ({ at: dig.at, rank: 1, n, dig })),
     ];
     const due = entries.filter((e) => startAt === null || e.at <= nowMs).sort((a, b) => a.at - b.at || a.rank - b.rank || a.n - b.n);
-    for (const e of due) {
+    /** The second the battle around the page was last run to (it runs from 0, never back), and the scoops in a row. */
+    let ranS = 0;
+    let scoops = 0;
+    const run = async (s: number, strikes: readonly Strike[]) => {
+      if (!battle) return;
+      battle.runTo(s, strikes);
+      const ran = s - ranS;
+      ranS = Math.max(ranS, s);
+      if (ran >= RUN_A_BREATH_S) await yieldNow();
+    };
+    /** One entry of the log, in its turn. */
+    const take = async (e: Entry) => {
       const s = startAt !== null && e.at >= startAt ? (e.at - startAt) / 1000 : null;
       if (e.rank === 1) {
-        if (s !== null) battle?.runTo(s, []);
+        if (s !== null) await run(s, []);
         this.hold(e.dig);
         this.dig();
-        continue;
+        return;
       }
       const { shell } = e;
       if (this.heard.has(shell.id)) {
         // Heard before the catch-up: landed already, or still in the air, when it lands here, in its place.
         const i = this.air.findIndex((a) => a.id === shell.id);
-        if (i < 0) continue;
+        if (i < 0) return;
         this.air.splice(i, 1);
       }
       this.heard.add(shell.id);
-      if (s !== null) battle?.runTo(s, []);
+      if (s !== null) await run(s, []);
       // Set again for each: a frame between the settles sets the session as the room is, off it once
       // the match is over (it may end while the page catches up), and the shell is the room's all the same.
       session.room = true;
       const id = session.land(shell.at[0], shell.at[1], shell.radius, shell.seed, true);
-      const craters = await this.settle(yieldNow, shell);
-      if (s === null) continue;
+      const craters = await this.settle(yieldNow, shell, page.clock);
+      if (s === null) return;
       this.down.push(shell);
       const crater = id === null ? undefined : craters.find((c) => c.id === id);
       const strike = crater ? roomStrike(session.map, crater, shell.seed, session.voxel, this.fireT) : null;
-      battle?.runTo(s, strike ? [strike] : []);
+      await run(s, strike ? [strike] : []);
+    };
+    page.progress?.(0, due.length);
+    for (let k = 0; k < due.length; k++) {
+      const e = due[k];
+      await take(e);
+      page.progress?.(k + 1, due.length);
+      if (e.rank === 1 && ++scoops % SCOOPS_A_BREATH === 0) await yieldNow();
     }
     if (startAt === null) return;
-    battle?.runTo(matchSeconds(nowMs, startAt), []);
+    await run(matchSeconds(nowMs, startAt), []);
     for (const shell of shells) if (shell.landAt > nowMs) this.hear(shell, now());
     const later = digs.filter((d) => d.at > nowMs).sort((a, b) => a.at - b.at);
     for (const dig of later) this.dug(dig, now());
@@ -297,15 +337,18 @@ export class RoomBattle {
    * The catch-up's craters cut until none is pending, the page let breathe (`yieldNow`) between ticks,
    * and the held scoops dug as they come free, before each tick as `tick` digs them before the
    * session's (a crater after a held scoop waits for it: Destruction.waits). The craters that went in.
-   * A crater not in after SETTLE_TICKS_MAX ticks is an error, naming it, not a page spinning for ever.
+   * A crater not in after SETTLE_TICKS_MAX ticks, and SETTLE_MS_MAX of the page's `clock` if it has
+   * one, is an error, naming it, not a page spinning for ever.
    */
-  private async settle(yieldNow: () => Promise<void>, shell: RoomShell): Promise<Crater[]> {
+  private async settle(yieldNow: () => Promise<void>, shell: RoomShell, clock?: () => number): Promise<Crater[]> {
     const d = this.session.destruction;
     const landed: Crater[] = [];
+    const from = clock?.();
     for (let ticks = 0; d.pending > 0; ticks++) {
-      if (ticks === SETTLE_TICKS_MAX) {
+      if (ticks >= SETTLE_TICKS_MAX && (from === undefined || clock!() - from >= SETTLE_MS_MAX)) {
         const stuck = d.oldest!;
-        throw new Error(`The battle's catch-up is stuck: crater ${stuck.id} is still ${stuck.state} after ${SETTLE_TICKS_MAX} ticks (settling shell ${shell.id}'s; craters pending: ${d.pending}, scoops held: ${this.digs.length}).`);
+        const waited = from === undefined ? '' : ` and ${Math.round((clock!() - from) / 1000)} s`;
+        throw new Error(`The battle's catch-up is stuck: crater ${stuck.id} is still ${stuck.state} after ${ticks} ticks${waited} (settling shell ${shell.id}'s; craters pending: ${d.pending}, scoops held: ${this.digs.length}).`);
       }
       if (ticks > 0) await yieldNow();
       this.dig();

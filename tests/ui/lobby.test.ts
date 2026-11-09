@@ -6,6 +6,7 @@ class FakeElement {
   hidden = false;
   textContent = '';
   value = '';
+  disabled = false;
   private readonly classes = new Set<string>();
   readonly classList = {
     add: (c: string) => void this.classes.add(c),
@@ -85,5 +86,16 @@ describe("the lobby's way in", () => {
     lobby.deploy('You fight for Blue. The match starts in 3…', false);
     lobby.deploy('The match is on. You fight for Blue.', true);
     expect(page.activeElement).toBe(go);
+  });
+});
+
+describe('the lobby while the page catches up on the battle', () => {
+  it('offers neither Ready nor Start until the page can play, so the host sees who is not ready', () => {
+    const { page, lobby } = lobbyOn();
+    const [ready, start] = [page.getElementById('ready'), page.getElementById('start')];
+    lobby.playable(false);
+    expect([ready.disabled, start.disabled]).toEqual([true, true]);
+    lobby.playable(true);
+    expect([ready.disabled, start.disabled]).toEqual([false, false]);
   });
 });

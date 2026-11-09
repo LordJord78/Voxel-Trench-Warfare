@@ -272,7 +272,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
         made.push(new RoomBattle(b.session, fireT));
         return made[made.length - 1];
       },
-      catchUp: (room, log, match, now) => (caught = room.catchUp(log, match?.startAt ?? null, now, null, yieldNow)),
+      catchUp: (room, log, match, now, progress) => (caught = room.catchUp(log, match?.startAt ?? null, now, null, yieldNow, { progress })),
       failed() {},
     };
     const together = new Together(doc as unknown as Document, 'http://relay.test', 'build', null, hooks);
@@ -301,7 +301,8 @@ describe("a page catching up on the room's log while the room plays on", () => {
       room.say({ t: 'shell', s: wire(S4) });
       room.say({ t: 'end' });
     });
-    expect(status).toEqual(['Catching up on the battle…']);
+    // S1 and S2 are due (S3 is still in the air), and the first yield is inside S1's settle.
+    expect(status).toEqual(['Catching up on the battle… 0 of 2']);
     expect(together.caughtUp).toBe(true);
     // One battle, the one caught up: it lands the log's rest in order, then the match over lands
     // S3 (in the air at the welcome) and S4 (told after it), as on the page that was there.
@@ -366,8 +367,12 @@ describe("a page catching up on the room's log while the room plays on", () => {
     expect(sameWorld(a.session.map, b.session.map)).toBe(true);
   }, 30_000);
 
-  /** A page in the match from the room's 9 000, its log empty, its catch-up the hook's `catchUp`; Sam (seat 1) fights for Blue. */
-  async function welcomed(catchUp: TogetherHooks['catchUp'], failed: (e: unknown) => void = () => {}) {
+  /**
+   * A page in the match from the room's 9 000, its log empty, its catch-up the hook's `catchUp`; Sam
+   * (seat 1) fights for Blue. Returned once the catch-up is done, and the page's welcome after it,
+   * unless `wait` is false.
+   */
+  async function welcomed(catchUp: TogetherHooks['catchUp'], failed: (e: unknown) => void = () => {}, wait = true) {
     const b = roomClient(trenchArena(), PLAYER);
     const doc = new FakePage();
     const hooks: TogetherHooks = {
@@ -381,18 +386,59 @@ describe("a page catching up on the room's log while the room plays on", () => {
       killed() {},
       respawn() {},
       battle: () => new RoomBattle(b.session, fireT),
-      catchUp,
+      catchUp: (...args) => (caught = catchUp(...args)),
       failed,
     };
+    let caught: Promise<void> = Promise.resolve();
     const together = new Together(doc as unknown as Document, 'http://relay.test', 'build', null, hooks);
     together.join('ABCDE');
     page = 1_000;
     StubSocket.last!.open();
     const both = [...seats, { id: 1, name: 'Sam', team: 'blue', ready: true, away: false }];
     StubSocket.last!.say({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats: both, config: defaultConfig(), phase: 'playing', match: MATCH, now: 9_000, log: { shells: [], digs: [] } });
-    for (let k = 0; k < 10; k++) await Promise.resolve();
+    if (wait) {
+      // The catch-up's end, then what the page's welcome does after it.
+      await caught.catch(() => {});
+      await Promise.resolve();
+    }
     return { b, doc, together };
   }
+
+  it("says how far its catch-up has come, in the lobby's status and on the way in, and offers neither Ready nor Start until it is done", async () => {
+    let report!: (done: number, total: number) => void;
+    let finish!: () => void;
+    const { b, doc, together } = await welcomed(
+      (_room, _log, _match, _now, progress) => {
+        report = progress;
+        return new Promise<void>((resolve) => (finish = resolve));
+      },
+      () => {},
+      false,
+    );
+    const shown = () => {
+      together.frame(b.session, false);
+      const el = (id: string) => doc.getElementById(id);
+      return [el('lobby-status').textContent, el('deploy-line').textContent, el('ready').disabled, el('start').disabled];
+    };
+    expect(together.caughtUp).toBe(false);
+    expect(shown()).toEqual(['Catching up on the battle…', 'Catching up on the battle…', true, true]);
+    report(0, 400);
+    expect(shown()).toEqual(['Catching up on the battle… 0 of 400', 'Catching up on the battle… 0 of 400', true, true]);
+    report(120, 400);
+    expect(shown()).toEqual(['Catching up on the battle… 120 of 400', 'Catching up on the battle… 120 of 400', true, true]);
+    // The room says more meanwhile (a roster): the page still says how far it has come.
+    StubSocket.last!.say({ t: 'roster', owner: 0, seats });
+    expect(shown()).toEqual(['Catching up on the battle… 120 of 400', 'Catching up on the battle… 120 of 400', true, true]);
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(together.caughtUp).toBe(true);
+    // On the way in (the lobby's status is the gathering's, hidden while the match is on): Go, Ready and Start.
+    const [, line, ready, start] = shown();
+    expect(line).toBe('The match is on. You fight for Red.');
+    expect(doc.getElementById('go').hidden).toBe(false);
+    expect([ready, start]).toEqual([false, false]);
+  });
 
   it("a catch-up whose hook fails outside the room's log stops the page with its error, rather than leaving it catching up", async () => {
     const boom = new Error('the regions could not be copied');

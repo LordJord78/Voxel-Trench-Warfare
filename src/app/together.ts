@@ -171,9 +171,10 @@ export interface TogetherHooks {
   /**
    * The room's log (the welcome's) caught up on `battle` (RoomBattle.catchUp), at the room's clock
    * `now`: with the match's battle around the page run along it when the welcome carried a `match`.
-   * While it runs, the page runs neither the session nor `battle`.
+   * While it runs, the page runs neither the session nor `battle`. `progress` is told how far it has
+   * come (CatchUpPage.progress), which the page shows.
    */
-  catchUp(battle: RoomBattle, log: MatchLog, match: MatchInfo | null, now: () => number): Promise<void>;
+  catchUp(battle: RoomBattle, log: MatchLog, match: MatchInfo | null, now: () => number, progress: (done: number, total: number) => void): Promise<void>;
   /** The catch-up failed (`catchUp` rejected with `error`): the world is not the room's, and the page stops, saying why. */
   failed(error: unknown): void;
 }
@@ -231,6 +232,8 @@ export class Together {
   private overWhileCatching = false;
   /** Why the catch-up failed, if it did: said where "Catching up…" would be, for good. */
   private failure: string | null = null;
+  /** How far the catch-up has come, as it last said: the log's entries done, of how many (null: nothing said yet). */
+  private progress: { done: number; total: number } | null = null;
   /** The battle work of each match's end that came while the log was caught up, done in order once it is. */
   private onceCaughtUp: (() => void)[] = [];
   /**
@@ -344,7 +347,7 @@ export class Together {
     const left = net.match!.startAt - net.serverNow();
     if (!this.inPlay) {
       const side = this.team === 'blue' ? 'Blue' : 'Red';
-      const line = !this.caughtUp ? (this.failure ?? CATCHING_UP) : left > 0 ? `You fight for ${side}. The match starts in ${Math.ceil(left / 1000)}…` : `The match is on. You fight for ${side}.`;
+      const line = !this.caughtUp ? (this.failure ?? this.catching()) : left > 0 ? `You fight for ${side}. The match starts in ${Math.ceil(left / 1000)}…` : `The match is on. You fight for ${side}.`;
       this.lobby.deploy(line, this.caughtUp && left <= 0);
     }
     // Sent only once they have gone in: on the deploy screen the world runs on, but nobody draws or shoots them.
@@ -631,12 +634,18 @@ export class Together {
     this.caughtUp = false;
     this.overWhileCatching = false;
     this.failure = null;
+    this.progress = null;
     const battle = (this.battle ??= this.hooks.battle());
     this.show();
+    // How far it has come, said as it goes: in the lobby's status now, and on the way in at the next frame.
+    const progress = (done: number, total: number) => {
+      this.progress = { done, total };
+      if (!this.caughtUp && !this.failure) this.lobby.status(this.catching());
+    };
     // The room's clock as the catch-up reads it: after every time once the match is over, as its end
     // gives the match's last edits, so the shells still in the air are heard with none left to whistle.
     try {
-      await this.hooks.catchUp(battle, net.log, net.match, () => (this.overWhileCatching ? Number.POSITIVE_INFINITY : net.serverNow()));
+      await this.hooks.catchUp(battle, net.log, net.match, () => (this.overWhileCatching ? Number.POSITIVE_INFINITY : net.serverNow()), progress);
     } catch (e) {
       this.failure = `Could not catch up on the battle: ${e instanceof Error ? e.message : String(e)}`;
       this.show();
@@ -697,7 +706,15 @@ export class Together {
     url.searchParams.set('room', net.room);
     url.searchParams.set('map', net.config.map);
     this.lobby.show({ room: net.room, invite: url.toString(), you: net.you, owner: net.owner, seats: net.seats, config: net.config });
-    if (!this.caughtUp) this.lobby.status(this.failure ?? CATCHING_UP);
+    if (!this.caughtUp) this.lobby.status(this.failure ?? this.catching());
+    // Not ready, nor started, on a world that is not yet the room's.
+    this.lobby.playable(this.caughtUp);
+  }
+
+  /** "Catching up on the battle…", and how far it has come once it has said. */
+  private catching(): string {
+    const p = this.progress;
+    return p && p.total > 0 ? `${CATCHING_UP} ${p.done} of ${p.total}` : CATCHING_UP;
   }
 
   private savedName(): string {

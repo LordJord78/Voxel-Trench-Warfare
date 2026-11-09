@@ -144,6 +144,12 @@ export class Lobby {
     this.statusLine.textContent = text;
   }
 
+  /** Whether the player can play yet: until the page has caught up on the room's battle, neither Ready nor Start is offered, so the host sees who is not ready. */
+  playable(can: boolean): void {
+    this.readyButton.disabled = !can;
+    this.startButton.disabled = !can;
+  }
+
   /** The match is starting or on: the way in, `line` saying how it stands. */
   deploy(line: string, canGo: boolean): void {
     this.root.hidden = false;

@@ -658,6 +658,15 @@ async function start(): Promise<void> {
   // were shot; on the range and in a room alike.
   const hitMarker = new HitMarker(document, markerTunables(tun));
   const hits = new HitFeedback(hitFeedbackTunables(tun), hitMarker, harmTunables(tun).frontDamageScale);
+  // The catch-up's breath: a message on a channel of the page's own, which a hidden tab does not
+  // throttle as it does a timer (to once a second or less), so a friend who tabs away while their page
+  // catches up on the room's battle is not slowed to a breath a second. One breath at a time.
+  const breathing = new MessageChannel();
+  const breathe = () =>
+    new Promise<void>((resolve) => {
+      breathing.port1.onmessage = () => resolve();
+      breathing.port2.postMessage(0);
+    });
   // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
   const searchParams = new URLSearchParams(location.search);
   const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
@@ -719,15 +728,17 @@ async function start(): Promise<void> {
     // clock are the visitor's, and left alone. Then the battle's clock is given the second it reached,
     // and the frames run it on to now, catching up silently past SILENT_STEP_S. It is that battle
     // throughout: if the room ends the match and starts the next while the log is caught up, the
-    // next's deploy makes its own, from 0. A catch-up that fails stops the game (`failed`).
-    catchUp: async (room, log, match, now) => {
+    // next's deploy makes its own, from 0. A catch-up that fails stops the game (`failed`). It breathes
+    // through `breathe`, is patient with a crater by the page's own clock, and says how far it has come
+    // (`progress`, which Together shows).
+    catchUp: async (room, log, match, now, progress) => {
       const director = battle;
       const made = (events: BattleEvents) => {
         for (const c of events.chars) chars.add(c.at);
         chars.make(session.map, (box) => session.destruction.overlapsPending(box));
       };
       const along = match ? catchUpRunner(director, (s) => matchInputs(match.config, s), made) : null;
-      await room.catchUp(log, match?.startAt ?? null, now, along, () => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+      await room.catchUp(log, match?.startAt ?? null, now, along, breathe, { clock: () => performance.now(), progress });
       renderer.largeEdit();
       if (along && battle === director) battleClock.given = along.reached;
     },
