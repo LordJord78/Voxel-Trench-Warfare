@@ -64,11 +64,12 @@ const SMALL_SPEAKER = 0.25;
 const GUSH: SoundRules = { band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3, low: true } };
 /**
  * A headshot that kills: at least this share of its first 300 ms's energy in 400 Hz–2 kHz; and its
- * energy there at least 1.5 dB over the same kill's without the gush, read alike, so the gush is not
+ * energy there at least 1.0 dB over the same kill's without the gush, read alike (the controller's ruling: a missing gush
+ * reads 0.0 dB, and 1.0 leaves room for a chime lift at the playtest), so the gush is not
  * lost under the kill. The share alone can't tell: the kill's chime (880 and 1320 Hz) fills the band
  * (0.527 without the gush, 0.532 with it).
  */
-const HEADSHOT_KILL: SoundRules = { band: { hz: [400, 2000], share: 0.35, firstS: 0.3 }, over: { of: 'headshot-kill-dry', band: [400, 2000], firstS: 0.3, db: 1.5 } };
+const HEADSHOT_KILL: SoundRules = { band: { hz: [400, 2000], share: 0.35, firstS: 0.3 }, over: { of: 'headshot-kill-dry', band: [400, 2000], firstS: 0.3, db: 1.0 } };
 /** The farthest plate's ring heard from the spawn: its peak at least this (dBFS). */
 const FAR_DING_DB = -24;
 

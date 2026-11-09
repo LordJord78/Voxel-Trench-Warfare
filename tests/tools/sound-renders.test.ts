@@ -97,7 +97,7 @@ describe("the sounds' proof: what it renders", () => {
     const now = planFeedback(t, (['head', 'gush'] as const).map((kind) => ({ kind, at: null, gain: gains[kind] })), [0, 0, 0]);
     const [kill] = planFeedback(t, [{ kind: 'kill', at: null, gain: gains.kill }], [0, 0, 0]);
     expect(r.plans).toEqual([...now, { ...kill, delayS: FRAME_S }]);
-    expect(r.rules).toEqual({ band: { hz: [400, 2000], share: 0.35, firstS: 0.3 }, over: { of: 'headshot-kill-dry', band: [400, 2000], firstS: 0.3, db: 1.5 } });
+    expect(r.rules).toEqual({ band: { hz: [400, 2000], share: 0.35, firstS: 0.3 }, over: { of: 'headshot-kill-dry', band: [400, 2000], firstS: 0.3, db: 1.0 } });
     expect(r.lengthS).toBeCloseTo(LEAD_S + Math.max(...r.plans.map((p) => p.delayS + voiceLength(p, report))) + TAIL_S, 9);
     // The same without the gush: the crack, and the kill a frame later; held to its peak's range alone.
     const dry = byName('headshot-kill-dry');
