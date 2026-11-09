@@ -119,7 +119,14 @@ class FakeElement {
     toggle: (c: string, on: boolean) => void (on ? this.classes.add(c) : this.classes.delete(c)),
   };
   readonly elements = Object.assign([] as FakeElement[], { namedItem: () => null });
-  addEventListener(): void {}
+  private readonly listeners = new Map<string, (() => void)[]>();
+  addEventListener(type: string, fn: () => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
+  }
+  /** As a player's click: its listeners called. */
+  click(): void {
+    for (const fn of this.listeners.get('click') ?? []) fn();
+  }
   querySelector(): FakeElement {
     return new FakeElement();
   }
@@ -151,11 +158,12 @@ class FakePage {
   addEventListener(): void {}
 }
 
-/** The room's side of the line: the test opens it and says what the room says. */
+/** The room's side of the line: the test opens it, says what the room says, and reads what the page sent. */
 class StubSocket {
   static readonly OPEN = 1;
   static last: StubSocket | null = null;
   readyState = 0;
+  readonly sent: { t: string; [k: string]: unknown }[] = [];
   private readonly listeners = new Map<string, ((e: unknown) => void)[]>();
   constructor(readonly url: string) {
     StubSocket.last = this;
@@ -163,7 +171,9 @@ class StubSocket {
   addEventListener(type: string, fn: (e: unknown) => void): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
   }
-  send(): void {}
+  send(text: string): void {
+    this.sent.push(JSON.parse(text) as { t: string });
+  }
   close(): void {
     this.readyState = 3;
   }
@@ -173,6 +183,17 @@ class StubSocket {
   }
   say(msg: Record<string, unknown>): void {
     for (const fn of this.listeners.get('message') ?? []) fn({ data: JSON.stringify(msg) });
+  }
+  /** The line goes, not by the page's doing. */
+  drop(reason = ''): void {
+    this.readyState = 3;
+    for (const fn of this.listeners.get('close') ?? []) fn({ reason });
+  }
+  /** What the page has sent of kind `t` since the last time asked, and forgotten. */
+  took(t: string): { t: string; [k: string]: unknown }[] {
+    const out = this.sent.filter((m) => m.t === t);
+    this.sent.splice(0, this.sent.length, ...this.sent.filter((m) => m.t !== t));
+    return out;
   }
 }
 
@@ -443,7 +464,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
   it("a catch-up whose hook fails outside the room's log stops the page with its error, rather than leaving it catching up", async () => {
     const boom = new Error('the regions could not be copied');
     const failed: unknown[] = [];
-    const { doc, together } = await welcomed(async () => {
+    const { b, doc, together } = await welcomed(async () => {
       throw boom;
     }, (e) => failed.push(e));
     expect(failed).toEqual([boom]);
@@ -453,7 +474,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
     expect(doc.getElementById('lobby-status').textContent).toContain(boom.message);
     // The room says more (a roster, a frame of the deploy screen): the page still says why it stopped.
     StubSocket.last!.say({ t: 'roster', owner: 0, seats });
-    together.frame(roomClient(trenchArena(), PLAYER).session, false);
+    together.frame(b.session, false);
     expect(doc.getElementById('lobby-status').textContent).toContain(boom.message);
     expect(doc.getElementById('deploy-line').textContent).not.toBe('Catching up on the battle…');
   });
@@ -496,6 +517,66 @@ describe("a page catching up on the room's log while the room plays on", () => {
     together.prepare(b.session, 1 / 60);
     expect(fired.mock.calls.at(-1)![8]).toBe(false);
     expect(b.session.drainEvents().remoteShots).toHaveLength(1);
+  });
+
+  it("a line lost while the page catches up still says why once it is done, not that the host will start", async () => {
+    let finish!: () => void;
+    const { doc, together } = await welcomed(() => new Promise<void>((resolve) => (finish = resolve)), () => {}, false);
+    StubSocket.last!.drop();
+    const LOST = 'The connection to the game was lost. Reload the page to rejoin.';
+    expect(doc.getElementById('lobby-status').textContent).toBe(LOST);
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(together.caughtUp).toBe(true);
+    expect(doc.getElementById('lobby-status').textContent).toBe(LOST);
+    // And whatever the room is said to do after: nothing comes on a closed line, but the page shows it again.
+    StubSocket.last!.say({ t: 'roster', owner: 0, seats });
+    expect(doc.getElementById('lobby-status').textContent).toBe(LOST);
+  });
+
+  it('sends nothing of the player from the deploy screen; once they have gone in, their state, their hurts once the match has begun and their scoops, and nothing once fallen', async () => {
+    const { b, doc, together } = await welcomed(async () => {});
+    const room = StubSocket.last!;
+    const frames = () => {
+      for (let k = 0; k < 3; k++) {
+        page += 100;
+        together.frame(b.session, true);
+      }
+    };
+    /** A frame's events: the battle's harm to the player, and a scoop of theirs. */
+    const harmed = () => ({ ...b.session.drainEvents(), harms: [{ tick: 1, amount: 30, cause: 'shell' as const }], scoops: [{ tick: 1, voxels: 1, at: [1, 2, 3] as [number, number, number], cells: [5] }] });
+    const told = () => {
+      together.after(b.session, harmed(), [], page);
+      return [room.took('hurt').length, room.took('dig').length];
+    };
+    expect(together.begun).toBe(true);
+    // On the deploy screen, the match on: no state, no hurt, no scoop.
+    frames();
+    expect(room.took('s')).toEqual([]);
+    expect(told()).toEqual([0, 0]);
+    // Go: in.
+    doc.getElementById('go').click();
+    frames();
+    expect(room.took('s').length).toBeGreaterThan(0);
+    expect(told()).toEqual([1, 1]);
+    // A clock sample that pulls the room's time back under the match's start: a scoop is still the
+    // world's, and told; a hurt waits for the match.
+    const serverNow = vi.spyOn(together.net!, 'serverNow').mockReturnValue(MATCH.startAt - 200);
+    expect(together.begun).toBe(false);
+    expect(told()).toEqual([0, 1]);
+    serverNow.mockRestore();
+    // Killed: nothing.
+    room.say({ t: 'death', v: 0, k: -1, z: null, tk: false, c: 'shell' });
+    expect(told()).toEqual([0, 0]);
+  });
+
+  it("ceases the front's fire once the match is won: a hurt on the victory screen would do nothing", async () => {
+    const { b, together } = await welcomed(async () => {});
+    b.session.front.intensity = 'heavy';
+    together.prepare(b.session, 1 / 60);
+    StubSocket.last!.say({ t: 'over', winner: 'red', red: 30, blue: 12 });
+    expect(b.session.front.intensity).toBe('off');
   });
 
   it("a kill whose killer is seated nowhere the room has said reads as a plain kill, not the line's", async () => {

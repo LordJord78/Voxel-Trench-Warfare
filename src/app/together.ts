@@ -235,6 +235,8 @@ export class Together {
   private failure: string | null = null;
   /** How far the catch-up has come, as it last said: the log's entries done, of how many (null: nothing said yet). */
   private progress: { done: number; total: number } | null = null;
+  /** Why the line to the room went, if it did: said in the lobby's status for good, whatever is shown after. */
+  private lostWhy: string | null = null;
   /** The battle work of each match's end that came while the log was caught up, done in order once it is. */
   private onceCaughtUp: (() => void)[] = [];
   /**
@@ -335,6 +337,9 @@ export class Together {
       respawn: (id, spawn) => this.respawned(id, spawn),
       over: (winner, red, blue) => {
         this.winner = { winner, red, blue };
+        // A cease-fire: the room heeds no hurt once the match is won (net/match-rules.ts), so the front
+        // firing on would only flash and voice hits that do nothing. The end gives the visitor's back.
+        if (this.session) this.session.front.intensity = 'off';
       },
     });
     this.hooks.showLobby();
@@ -416,7 +421,8 @@ export class Together {
   /**
    * After the frame's ticks: this player's shots kept to send, their hits claimed (the hit feedback
    * marks them), the battle's harm to them and their scoops told the room while they are in and
-   * alive, and the match shown.
+   * alive (the harm only once the match has begun, as the room heeds it; a scoop whenever it is dug,
+   * as it is the world's), and the match shown.
    */
   after(session: Session, events: CombatEvents, draws: readonly SoldierDraw[], now: number): void {
     const net = this.net;
@@ -428,9 +434,13 @@ export class Together {
       this.claimed++;
     }
     if (this.battle) {
-      for (const m of this.battle.outgoing(events, this.inPlay && this.begun && !this.fallen && session.alive)) {
-        if (m.t === 'hurt') net.hurt(m.a, m.c);
-        else if (m.t === 'dig') net.dig(m.c);
+      // A scoop dug in play is the world's, even in a moment a clock sample has put back before the
+      // match's start (dropped, it would be the digger's alone); a hurt is told only once it has begun.
+      const begun = this.begun;
+      for (const m of this.battle.outgoing(events, this.inPlay && !this.fallen && session.alive)) {
+        if (m.t === 'hurt') {
+          if (begun) net.hurt(m.a, m.c);
+        } else if (m.t === 'dig') net.dig(m.c);
       }
     }
     const p = session.player;
@@ -691,6 +701,7 @@ export class Together {
   }
 
   private lost(why: string): void {
+    this.lostWhy = why;
     this.lobby.gather();
     this.lobby.status(why);
     this.hooks.note(why);
@@ -725,6 +736,8 @@ export class Together {
     if (!this.caughtUp) this.lobby.status(this.failure ?? this.catching());
     // Not ready, nor started, on a world that is not yet the room's.
     this.lobby.playable(this.caughtUp);
+    // A line gone is gone (a catch-up ending after it shows the lobby again): the page says why, not that the host will start.
+    if (this.lostWhy) this.lobby.status(this.lostWhy);
   }
 
   /** "Catching up on the battle…", and how far it has come once it has said. */
