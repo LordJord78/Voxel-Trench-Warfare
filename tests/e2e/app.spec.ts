@@ -115,7 +115,7 @@ test('the page loads to a click-to-play prompt over the world, and a teleport st
   expect(errors).toEqual([]);
 });
 
-test('the start screen stands at its foot from 1280 × 720 up, as it did, and in a smaller window scrolls with its head in reach', async ({ page }) => {
+test('the start screen stands at its foot from 1280 × 720 up, as it did, and in a smaller window scrolls with its head in reach; both key lists say W into the bench for the firing step', async ({ page }) => {
   // Its ready block (the map, the loadout, Play, Fullscreen, the way in with friends, the keys) is some
   // 940 px tall. From 1280 × 720 up the sheet stands as it always has: the block at its foot, nothing
   // to scroll (so no scroll bar at 1920 × 1080). In a window short of that either way it scrolls as the
@@ -124,6 +124,16 @@ test('the start screen stands at its foot from 1280 × 720 up, as it did, and in
   await page.setViewportSize({ width: 1280, height: 720 });
   const errors = await openGame(page);
   await expect(page.locator('#host')).toBeVisible();
+  // The keys say how to reach the firing step. In play it is a line of its own; on the start screen it
+  // is the Q line's, broken in two so its column keeps its width: a wider key there narrows the last
+  // column, its lines wrap, and the legend rises until Play is off the top of 1280 × 720.
+  const help = page.locator('#hud .help dt', { hasText: 'into the bench' });
+  await expect(help).toHaveText('W into the bench');
+  await expect(help.locator('xpath=following-sibling::dd[1]')).toHaveText('Climb onto the firing step');
+  const start = page.locator('#controls dt', { hasText: 'into the bench' });
+  await expect(start).toHaveText(/^W into the bench,\s*then Q$/, { useInnerText: true });
+  await expect(start.locator('xpath=following-sibling::dd[1]')).toHaveText('Firing step, periscope');
+  await expect(page.locator('#play'), 'Play at 1280 × 720').toBeInViewport({ ratio: 1 });
   const sheet = () =>
     page.evaluate(() => {
       const root = document.getElementById('loading')!;

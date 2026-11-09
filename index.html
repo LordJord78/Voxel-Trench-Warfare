@@ -78,7 +78,7 @@
 
       /* The controls, as a map's legend: the symbol, then what it means. */
       .legend { display: grid; grid-template-columns: max-content 9.5rem max-content auto; gap: 0.4rem 0.9rem; margin: 1.6rem 0 0; font-size: 0.92rem; color: var(--duckboard); align-items: baseline; }
-      .legend dt { justify-self: end; white-space: nowrap; }
+      .legend dt { justify-self: end; white-space: nowrap; text-align: end; }
       .legend dd { margin: 0; }
       kbd { font: 0.82rem/1 var(--serif); color: var(--haze); border: 1px solid rgba(231, 211, 184, 0.42); border-radius: 3px; padding: 0.18em 0.42em; }
       @media (max-width: 560px) { .legend { grid-template-columns: max-content auto; } }
@@ -411,7 +411,9 @@
           <dt><kbd>Space</kbd></dt><dd>Jump</dd>
           <dt><kbd>C</kbd></dt><dd>Crouch</dd>
           <dt><kbd>Z</kbd></dt><dd>Go prone</dd>
-          <dt><kbd>W</kbd> to the bench, <kbd>Q</kbd></dt><dd>Up the step; the periscope</dd>
+          <!-- Broken in two, so its column keeps its width: wider, the last column's lines wrap and Play
+               rises off the top of 1280 × 720. Its dd's two lines answer the dt's. -->
+          <dt><kbd>W</kbd> into the bench,<br />then <kbd>Q</kbd></dt><dd>Firing step, periscope</dd>
           <dt><kbd>Left mouse</kbd></dt><dd>Fire</dd>
           <dt><kbd>Right mouse</kbd></dt><dd>Aim down the sights</dd>
           <dt><kbd>R</kbd></dt><dd>Reload</dd>
