@@ -8,6 +8,7 @@ import { loadTunables } from '../../src/core/tunables';
 import { decodeGear, TRACER_KIND } from '../../src/net/gear';
 import { defaultConfig, type Dig, type RoomShell, type Seat } from '../../src/net/protocol';
 import { RoomBattle } from '../../src/sim/room-battle';
+import { fallenLine, MatchHud } from '../../src/ui/match-hud';
 import { P } from '../../src/world/materials';
 import { roomClient, sameWorld, trenchArena } from '../support/worlds';
 
@@ -272,6 +273,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
         return made[made.length - 1];
       },
       catchUp: (room, log, match, now) => (caught = room.catchUp(log, match?.startAt ?? null, now, null, yieldNow)),
+      failed() {},
     };
     const together = new Together(doc as unknown as Document, 'http://relay.test', 'build', null, hooks);
     together.join('ABCDE');
@@ -361,4 +363,67 @@ describe("a page catching up on the room's log while the room plays on", () => {
     expect(b.session.map.get(230, 75, 150)).toBe(P.AIR);
     expect(sameWorld(a.session.map, b.session.map)).toBe(true);
   }, 30_000);
+
+  /** A page in the match from the room's 9 000, its log empty, its catch-up the hook's `catchUp`; Sam (seat 1) fights for Blue. */
+  async function welcomed(catchUp: TogetherHooks['catchUp'], failed: (e: unknown) => void = () => {}) {
+    const b = roomClient(trenchArena(), PLAYER);
+    const doc = new FakePage();
+    const hooks: TogetherHooks = {
+      map: defaultConfig().map,
+      switchMap() {},
+      showLobby() {},
+      deploy() {},
+      play() {},
+      ended() {},
+      note() {},
+      killed() {},
+      respawn() {},
+      battle: () => new RoomBattle(b.session, fireT),
+      catchUp,
+      failed,
+    };
+    const together = new Together(doc as unknown as Document, 'http://relay.test', 'build', null, hooks);
+    together.join('ABCDE');
+    page = 1_000;
+    StubSocket.last!.open();
+    const both = [...seats, { id: 1, name: 'Sam', team: 'blue', ready: true, away: false }];
+    StubSocket.last!.say({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats: both, config: defaultConfig(), phase: 'playing', match: MATCH, now: 9_000, log: { shells: [], digs: [] } });
+    for (let k = 0; k < 10; k++) await Promise.resolve();
+    return { b, doc, together };
+  }
+
+  it("a catch-up whose hook fails outside the room's log stops the page with its error, rather than leaving it catching up", async () => {
+    const boom = new Error('the regions could not be copied');
+    const failed: unknown[] = [];
+    const { doc, together } = await welcomed(async () => {
+      throw boom;
+    }, (e) => failed.push(e));
+    expect(failed).toEqual([boom]);
+    // Not caught up, so the page plays nothing on a world that is not the room's; and it does not say it is catching up.
+    expect(together.caughtUp).toBe(false);
+    expect(doc.getElementById('lobby-status').textContent).not.toBe('Catching up on the battle…');
+    expect(doc.getElementById('lobby-status').textContent).toContain(boom.message);
+    // The room says more (a roster, a frame of the deploy screen): the page still says why it stopped.
+    StubSocket.last!.say({ t: 'roster', owner: 0, seats });
+    together.frame(roomClient(trenchArena(), PLAYER).session, false);
+    expect(doc.getElementById('lobby-status').textContent).toContain(boom.message);
+    expect(doc.getElementById('deploy-line').textContent).not.toBe('Catching up on the battle…');
+  });
+
+  it("a kill whose killer is seated nowhere the room has said reads as a plain kill, not the line's", async () => {
+    const { b, together } = await welcomed(async () => {});
+    expect(together.caughtUp).toBe(true);
+    const fallen = vi.spyOn(MatchHud.prototype, 'fallen');
+    const line = (k: number, c: 'round' | 'shell') => {
+      StubSocket.last!.say({ t: 'death', v: 0, k, z: 'torso', tk: false, c });
+      together.after(b.session, b.session.drainEvents(), [], page);
+      const [by, , cause] = fallen.mock.calls.at(-1)!;
+      return fallenLine(by, cause ?? 'shell');
+    };
+    // Seat 5 has left (or was never told): killed, by no one the page can name.
+    expect(line(5, 'round')).toBe('Killed');
+    expect(line(1, 'round')).toBe('Killed by Sam');
+    expect(line(-1, 'round')).toBe('Shot from the line');
+    expect(line(-1, 'shell')).toBe('Killed by the shelling');
+  });
 });

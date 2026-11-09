@@ -33,7 +33,7 @@ import { chip, type DetonateOptions } from '../world/destruction';
 import { detonationRegion, runDetonation, type DetonationRequest, type DetonationResult } from '../world/detonation';
 import { P } from '../world/materials';
 import { groundTop } from '../world/raycast';
-import type { Box } from '../world/region';
+import { overlapXZ as overlap, type Box } from '../world/region';
 import { applyPatch, copyRegion, type BrickPatch } from '../world/region-copy';
 
 /** Where a crater's job runs: post it, and take what has come back since. */
@@ -110,7 +110,6 @@ interface Job {
 /** A job's crater, `bricks` written: what it struck, if it was cut on the ground. */
 const crater = (j: Job, bricks: number): Crater => ({ id: j.id, centre: j.centre, radius: j.radius, bricks, ...(j.material === undefined ? {} : { material: j.material }) });
 const inside = (b: Box, x: number, y: number, z: number) => x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1 && z >= b.z0 && z < b.z1;
-const overlap = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
 
 export class Destruction {
   /** Queued, out or landing, in the order they were shelled. */

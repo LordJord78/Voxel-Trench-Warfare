@@ -31,7 +31,9 @@
  * A scoop is the world's for the same reason: from the start of the first match on it until the map
  * changes, a player's scoop is stamped, logged and relayed in any phase. One sent just before a match
  * ended reaches the room after it, and its digger has dug it: dropped, it would be in their world
- * alone, there for the rematch.
+ * alone, there for the rematch. Between matches each seat's are taken up to LOBBY_DIGS_MAX: every
+ * page holds the lobby's scoops until the next match and digs them all in its first frames, so a
+ * client gone wrong could otherwise stall them all.
  */
 
 import { MatchRules, type MatchEvent } from './match-rules';
@@ -60,6 +62,13 @@ const BURST = 120;
 export const MAP_SEEDS: Record<string, number> = { ravine: 7, corridor: 11 };
 /** The log's most characters, counting each entry's JSON and a separator: a welcome stays under protocol.ts ROOM_TEXT_MAX. */
 export const LOG_CHARS_MAX = 900_000;
+/**
+ * The most scoops the room takes from a seat between matches, the rest dropped (neither relayed nor
+ * logged). An honest page sends only those it dug before the end reached it, a few; this is a
+ * minute of the shovel's fastest work ([entrenching] scoop_voxels: a scoop each 0.26 s, 231), as if
+ * its player dug all through a minute's lobby.
+ */
+export const LOBBY_DIGS_MAX = 240;
 
 /** The room's log of its world: the shells told and the scoops relayed, their characters, the next shell's id, and whether a match has begun on it (from then its scoops are taken). */
 interface RoomLog extends MatchLog {
@@ -97,6 +106,8 @@ export class RoomCore {
   private shelling: Shelling | null = null;
   private toldS = 0;
   private log: RoomLog = emptyLog();
+  /** Each seat's scoops taken since the last match ended (none counted in a match), by seat id. */
+  private readonly lobbyDigs = new Map<number, number>();
   /** When a won match goes back to the lobby. */
   private overAt: number | null = null;
   private build: string | null = null;
@@ -140,6 +151,7 @@ export class RoomCore {
       this.rules = null;
       this.shelling = null;
       this.log = emptyLog();
+      this.lobbyDigs.clear();
       this.overAt = null;
       this.build = null;
       this.ownerId = -1;
@@ -269,7 +281,13 @@ export class RoomCore {
       case 'dig':
         // In any phase once a match has begun on this world (a scoop sent before the end comes after
         // it); never one of a world the room has left (the map changed since, and no match yet).
+        // Between matches, no more than LOBBY_DIGS_MAX a seat.
         if (this.log.played) {
+          if (this.phase !== 'playing') {
+            const taken = this.lobbyDigs.get(seat.id) ?? 0;
+            if (taken >= LOBBY_DIGS_MAX) return;
+            this.lobbyDigs.set(seat.id, taken + 1);
+          }
           const d: WireDig = [seat.id, now, ...msg.c];
           this.record(this.log.digs, d);
           this.broadcast({ t: 'dig', d }, m);
@@ -305,6 +323,7 @@ export class RoomCore {
         this.toldS = 0;
         this.overAt = null;
         this.log.played = true;
+        this.lobbyDigs.clear();
         for (const s of this.seated()) {
           s.state = null;
           s.shots.length = 0;

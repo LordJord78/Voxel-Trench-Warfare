@@ -57,11 +57,12 @@ import type { SoldierDraw } from '../render/soldiers';
 import { boxHitsSolid } from '../physics/collision';
 import { Vec3 } from '../physics/vec';
 import { battleDarkness, Director, noBattleEvents, type BattleEvents, type BattleInputs, type Strike } from '../battle/director';
-import { battleStep, matchHours } from '../net/clock';
+import { matchHours } from '../net/clock';
+import type { RoomConfig } from '../net/protocol';
 import { fireChance, fireTunables } from '../battle/fires';
 import { CharQueue, fuelNear } from '../world/char';
 import { waterTunables } from '../battle/water';
-import { glintsFrom, glintTerms, STILL_WATER, waterFrameTunables } from '../render/water-frame';
+import { glintsFrom, glintTerms, STILL_WATER, waterFrameTunables, type FrameWater } from '../render/water-frame';
 import { flareTunables } from '../battle/flares';
 import { flashPower, flashTunables } from '../battle/barrages';
 import { farHeightM } from '../world/generation/farfield';
@@ -77,7 +78,8 @@ import { copyRegion, type RegionCopy } from '../world/region-copy';
 import { CameraRig, rigTunables } from './camera-rig';
 import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
-import { coverAt, daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type DebugEmber, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
+import { BattleClock, runChunks } from './battle-clock';
+import { coverAt, daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type ShownBattle, type DebugEmber, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
@@ -371,10 +373,11 @@ async function start(): Promise<void> {
   let battle = new Director(world.plan, tun, SEED, ground);
   /**
    * In a room's match the battle runs on the match's clock (net/clock.ts), so every client's is at the
-   * same moment of it: the match's seconds this frame (null out of a match), and those given the battle.
+   * same moment of it: the match's seconds this frame (null out of a match), and the clock that gives
+   * them to the battle, catching it up in chunks over frames when it is far behind (battle-clock.ts).
    */
   let matchNow: number | null = null;
-  let battleGiven = 0;
+  const battleClock = new BattleClock(tun.i('room_battle.catch_up_chunks'));
   const flashT = flashTunables(tun);
   renderer.horizonTerms = horizonTerms(tun);
   renderer.waterTerms = { frame: waterFrameTunables(tun), ripples: waterTunables(tun) };
@@ -398,6 +401,11 @@ async function start(): Promise<void> {
     const intensity = together.config?.intensity ?? session.front.intensity;
     return { intensity, darkness: battleDarkness(s.sunElevationDeg, s.flares, flareT), player: session.player.position.toArray() };
   };
+  /** The battle's inputs at the match's second `s`: the room's tempo, the dark of the match's time of day then, the player's feet now. */
+  const matchInputs = (config: RoomConfig, s: number): BattleInputs => {
+    const sky = s === matchNow ? skyNow() : skyState(tun, matchHours(config, s));
+    return { intensity: config.intensity, darkness: battleDarkness(sky.sunElevationDeg, sky.flares, flareT), player: session.player.position.toArray() };
+  };
   /**
    * The clock and the dark when the battle last ran live. A jump of the clock into the dark from there
    * (a view, the time key, the pause menu; not the lapse's creep) finds a night already under way: the
@@ -413,6 +421,9 @@ async function start(): Promise<void> {
   };
   let battleEvents: BattleEvents = noBattleEvents();
   let shownBattle: Director = battle;
+  /** The battle's water as the lights last showed it, and the battle as the effects last drew it. */
+  let water: FrameWater = STILL_WATER;
+  let seen: ShownBattle = NO_BATTLE;
   let sought: { at: number; inputs: string; d: Director } | null = null;
   const battleAt = (t: number) => {
     const inputs = battleInputs();
@@ -448,35 +459,8 @@ async function start(): Promise<void> {
     });
     return now;
   };
-  /** `strikes`: the session's shells landed this frame, which may start fires; `splashes`: its rounds and shells into water, which ripple it. */
-  const light = (dt: number, eye: readonly number[], strikes: readonly Strike[] = [], splashes: NonNullable<BattleInputs['splashes']> = []) => {
-    skyNow();
-    battleEvents = noBattleEvents();
-    if (mode !== 'paused' || matchNow !== null) {
-      lightSeconds = matchNow ?? lightSeconds + dt;
-      if (lightsHeld === null) {
-        const inputs = { ...battleInputs(), strikes, splashes };
-        if (matchNow !== null) {
-          // On the match's clock: run on to it, never back, and with no pre-roll (a jump into the dark
-          // is the match's own night). A jump past a second (a join, a hidden tab) goes unheard, its chars kept.
-          // While the room's log is caught up, the catch-up runs it along the log (the hooks' catchUp), not the frames.
-          if (together.caughtUp) {
-            const { stepS, silent } = battleStep(battleGiven, matchNow);
-            battleGiven += stepS;
-            battleEvents = battle.tick(stepS, inputs);
-            for (const c of battleEvents.chars) chars.add(c.at);
-            if (silent) battleEvents = noBattleEvents();
-          }
-        } else {
-          battleEvents = jumpedIntoDark(dt, inputs.darkness) ? battle.preRoll(flareT.preRollS, dt, inputs) : battle.tick(dt, inputs);
-          for (const c of battleEvents.chars) chars.add(c.at);
-        }
-        ranAt = { hours: timeOfDay, darkness: inputs.darkness };
-      }
-    }
-    // In a match a char waits while any crater is still to be cut there, queued too: its crater goes out
-    // on the ground as it is then, and says what it struck there, the same on every client.
-    chars.make(session.map, (box) => (together.inMatch ? session.destruction.overlapsPending(box) : session.destruction.overlapsOut(box)));
+  /** The lights, the horizon's flashes and the water, from the battle as it is now. */
+  const showBattle = () => {
     horizon = [];
     if (lightsHeld === 'rest') {
       lit = lights;
@@ -492,14 +476,47 @@ async function start(): Promise<void> {
       renderer.setFlareGlow(Math.min(2, flares.reduce((sum, f) => sum + f.glow, 0) / flareT.meanLight));
       horizon = shownBattle.flashes().map((f) => ({ position: f.position, power: flashPower(f, now, flashT), glow: !f.far }));
     }
-    renderer.setLights(lit, sky.flares, eye);
-    renderer.setHorizon(horizon);
     // The battle's water: its rings, the wind on it, and its flares' and fires' glints; still at rest, and under a test's own lights.
-    renderer.setWater(
+    water =
       lightsHeld === 'rest' || lights !== planned
         ? STILL_WATER
-        : { rings: shownBattle.rings(), ...shownBattle.roughness(), seconds: shownBattle.seconds, glints: glintsFrom(shownBattle.flares(), shownBattle.fires(), sky.flares, glintT) },
-    );
+        : { rings: shownBattle.rings(), ...shownBattle.roughness(), seconds: shownBattle.seconds, glints: glintsFrom(shownBattle.flares(), shownBattle.fires(), sky.flares, glintT) };
+  };
+  /** `strikes`: the session's shells landed this frame, which may start fires; `splashes`: its rounds and shells into water, which ripple it. */
+  const light = (dt: number, eye: readonly number[], strikes: readonly Strike[] = [], splashes: NonNullable<BattleInputs['splashes']> = []) => {
+    skyNow();
+    battleEvents = noBattleEvents();
+    if (mode !== 'paused' || matchNow !== null) {
+      lightSeconds = matchNow ?? lightSeconds + dt;
+      if (lightsHeld === null) {
+        const inputs = { ...battleInputs(), strikes, splashes };
+        if (matchNow !== null) {
+          // On the match's clock: run on to it, never back, and with no pre-roll (a jump into the dark
+          // is the match's own night). A jump past a second (a join, a hidden tab) is caught up unheard,
+          // a second at a time at that second's dark, over frames; its chars kept (battle-clock.ts).
+          // While the room's log is caught up, the catch-up runs it along the log (the hooks' catchUp), not the frames.
+          if (together.caughtUp) {
+            const config = together.config!;
+            const ran = battleClock.frame(battle, matchNow, (s) => matchInputs(config, s), strikes, splashes);
+            battleEvents = ran.heard;
+            for (const c of ran.chars) chars.add(c.at);
+          }
+        } else {
+          battleEvents = jumpedIntoDark(dt, inputs.darkness) ? battle.preRoll(flareT.preRollS, dt, inputs) : battle.tick(dt, inputs);
+          for (const c of battleEvents.chars) chars.add(c.at);
+        }
+        ranAt = { hours: timeOfDay, darkness: inputs.darkness };
+      }
+    }
+    // In a match a char waits while any crater is still to be cut there, queued too: its crater goes out
+    // on the ground as it is then, and says what it struck there, the same on every client.
+    chars.make(session.map, (box) => (together.inMatch ? session.destruction.overlapsPending(box) : session.destruction.overlapsOut(box)));
+    // While the battle catches up on the match's clock, what is shown of it is held as it was: a past
+    // moment of it, run through a few seconds a frame, would strobe.
+    if (!(matchNow !== null && battleClock.behind)) showBattle();
+    renderer.setLights(lit, sky.flares, eye);
+    renderer.setHorizon(horizon);
+    renderer.setWater(water);
   };
 
   /**
@@ -662,7 +679,7 @@ async function start(): Promise<void> {
       lapse = match.config.lapse;
       // The match's battle from its start, on its clock: every client's the same moment of the same battle.
       battle = new Director(world.plan, tun, SEED, ground);
-      battleGiven = 0;
+      battleClock.reset();
       // The front fires at the player from the line across from their team, at the room's intensity
       // (the shared-battle spec's "The front in a room"); the room sends the shells, not the artillery.
       session.frontFrom(team === 'red' ? 1 : 0);
@@ -698,20 +715,18 @@ async function start(): Promise<void> {
     // The room's log caught up (sim/room-battle.ts catchUp): in a match, the battle deploy has just
     // made at 0 run along it, a second at most a step, at each second's darkness (the match's time of
     // day then) and the player's feet, given each crater's strike first; its chars made at once, as
-    // nothing is pending after a settle. With no match the battle and the clock are the visitor's,
-    // and left alone. Then the battle is given the second it reached, and the next frame's step runs
-    // it on to now, silently past SILENT_STEP_S. It is that battle throughout: if the room ends the
-    // match and starts the next while the log is caught up, the next's deploy makes its own, from 0.
+    // nothing is pending after a settle (battle-clock.ts runChunks). With no match the battle and the
+    // clock are the visitor's, and left alone. Then the battle's clock is given the second it reached,
+    // and the frames run it on to now, catching up silently past SILENT_STEP_S. It is that battle
+    // throughout: if the room ends the match and starts the next while the log is caught up, the
+    // next's deploy makes its own, from 0. A catch-up that fails stops the game (`failed`).
     catchUp: async (room, log, match, now) => {
       let reached = 0;
       let along: BattleCatchUp | null = null;
       const director = battle;
       if (match) {
         const { config } = match;
-        const inputs = (s: number): BattleInputs => {
-          const sky = skyState(tun, matchHours(config, s));
-          return { intensity: config.intensity, darkness: battleDarkness(sky.sunElevationDeg, sky.flares, flareT), player: session.player.position.toArray() };
-        };
+        const inputs = (s: number) => matchInputs(config, s);
         const made = (events: BattleEvents) => {
           for (const c of events.chars) chars.add(c.at);
           chars.make(session.map, (box) => session.destruction.overlapsPending(box));
@@ -719,24 +734,19 @@ async function start(): Promise<void> {
         along = {
           runTo: (s, strikes) => {
             made(director.tick(0, { ...inputs(reached), strikes }));
-            while (reached < s) {
-              const next = Math.min(s, reached + 1);
-              made(director.tick(next - reached, inputs(next)));
-              reached = next;
-            }
+            reached = runChunks(director, reached, s, inputs, made);
           },
         };
       }
-      try {
-        await room.catchUp(log, match?.startAt ?? null, now, along, () => new Promise<void>((resolve) => setTimeout(resolve, 0)));
-      } catch (e) {
-        // A crater that never goes in: the world can't be the room's, so the game stops and says why.
-        console.error(e);
-        stop(`TRENCHLINE stopped: ${e instanceof Error ? e.message : String(e)}`);
-        return;
-      }
+      await room.catchUp(log, match?.startAt ?? null, now, along, () => new Promise<void>((resolve) => setTimeout(resolve, 0)));
       renderer.largeEdit();
-      if (match && battle === director) battleGiven = reached;
+      if (match && battle === director) battleClock.given = reached;
+    },
+    // A crater that never goes in, or any other failure to catch up: the world can't be the room's,
+    // so the game stops and says why.
+    failed: (e) => {
+      console.error(e);
+      stop(`TRENCHLINE stopped: ${e instanceof Error ? e.message : String(e)}`);
     },
   }, hits);
 
@@ -1075,7 +1085,8 @@ async function start(): Promise<void> {
       craterWaiters.delete(c.id);
     }
     // The battle seen (its flares, flashes, smoke, tracers, and fires' flames and plumes) as the lights last showed it; none at rest.
-    const seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
+    // Held as it was while the battle catches up on the match's clock, as the lights are (light()).
+    if (!(matchNow !== null && battleClock.behind)) seen = lightsHeld === 'rest' || lights !== planned ? NO_BATTLE : { seconds: shownBattle.seconds, flares: shownBattle.flares(), flashes: shownBattle.flashes(), smoke: shownBattle.smoke(), tracers: shownBattle.tracers(), flames: shownBattle.flames(), plumes: shownBattle.plumes() };
     // The dummies after any others: the renderer has eight soldiers' slots.
     if (dummies.length > 0) {
       soldiers.length = 0;

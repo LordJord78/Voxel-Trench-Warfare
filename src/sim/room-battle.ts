@@ -17,8 +17,9 @@
  *   then dug in the order the scoops came. A later shell's crater over it waits to go out until it
  *   is in (`holds`, which Destruction.waits asks), so a tab back from hidden, or a worker slow to
  *   hand an earlier crater back, still cuts that crater after the scoop, as its digger did. The
- *   player's own scoop waits while a heard shell would take its ground (`reserves`, which the session
- *   asks), so it is never made between a shell's telling and its crater.
+ *   player's own scoop waits while a heard shell would take its ground, or a held scoop overlaps it
+ *   (`reserves`, which the session asks), so it is never made between a shell's telling and its
+ *   crater, nor before a scoop the room stamped first.
  * - **Told** (`outgoing`): the battle's harm to the player, as hurts for the room, and the player's
  *   own scoops, while in play.
  * - **Over** (`finish`): the match ended, every shell still in the air lands at once, quietly; the
@@ -38,7 +39,7 @@ import { scoopBox } from '../combat/entrenching';
 import { matchSeconds, SILENT_STEP_S } from '../net/clock';
 import { decodeDig, decodeShell, HURT_MAX, type ClientMsg, type Dig, type MatchLog, type RoomShell } from '../net/protocol';
 import { detonationRegion } from '../world/detonation';
-import type { Box } from '../world/region';
+import { overlapXZ, type Box } from '../world/region';
 import type { Crater } from './destruction';
 import type { CombatEvents, Session } from './session';
 
@@ -65,9 +66,6 @@ export interface BattleCatchUp {
 
 /** A log's entry: a shell at its landing, or a scoop at its stamp; ranked so a shell comes before a scoop of the same ms (`dug` lands the shells due by its stamp first). */
 type Entry = { at: number; rank: 0; n: number; shell: RoomShell } | { at: number; rank: 1; n: number; dig: Dig };
-
-/** Whether two boxes overlap across x and z, as Destruction asks of its regions. */
-const across = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
 
 /** Another's scoop, held: its box (scoopBox), and the last crater id the session had given when it was put in order, which it comes after (every later crater comes after it). */
 interface Held {
@@ -213,17 +211,22 @@ export class RoomBattle {
 
   /** Whether crater `id`'s job, over `box`, waits to go out: a scoop held that comes before it overlaps it across x and z. */
   holds(id: number, box: Box): boolean {
-    return this.digs.some((h) => h.after < id && across(h.box, box));
+    return this.digs.some((h) => h.after < id && overlapXZ(h.box, box));
   }
 
-  /** Whether ground in `box` would be taken by a shell heard and not yet landed: its crater's region overlaps it across x and z. */
+  /**
+   * Whether ground in `box` is spoken for before the player's own scoop there: a held scoop of
+   * another's overlaps it across x and z (the room stamped it first, so it goes in first on every
+   * page), or a shell heard and not yet landed would take it (its crater's region overlaps it).
+   */
   reserves(box: Box): boolean {
+    if (this.digs.some((h) => overlapXZ(h.box, box))) return true;
     const { session } = this;
     const v = session.voxel;
     const loosen = session.destruction.t.options.loosen;
     return this.air.some((s) => {
       const region = detonationRegion(session.map.dims, [s.at[0] / v, 0, s.at[1] / v], s.radius / v, loosen);
-      return region !== null && across(region, box);
+      return region !== null && overlapXZ(region, box);
     });
   }
 
@@ -315,7 +318,7 @@ export class RoomBattle {
     if (this.digs.length === 0) return;
     const held: Held[] = [];
     for (const h of this.digs) {
-      if (held.some((e) => across(e.box, h.box)) || !this.session.applyDig(h.dig.cells, h.after)) held.push(h);
+      if (held.some((e) => overlapXZ(e.box, h.box)) || !this.session.applyDig(h.dig.cells, h.after)) held.push(h);
     }
     this.digs = held;
   }

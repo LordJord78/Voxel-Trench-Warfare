@@ -174,6 +174,8 @@ export interface TogetherHooks {
    * While it runs, the page runs neither the session nor `battle`.
    */
   catchUp(battle: RoomBattle, log: MatchLog, match: MatchInfo | null, now: () => number): Promise<void>;
+  /** The catch-up failed (`catchUp` rejected with `error`): the world is not the room's, and the page stops, saying why. */
+  failed(error: unknown): void;
 }
 
 /** Where the relay is: `?relay=` on a development build (the tests'), the build's own, or the local one on localhost; null where there is none. */
@@ -199,8 +201,8 @@ export class Together {
   private shownAt = 0;
   /** Others killed and not yet back: when (performance.now()). */
   private readonly deaths = new Map<number, number>();
-  /** This player killed: by whom (null, the battle), when, and by what. */
-  private fallen: { by: { name: string; team: Team } | null; at: number; cause: Cause } | null = null;
+  /** This player killed: by whom (null, the battle; undefined, a player seated nowhere the room has said), when, and by what. */
+  private fallen: { by: { name: string; team: Team } | null | undefined; at: number; cause: Cause } | null = null;
   private winner: { winner: Team; red: number; blue: number } | null = null;
   /** This player's shots not yet sent, as their words: in a room, the words each flew as (Session sent). */
   private shotsOut: number[][] = [];
@@ -227,6 +229,8 @@ export class Together {
   caughtUp = true;
   /** The match the log is caught up on ended meanwhile: the catch-up's clock is then after every time. */
   private overWhileCatching = false;
+  /** Why the catch-up failed, if it did: said where "Catching up…" would be, for good. */
+  private failure: string | null = null;
   /** The battle work of each match's end that came while the log was caught up, done in order once it is. */
   private onceCaughtUp: (() => void)[] = [];
   /**
@@ -340,7 +344,7 @@ export class Together {
     const left = net.match!.startAt - net.serverNow();
     if (!this.inPlay) {
       const side = this.team === 'blue' ? 'Blue' : 'Red';
-      const line = !this.caughtUp ? CATCHING_UP : left > 0 ? `You fight for ${side}. The match starts in ${Math.ceil(left / 1000)}…` : `The match is on. You fight for ${side}.`;
+      const line = !this.caughtUp ? (this.failure ?? CATCHING_UP) : left > 0 ? `You fight for ${side}. The match starts in ${Math.ceil(left / 1000)}…` : `The match is on. You fight for ${side}.`;
       this.lobby.deploy(line, this.caughtUp && left <= 0);
     }
     // Sent only once they have gone in: on the deploy screen the world runs on, but nobody draws or shoots them.
@@ -485,8 +489,9 @@ export class Together {
       return s ? { name: s.name, team: s.team } : null;
     };
     const v = who(victim);
-    const k = killer >= 0 ? who(killer) : null;
-    if (v) this.hud.killed({ killer: k, victim: v, how: howKilled(killer, zone, teamkill, cause) }, now);
+    // A player's kill whose seat is gone (they left) is no one the page can name: not the battle's.
+    const k = killer >= 0 ? (who(killer) ?? undefined) : null;
+    if (v) this.hud.killed({ killer: k ?? null, victim: v, how: howKilled(killer, zone, teamkill, cause) }, now);
     if (victim === net.you) {
       this.fallen = { by: k, at: now, cause };
       this.hp = 0;
@@ -616,18 +621,28 @@ export class Together {
    * page plays, the session still and the room's edits waiting meanwhile; then the end of each match
    * that ended meanwhile, in order; then the edits go to the battle, at the next frame. NetClient calls
    * this after `started`, so no frame runs between the match's deploy and the catch-up. A page leaving
-   * for the room's map catches up on nothing here.
+   * for the room's map catches up on nothing here. A catch-up that fails, wherever, leaves the page
+   * not caught up, so it plays nothing on a world that is not the room's: it says why, and stops
+   * (`failed`), rather than catching up for ever.
    */
   private async welcomed(): Promise<void> {
     const net = this.net;
     if (!net || this.leaving) return;
     this.caughtUp = false;
     this.overWhileCatching = false;
+    this.failure = null;
     const battle = (this.battle ??= this.hooks.battle());
     this.show();
     // The room's clock as the catch-up reads it: after every time once the match is over, as its end
     // gives the match's last edits, so the shells still in the air are heard with none left to whistle.
-    await this.hooks.catchUp(battle, net.log, net.match, () => (this.overWhileCatching ? Number.POSITIVE_INFINITY : net.serverNow()));
+    try {
+      await this.hooks.catchUp(battle, net.log, net.match, () => (this.overWhileCatching ? Number.POSITIVE_INFINITY : net.serverNow()));
+    } catch (e) {
+      this.failure = `Could not catch up on the battle: ${e instanceof Error ? e.message : String(e)}`;
+      this.show();
+      this.hooks.failed(e);
+      return;
+    }
     for (const over of this.onceCaughtUp.splice(0)) over();
     this.caughtUp = true;
     this.show();
@@ -682,7 +697,7 @@ export class Together {
     url.searchParams.set('room', net.room);
     url.searchParams.set('map', net.config.map);
     this.lobby.show({ room: net.room, invite: url.toString(), you: net.you, owner: net.owner, seats: net.seats, config: net.config });
-    if (!this.caughtUp) this.lobby.status(CATCHING_UP);
+    if (!this.caughtUp) this.lobby.status(this.failure ?? CATCHING_UP);
   }
 
   private savedName(): string {

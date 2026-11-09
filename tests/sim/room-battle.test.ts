@@ -12,7 +12,7 @@ import type { BrickMap } from '../../src/world/bricks';
 import { CharQueue, fuelNear } from '../../src/world/char';
 import { detonationRegion } from '../../src/world/detonation';
 import { K, kindOf, P } from '../../src/world/materials';
-import type { Box } from '../../src/world/region';
+import { overlapXZ } from '../../src/world/region';
 import { lateRunner, roomClient, sameWorld, trenchArena, type RoomClient } from '../support/worlds';
 
 // The room's shells on a page (the shared-battle spec's "Clients"): each whistles from when it is
@@ -72,9 +72,6 @@ function digOnce(c: RoomClient, from: number, each?: (events: CombatEvents) => v
   c.session.intent = idleIntent();
   return made;
 }
-
-/** Whether two boxes overlap across x and z, as Destruction asks of regions. */
-const across = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
 
 /** A client stepped to room time `ms`, its events since drained. */
 function client(ms = 1_000, map = trenchArena(), offsetMs = 0, frameS = 1 / 60, late?: number): RoomClient {
@@ -379,8 +376,8 @@ describe("the room's shells on a page", () => {
     const dims = a.session.map.dims;
     const region = detonationRegion(dims, [S.at[0] / V, 0, S.at[1] / V], S.radius / V, tun.f('destruction.loosen_radius_scale'))!;
     const [b1, b2, b3] = [d1, d2, d3].map((d) => scoopBox(dims, d.cells));
-    expect([across(b1, region), across(b2, region), across(b3, region)]).toEqual([true, false, false]);
-    expect([across(b2, b1), across(b3, b1), across(b3, b2)]).toEqual([true, false, false]);
+    expect([overlapXZ(b1, region), overlapXZ(b2, region), overlapXZ(b3, region)]).toEqual([true, false, false]);
+    expect([overlapXZ(b2, b1), overlapXZ(b3, b1), overlapXZ(b3, b2)]).toEqual([true, false, false]);
     // B: its craters back 2.5 s late, so S's is still pending as the three come.
     const b = roomClient(heaped(), AWAY, -200, 1 / 45, lateRunner(150));
     b.step(1_560);
@@ -404,6 +401,58 @@ describe("the room's shells on a page", () => {
     expect(sameWorld(a.session.map, b.session.map)).toBe(true);
   }, 30_000);
 
+  it("the player's own scoop over another's held dig waits until that dig goes in, as on every other client", () => {
+    // As above: S on the bank toward the arena's west end, and A's scoop d1 at x 12.75 m reaching into
+    // S's region, dug once S's crater is in. B stands 0.6 m east of A's spot, where its scoop's box
+    // overlaps d1's but not S's region; its craters come back 2.5 s late, so S's is still pending
+    // when d1 comes, and d1 is held behind it. The room stamped d1 before anything B digs: B's own
+    // scoop waits for d1, as it goes in after d1 on every page the room relays both to.
+    const S = shell(1, 3_000, 4.0, 7.0, 1.5, 507);
+    const a = roomClient(heaped(), [12.75, 6.4, 4.4]);
+    a.step(1_530);
+    a.battle.hear(S, 1_530);
+    a.step(2_000);
+    const m1 = digOnce(a, 2_000);
+    a.step(9_000);
+    const d1: Dig = { seat: 0, at: Math.round(m1.ms) + 30, cells: m1.cells };
+    const b = roomClient(heaped(), [13.35, 6.4, 4.4], -200, 1 / 45, lateRunner(150));
+    b.step(1_560);
+    b.battle.hear(S, 1_560 + b.offsetMs);
+    b.step(d1.at + 30);
+    b.battle.dug(d1, d1.at + 30 + b.offsetMs);
+    expect(b.battle.held).toEqual([d1]);
+    expect(b.session.destruction.pending).toBe(1);
+    // B digs: what is held as its scoop is made.
+    let heldAtScoop: Dig[] | null = null;
+    let waited = 0;
+    const made = digOnce(b, d1.at + 40, (e) => {
+      if (e.scoops.length) heldAtScoop = [...b.battle.held];
+      else if (b.battle.held.length > 0) waited++;
+    });
+    expect(heldAtScoop).toEqual([]);
+    expect(waited).toBeGreaterThan(30);
+    const dims = b.session.map.dims;
+    const own = scoopBox(dims, made.cells);
+    const region = detonationRegion(dims, [S.at[0] / V, 0, S.at[1] / V], S.radius / V, tun.f('destruction.loosen_radius_scale'))!;
+    expect([overlapXZ(own, scoopBox(dims, d1.cells)), overlapXZ(own, region)]).toEqual([true, false]);
+    b.step(12_000);
+    // C, given S, then d1, then B's scoop as the room stamped it: B's world.
+    const c = roomClient(heaped(), AWAY, 200);
+    c.step(1_560);
+    c.battle.hear(S, 1_560 + c.offsetMs);
+    c.step(d1.at + 30);
+    c.battle.dug(d1, d1.at + 30 + c.offsetMs);
+    const mine: Dig = { seat: 1, at: Math.round(made.ms) + 30, cells: made.cells };
+    c.step(mine.at + 30);
+    c.battle.dug(mine, mine.at + 30 + c.offsetMs);
+    c.step(12_000);
+    for (const r of [b, c]) {
+      expect(r.battle.held).toEqual([]);
+      expect(r.session.destruction.pending).toBe(0);
+    }
+    expect(sameWorld(b.session.map, c.session.map)).toBe(true);
+  }, 30_000);
+
   it("a dig between two craters stays between them on a tab back from hidden and behind a slow worker: the digger's world and the receivers' agree", () => {
     // S1 lands on the bank 2.6 m ahead of A; A digs in its rim once its crater is in; S2, told after
     // that, lands over the scoop. A's world is S1, the dig, then S2.
@@ -422,7 +471,7 @@ describe("the room's shells on a page", () => {
     const box = scoopBox(a.session.map.dims, d.cells);
     const loosen = tun.f('destruction.loosen_radius_scale');
     const region = (s: RoomShell) => detonationRegion(a.session.map.dims, [s.at[0] / V, 0, s.at[1] / V], s.radius / V, loosen)!;
-    expect([across(box, region(S1)), across(box, region(S2))]).toEqual([true, true]);
+    expect([overlapXZ(box, region(S1)), overlapXZ(box, region(S2))]).toEqual([true, true]);
     /** What `r` does from here to room time 14 000: each crater as it lands, and the dig as it goes in. */
     const order = (r: RoomClient) => {
       const seen: string[] = [];
@@ -466,13 +515,13 @@ describe("the room's shells on a page", () => {
   }, 30_000);
 
   it('a dig that lands a shell more than SILENT_STEP_S overdue lands it quietly', () => {
-    // A hidden tab back: its queued edits are fed before its tick. The player 2 m from the shell,
-    // heard at 9 000; the dig, stamped 10 200, fed at `back`.
-    const run = (back: number) => {
+    // A hidden tab back: its queued edits are fed before its tick. The player 2 m from the shell, due
+    // at 10 000, told before the tab hid (heard at 9 000) or while it was hidden (heard at `back`, as
+    // the dig is); the dig, stamped 10 200, fed at `back`.
+    const run = (back: number, toldAt = back) => {
       const c = client(9_000);
       const s = shell(1, 10_000, PLAYER[0], PLAYER[2] + 2);
-      c.battle.hear(s, 9_000);
-      c.session.drainEvents();
+      c.battle.hear(s, toldAt);
       const d: Dig = { seat: 3, at: 10_200, cells: [packCell(c.session.map.dims, 128, 70, 150)] };
       c.battle.dug(d, back);
       const e = c.session.drainEvents();
@@ -482,10 +531,16 @@ describe("the room's shells on a page", () => {
       c.step(10_000, (ev) => craters.push(...ev.craters));
       return { e, craters: craters.length, held: c.battle.held.length };
     };
+    // Told while hidden: no whistle for a shell already due, and no blast or harm.
     const away = run(13_000);
     expect([away.e.incoming, away.e.blasts, away.e.harms]).toEqual([[], [], []]);
     expect([away.craters, away.held]).toEqual([1, 0]);
+    // Told before the tab hid: its whistle then, for the second it had left, and nothing more.
+    const heard = run(13_000, 9_000);
+    expect(heard.e.incoming.map((i) => i.landsInS)).toEqual([1]);
+    expect([heard.e.blasts, heard.e.harms]).toEqual([[], []]);
     const soon = run(10_500);
+    expect(soon.e.incoming).toEqual([]);
     expect(soon.e.blasts).toHaveLength(1);
     expect(soon.e.harms.map((h) => h.cause)).toEqual(['shell']);
     expect(soon.e.harms[0].amount).toBeGreaterThan(100);
@@ -835,7 +890,7 @@ describe("the room's log caught up on a page that joins or reloads", () => {
     const d: Dig = { seat: 0, at: Math.round(made.ms) + 30, cells: made.cells };
     const box = scoopBox(a.session.map.dims, d.cells);
     const region = detonationRegion(a.session.map.dims, [S2.at[0] / V, 0, S2.at[1] / V], S2.radius / V, tun.f('destruction.loosen_radius_scale'))!;
-    expect(across(box, region)).toBe(true);
+    expect(overlapXZ(box, region)).toBe(true);
     const j = client(5_500, heaped());
     const spy = spyBattle();
     await j.battle.catchUp(logOf([S1, S2], [d]), null, () => 5_500, spy, noYield);
@@ -923,11 +978,29 @@ describe("the room's log caught up on a page that joins or reloads", () => {
     });
     expect(over).toBe(true);
     expect([j.battle.landed, j.battle.waiting, j.battle.held]).toEqual([[S1, S2, S3], [], [D]]);
-    j.battle.finish();
+    expect(j.battle.finish()).toEqual([]);
     j.step(4_000);
-    expect(j.battle.held).toEqual([]);
     expect(j.session.destruction.pending).toBe(0);
     expect(sameWorld(stayed.session.map, j.session.map)).toBe(true);
+  });
+
+  it("a logged scoop stamped after the catch-up began is given as the room's next edits are: at the room's time as the catch-up ends", async () => {
+    // The page reckons the room at 9 000 as the catch-up begins (its clock a little behind the
+    // room's), and the log holds S1, landed at 3 000, so the catch-up settles it and yields; S2, due
+    // at 9 100 by the player, still in the air; and a scoop stamped 9 250. The catch-up takes 1.5 s.
+    const S1 = shell(1, 3_000, 11.0, 15.0, 2.0, 891);
+    const S2 = shell(2, 9_100, PLAYER[0], PLAYER[2] + 2, 2.0, 892);
+    const D: Dig = { seat: 1, at: 9_250, cells: [packCell(trenchArena().dims, 230, 75, 150)] };
+    const j = client(1_000);
+    let t = 9_000;
+    await j.battle.catchUp(logOf([S1, S2], [D]), 1_000, () => t, null, async () => {
+      t = 10_500;
+    });
+    // Given at 10 500, the scoop lands S2, due by its stamp, first: 1.4 s overdue by then, so
+    // quietly, as a tab back from hidden lands it (given at 9 000, S2 would not yet be due: aloud).
+    const e = j.session.drainEvents();
+    expect([e.incoming, e.blasts, e.harms]).toEqual([[], [], []]);
+    expect([j.battle.landed, j.battle.waiting, j.battle.held]).toEqual([[S1, S2], [], [D]]);
   });
 
   it('a catch-up whose crater never comes back fails loudly, naming it, rather than waiting for ever', async () => {

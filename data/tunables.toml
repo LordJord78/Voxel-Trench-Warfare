@@ -652,6 +652,11 @@ crest_clear_m       = 0.3      # the front at a player whose head its muzzle can
 sight_near_m        = 3.0      # its sight stopped nearer its muzzle than this is no stop: a muzzle in
                                # the ground (spoil heaped over its bay) fires at the head, into what
                                # it is in, not steeply up or sideways over a crest at its own mouth
+# The page's battle on the match's clock (src/app/battle-clock.ts): one behind it by more than
+# net/clock.ts SILENT_STEP_S (a tab back from hidden) catches up silently, a SILENT_STEP_S chunk at a
+# time at that second's dark, spread over frames. Not copied into SHELLING: the room runs no Director.
+catch_up_chunks     = 4        # chunks a frame at most: a dark heavy second is 60 Director steps of
+                               # up to 20 µs, so about 5 ms; a 20-minute absence is 5 s of frames
 
 [range]
 # Solo play's firing range (the shots spec's §5, combat/range.ts): dummies and

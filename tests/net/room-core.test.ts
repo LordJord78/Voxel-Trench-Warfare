@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DIG_CELLS_MAX, encodeShell, encodeShot, encodeState, parseRoom, PROTOCOL, type RoomMsg, type WireShell } from '../../src/net/protocol';
 import { PROTECT_MS } from '../../src/net/match-rules';
-import { AWAY_MS, COUNTDOWN_MS, LOG_CHARS_MAX, OVER_MS, RoomCore, type Conn } from '../../src/net/room-core';
+import { AWAY_MS, COUNTDOWN_MS, LOBBY_DIGS_MAX, LOG_CHARS_MAX, OVER_MS, RoomCore, type Conn } from '../../src/net/room-core';
 import { SHELL_FIELDS } from '../../src/net/shell-fields';
 import { Shelling, shellingSeed } from '../../src/net/shelling';
 
@@ -269,6 +269,37 @@ describe("a room's shelling and its log", () => {
     say(room, a, { t: 'start' }, overAt + 600);
     say(room, b, { t: 'dig', c: [5] }, overAt + 700);
     expect(a.got.filter((m) => m.t === 'dig').at(-1)).toEqual({ t: 'dig', d: [1, overAt + 700, 5] });
+  });
+
+  it("caps each seat's digs between matches: past LOBBY_DIGS_MAX they are dropped, neither relayed nor logged, until the next match", () => {
+    // A minute of the shovel's fastest work (a scoop every 0.26 s): far above the few an honest page
+    // sends after the end, dug before the end reached it.
+    expect(LOBBY_DIGS_MAX).toBeGreaterThanOrEqual(Math.floor(60 / 0.26));
+    const room = new RoomCore('FLOOD');
+    const a = join(room, 'a');
+    const b = join(room, 'b');
+    const c = join(room, 'c');
+    const from = (seat: number) => c.got.flatMap((m) => (m.t === 'dig' && m.d[0] === seat ? [m.d] : []));
+    say(room, a, { t: 'start' }, 1_000);
+    say(room, a, { t: 'end' }, 10_000);
+    expect(room.phase).toBe('lobby');
+    // B floods the lobby, fifty scoops a second, within the room's rate: the first LOBBY_DIGS_MAX are
+    // taken, the rest dropped. A's few are its own.
+    let now = 10_000;
+    for (let k = 0; k < LOBBY_DIGS_MAX + 30; k++) say(room, b, { t: 'dig', c: [k] }, (now += 20));
+    say(room, a, { t: 'dig', c: [7] }, (now += 20));
+    expect(b.closed).toBeNull();
+    expect(from(1)).toEqual(Array.from({ length: LOBBY_DIGS_MAX }, (_, k) => [1, 10_000 + 20 * (k + 1), k]));
+    expect(from(0)).toEqual([[0, now, 7]]);
+    const log = join(room, 'd', (now += 20)).last('welcome')!.log;
+    expect(log.digs.filter((d) => d[0] === 1)).toEqual(from(1));
+    // In a match there is no cap; and the next lobby counts afresh.
+    say(room, a, { t: 'start' }, (now += 1_000));
+    for (let k = 0; k < 40; k++) say(room, b, { t: 'dig', c: [k] }, (now += 20));
+    say(room, a, { t: 'end' }, (now += 1_000));
+    say(room, b, { t: 'dig', c: [1] }, (now += 20));
+    expect(from(1)).toHaveLength(LOBBY_DIGS_MAX + 41);
+    expect(from(1).at(-1)).toEqual([1, now, 1]);
   });
 
   it('welcomes a late joiner with the log so far, a shell still in the air among it', () => {
