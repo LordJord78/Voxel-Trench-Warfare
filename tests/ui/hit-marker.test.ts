@@ -96,22 +96,22 @@ describe('the hit marker', () => {
     expect(marker.state().marker).toBe('hit');
   });
 
-  it('a kill replaces a hit still showing, and nothing less replaces a kill until it is done; a headshot is gold, a kill red and ringed, by class', () => {
+  it('a kill replaces a hit still showing, and nothing less replaces a kill until it is done; a headshot is gold, a kill red and ringed, by class; show says whether it showed', () => {
     const { els, marker } = page();
-    marker.show('hit', 0);
-    marker.show('kill', 150);
+    expect(marker.show('hit', 0)).toBe(true);
+    expect(marker.show('kill', 150)).toBe(true);
     expect([marker.state().marker, els.marker.className]).toEqual(['kill', 'marker kill']);
     expect(els.marker.animation.options.duration).toBe(720);
-    marker.show('head', 300);
-    marker.show('hit', 400);
+    expect(marker.show('head', 300)).toBe(false);
+    expect(marker.show('hit', 400)).toBe(false);
     expect([marker.state().marker, els.marker.className, els.marker.animations.length]).toEqual(['kill', 'marker kill', 2]);
     marker.tick(869);
     expect(marker.state().marker).toBe('kill');
     marker.tick(870);
     expect(marker.state().marker).toBeNull();
     // Done, a hit shows; a headshot over it.
-    marker.show('hit', 900);
-    marker.show('head', 950);
+    expect(marker.show('hit', 900)).toBe(true);
+    expect(marker.show('head', 950)).toBe(true);
     expect([marker.state().marker, els.marker.className]).toEqual(['head', 'marker head']);
     expect(els.marker.animation.options.duration).toBe(440);
   });
@@ -137,6 +137,36 @@ describe('the hit marker', () => {
     marker.pop('KILL', { name: 'Ann', team: 'blue' }, 1000);
     expect([els.pop.className, els.word.textContent, els.name.textContent, els.name.className]).toEqual(['hit-pop kill', 'KILL', 'Ann', 'name blue']);
     expect(marker.state().pop).toBe('KILL Ann');
+  });
+
+  it("a match's headshot kill pops HEADSHOT once: the room's word, while the round's HEADSHOT still shows, names the victim without starting it again", () => {
+    const { els, marker } = page();
+    marker.pop('HEADSHOT', null, 0);
+    const a = els.pop.animation;
+    marker.tick(100);
+    expect(a.currentTime).toBe(100);
+    // The room's death, a round trip on: the name added, the same animation going on from where it was.
+    marker.pop('HEADSHOT', { name: 'Ann', team: 'blue' }, 100);
+    expect(els.pop.animations).toHaveLength(1);
+    expect([a.cancelled, a.currentTime]).toEqual([false, 100]);
+    expect([els.pop.hidden, els.pop.className, els.word.textContent, els.name.textContent, els.name.className]).toEqual([false, 'hit-pop head', 'HEADSHOT', 'Ann', 'name blue']);
+    expect(marker.state().pop).toBe('HEADSHOT Ann');
+    marker.tick(150);
+    expect(a.currentTime).toBe(150);
+    // Gone when the round's pop is done, 0.9 s from the round.
+    marker.tick(899);
+    expect(marker.state().pop).toBe('HEADSHOT Ann');
+    marker.tick(900);
+    expect([marker.state().pop, els.pop.hidden]).toEqual([null, true]);
+    // A new word, a new headshot, or another kill's name starts it again.
+    marker.pop('HEADSHOT', null, 1000);
+    marker.pop('KILL', { name: 'Ann', team: 'blue' }, 1050);
+    expect(els.pop.animations).toHaveLength(3);
+    marker.pop('KILL', { name: 'Bob', team: 'red' }, 1100);
+    marker.pop('KILL', null, 1150);
+    expect(els.pop.animations).toHaveLength(5);
+    expect(els.pop.animations.slice(0, 4).every((x) => x.cancelled)).toBe(true);
+    expect([marker.state().pop, els.name.textContent]).toEqual(['KILL', '']);
   });
 
   it('the red flash: at its strength, gone over 0.35 s; clear takes everything down at once', () => {

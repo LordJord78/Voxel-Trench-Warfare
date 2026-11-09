@@ -4,8 +4,10 @@ import { expect, test, type Browser, type Page } from '@playwright/test';
 // shoots the other in the open; the room hears the hits, the other dies, the feed and the score
 // say so, and the dead come back in. The hit feedback (the shots spec's §4): the shooter's crosshair
 // marks the kill when the room says it, red, and KILL under it names the victim in their team's
-// colour; the one shot sees the red flash of each round into them. A headshot kill says HEADSHOT, and
-// the shooter's ear hears its crack and gush. Then a team kill, which costs the killer's team a point.
+// colour; the one shot sees the red flash of each round into them, and as they die, whether or not
+// the round that killed them reached their page first. A headshot kill says HEADSHOT once, the room's
+// word naming the victim in the round's pop without starting it again, and the shooter's ear hears
+// its crack and gush. Then a team kill, which costs the killer's team a point.
 
 const RELAY = 'http://127.0.0.1:8787';
 
@@ -121,28 +123,44 @@ async function face(shooter: Page, target: Page, aimAt = 1.25): Promise<void> {
 
 /**
  * On `page`, from now: the first frame the crosshair's marker shows a kill (its kind, its class and
- * colour, the words under it, their name's class), and the first the red flash shows (its opacity),
- * each kept as the page's `__seen` for `seen` to read.
+ * colour, the words under it, their name's class, and whether the words' pop is the one a HEADSHOT
+ * unnamed last started, going on), the first the red flash shows (its opacity), and the first the
+ * page's player is dead (whether the red flash shows then, its opacity, and how long ago it last
+ * showed, ms), each kept as the page's `__seen` for `seen` to read.
  */
 async function watch(page: Page): Promise<void> {
   await page.evaluate(() => {
-    const w = window as unknown as { __trenchline: H; __seen: Record<string, unknown> };
+    const w = window as unknown as { __trenchline: H; __seen: Record<string, unknown>; __headshot?: Animation; __flashAt?: number };
     w.__seen = {};
     const look = () => {
       const f = w.__trenchline.hitFeedback();
       const marker = document.querySelector<HTMLElement>('#hud .marker')!;
+      const pop = document.querySelector<HTMLElement>('#hud .hit-pop')!.getAnimations()[0];
+      if (f.pop === 'HEADSHOT') w.__headshot = pop;
       if (f.marker === 'kill' && !w.__seen.kill) {
-        w.__seen.kill = { marker: f.marker, pop: f.pop, className: marker.className, colour: getComputedStyle(marker.querySelector('i')!).backgroundColor, name: document.querySelector('#hud .hit-pop .name')!.className };
+        w.__seen.kill = { marker: f.marker, pop: f.pop, className: marker.className, colour: getComputedStyle(marker.querySelector('i')!).backgroundColor, name: document.querySelector('#hud .hit-pop .name')!.className, samePop: pop !== undefined && pop === w.__headshot };
       }
       const flash = document.querySelector<HTMLElement>('#hurt-flash')!;
+      if (!flash.hidden) w.__flashAt = performance.now();
       if (!flash.hidden && !w.__seen.flash) w.__seen.flash = { opacity: Number(getComputedStyle(flash).opacity) };
+      if (w.__trenchline.together.deadFor() !== null && !w.__seen.death) {
+        w.__seen.death = { flash: !flash.hidden, opacity: Number(getComputedStyle(flash).opacity), ago: w.__flashAt === undefined ? null : performance.now() - w.__flashAt };
+      }
       requestAnimationFrame(look);
     };
     requestAnimationFrame(look);
   });
 }
 
-const seen = (page: Page) => page.evaluate(() => (window as unknown as { __seen: Record<string, { marker?: string; pop?: string | null; className?: string; colour?: string; name?: string; opacity?: number }> }).__seen);
+const seen = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __seen: Record<string, { marker?: string; pop?: string | null; className?: string; colour?: string; name?: string; samePop?: boolean; opacity?: number; flash?: boolean; ago?: number | null }> }).__seen);
+
+/**
+ * As the one shot died, the red flash showed: at that frame, or (a round felt within kill_window_s
+ * before, whose flash the room's word does not repeat, fading over hurt_flash_s, 50 ms longer) at the
+ * frames just before it.
+ */
+const redAsTheyDied = (death: { flash?: boolean; ago?: number | null } | undefined) => death !== undefined && death.ago !== null && death.ago !== undefined && death.ago < 100;
 
 /** The other seat's name, as `page` has the room's seats. */
 const otherName = (page: Page) => h(page, (x) => x.together.seats().find((s) => s.id !== x.together.you())!.name);
@@ -194,17 +212,23 @@ test('a round kills: the feed and the score say so, the shooter sees the kill ma
   const shooter = await seen(host.page);
   const fed = await h(host.page, (x) => x.hitFeedback());
   const said = JSON.stringify({ name, shooter, fed });
-  expect(shooter.kill, said).toEqual({ marker: 'kill', pop: `KILL ${name}`, className: 'marker kill', colour: 'rgb(255, 59, 47)', name: 'name blue' });
+  // (KILL's pop is its own: no HEADSHOT pop went on into it.)
+  expect(shooter.kill, said).toEqual({ marker: 'kill', pop: `KILL ${name}`, className: 'marker kill', colour: 'rgb(255, 59, 47)', name: 'name blue', samePop: false });
   // Chest rounds: each a thwack at the shooter's ear, none a headshot.
   expect(fed.markers.hit, said).toBeGreaterThanOrEqual(1);
   expect(fed.voices.hit, said).toBeGreaterThanOrEqual(1);
   expect([fed.markers.head, fed.voices.head ?? 0, fed.voices.gush ?? 0, fed.voices.kill], said).toEqual([0, 0, 0, 1]);
-  // The one shot: each round of the shooter's into their body as their page fired it, a red flash and a hurt.
-  const victim = await h(friend.page, (x) => x.hitFeedback());
+  // The one shot: each round of the shooter's into their body as their page fired it, a red flash and
+  // a hurt; and as they die, the red flash, the killing round's or the room's word's.
+  const victim = await h(friend.page, async (x) => {
+    await x.waitFrames(3);
+    return x.hitFeedback();
+  });
   const struck = await seen(friend.page);
   expect(victim.flashes, JSON.stringify({ victim, struck })).toBeGreaterThanOrEqual(1);
   expect(victim.voices.hurt, JSON.stringify(victim)).toBe(victim.flashes);
   expect(struck.flash?.opacity ?? 0, JSON.stringify(struck)).toBeGreaterThan(0);
+  expect(redAsTheyDied(struck.death), JSON.stringify(struck)).toBe(true);
   expect(victim.markers, JSON.stringify(victim)).toEqual({ hit: 0, head: 0, kill: 0 });
   await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.score()?.red === 1);
   await expect(host.page.locator('#roomline')).toContainText('RED 1');
@@ -219,20 +243,34 @@ test('a round kills: the feed and the score say so, the shooter sees the kill ma
 test("a headshot kill: the shooter's ear hears its crack and gush, and HEADSHOT names the victim when the room says", async ({ browser }) => {
   test.setTimeout(300_000);
   const { host, friend } = await match(browser, 'blue', 5);
-  // At the head: an AK's round there kills (105).
+  // At the head: an AK's round there kills (105), one round, which may reach the one shot's page
+  // after the room's word that they are dead.
   await face(host.page, friend.page, 1.62);
   await watch(host.page);
+  await watch(friend.page);
   expect(await tapUntilDead(host.page, friend.page, 8000)).toBe(true);
   await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.hitFeedback().markers.kill === 1, null, { timeout: 5000 });
   const name = await otherName(host.page);
   const shooter = await seen(host.page);
   const fed = await h(host.page, (x) => x.hitFeedback());
   const said = JSON.stringify({ name, shooter, fed });
-  expect(shooter.kill, said).toMatchObject({ marker: 'kill', pop: `HEADSHOT ${name}`, className: 'marker kill', name: 'name blue' });
+  // HEADSHOT popped once: the room's word named the victim in the pop the round started, going on.
+  expect(shooter.kill, said).toMatchObject({ marker: 'kill', pop: `HEADSHOT ${name}`, className: 'marker kill', name: 'name blue', samePop: true });
   expect(fed.markers.head, said).toBeGreaterThanOrEqual(1);
   expect(fed.voices.head, said).toBeGreaterThanOrEqual(1);
   expect(fed.voices.gush, said).toBeGreaterThanOrEqual(1);
   expect(fed.voices.kill, said).toBe(1);
+  // The one shot felt it as they died: the red flash, at full strength if the room's word gave it; and its hurt.
+  const victim = await h(friend.page, async (x) => {
+    await x.waitFrames(3);
+    return x.hitFeedback();
+  });
+  const struck = await seen(friend.page);
+  const felt = JSON.stringify({ victim, struck });
+  console.log(`the one shot, killed by a headshot: ${victim.flashes} red flashes, the flash ${struck.death?.flash ? `showing at ${struck.death.opacity?.toFixed(2)}` : `last shown ${struck.death?.ago?.toFixed(0)} ms before`} as they died`);
+  expect(redAsTheyDied(struck.death), felt).toBe(true);
+  expect(victim.flashes, felt).toBeGreaterThanOrEqual(1);
+  expect(victim.voices.hurt, felt).toBe(victim.flashes);
   expect(host.errors).toEqual([]);
   expect(friend.errors).toEqual([]);
 });

@@ -4,8 +4,10 @@
  * looks are index.html's `#hud .marker`). Each pops in from [hits] marker_pop_scale to 1×, is held
  * its kind's while and fades; a kill shows over a headshot over a hit, and another of the same, or a
  * greater, starts it again. Under it "HEADSHOT" in gold or "KILL" in red, a match's kill with the
- * victim's name in their team's colour (`.hit-pop`); over the whole view, being hit, a red flash at
- * its strength fading out (`#hurt-flash`).
+ * victim's name in their team's colour (`.hit-pop`): the room's word naming the victim of a round
+ * whose word still shows (a match's headshot, popped as it struck) adds the name to it and goes on
+ * with it, so it pops once. Over the whole view, being hit, a red flash at its strength fading out
+ * (`#hurt-flash`).
  *
  * Each is a Web Animation on scale and opacity, held and set each frame to the frame's own clock
  * (tick), so a page frozen and stepped shows each frame what its time says.
@@ -44,6 +46,12 @@ export function markerTunables(tun: Tunables): MarkerTunables {
 /** Which marker shows over which. */
 const RANK: Record<MarkerKind, number> = { hit: 0, head: 1, kill: 2 };
 
+/** The words under the marker: HEADSHOT or KILL, and the victim's name (none: the round's own, or the range's). */
+interface Popped {
+  word: PopText;
+  name: string | null;
+}
+
 /** Something shown: what, from when to when (ms, the frame's clock), and its animation. */
 interface Showing<T> {
   what: T;
@@ -61,7 +69,7 @@ export class HitMarker {
   private readonly nameEl: HTMLElement | null;
   private readonly flashEl: HTMLElement | null;
   private marker: Showing<MarkerKind> | null = null;
-  private popped: Showing<string> | null = null;
+  private popped: Showing<Popped> | null = null;
   private flashed: Showing<number> | null = null;
 
   constructor(
@@ -75,10 +83,10 @@ export class HitMarker {
     this.flashEl = doc.querySelector<HTMLElement>('#hurt-flash');
   }
 
-  /** The marker of `kind` at `now` (ms): unless a greater one still shows, from its start. */
-  show(kind: MarkerKind, now: number): void {
+  /** The marker of `kind` at `now` (ms): unless a greater one still shows, from its start. Whether it shows. */
+  show(kind: MarkerKind, now: number): boolean {
     const was = this.marker;
-    if (was && now < was.until && RANK[kind] < RANK[was.what]) return;
+    if (was && now < was.until && RANK[kind] < RANK[was.what]) return false;
     const held = ms(this.t.holdS[kind]);
     const total = held + ms(this.t.fadeS);
     const el = this.markerEl;
@@ -87,10 +95,25 @@ export class HitMarker {
       el.hidden = false;
     }
     this.marker = this.start(was, el, kind, now, total, this.popIn(this.t.popScale, total, held));
+    return true;
   }
 
-  /** "HEADSHOT" or "KILL" under the crosshair at `now` (ms), a match's victim named after it in their team's colour. */
+  /**
+   * "HEADSHOT" or "KILL" under the crosshair at `now` (ms), a match's victim named after it in their
+   * team's colour. The same word still showing unnamed (the round's, as it struck) takes the name and
+   * goes on as it was, its pop and its time; anything else starts afresh.
+   */
   pop(text: PopText, name: { name: string; team: Team } | null, now: number): void {
+    const was = this.popped;
+    const naming = name !== null && was !== null && now < was.until && was.what.word === text && was.what.name === null;
+    if (this.nameEl) {
+      this.nameEl.textContent = name?.name ?? '';
+      this.nameEl.className = name ? `name ${name.team}` : 'name';
+    }
+    if (naming) {
+      was.what = { word: text, name: name.name };
+      return;
+    }
     const total = ms(this.t.textS);
     const el = this.popEl;
     if (el) {
@@ -98,11 +121,7 @@ export class HitMarker {
       el.hidden = false;
     }
     if (this.wordEl) this.wordEl.textContent = text;
-    if (this.nameEl) {
-      this.nameEl.textContent = name?.name ?? '';
-      this.nameEl.className = name ? `name ${name.team}` : 'name';
-    }
-    this.popped = this.start(this.popped, el, name ? `${text} ${name.name}` : text, now, total, this.popIn(this.t.textScale, total, total - ms(this.t.fadeS)));
+    this.popped = this.start(was, el, { word: text, name: name?.name ?? null }, now, total, this.popIn(this.t.textScale, total, total - ms(this.t.fadeS)));
   }
 
   /** Being hit, at `now` (ms): the red flash over the view at `strength` (0 to 1), fading out. */
@@ -128,7 +147,8 @@ export class HitMarker {
 
   /** The marker showing, and the words. */
   state(): { marker: MarkerKind | null; pop: string | null } {
-    return { marker: this.marker?.what ?? null, pop: this.popped?.what ?? null };
+    const p = this.popped?.what;
+    return { marker: this.marker?.what ?? null, pop: p ? (p.name === null ? p.word : `${p.word} ${p.name}`) : null };
   }
 
   /** Popping in from `scale` over the pop, held until `held` (ms), and faded by `total`. */

@@ -28,7 +28,9 @@
  *   its own; a plate, the voxel struck repainted lead-grey (TARGET_STEEL_HIT). A pull's rounds into
  *   one dummy are one event, the pull's: their damage summed, HEAD if any struck the head (else the
  *   zone that took the most), the latest one's distance, and the kill if one killed. Others' rounds
- *   only spark off the steel. A frame with none gives one shared empty list.
+ *   only spark off the steel. A frame with none gives one shared empty list. The dummies it found
+ *   killed, each by which of the frame's rounds (killed), go to the hit feedback, which gives
+ *   nothing for the rounds that struck one after: a dummy killed is a target until the next frame.
  */
 
 import { FIRST_DUMMY, plateCentre, plateVoxels, Range, rangeLayout, rangeTunables, type RangeBay, type RangeEvent, type RangeTunables } from '../combat/range';
@@ -39,13 +41,14 @@ import type { SoldierDraw } from '../render/soldiers';
 import type { Body, CombatEvents, Session } from '../sim/session';
 import type { BrickMap } from '../world/bricks';
 import { P } from '../world/materials';
-import type { FigureOverlay } from './hit-feedback';
+import type { Dropped, FigureOverlay } from './hit-feedback';
 import { Gaits, type Figure } from './together';
 
 /** What a frame of a range that is down gives, and one whose ticks did nothing on it: one list each, never written. */
 const NO_DRAWS: readonly SoldierDraw[] = Object.freeze([]);
 const NO_FIGURES: readonly Figure[] = Object.freeze([]);
 const NO_EVENTS: readonly RangeEvent[] = Object.freeze([]);
+const NO_KILLS: readonly Dropped[] = Object.freeze([]);
 
 /** Whether the range may stand: in solo play, not in a check run, and not asked away (`?range=0`). */
 export function rangeAllowed(o: { room: boolean; check: boolean; param: string | null }): boolean {
@@ -94,6 +97,8 @@ export class RangeView {
   private on: Up | null = null;
   /** The seconds the range was last brought to: its clock, which never goes back. */
   private now = 0;
+  /** The dummies the last after() found killed. */
+  private kills: readonly Dropped[] = NO_KILLS;
 
   constructor(tun: Tunables) {
     this.t = rangeTunables(tun);
@@ -214,6 +219,7 @@ export class RangeView {
    * down, or when no round of the player's struck a dummy or the range's steel: one shared empty list.
    */
   after(events: CombatEvents, nowS: number): readonly RangeEvent[] {
+    this.kills = NO_KILLS;
     const on = this.on;
     if (!on) return NO_EVENTS;
     const now = this.clock(nowS);
@@ -221,13 +227,17 @@ export class RangeView {
     let ticks: number[] | null = null;
     /** Each dummy event's body and pull, and the damage each zone took in it, by its place in `out` (the plates come after). */
     let pulls: Fold[] | null = null;
-    for (const h of events.hits) {
+    let kills: Dropped[] | null = null;
+    const hits = events.hits;
+    for (let index = 0; index < hits.length; index++) {
+      const h = hits[index];
       if (h.owner !== 0 || h.body < FIRST_DUMMY) continue;
       // Every pull of the player's says itself on its rounds (session.combat); a round that says
       // none (fired into the pool by hand) counts as a pull of the tick it struck on.
       const pull = h.shot ?? h.tick;
       const e = on.range.hit(h.body, h.zone, h.gun, h.distance, pull, now);
       if (!e || e.kind === 'plate') continue;
+      if (e.kind === 'kill') (kills ??= []).push({ id: h.body, tick: h.tick, index });
       // A pull's pellets into one dummy are one event: the pull's.
       const k = pulls === null ? -1 : pulls.findIndex((f) => f.body === h.body && f.pull === pull);
       if (out !== null && pulls !== null && k >= 0) {
@@ -248,6 +258,7 @@ export class RangeView {
       (out ??= []).push(on.range.plate(index, i.distance));
       (ticks ??= []).push(i.tick);
     }
+    if (kills !== null) this.kills = kills;
     if (out === null || ticks === null) return NO_EVENTS;
     // Oldest first, and stable: a tick's dummies before its plates, each as the rounds struck. A
     // frame's are few, so an insertion sort; one alone needs none.
@@ -265,6 +276,16 @@ export class RangeView {
       }
     }
     return out;
+  }
+
+  /**
+   * The dummies the last after() found killed, in the order their rounds struck: each one's id, and
+   * the round that killed it, by its tick and its place among that frame's hits (CombatEvents.hits),
+   * for the hit feedback (HitFeedback.frame's `dropped`). One shared empty list when none; never
+   * written, and not to be kept.
+   */
+  killed(): readonly Dropped[] {
+    return this.kills;
   }
 
   /** The range as it stands, at the time it was last brought to. */

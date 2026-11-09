@@ -993,12 +993,16 @@ async function start(): Promise<void> {
       renderer.setSoldiers(soldiers);
     } else renderer.setSoldiers(draws);
     together.after(session, events, draws, performance.now());
-    // What the frame's hits show and sound (hit-feedback.ts), with what a kill or a plate made since
-    // the last frame; the bodies drawn say where each chest is, for a kill.
-    const feedback = hits.frame(session, events, now, dummies.length > 0 ? soldiers : draws);
-    // The player's rounds on the range, read out under the marker; its kills and plates are fed back
-    // at once, their voices with the next frame's.
+    // The player's rounds on the range (once a frame: its events are the readout's too), first, so
+    // the hit feedback knows the dummies they killed and gives nothing for the rounds after.
     const ranged = range.after(events, session.ticks * session.clock.dt);
+    // What the frame's hits show and sound (hit-feedback.ts), with what a kill, a plate or the player's
+    // death made since the last frame; the bodies drawn say where each chest is, for a kill. In a room
+    // the front's rounds hurt the player too.
+    hits.room = together.net !== null;
+    const feedback = hits.frame(session, events, now, dummies.length > 0 ? soldiers : draws, range.killed());
+    // The range's events read out under the marker; its kills and plates fed back at once, their
+    // voices with the next frame's.
     readout.show(ranged, now / 1000);
     readout.tick(now / 1000);
     for (const e of ranged) {
@@ -1345,7 +1349,8 @@ async function start(): Promise<void> {
     rangeState: () => ({ ...range.state(), readout: readout.text }),
     /**
      * The hit feedback (hit-feedback.ts): the marker showing and the words under it (null, none);
-     * the voices it has made by kind, the red flashes, and the markers it has shown by kind.
+     * the voices it has made by kind, the red flashes, and the markers shown by kind (not those a
+     * greater marker still showing kept from showing).
      */
     hitFeedback: () => ({ ...hitMarker.state(), ...hits.state() }),
     /** The camera held at `pose` while the session runs (null: play again); peak-combat.ts's. */

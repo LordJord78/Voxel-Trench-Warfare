@@ -194,10 +194,16 @@ export class Together {
   private leaving = false;
   /** The session the frames run, as the last frame gave it: a death between frames bleeds in it. */
   private session: Session | null = null;
+  /**
+   * The hit feedback's clock (main's frame clock, ms) at the last frame (prepare's `now`): a death
+   * between frames is felt at it, on the clock its markers are shown and stepped by.
+   */
+  private frameNow = 0;
 
   /**
    * `hits`, the hit feedback (hit-feedback.ts): the others' flinches and falls come from it, and a
-   * death in the room goes to it.
+   * death in the room goes to it, on its clock (the last frame's, prepare's `now`): another's for
+   * the kill, this player's own for being killed.
    */
   constructor(
     private readonly doc: Document,
@@ -314,6 +320,7 @@ export class Together {
    */
   prepare(session: Session, dt: number, extra: readonly Figure[] = [], now = performance.now()): SoldierDraw[] {
     this.session = session;
+    this.frameNow = now;
     const hits = this.hits;
     const figures = [...this.figures(), ...extra].map((f) => (hits ? overlaid(f, hits.figureOverlay(f.seat, now)) : f));
     const draws = this.gaits.pose(figures, dt);
@@ -423,12 +430,15 @@ export class Together {
       this.fallen = { by: k, at: now };
       this.hp = 0;
       this.hooks.killed();
+      // Killed (hit-feedback.ts): felt from the room's word when the round that did it was not, as a
+      // one-shot kill's may never be (its shot rides the next state message; the dead strike nothing).
+      this.hits?.died(this.frameNow);
     } else {
       this.deaths.set(victim, now);
       // Another's death (hit-feedback.ts): this player's kill marked, popped and heard; the body's fall
       // and, a round's, its critical burst where it was last struck. Not this player's own, whose view
       // is in the head: its blood would be thrown into the eye.
-      if (this.session) this.hits?.kill(victim, killer === net.you, v, now, this.session, cause === 'round' ? zone : null);
+      if (this.session) this.hits?.kill(victim, killer === net.you, v, this.frameNow, this.session, cause === 'round' ? zone : null);
     }
   }
 

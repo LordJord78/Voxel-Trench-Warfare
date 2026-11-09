@@ -656,6 +656,9 @@ bursts_per_tick     = 2        # a body bleeds this many rounds a tick at most,
 flinch_deg          = 12
 head_snap_deg       = 25       # on top of the torso's lean
 flinch_s            = 0.25     # back to 2% of either
+flinch_send_span    = 2        # a figure is given its flinch for this many times
+                               # flinch_s: settled to 2% at one, to nothing that
+                               # shows at two (app/hit-feedback.ts)
 fall_s              = 0.7      # a killed body's fall, unless told otherwise
 head_fall_s         = 0.45     # killed by a headshot
 spatter_rays        = 14       # a critical hit's spatter: rays from where it

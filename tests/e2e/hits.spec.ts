@@ -5,9 +5,10 @@ import { audioRenders, hooks, openGame, type Hooks } from './support/app';
 // Hit feedback on the range (the shots spec's §4): a round into a dummy marks the crosshair white and
 // thwacks at the ear, and the dummy bleeds; a headshot marks it gold and cracks and gushes, and a kill
 // marks it red over that at once, says HEADSHOT under it, thuds and chimes, and the ground behind the
-// dummy takes its blood; a dummy that is down is not hit, and nothing says it was; a plate rings.
-// Sound is counted as heard only where the page's audio renders (audioRenders): elsewhere what the
-// feedback made is counted, and what was heard is not.
+// dummy takes its blood; a dummy that is down is not hit, and nothing says it was; a plate rings; an
+// M870's pull that kills says KILL, its pellets that struck the dummy dead saying nothing. What the
+// feedback made and showed is checked everywhere; what was heard has its own test, which skips (and
+// says so) where the page's audio does not render (audioRenders), as the audio specs' do.
 test.use({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
 
 type Fed = Hooks & {
@@ -22,6 +23,9 @@ type Fed = Hooks & {
 
 const fed = <T>(page: Page, fn: (h: Fed, arg: unknown) => T | Promise<T>, arg?: unknown): Promise<T> => hooks(page, fn as unknown as (h: Hooks, arg: unknown) => T | Promise<T>, arg);
 
+/** The player's shots, and what their rounds struck, as `record` keeps them on the page: into bodies, and into the world. */
+type Struck = { shots: { origin: number[]; tick: number }[]; hits: { body: number; zone: string; tick: number }[]; impacts: { position: number[]; material: number; tick: number }[] };
+
 /** The blood shades, by name (ids 83 on, as the palette appends them). */
 const BLOOD = Object.entries(P)
   .filter(([name]) => name.startsWith('BLOOD_'))
@@ -31,7 +35,7 @@ const BLOOD = Object.entries(P)
  * Solo play from the click that starts it (and its sound), the range asked for, `primary` in the
  * hands, standing on the spawn bay's firing step: the page's errors, and whether its sound renders.
  */
-async function onTheStep(page: Page, primary: 'svd' | 'm4'): Promise<{ errors: string[]; renders: boolean }> {
+async function onTheStep(page: Page, primary: 'svd' | 'm4' | 'm870'): Promise<{ errors: string[]; renders: boolean }> {
   const errors = await openGame(page);
   await page.locator('#play').click();
   const renders = await audioRenders(page);
@@ -77,8 +81,48 @@ async function shootAt(page: Page, at: readonly number[]): Promise<number> {
 /** What the feedback has made and the sound has played, by kind, now. */
 const tallies = (page: Page) => fed(page, (h) => ({ ...h.hitFeedback(), heard: { ...h.audio().kinds } }));
 
+/**
+ * From now, each frame's combat events as the page drains them: the player's shots (from where), and
+ * their rounds into bodies and into the world, kept on the page (`struck` reads them). The game's own
+ * drain, watched.
+ */
+async function record(page: Page): Promise<void> {
+  await fed(page, (h) => {
+    const s = h.session as unknown as {
+      drainEvents(): { shots: { origin: number[]; tick: number }[]; hits: { owner: number; body: number; zone: string; tick: number }[]; impacts: { owner: number; position: number[]; material: number; tick: number }[] };
+    };
+    const w = window as unknown as { __struck: Struck };
+    w.__struck = { shots: [], hits: [], impacts: [] };
+    const drain = s.drainEvents.bind(s);
+    s.drainEvents = () => {
+      const e = drain();
+      for (const x of e.shots) w.__struck.shots.push({ origin: [...x.origin], tick: x.tick });
+      for (const x of e.hits) if (x.owner === 0) w.__struck.hits.push({ body: x.body, zone: x.zone, tick: x.tick });
+      for (const i of e.impacts) if (i.owner === 0) w.__struck.impacts.push({ position: [...i.position], material: i.material, tick: i.tick });
+      return e;
+    };
+  });
+}
+
+const struck = (page: Page) => page.evaluate(() => (window as unknown as { __struck: Struck }).__struck);
+
+/** The top of what stops a round at (x, z), metres: the first voxel down from `fromY` that is not air or wire. */
+const groundAt = (page: Page, x: number, z: number, fromY: number) =>
+  fed(
+    page,
+    (h, arg) => {
+      const { x, z, fromY, through } = arg as { x: number; z: number; fromY: number; through: number[] };
+      const v = 0.1;
+      const [ix, iz] = [Math.floor(x / v), Math.floor(z / v)];
+      let iy = Math.floor(fromY / v);
+      while (iy > 0 && through.includes(h.world.map.get(ix, iy, iz))) iy--;
+      return (iy + 1) * v;
+    },
+    { x, z, fromY, through: [P.AIR, P.WIRE] },
+  );
+
 test('a torso hit on a dummy: the white marker, a hit voice, blood particles', async ({ page }) => {
-  const { errors, renders } = await onTheStep(page, 'm4');
+  const { errors } = await onTheStep(page, 'm4');
   const dummy = await fed(page, (h) => h.rangeState().dummies.find((d) => d.id === 200)!);
   expect(dummy).toMatchObject({ hp: 100, down: false });
   // The chest: the feet and 1.2 m.
@@ -129,17 +173,16 @@ test('a torso hit on a dummy: the white marker, a hit voice, blood particles', a
   expect(seen.feedback.pop, said).toBeNull();
   expect(after.markers.hit - before.markers.hit, said).toBe(1);
   expect([after.markers.head - before.markers.head, after.markers.kill - before.markers.kill], said).toEqual([0, 0]);
-  // One thwack at the ear, made, and heard where sound renders; no crack, gush or kill.
+  // One thwack at the ear, made (its hearing is the heard test's); no crack, gush or kill.
   expect((after.voices.hit ?? 0) - (before.voices.hit ?? 0), said).toBe(1);
   for (const k of ['head', 'gush', 'kill']) expect(after.voices[k] ?? 0, said).toBe(before.voices[k] ?? 0);
-  if (renders) expect((after.heard.hit ?? 0) - (before.heard.hit ?? 0), said).toBe(1);
   // Its 6 droplets and puff of mist.
   expect(seen.blood, said).toBeGreaterThanOrEqual(7);
   expect(errors).toEqual([]);
 });
 
-test('a headshot: the gold marker → the red kill marker, HEADSHOT, gush and kill heard, spatter behind it', async ({ page }) => {
-  const { errors, renders } = await onTheStep(page, 'svd');
+test('a headshot: the gold marker → the red kill marker, HEADSHOT, the crack, gush and kill made, spatter behind it', async ({ page }) => {
+  const { errors } = await onTheStep(page, 'svd');
   const dummy = await fed(page, (h) => h.rangeState().dummies.find((d) => d.id === 200)!);
   const head = [dummy.position[0], dummy.position[1] + 1.62, dummy.position[2]];
   /**
@@ -215,10 +258,9 @@ test('a headshot: the gold marker → the red kill marker, HEADSHOT, gush and ki
   expect([seen.className, seen.colour, seen.ring], said).toEqual(['marker kill', 'rgb(255, 59, 47)', 'block']);
   expect(seen.feedback.pop, said).toBe('HEADSHOT');
   expect([seen.pop.shown, seen.pop.text, seen.word], said).toEqual([true, 'HEADSHOT', 'rgb(255, 200, 61)']);
-  // The crack, the gush and the kill's thud and chime at the ear, made, and heard where sound renders.
+  // The crack, the gush and the kill's thud and chime at the ear, made (their hearing is the heard test's).
   for (const k of ['head', 'gush', 'kill']) expect((after.voices[k] ?? 0) - (before.voices[k] ?? 0), `${k}: ${said}`).toBe(1);
   expect(after.voices.hit ?? 0, said).toBe(before.voices.hit ?? 0);
-  if (renders) for (const k of ['gush', 'kill']) expect((after.heard[k] ?? 0) - (before.heard[k] ?? 0), `${k} heard: ${said}`).toBe(1);
   // The words and the readout's two lines under them do not meet.
   expect(seen.readout.shown, said).toBe(true);
   expect(seen.readout.text, said).toMatch(/^HEAD 190 · 2\d m\nDOWN IN 1 · 2\d m$/);
@@ -246,23 +288,41 @@ test('a round into a downed dummy gives nothing', async ({ page }) => {
   const before = await tallies(page);
   expect(before.markers.kill, JSON.stringify(before)).toBe(1);
   expect([before.marker, before.pop], JSON.stringify(before)).toEqual([null, null]);
-  // Where it lies: fallen away from the eye, its head about a metre and a half beyond its feet.
-  const lying = await fed(
+  // Where it lies: fallen away from the eye, its head about a metre and a half beyond its feet, on
+  // the ground: the round goes through where its head lies, 10 cm over the ground.
+  const head = await fed(
     page,
     (h, arg) => {
       const feet = arg as number[];
       const p = h.session.player;
       const away = [feet[0] - p.position.x, feet[2] - p.position.z];
       const n = Math.hypot(away[0], away[1]);
-      return [feet[0] + (away[0] / n) * 1.5, feet[1] + 0.2, feet[2] + (away[1] / n) * 1.5];
+      return [feet[0] + (away[0] / n) * 1.5, feet[2] + (away[1] / n) * 1.5];
     },
     dummy.position,
   );
+  const lying = [head[0], (await groundAt(page, head[0], head[1], dummy.position[1] + 1)) + 0.1, head[1]];
+  await record(page);
   expect(await shootAt(page, lying)).toBe(1);
   await fed(page, (h) => h.waitFrames(30));
   const after = await tallies(page);
   const state = await fed(page, (h) => h.rangeState().dummies[0]);
-  const said = JSON.stringify({ before, after, state });
+  // It reached the body: its round went by within half a metre of where the head lies, nothing
+  // stopping it short, and struck the world beyond it. (From the step it runs about 4° down, over
+  // ground that is not level: it may skim on a few metres before it meets the ground.)
+  const { shots, hits, impacts } = await struck(page);
+  expect([shots.length, impacts.length], JSON.stringify({ shots, impacts })).toEqual([1, 1]);
+  const o = shots[0].origin;
+  const hit = impacts[0].position;
+  const flown = Math.hypot(hit[0] - o[0], hit[1] - o[1], hit[2] - o[2]);
+  const way = [0, 1, 2].map((k) => (hit[k] - o[k]) / flown);
+  const along = [0, 1, 2].reduce((sum, k) => sum + (lying[k] - o[k]) * way[k], 0);
+  const by = Math.hypot(...[0, 1, 2].map((k) => lying[k] - (o[k] + way[k] * along)));
+  const said = JSON.stringify({ before, after, state, lying, shots, hits, impacts, along, by, flown });
+  console.log(`the round at the lying dummy went by ${by.toFixed(3)} m from where its head lies, ${along.toFixed(2)} m out, and struck the world ${flown.toFixed(2)} m out`);
+  expect(hits, said).toEqual([]);
+  expect(by, said).toBeLessThan(0.5);
+  expect(flown, said).toBeGreaterThan(along);
   expect(state, said).toMatchObject({ id: 200, hp: 0, down: true });
   // No marker, no words, no voice of a hit: a dead body is not hit.
   expect(after.markers, said).toEqual(before.markers);
@@ -271,8 +331,8 @@ test('a round into a downed dummy gives nothing', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test('a plate rings: a ding is heard', async ({ page }) => {
-  const { errors, renders } = await onTheStep(page, 'svd');
+test('a plate rings: the hit marker, and a ding made', async ({ page }) => {
+  const { errors } = await onTheStep(page, 'svd');
   const plate = await fed(page, (h) => h.rangeState().plates[0]);
   expect(plate).toMatchObject({ index: 0, hits: 0 });
   const before = await tallies(page);
@@ -292,6 +352,106 @@ test('a plate rings: a ding is heard', async ({ page }) => {
   expect((after.voices.ding ?? 0) - (before.voices.ding ?? 0), said).toBe(1);
   // Nothing of a body's.
   for (const k of ['hit', 'head', 'gush', 'kill']) expect(after.voices[k] ?? 0, said).toBe(before.voices[k] ?? 0);
-  if (renders) expect((after.heard.ding ?? 0) - (before.heard.ding ?? 0), said).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test("an M870's kill at 15 m says KILL, as the readout says, and the pellets that struck the dummy dead say nothing", async ({ page }) => {
+  const { errors } = await onTheStep(page, 'm870');
+  // No fire from the front, out in the open.
+  await fed(page, (h) => h.setIntensity('off'));
+  const dummy = await fed(page, (h) => h.rangeState().dummies.find((d) => d.id === 200)!);
+  // Out on the ground 15 m short of it, on the line from the step, facing it.
+  const spot = await fed(
+    page,
+    (h, arg) => {
+      const feet = arg as number[];
+      const p = h.session.player;
+      const away = [feet[0] - p.position.x, feet[2] - p.position.z];
+      const n = Math.hypot(away[0], away[1]);
+      return { x: feet[0] - (away[0] / n) * 15, z: feet[2] - (away[1] / n) * 15, yaw: (Math.atan2(away[0], away[1]) * 180) / Math.PI };
+    },
+    dummy.position,
+  );
+  const ground = await groundAt(page, spot.x, spot.z, dummy.position[1] + 3);
+  await fed(
+    page,
+    async (h, arg) => {
+      const a = arg as { x: number; z: number; yaw: number; y: number };
+      h.teleport({ position: [a.x, a.y + 0.05, a.z], yaw: a.yaw, pitch: 0 });
+      await h.waitFrames(30);
+    },
+    { ...spot, y: ground },
+  );
+  const stood = await fed(page, (h) => h.player().position);
+  const range = Math.hypot(dummy.position[0] - stood[0], dummy.position[2] - stood[2]);
+  expect(range, JSON.stringify({ stood, dummy })).toBeGreaterThan(14);
+  expect(range, JSON.stringify({ stood, dummy })).toBeLessThan(16);
+  await record(page);
+  // A pull at a time at its belly, so its pellets keep out of the head, the pump worked between, until it is down.
+  const belly = [dummy.position[0], dummy.position[1] + 1.0, dummy.position[2]];
+  let pulls = 0;
+  let killing: { before: Awaited<ReturnType<typeof tallies>>; hp: number; seen: { feedback: Awaited<ReturnType<typeof tallies>>; readout: string | null; down: boolean } } | null = null;
+  while (killing === null && pulls < 6) {
+    const before = await tallies(page);
+    const hp = await fed(page, (h) => h.rangeState().dummies[0].hp);
+    expect(await shootAt(page, belly)).toBe(1);
+    pulls++;
+    const seen = await fed(
+      page,
+      async (h, kills) => {
+        const t0 = performance.now();
+        while (performance.now() - t0 < 600 && h.hitFeedback().markers.kill === kills) await h.waitFrames(1);
+        const feedback = { ...h.hitFeedback(), heard: {} };
+        const state = h.rangeState();
+        return { feedback, readout: state.readout, down: state.dummies[0].down };
+      },
+      before.markers.kill,
+    );
+    if (seen.down) killing = { before, hp, seen };
+    // The pump worked, the recoil settled.
+    await fed(page, (h) => h.waitFrames(50));
+  }
+  const after = await tallies(page);
+  const { hits } = await struck(page);
+  const said = JSON.stringify({ pulls, killing, after, hits });
+  expect(killing, said).not.toBeNull();
+  const { before, hp, seen } = killing!;
+  // The killing pull's pellets into the dummy, by tick: those that struck it alive, the one that killed
+  // it (the range's damage, 23 to the torso, 42 to the head, 13 to a limb), and those that struck it dead.
+  const last = hits.filter((x) => x.body === 200).at(-1)!;
+  const pull = hits.filter((x) => x.body === 200 && x.tick >= last.tick - 2);
+  const damage: Record<string, number> = { torso: 23, head: 42, limb: 13 };
+  let left = hp;
+  const lethal = pull.findIndex((x) => (left -= damage[x.zone]) <= 0);
+  console.log(`the M870 at ${range.toFixed(1)} m: down on pull ${pulls}; its pellets into the dummy ${pull.map((x) => x.zone).join(', ')}: pellet ${lethal + 1} of ${pull.length} killing it from ${hp} hp, ${pull.length - lethal - 1} striking it dead`);
+  // The readout's line is the pull's: not HEAD, its pellets into the head (if any) all after the kill.
+  expect(seen.readout, said).toMatch(/^(TORSO|LIMB) \d+ · 1\d m\nDOWN IN \d · 1\d m$/);
+  expect(pull.slice(0, lethal + 1).some((x) => x.zone === 'head'), said).toBe(false);
+  // KILL under the red marker; nothing of a headshot from the pull, whatever struck the dummy dead.
+  expect([seen.feedback.marker, seen.feedback.pop], said).toEqual(['kill', 'KILL']);
+  expect([after.markers.kill - before.markers.kill, after.markers.head - before.markers.head], said).toEqual([1, 0]);
+  for (const k of ['head', 'gush']) expect(after.voices[k] ?? 0, `${k}: ${said}`).toBe(before.voices[k] ?? 0);
+  expect((after.voices.kill ?? 0) - (before.voices.kill ?? 0), said).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test("what the range's hits make is heard: a hit's thwack, a headshot's gush and the kill's thud, a plate's ding", async ({ page }) => {
+  const { errors, renders } = await onTheStep(page, 'm4');
+  test.skip(!renders, 'the audio clock stands still here (no output renders): what is played cannot be counted as heard');
+  const dummy = await fed(page, (h) => h.rangeState().dummies.find((d) => d.id === 200)!);
+  const plate = await fed(page, (h) => h.rangeState().plates[0]);
+  /** One press at `at`, a few frames on for its voices, and what was heard of each kind meanwhile. */
+  const heard = async (at: readonly number[]) => {
+    const before = await tallies(page);
+    expect(await shootAt(page, at)).toBe(1);
+    await fed(page, (h) => h.waitFrames(30));
+    const after = await tallies(page);
+    const kinds = new Set([...Object.keys(before.heard), ...Object.keys(after.heard)]);
+    return Object.fromEntries([...kinds].map((k) => [k, (after.heard[k] ?? 0) - (before.heard[k] ?? 0)]).filter(([, n]) => n !== 0));
+  };
+  // An M4's chest round (55): the thwack. Then its head (100, the kill): the crack, the gush, and the kill's thud and chime.
+  expect(await heard([dummy.position[0], dummy.position[1] + 1.2, dummy.position[2]])).toMatchObject({ hit: 1 });
+  expect(await heard([dummy.position[0], dummy.position[1] + 1.62, dummy.position[2]])).toMatchObject({ head: 1, gush: 1, kill: 1 });
+  expect(await heard(plate.at)).toMatchObject({ ding: 1 });
   expect(errors).toEqual([]);
 });

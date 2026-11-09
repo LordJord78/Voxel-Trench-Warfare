@@ -4,23 +4,33 @@
  *
  * - **The player's hits** (owner 0, into any body): the marker, and on a headshot the HEADSHOT pop;
  *   at the ear the thwack, or a headshot's crack and gush. A tick's hits are one marker and one voice
- *   of a kind, however many of a shotgun's pellets struck.
+ *   of a kind, however many of a shotgun's pellets struck. Not those into a body the range has
+ *   dropped (frame's `dropped`): a shotgun's pellets after the one that killed a dummy strike it dead,
+ *   in that tick or a later one of the frame, before its next frame takes it from the targets.
  * - **Every hit on a body seen** (the player's, and others' into others): the body flinches along the
  *   round, kept by its id until it has settled (figureOverlay), and its last hit is kept for a kill.
  *   Another's is heard where it struck: its thwack within [hits] hit_heard_m, a headshot's gush within
  *   gush_heard_m; its crack and its kill are the shooter's own.
- * - **Rounds into the player** (LOCAL_BODY; never their own, which a body's test leaves out): the red
- *   flash at the damage's share of 100, the aim jolted away from the round, and the hurt voice, once a
- *   tick; the damage as the room reckons it (the zone's by the gun's scale, net/gear.ts), a tick's
- *   added up.
+ * - **Rounds into the player** (LOCAL_BODY): others' (owner 2 on), and the front's (owner 1) in a room
+ *   only (`room`: M6 brings the front's harm into rooms; in solo play it harms no one, though puppets
+ *   make the session test the player's body); never their own, which a body's test leaves out. The
+ *   red flash at the damage's share of 100, the aim jolted away from the round, and the hurt voice,
+ *   once a tick; the damage as the room reckons it (the zone's by the gun's scale, net/gear.ts), a
+ *   tick's added up.
+ * - **The player killed** (the room's death, died): the round that killed them may never be felt
+ *   here (the room's word can come before the shot, and a dead body strikes nothing). Unless a round
+ *   into them was felt within kill_window_s, the red flash at full strength and the hurt voice; no
+ *   jolt, the player being dead.
  * - **A kill** (the room's death in a match, the range's own at once): when it was the player's, the
  *   kill marker, the pop (KILL, or HEADSHOT for a headshot's), and the kill's thud and chime at the
  *   ear. The body falls along the last round seen to strike it within kill_window_s, in head_fall_s
  *   from a headshot; and bursts critical there (failing such a hit, at its chest as last drawn),
- *   unless a headshot killed it, which bled and spattered as it struck: one critical burst a hit.
+ *   unless a headshot killed it, or that last round's tick struck the head: either bled and
+ *   spattered as it struck, and a hit bursts critical once.
  * - **A plate** (the range's): the hit marker, and its ring where it stands.
  *
- * A kill's and a plate's voices go out with the next frame's (frame). Times are the frame's clock, ms.
+ * The voices of a kill, a plate and the player's death go out with the next frame's (frame). Times
+ * are the frame's clock, ms (main's `now`, the one Together.prepare is given), the room's words too.
  */
 
 import type { FeedbackKind, FeedbackVoice } from '../audio/plan';
@@ -36,15 +46,15 @@ import type { SoldierDraw } from '../render/soldiers';
 import { LOCAL_BODY, type CombatEvents, type Session } from '../sim/session';
 import type { MarkerKind, PopText } from '../ui/hit-marker';
 
-/** What hit feedback shows (ui/hit-marker.ts's HitMarker): the marker, the words under it, the red flash. */
+/** What hit feedback shows (ui/hit-marker.ts's HitMarker): the marker (whether it showed: not while a greater one shows), the words under it, the red flash. */
 export interface FeedbackMarker {
-  show(kind: MarkerKind, now: number): void;
+  show(kind: MarkerKind, now: number): boolean;
   pop(text: PopText, name: { name: string; team: Team } | null, now: number): void;
   flash(strength: number, now: number): void;
   clear(): void;
 }
 
-/** [hits] as the feedback reads it: the kill's window (s), each voice's gain, how near another's hit and gush are heard (m), the flash's least, the jolt's terms (°), the fall's times and the flinch's (s). */
+/** [hits] as the feedback reads it: the kill's window (s), each voice's gain, how near another's hit and gush are heard (m), the flash's least, the jolt's terms (°), the fall's times and the flinch's (s), and how many flinch_s a flinch is given for. */
 export interface HitFeedbackTunables {
   killWindowS: number;
   gains: Record<FeedbackKind, number>;
@@ -55,6 +65,7 @@ export interface HitFeedbackTunables {
   fallS: number;
   headFallS: number;
   flinchS: number;
+  flinchSpan: number;
 }
 
 export function hitFeedbackTunables(tun: Tunables): HitFeedbackTunables {
@@ -69,6 +80,7 @@ export function hitFeedbackTunables(tun: Tunables): HitFeedbackTunables {
     fallS: f('fall_s'),
     headFallS: f('head_fall_s'),
     flinchS: f('flinch_s'),
+    flinchSpan: f('flinch_send_span'),
   };
 }
 
@@ -77,6 +89,17 @@ export interface FigureOverlay {
   flinch?: Flinch;
   fallYaw?: number;
   fallS?: number;
+}
+
+/**
+ * A body the range has dropped in the frame (app/range.ts's killed): its id, and the round that
+ * killed it, by its tick and its place among the frame's hits (CombatEvents.hits). The player's
+ * rounds into it after that one strike the dead.
+ */
+export interface Dropped {
+  id: number;
+  tick: number;
+  index: number;
 }
 
 /** A body's last hit: where its round went in, which way, where on it, when (ms; its tick), and whether its tick struck the head. */
@@ -93,8 +116,6 @@ const NONE: FigureOverlay = Object.freeze({});
 const DEG = 180 / Math.PI;
 /** A body's chest: the middle of its torso's box, in the torso's frame. */
 const CHEST: V3 = [0, 1, 2].map((k) => (PART_BOX.torso.min[k] + PART_BOX.torso.max[k]) / 2) as V3;
-/** A flinch is given for this many times flinch_s: settled to 2% at one, to nothing that shows at two. */
-const FLINCH_SPAN = 2;
 
 const copy = (v: readonly number[]): V3 => [v[0], v[1], v[2]];
 const dot = (a: readonly number[], b: readonly number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -106,12 +127,16 @@ export class HitFeedback {
   private readonly falls = new Map<number, { fallYaw?: number; fallS: number }>();
   /** Each body's chest as last drawn, by its id. */
   private readonly chests = new Map<number, V3>();
-  /** Voices of kills and plates, for the next frame. */
+  /** Voices of kills, plates and the player's death, for the next frame. */
   private queued: FeedbackVoice[] = [];
   /** What has been made, for the hooks: voices and markers by kind, and flashes. */
   private readonly tally: Partial<Record<FeedbackKind, number>> = {};
   private readonly markers: Record<MarkerKind, number> = { hit: 0, head: 0, kill: 0 };
   private flashes = 0;
+  /** When a round into the player was last felt, or the room's word of their death (ms). */
+  private hurtAt = Number.NEGATIVE_INFINITY;
+  /** In a room: the front's rounds (owner 1) hurt the player too (M6 brings its harm there). */
+  room = false;
 
   constructor(
     readonly t: HitFeedbackTunables,
@@ -120,10 +145,11 @@ export class HitFeedback {
 
   /**
    * After the frame's ticks, at `now` (ms): what its hits show and sound (the drawn bodies, `others`,
-   * say where each one's chest is, for a kill): the voices to play, any a kill or a plate made since
-   * the last frame first.
+   * say where each one's chest is, for a kill; `dropped`, the bodies the range has dropped in the
+   * frame, whose later hits are none): the voices to play, any a kill or a plate made since the last
+   * frame first. `dropped` is the range's, never kept.
    */
-  frame(session: Session, events: CombatEvents, now: number, others: readonly SoldierDraw[] = []): FeedbackVoice[] {
+  frame(session: Session, events: CombatEvents, now: number, others: readonly SoldierDraw[] = [], dropped: readonly Dropped[] = []): FeedbackVoice[] {
     this.chests.clear();
     for (const d of others) this.chests.set(d.seat, toWorld(d.frames.torso, CHEST));
     const out = this.queued;
@@ -148,13 +174,17 @@ export class HitFeedback {
       heard.clear();
       hurt = null;
     };
-    for (const h of events.hits) {
+    const hits = events.hits;
+    for (let i = 0; i < hits.length; i++) {
+      const h = hits[i];
       if (h.tick !== tick) {
         done();
         tick = h.tick;
       }
       if (h.body >= 0) {
         if (h.owner !== 0 && h.owner < 2) continue;
+        // A round of the player's into a body the range has dropped, after the one that killed it.
+        if (h.owner === 0 && dropped.some((d) => d.id === h.body && (h.tick > d.tick || (h.tick === d.tick && i > d.index)))) continue;
         this.struck(h, now);
         if (h.owner === 0) {
           if (h.zone === 'head') head = true;
@@ -170,7 +200,7 @@ export class HitFeedback {
         };
         hear('hit', t.hitHeardM);
         if (h.zone === 'head') hear('gush', t.gushHeardM);
-      } else if (h.body === LOCAL_BODY && h.owner !== 0) {
+      } else if (h.body === LOCAL_BODY && (h.owner >= 2 || (h.owner === 1 && this.room))) {
         hurt ??= { damage: 0, dir: copy(h.dir) };
         hurt.damage += gunDamage(DAMAGE[h.zone], h.gun);
       }
@@ -182,8 +212,10 @@ export class HitFeedback {
 
   /**
    * Body `victimId` killed (the room's death, the range's kill) at `now` (ms), by the player's round
-   * if `killerIsYou`, `victim` their name and team (none on the range), `zone` where the killing round
-   * struck (null: no round killed them, a shell or a fire).
+   * if `killerIsYou`, `victim` their name and team (none on the range), `zone` the zone the range or
+   * the room reports for the kill (null: no round killed them, a shell or a fire). The range's is its
+   * pull's (app/range.ts's fold): HEAD if any of a shotgun's pellets that struck it alive went into
+   * the head, whichever one killed; the room's, the round that killed by its reckoning.
    */
   kill(victimId: number, killerIsYou: boolean, victim: { name: string; team: Team } | null, now: number, session: Session, zone: Zone | null): void {
     const t = this.t;
@@ -196,13 +228,28 @@ export class HitFeedback {
       this.marker.pop(zone === 'head' ? 'HEADSHOT' : 'KILL', victim, now);
       this.queued.push(this.voice('kill', null));
     }
-    // The round that kills is critical: its burst where it went in. A headshot's was its own, as it struck.
-    if (zone === null || zone === 'head') return;
+    // The round that kills is critical: its burst where it went in. A headshot's was its own, as it
+    // struck; and so was a headshot in the last round's tick (an AK held on the chest climbing into
+    // the head after the rounds that killed, a pellet in the head with them): no second.
+    if (zone === null || zone === 'head' || recent?.head) return;
     const at = recent?.position ?? this.chests.get(victimId);
     if (!at) return;
     const dir = recent?.dir ?? away(eyeOf(session), at);
     session.bleed(at, dir, true);
     session.spatterAt(at, dir, hash32(victimId, Math.round(now)));
+  }
+
+  /**
+   * The player killed, by the room's word at `now` (ms): unless a round into them was felt within
+   * kill_window_s, the red flash at full strength and the hurt voice (with the next frame's), as a
+   * one-shot kill's round may never reach them here. No jolt: they are dead.
+   */
+  died(now: number): void {
+    if (now - this.hurtAt <= this.t.killWindowS * 1000) return;
+    this.hurtAt = now;
+    this.marker.flash(1, now);
+    this.flashes++;
+    this.queued.push(this.voice('hurt', null));
   }
 
   /** A round of the player's rang one of the range's plates, standing at `at` (metres), at `now` (ms): the hit marker, and its ring there. */
@@ -216,12 +263,12 @@ export class HitFeedback {
     const s = this.bodies.get(id);
     const fall = this.falls.get(id);
     const age = s ? Math.max(0, now - s.at) / 1000 : Number.POSITIVE_INFINITY;
-    const flinch = s && age < FLINCH_SPAN * this.t.flinchS ? { dir: s.dir, age, head: s.head } : null;
+    const flinch = s && age < this.t.flinchSpan * this.t.flinchS ? { dir: s.dir, age, head: s.head } : null;
     if (!flinch && !fall) return NONE;
     return { ...(flinch ? { flinch } : {}), ...fall };
   }
 
-  /** What has been made, for the hooks: voices by kind, flashes, markers by kind. */
+  /** What has been made, for the hooks: voices by kind, flashes, and the markers shown by kind (not those a greater one kept from showing). */
   state(): { voices: Record<string, number>; flashes: number; markers: Record<MarkerKind, number> } {
     return { voices: { ...this.tally }, flashes: this.flashes, markers: { ...this.markers } };
   }
@@ -232,6 +279,7 @@ export class HitFeedback {
     this.falls.clear();
     this.chests.clear();
     this.queued = [];
+    this.hurtAt = Number.NEGATIVE_INFINITY;
     this.marker.clear();
   }
 
@@ -246,6 +294,7 @@ export class HitFeedback {
   private hurt(session: Session, damage: number, dir: V3, now: number, out: FeedbackVoice[]): void {
     const t = this.t;
     const share = Math.min(1, damage / 100);
+    this.hurtAt = now;
     this.marker.flash(Math.max(t.flashMin, share), now);
     this.flashes++;
     // Away from the round: across the view the way it went, and up for one that came at the face
@@ -262,8 +311,7 @@ export class HitFeedback {
   }
 
   private mark(kind: MarkerKind, now: number): void {
-    this.marker.show(kind, now);
-    this.markers[kind]++;
+    if (this.marker.show(kind, now)) this.markers[kind]++;
   }
 
   private voice(kind: FeedbackKind, at: [number, number, number] | null): FeedbackVoice {
@@ -273,7 +321,7 @@ export class HitFeedback {
 
   /** Bodies' hits past any use: their flinch settled and no kill to take them. */
   private forget(now: number): void {
-    const keep = 1000 * Math.max(this.t.killWindowS, FLINCH_SPAN * this.t.flinchS);
+    const keep = 1000 * Math.max(this.t.killWindowS, this.t.flinchSpan * this.t.flinchS);
     for (const [id, s] of this.bodies) if (now - s.at > keep) this.bodies.delete(id);
   }
 }

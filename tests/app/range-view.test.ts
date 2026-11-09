@@ -461,6 +461,53 @@ describe('the range in the app', () => {
     });
   });
 
+  it("the dummies a frame's rounds killed, for the hit feedback: each one's id, and its killing round's tick and place among the frame's hits; one shared empty list when none", () => {
+    const s = field();
+    const view = new RangeView(tun);
+    view.raise(s, SPAWN, EYE);
+    view.frame(s, now(s));
+    const [a, b, c] = view.state().dummies;
+    const M870 = GUNS.indexOf('m870');
+    /** A pellet of the player's M870 into dummy `body`'s `zone`, from the pull on tick `shot`, struck on `tick`. */
+    const pellet = (body: number, zone: Zone, shot: number, tick = shot): CombatEvents['hits'][number] => ({ owner: 0, body, zone, gun: M870, position: [0, 0, 0], dir: [0, 0, 1], distance: 15, shot, tick });
+    const none = view.killed();
+    expect(none).toEqual([]);
+    // A limb pellet into b first; then nine into a's torso on tick 70, the fifth killing it (5 × 23),
+    // the rest finding it down; then c killed by the head on tick 71 (an SVD's round, 190).
+    const hits = [pellet(b.id, 'limb', 70), ...Array.from({ length: 9 }, () => pellet(a.id, 'torso', 70)), { ...pellet(c.id, 'head', 71), gun: GUNS.indexOf('svd') }];
+    const events = view.after({ ...s.drainEvents(), hits }, now(s));
+    expect(events.map((e) => [e.kind, e.kind === 'plate' ? e.index : e.id])).toEqual([['hit', b.id], ['kill', a.id], ['kill', c.id]]);
+    expect(view.killed()).toEqual([
+      { id: a.id, tick: 70, index: 5 },
+      { id: c.id, tick: 71, index: 10 },
+    ]);
+    // The next frame's, with none: the shared empty list again.
+    view.after(run(s, 1), now(s));
+    expect(view.killed()).toBe(none);
+  });
+
+  it("the dummies take the hit feedback's overlay each frame: its flinch, fallYaw and fallS set on their figures and posed, and cleared on a frame without one", () => {
+    const s = field();
+    const view = new RangeView(tun);
+    view.raise(s, SPAWN, EYE);
+    const plain = view.frame(s, now(s)).map((d) => d.frames);
+    const flinch = { dir: [0, 0, 1] as [number, number, number], age: 0.05, head: true };
+    const overlay = (id: number) => (id === FIRST_DUMMY ? { flinch } : id === FIRST_DUMMY + 1 ? { fallYaw: 90, fallS: 0.45 } : {});
+    const draws = view.frame(s, now(s), overlay);
+    const figures = view.figures(now(s));
+    expect([figures[0].flinch, figures[0].fallYaw, figures[0].fallS]).toEqual([flinch, undefined, undefined]);
+    expect([figures[1].flinch, figures[1].fallYaw, figures[1].fallS]).toEqual([undefined, 90, 0.45]);
+    expect(figures.slice(2).every((f) => f.flinch === undefined && f.fallYaw === undefined && f.fallS === undefined)).toBe(true);
+    // Posed as the overlay says: the first leans and its head snaps, as drawn and as a target.
+    expect(draws[0].frames).not.toEqual(plain[0]);
+    expect(s.targets[0].frames).toBe(draws[0].frames);
+    expect(draws.slice(2).map((d) => d.frames)).toEqual(plain.slice(2));
+    // A frame without one: every figure's cleared, and stood as it was.
+    const after = view.frame(s, now(s));
+    expect(view.figures(now(s)).every((f) => f.flinch === undefined && f.fallYaw === undefined && f.fallS === undefined)).toBe(true);
+    expect(after.map((d) => d.frames)).toEqual(plain);
+  });
+
   it("raise keeps the front's shells range_shell_clear_m off every spot, a mover's walk too; lower lets them back", () => {
     const s = field();
     const view = new RangeView(tun);

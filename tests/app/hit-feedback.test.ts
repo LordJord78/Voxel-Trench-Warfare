@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { HitFeedback, hitFeedbackTunables, type FeedbackMarker } from '../../src/app/hit-feedback';
+import { HitFeedback, hitFeedbackTunables, type Dropped, type FeedbackMarker } from '../../src/app/hit-feedback';
 import type { FeedbackVoice } from '../../src/audio/plan';
-import { projectileSpec } from '../../src/combat/ballistics';
+import { projectileSpec, type BodyHit } from '../../src/combat/ballistics';
 import { BILLBOARD_FLOATS, particleSpec } from '../../src/combat/particles';
+import type { RangeEvent } from '../../src/combat/range';
 import { pose, toWorld, type V3 } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
-import { encodeShotMark } from '../../src/net/gear';
+import { encodeShotMark, gunDamage } from '../../src/net/gear';
+import { DAMAGE } from '../../src/net/match-rules';
 import type { Team } from '../../src/net/protocol';
 import type { SoldierDraw } from '../../src/render/soldiers';
 import { idleIntent, LOCAL_BODY, Session, type Body, type CombatEvents } from '../../src/sim/session';
@@ -32,11 +34,13 @@ const NOW = 10_000;
 
 type Call = ['show', MarkerKind, number] | ['pop', PopText, { name: string; team: Team } | null, number] | ['flash', number, number] | ['clear'];
 
-/** A HitMarker that records what it is asked. */
+/** A HitMarker that records what it is asked, and shows a marker unless told it would not (a greater one showing). */
 class FakeMarker implements FeedbackMarker {
   readonly calls: Call[] = [];
-  show(kind: MarkerKind, now: number): void {
+  shows = true;
+  show(kind: MarkerKind, now: number): boolean {
     this.calls.push(['show', kind, now]);
+    return this.shows;
   }
   pop(text: PopText, name: { name: string; team: Team } | null, now: number): void {
     this.calls.push(['pop', text, name, now]);
@@ -112,11 +116,20 @@ function bloodied(s: Session, at: readonly number[]): number {
 
 const near = (a: readonly number[], b: readonly number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
+/** The player's chest, as their own body (LOCAL_BODY) stands. */
+function ownChest(s: Session): V3 {
+  const p = s.player;
+  return toWorld(pose({ position: p.position.toArray(), yaw: p.yaw, pitch: p.pitch, height: p.height, speed: 0, bob: p.bobPhase, deadFor: null }).torso, [0, 0.28, 0]);
+}
+
+/** A round of `owner`'s into the player's chest along `dir`, as combat would say it (no gun's: 55 to the torso). */
+const intoPlayer = (s: Session, owner: number, dir: V3 = [1, 0, 0]): BodyHit & { tick: number } => ({ owner, body: LOCAL_BODY, zone: 'torso', position: ownChest(s), dir, distance: 5, tick: s.ticks });
+
 describe('hit feedback', () => {
   it("[hits] gives the feedback's numbers", () => {
     expect(t.gains).toEqual({ hit: 0.75, head: 0.9, gush: 0.8, kill: 0.9, ding: 1.5, hurt: 0.7 });
     expect([t.killWindowS, t.hitHeardM, t.gushHeardM, t.flashMin, t.jolt]).toEqual([0.3, 30, 25, 0.25, [1.5, 1.5]]);
-    expect([t.fallS, t.headFallS, t.flinchS]).toEqual([0.7, 0.45, 0.25]);
+    expect([t.fallS, t.headFallS, t.flinchS, t.flinchSpan]).toEqual([0.7, 0.45, 0.25, 2]);
   });
 
   it("a body hit of the player's: a hit marker and one hit voice at the ear", () => {
@@ -134,7 +147,7 @@ describe('hit feedback', () => {
     expect(voices).toEqual([{ kind: 'hit', at: null, gain: 0.75 }]);
     // The body flinches along the round, kept by its id until it has settled.
     expect(fb.figureOverlay(3, NOW + 100)).toEqual({ flinch: { dir: events.hits[0].dir, age: 0.1, head: false } });
-    expect(fb.figureOverlay(3, NOW + 2000 * t.flinchS)).toEqual({});
+    expect(fb.figureOverlay(3, NOW + 1000 * t.flinchSpan * t.flinchS)).toEqual({});
     expect(fb.figureOverlay(4, NOW + 100)).toEqual({});
     // Nothing more the next frame.
     expect(fb.frame(s, none(), NOW + 16)).toEqual([]);
@@ -377,5 +390,229 @@ describe('hit feedback', () => {
     expect(fb.frame(s, none(), NOW + 16)).toEqual([{ kind: 'ding', at: plate, gain: 1.5 }]);
     expect(fb.frame(s, none(), NOW + 32)).toEqual([]);
     expect(fb.state().voices).toEqual({ ding: 1 });
+  });
+  it("pellets into a dummy the range has dropped (killed earlier in their tick, or a tick before) give nothing: no head voice, no HEADSHOT; the kill bursts at the round that killed it", () => {
+    const s = field();
+    const them = body(200);
+    s.targets = [them];
+    const chest = chestOf(them);
+    const head = headOf(them);
+    // An M870's pull from 5 m: five pellets into the chest, the fifth killing it as the range says,
+    // then one into the head and one more into the chest, all on one tick; and a round on a later tick.
+    const pull = [...[-2, -1, 0, 1, 2].map((k) => [chest[0] + k * 0.05, chest[1], chest[2] - 5]), [head[0], head[1], head[2] - 5], [chest[0], chest[1] - 0.1, chest[2] - 5]];
+    const first = strike(s, pull, [0, 0, 1]);
+    expect(first.hits.map((h) => [h.body, h.zone])).toEqual([...Array.from({ length: 5 }, () => [200, 'torso']), [200, 'head'], [200, 'torso']]);
+    expect(new Set(first.hits.map((h) => h.tick)).size).toBe(1);
+    const later = strike(s, [[chest[0], chest[1] + 0.1, chest[2] - 5]], [0, 0, 1]);
+    expect(later.hits[0].tick).toBeGreaterThan(first.hits[0].tick);
+    const events = { ...first, hits: [...first.hits, ...later.hits] };
+    const lethal = first.hits[4];
+    // Unknowing, the feedback takes the trailing pellet in the head for a headshot.
+    const blind = new FakeMarker();
+    new HitFeedback(t, blind).frame(s, events, NOW, [drawn(them)]);
+    expect(blind.calls.slice(0, 2)).toEqual([
+      ['show', 'head', NOW],
+      ['pop', 'HEADSHOT', null, NOW],
+    ]);
+    // Told the range dropped it at its fifth pellet: the hit marker and the thwack for the pellets
+    // that struck it alive, and nothing for those that struck it dead.
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const dropped: Dropped[] = [{ id: 200, tick: lethal.tick, index: 4 }];
+    expect(fb.frame(s, events, NOW, [drawn(them)], dropped)).toEqual([{ kind: 'hit', at: null, gain: 0.75 }]);
+    expect(marker.calls).toEqual([['show', 'hit', NOW]]);
+    expect(fb.state()).toMatchObject({ voices: { hit: 1 }, markers: { hit: 1, head: 0, kill: 0 } });
+    // Its last hit is the round that killed it: it flinches along that, the head unsnapped ...
+    expect(fb.figureOverlay(200, NOW)).toEqual({ flinch: { dir: lethal.dir, age: 0, head: false } });
+    // ... and the range's kill bursts there.
+    const before = bloodOf(s).droplets.length;
+    fb.kill(200, true, null, NOW, s, 'torso');
+    expect(marker.calls.slice(1)).toEqual([
+      ['show', 'kill', NOW],
+      ['pop', 'KILL', null, NOW],
+    ]);
+    const thrown = bloodOf(s).droplets;
+    expect(thrown.length - before).toBe(18);
+    expect(thrown.filter((b) => near(b, lethal.position) < 1e-4)).toHaveLength(18);
+  });
+
+  it("a range kill the range reports as HEAD (an M870 pull with a pellet in the head, folded into one event, whichever pellet killed): the HEADSHOT pop, the faster fall, and no second burst", () => {
+    const s = field();
+    const them = body(200);
+    s.targets = [them];
+    const chest = chestOf(them);
+    const head = headOf(them);
+    // The pull: a pellet into the chest, one into the head, and one more into the chest, which kills.
+    const events = strike(s, [[chest[0], chest[1], chest[2] - 5], [head[0], head[1], head[2] - 5], [chest[0] + 0.05, chest[1], chest[2] - 5]], [0, 0, 1]);
+    expect(events.hits.map((h) => h.zone)).toEqual(['torso', 'head', 'torso']);
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    fb.frame(s, events, NOW, [drawn(them)], [{ id: 200, tick: events.hits[2].tick, index: 2 }]);
+    // combat() bled the head pellet critical as it struck (18 droplets, 3 puffs), and one chest pellet
+    // as any hit (6, 1): a body bleeds two of a tick's rounds, its headshots first. And spattered it.
+    const before = { blood: bloodOf(s), spatter: bloodied(s, head) };
+    expect([before.blood.droplets.length, before.blood.mists.length]).toEqual([18 + 6, 3 + 1]);
+    expect(before.spatter).toBeGreaterThan(0);
+    // The range's event for the pull: HEAD, as its fold has it (app/range.ts), the zone kill() is given.
+    const e: RangeEvent = { kind: 'kill', id: 200, zone: 'head', damage: 88, distanceM: 5, shots: 1 };
+    fb.kill(e.id, true, null, NOW, s, e.zone);
+    expect(marker.calls).toEqual([
+      ['show', 'head', NOW],
+      ['pop', 'HEADSHOT', null, NOW],
+      ['show', 'kill', NOW],
+      ['pop', 'HEADSHOT', null, NOW],
+    ]);
+    expect(fb.figureOverlay(200, NOW).fallS).toBe(0.45);
+    const after = bloodOf(s);
+    expect([after.droplets.length, after.mists.length]).toEqual([before.blood.droplets.length, before.blood.mists.length]);
+    expect(bloodied(s, head)).toBe(before.spatter);
+  });
+
+  it("torso, torso, then a head round that does not kill on its own, then the room's death by a torso round: one critical burst, the headshot's", () => {
+    const s = field();
+    const them = body(3);
+    s.together = true;
+    s.bodies = [them];
+    const chest = chestOf(them);
+    const head = headOf(them);
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    // An AK held on the chest climbs into the head: a round a frame, 100 ms apart. Each bleeds as it
+    // strikes (combat()): the chest rounds 6 droplets, the headshot 18, critical.
+    const bled: number[] = [];
+    const struck = [[chest[0], chest[1] - 0.1, chest[2]], chest, head].map((aim, k) => {
+      const was = bloodOf(s).droplets.length;
+      const events = strike(s, [[aim[0], aim[1], aim[2] - 5]], [0, 0, 1]);
+      bled.push(bloodOf(s).droplets.length - was);
+      fb.frame(s, events, NOW + 100 * k, [drawn(them)]);
+      return events.hits[0];
+    });
+    expect(struck.map((h) => h.zone)).toEqual(['torso', 'torso', 'head']);
+    expect(bled).toEqual([6, 6, 18]);
+    const before = { blood: bloodOf(s), spatter: bloodied(s, head) };
+    // The room says the torso rounds killed (its harm, not this page's sight): no burst of the kill's.
+    fb.kill(3, true, { name: 'Ann', team: 'blue' }, NOW + 300, s, 'torso');
+    const after = bloodOf(s);
+    expect([after.droplets.length, after.mists.length]).toEqual([before.blood.droplets.length, before.blood.mists.length]);
+    expect(bloodied(s, head)).toBe(before.spatter);
+    // It is still the kill: marked, popped and heard; and it falls along the last round.
+    expect(marker.calls.slice(-2)).toEqual([
+      ['show', 'kill', NOW + 300],
+      ['pop', 'KILL', { name: 'Ann', team: 'blue' }, NOW + 300],
+    ]);
+    expect(fb.frame(s, none(), NOW + 316)).toEqual([{ kind: 'kill', at: null, gain: 0.9 }]);
+    expect(fb.figureOverlay(3, NOW + 316)).toMatchObject({ fallYaw: 0, fallS: 0.7 });
+  });
+
+  it("the player killed by a round they never felt (a one-shot kill: the room's word before the round): the red flash at full strength and the hurt voice, once, and no jolt; 0.1 s after a felt hit, nothing more", () => {
+    const s = field();
+    s.together = true;
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const was = [s.suppression.flinchYaw, s.suppression.flinchPitch];
+    fb.died(NOW);
+    expect(marker.calls).toEqual([['flash', 1, NOW]]);
+    expect([s.suppression.flinchYaw, s.suppression.flinchPitch]).toEqual(was);
+    // The room's word comes between frames: its voice with the next frame's, once.
+    expect(fb.frame(s, none(), NOW + 16)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(fb.frame(s, none(), NOW + 32)).toEqual([]);
+    expect(fb.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
+    // The round felt as it struck, and the room's word 0.1 s on: the round's flash and voice alone.
+    const felt = new FakeMarker();
+    const after = new HitFeedback(t, felt);
+    expect(after.frame(s, { ...none(), hits: [intoPlayer(s, 4)] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    after.died(NOW + 100);
+    expect(after.frame(s, none(), NOW + 116)).toEqual([]);
+    expect(felt.calls).toEqual([['flash', 0.55, NOW]]);
+    expect(after.state()).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
+    // Past kill_window_s, the room's word is felt.
+    after.died(NOW + 400);
+    expect(felt.calls.at(-1)).toEqual(['flash', 1, NOW + 400]);
+    expect(after.frame(s, none(), NOW + 416)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+  });
+
+  it("the front's rounds (owner 1) into the player: nothing in solo play (puppets make it together), the flash in a room; others' rounds always", () => {
+    const s = field();
+    s.together = true;
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    const was = [s.suppression.flinchYaw, s.suppression.flinchPitch];
+    expect(fb.room).toBe(false);
+    expect(fb.frame(s, { ...none(), hits: [intoPlayer(s, 1)] }, NOW)).toEqual([]);
+    expect(marker.calls).toEqual([]);
+    expect([s.suppression.flinchYaw, s.suppression.flinchPitch]).toEqual(was);
+    // Another player's round (seat 0's, owner 2), in solo too: a puppet's world is a room's.
+    expect(fb.frame(s, { ...none(), hits: [intoPlayer(s, 2)] }, NOW + 16)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(marker.calls).toEqual([['flash', 0.55, NOW + 16]]);
+    // In a room the front's rounds are felt (M6 brings its harm into rooms).
+    fb.room = true;
+    expect(fb.frame(s, { ...none(), hits: [intoPlayer(s, 1)] }, NOW + 32)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+    expect(marker.calls.at(-1)).toEqual(['flash', 0.55, NOW + 32]);
+    // Never the player's own.
+    expect(fb.frame(s, { ...none(), hits: [intoPlayer(s, 0)] }, NOW + 48)).toEqual([]);
+    expect(fb.state().flashes).toBe(2);
+  });
+
+  it('a round from straight ahead (along −forward) jolts the aim straight up, by the full 1.5° + 1.5° × its share', () => {
+    const s = field();
+    s.together = true;
+    const p = s.player;
+    expect([p.yaw, p.pitch]).toEqual([0, 0]);
+    const chest = ownChest(s);
+    // Seat 2's AK round (owner 4), from 5 m in front of the player, level, at their chest: along −z.
+    const mark = encodeShotMark({ tracer: false, kind: 0, suppressed: false, gun: 'ak74' });
+    const from: [number, number, number] = [chest[0], chest[1], chest[2] + 5];
+    s.fireRemote(4, from, [0, 0, -1], false, from, mark);
+    let events = none();
+    for (let k = 0; k < 10 && events.hits.length === 0; k++) {
+      s.tick();
+      events = s.drainEvents();
+    }
+    expect(events.hits.map((h) => [h.owner, h.body, h.gun])).toEqual([[4, LOCAL_BODY, 0]]);
+    const [hit] = events.hits;
+    expect(hit.dir[2]).toBeCloseTo(-1, 6);
+    const share = Math.min(1, gunDamage(DAMAGE[hit.zone], hit.gun) / 100);
+    const was = [s.suppression.flinchYaw, s.suppression.flinchPitch];
+    const marker = new FakeMarker();
+    new HitFeedback(t, marker).frame(s, events, NOW);
+    expect(marker.calls).toEqual([['flash', Math.max(0.25, share), NOW]]);
+    expect(s.suppression.flinchPitch - was[1]).toBeCloseTo(1.5 + 1.5 * share, 3);
+    expect(s.suppression.flinchYaw - was[0]).toBeCloseTo(0, 3);
+  });
+
+  it("nine of another's pellets into one body on one tick: one spatial hit voice, where the first struck", () => {
+    const s = field();
+    const them = body(3, 15);
+    s.together = true;
+    s.bodies = [them];
+    const chest = chestOf(them);
+    const grid = Array.from({ length: 9 }, (_, k) => [chest[0] + ((k % 3) - 1) * 0.06, chest[1] + (Math.floor(k / 3) - 1) * 0.06, chest[2] - 5]);
+    // Seat 2's shotgun (owner 4), from 5 m short of them.
+    const events = strike(s, grid, [0, 0, 1], 4);
+    expect(events.hits).toHaveLength(9);
+    expect(events.hits.every((h) => h.owner === 4 && h.body === 3 && h.zone === 'torso' && h.tick === events.hits[0].tick)).toBe(true);
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    expect(fb.frame(s, events, NOW, [drawn(them)])).toEqual([{ kind: 'hit', at: events.hits[0].position, gain: 0.75 }]);
+    expect(marker.calls).toEqual([]);
+    expect(fb.state().voices).toEqual({ hit: 1 });
+  });
+
+  it('the markers tallied are the markers shown: one that a greater marker still showing keeps from showing is not counted', () => {
+    const s = field();
+    const them = body(3);
+    s.together = true;
+    s.bodies = [them];
+    const chest = chestOf(them);
+    const events = strike(s, [[chest[0], chest[1], chest[2] - 5]], [0, 0, 1]);
+    const marker = new FakeMarker();
+    const fb = new HitFeedback(t, marker);
+    marker.shows = false;
+    expect(fb.frame(s, events, NOW, [drawn(them)])).toEqual([{ kind: 'hit', at: null, gain: 0.75 }]);
+    expect(marker.calls).toEqual([['show', 'hit', NOW]]);
+    expect(fb.state().markers).toEqual({ hit: 0, head: 0, kill: 0 });
+    marker.shows = true;
+    fb.kill(3, true, null, NOW + 100, s, 'torso');
+    expect(fb.state().markers).toEqual({ hit: 0, head: 0, kill: 1 });
   });
 });
