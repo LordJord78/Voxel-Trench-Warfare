@@ -108,7 +108,16 @@ Playing with friends needs the battle in the room, and the same world for everyo
   - a round stopped by a body that one client draws and another doesn't;
   - a crater whose job asks for a wider region just as a neighbour goes out;
   - two players digging the same ground within a round trip: their clients apply the two scoops in opposite orders;
-  - blood spatter (sub-project 7): per page and colour only. Each blood shade keeps the rules of what it marks (sod's is mud's kind, whose rules are the same), so the shared edits read the same world.
+  - blood spatter (sub-project 7): per page and colour only. Each blood shade keeps the rules of what it marks (sod's is mud's kind, whose rules are the same), so the shared edits read the same world;
+  - (b) a scoop over a shell told in the last round trip before the end, or a dig carried across an end, can go in on the other side of the end's quiet craters (`RoomBattle.finish`);
+  - (c) after a match ends during a page's catch-up, that match's fires' chars may fall differently there: colour only;
+  - (d) a digger whose clock runs ahead of the room's can stamp a scoop before a shell it has already landed: the plan's note 9 tolerates about 1.2 s, in one direction only;
+  - (e) shots fired in a match's last round trip chip only the shooter's world: the room relays no shot after its end;
+  - (h) a chip racing a scoop over the same ground within a round trip: shots carry no room stamp. It is the same class as a chip racing a crater.
+- **Known limits** (M6's final review). Each is accepted for M6-lite and recorded here:
+  - (a) A very long-lived room's welcome grows past `ROOM_TEXT_MAX` on shells alone, at about 17,600 shells (roughly 16 hours of heavy fire on one map). A joiner then waits at "Joining…". Long before that, each new scoop leaves the log as it arrives.
+  - (f) The log holds about 3,200 scoops, roughly 14 digger-minutes over a map's life. Past that, a page that reloads or joins lacks the earliest scoops. The owner changing the map, or everyone leaving, resets the log.
+  - (g) **A catch-up costs about 0.3–0.47 s of crater work per shell the map has seen,** on one destruction worker: two benches on the Ravine measured 55 heavy shells in 17.4 s and 120 shells in 56 s. Joining 10 minutes into a heavy match is about a minute's wait; an evening of light rematches on one map, several. The wait is shown ("Catching up on the battle… 120 of 400"), Ready and Start are not offered meanwhile, and a hidden tab does not slow it. Cutting the cost (a pool of workers for regions that don't overlap, or a snapshot of the world sent to a joiner) is a project of its own, to be decided from Task 8's measure of a realistic log.
 
 ## Corrections from planning (2026-11-04)
 
