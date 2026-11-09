@@ -683,6 +683,8 @@ range_shell_clear_m = 6.0      # while it stands, the solo artillery lands no sh
 # toward the killing round's bearing.
 critical_droplets   = 18       # [particles.blood]'s, out of the far side
 critical_mist       = 3        # [particles.blood_mist]'s
+entry_puff_back_m   = 0.1      # every hit that bleeds: one [particles.blood_entry]
+                               # puff this far before the hit, on the shooter's side
 helmet_sparks       = 4        # [particles.spark]'s: every head hit's
 bursts_per_tick     = 2        # a body bleeds this many rounds a tick at most,
                                # and spatters this many of its headshots: a
@@ -704,6 +706,11 @@ spatter_core        = 2        # both cones pack toward their axis: a ray's angl
                                # off it is the half-angle × r^core, r uniform in
                                # [0, 1). 1 spreads the rays evenly over the cone's
                                # width; 2 packs a splat with a thin fringe
+spatter_splat       = 3        # and each ray's voxel splats onto up to this many of
+                               # its eight neighbours on the face it struck, seeded:
+                               # ⌈3 × (1 − r^core)⌉, fewer toward the cone's edge.
+                               # 14 rays of one voxel each read as buckshot holes at
+                               # 2 m (G3 Task 4's captures); a splat reads as blood
 spatter_fall_rays   = 10       # and rays falling from it, so a body standing in
                                # the open marks the ground behind it
 spatter_fall_cone_deg = 30     # their cone's half-angle about an axis tilted
@@ -720,6 +727,12 @@ marker_kill_s       = 0.60
 marker_pop_s        = 0.09
 marker_pop_scale    = 1.6
 marker_fade_s       = 0.12
+kill_ring_from      = 1.6      # a kill's ring leaves the ticks' tips as they pop
+kill_ring_to        = 4.0      # (this × their reach) and expands out to this × it
+kill_ring_ease      = 3        # over marker_kill_s, easing out (1 − (1 − u)^this),
+                               # fading as it goes: it frames the body it marks. At
+                               # the marker's own size it covered a 25 m dummy (G3
+                               # Task 4's captures)
 pop_s               = 0.9      # HEADSHOT, or KILL, under the crosshair: all told,
 pop_scale           = 1.3      # popping in from this over marker_pop_s, fading
                                # over marker_fade_s at its end
@@ -736,7 +749,10 @@ hurt_gain           = 0.7      # -30 to -1 dBFS, a quarter of it over 400 Hz (a
                                # narrow band of noise fluttering down to a quarter,
                                # and the compressor takes its peaks: hence its gain
 hit_heard_m         = 30.0     # another's round into a body is heard where it struck
-gush_heard_m        = 25.0     # this near; a headshot's gush this near
+gush_heard_m        = 25.0     # this near; a headshot's gush this near,
+gush_others_gain    = 0.8      # at this gain, not gush_gain: that is the shooter's,
+                               # at the ear, and another's kill nearby in a match is
+                               # not to overpower it (falling off as any voice afar)
 hurt_flash_min      = 0.25     # being hit: a red flash at the damage's share of 100,
 hurt_flash_s        = 0.35     # at least this, fading over this
 hurt_jolt_deg       = [1.5, 1.5]  # and the aim jolted away from the round: the first,
@@ -1003,7 +1019,9 @@ speed_jitter        = 0.25
 # Blood (the shots spec's §4): a round into a body throws droplets and a puff
 # of mist out along it, beside the uniform's khaki dust; a critical hit throws
 # [hits] critical_droplets and critical_mist of them. Dark red, lit by the
-# world as dust is.
+# world as dust is, but never darker than [effects] blood_light_floor and never
+# smaller than blood_min_px across (blood = true: its own kind of billboard), so
+# at 25 m and at dusk it reads as red, not as a pixel of soot (G3 Task 6).
 [particles.blood]
 life_s              = 0.8
 gravity             = -9.81
@@ -1014,6 +1032,7 @@ colour_start        = [0.32, 0.02, 0.02, 1.0]
 colour_end          = [0.32, 0.02, 0.02, 0.0]
 emissive            = false
 square              = false
+blood               = true
 count               = 6        # an ordinary hit's
 speed               = 3.5      # out of the far side, along the round
 lift                = 0.0
@@ -1026,14 +1045,38 @@ gravity             = -0.4     # it hangs, growing as it thins
 drag                = 3.0
 size_start_m        = 0.15
 size_end_m          = 0.6
-colour_start        = [0.42, 0.04, 0.04, 0.45]
+size_ease           = 4        # swelling out fast and then slowly: (1 − (1 − t)^4)
+colour_start        = [0.42, 0.04, 0.04, 0.6]
 colour_end          = [0.42, 0.04, 0.04, 0.0]
 emissive            = false
 square              = false
+blood               = true
 count               = 1        # an ordinary hit's
 speed               = 0.8      # along the round
 lift                = 0.0
 spread              = 0.8
+speed_jitter        = 0.0
+
+# Where the round went in: every hit that bleeds throws one small puff on the
+# shooter's side, [hits] entry_puff_back_m before the hit and coming back toward
+# them, quick and growing. The far side's burst is behind the body, out of the
+# shooter's sight (G3 Task 6's ruling).
+[particles.blood_entry]
+life_s              = 0.25
+gravity             = -0.4
+drag                = 3.0
+size_start_m        = 0.1
+size_end_m          = 0.3
+size_ease           = 6        # bursting out, then swelling slowly: (1 − (1 − t)^6)
+colour_start        = [0.5, 0.05, 0.04, 0.9]
+colour_end          = [0.5, 0.05, 0.04, 0.0]
+emissive            = false
+square              = false
+blood               = true
+count               = 1
+speed               = 0.6      # back toward the shooter
+lift                = 0.0
+spread              = 0.15
 speed_jitter        = 0.0
 
 # The sound (src/audio): every voice made in WebAudio, nothing loaded. A sound is
@@ -1193,6 +1236,12 @@ dust_key            = 0.5      # how much of the key's light a mote of dust or a
 dust_sky            = 1.0      # case of brass takes (a flake turned every way: the
                                # mean of n·l), and of the mean of the sky's on its
                                # faces, in the open (near a face it takes the face's)
+blood_light_floor   = 0.5      # blood ([particles.blood*]) is lit as dust is, but
+                               # never darker than the light the present pass shows
+                               # as this (1: at the tone curve's input of 1), so at
+                               # dusk and at night it reads dark red, not soot
+blood_min_px        = 2.0      # and is drawn at least this many pixels across: a
+                               # 3 cm droplet at 25 m was a pixel (G3 Task 4)
 
 # Ricochets and embers (src/app/ricochets.ts): a tracer that strikes leaves an ember, and a graze
 # (within max_deg of the face's plane) sometimes glances off and flies on, burning.

@@ -39,7 +39,7 @@ import { tracerTunables, type TracerState } from '../battle/tracers';
 import { Ricochets, ricochetTunables, type RicochetTunables } from './ricochets';
 import { beamOf } from '../combat/arsenal';
 import type { StrikeDraw } from '../combat/ballistics';
-import { BILLBOARD_FLOATS } from '../combat/particles';
+import { BILLBOARD_FLOATS, BLOOD_BILLBOARD } from '../combat/particles';
 import { toWorld } from '../combat/soldier-rig';
 import type { Tunables } from '../core/tunables';
 import { decodeGear, TRACER_KIND } from '../net/gear';
@@ -319,6 +319,12 @@ export class EffectsFrameBuilder {
   debugSmoke: SmokePuff[] = [];
   /** Where the last frame's test quads start among its billboards. */
   debugAt = 0;
+  /**
+   * For the capture tool's control (tools/hit-captures.mjs): a hit's burst left out of the frame, the
+   * particles' blood and their emissive ones (a helmet's sparks: the shots spec's blood; a shot's own
+   * flash lives 45 ms), the rest as it is.
+   */
+  hideBurst = false;
   private readonly billboards = new Float32Array(MAX_BILLBOARDS * BILLBOARD_FLOATS);
   private readonly ribbons = new Float32Array(MAX_RIBBONS * RIBBON_FLOATS);
   /** Shots' flashes, aging: the player's at the drawn rifle's muzzle; another player's (`remote`) at their own; each its `share` of a bare gun's. */
@@ -376,6 +382,16 @@ export class EffectsFrameBuilder {
     }
 
     let billboards = session.particles.billboards(this.billboards, drift, t.particleAttachS);
+    if (this.hideBurst) {
+      let kept = 0;
+      for (let i = 0; i < billboards; i++) {
+        const o = i * BILLBOARD_FLOATS;
+        if (this.billboards[o + 8] === BLOOD_BILLBOARD || this.billboards[o + 8] === 1) continue;
+        if (kept !== i) this.billboards.copyWithin(kept * BILLBOARD_FLOATS, o, o + BILLBOARD_FLOATS);
+        kept++;
+      }
+      billboards = kept;
+    }
     this.debugAt = billboards;
     for (const q of this.debug) {
       if (billboards >= MAX_BILLBOARDS) break;

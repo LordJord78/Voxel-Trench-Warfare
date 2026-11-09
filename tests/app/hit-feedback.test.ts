@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { HitFeedback, hitFeedbackTunables, type Dropped, type FeedbackMarker } from '../../src/app/hit-feedback';
 import type { FeedbackVoice } from '../../src/audio/plan';
 import { projectileSpec, type BodyHit } from '../../src/combat/ballistics';
-import { BILLBOARD_FLOATS, particleSpec } from '../../src/combat/particles';
+import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, particleSpec } from '../../src/combat/particles';
 import type { RangeEvent } from '../../src/combat/range';
 import { pose, toWorld, type V3 } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
@@ -98,7 +98,7 @@ function bloodOf(s: Session): { droplets: number[][]; mists: number[][] } {
   for (let i = 0; i < n; i++) {
     const b = Array.from(out.subarray(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS));
     const rgb = [b[4] / b[7], b[5] / b[7], b[6] / b[7]];
-    const is = (c: readonly number[]) => b[8] === 0 && Math.hypot(rgb[0] - c[0], rgb[1] - c[1], rgb[2] - c[2]) < 2e-3;
+    const is = (c: readonly number[]) => b[8] === BLOOD_BILLBOARD && Math.hypot(rgb[0] - c[0], rgb[1] - c[1], rgb[2] - c[2]) < 2e-3;
     if (is(blood.colourStart)) found.droplets.push(b);
     else if (is(mist.colourStart)) found.mists.push(b);
   }
@@ -128,7 +128,9 @@ const intoPlayer = (s: Session, owner: number, dir: V3 = [1, 0, 0]): BodyHit & {
 describe('hit feedback', () => {
   it("[hits] gives the feedback's numbers", () => {
     expect(t.gains).toEqual({ hit: 0.85, head: 0.9, gush: 6, kill: 0.9, ding: 1.5, hurt: 0.7 });
-    expect([t.killWindowS, t.hitHeardM, t.gushHeardM, t.flashMin, t.jolt]).toEqual([0.3, 30, 25, 0.25, [1.5, 1.5]]);
+    // Another's headshot's gush, heard at the body: the old gain, so a kill nearby in a match is not overpowering (Task 5's ruling).
+    expect(t.gushOthersGain).toBe(0.8);
+    expect([t.killWindowS, t.hitHeardM, t.gushHeardM, t.flashMin, t.flashS, t.jolt]).toEqual([0.3, 30, 25, 0.25, 0.35, [1.5, 1.5]]);
     expect([t.fallS, t.headFallS, t.flinchS, t.flinchSpan]).toEqual([0.7, 0.45, 0.25, 2]);
   });
 
@@ -288,7 +290,7 @@ describe('hit feedback', () => {
     expect(fb.figureOverlay(3, NOW + 500)).toEqual({ fallS: 0.7 });
   });
 
-  it("another's headshot seen 10 m off: a spatial gush at the body, no marker", () => {
+  it("another's headshot seen 10 m off: a spatial gush at the body at gush_others_gain (0.8, not the shooter's 6), no marker", () => {
     const s = field();
     // At 10, 27 and 32 m from the player's eye.
     const them = [body(3, 15), body(5, 32), body(6, 37)];
@@ -309,7 +311,7 @@ describe('hit feedback', () => {
     const at = (v: FeedbackVoice) => v.at;
     expect(voices).toEqual([
       { kind: 'hit', at: near10.position, gain: 0.85 },
-      { kind: 'gush', at: near10.position, gain: 6 },
+      { kind: 'gush', at: near10.position, gain: 0.8 },
       { kind: 'hit', at: at27.position, gain: 0.85 },
     ]);
     expect(voices.map(at).every((a) => a !== null)).toBe(true);
@@ -619,6 +621,29 @@ describe('hit feedback', () => {
     after.died(NOW + 400);
     expect(felt.calls.at(-1)).toEqual(['flash', 1, NOW + 400]);
     expect(after.frame(s, none(), NOW + 416)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+  });
+
+  it("the player killed after a round felt within kill_window_s, its red flash faded below half (past half of hurt_flash_s): the death flashes again at full strength, with its hurt voice, so it reads; before that, nothing more", () => {
+    const s = field();
+    s.together = true;
+    // fight.spec's headshot runs: the victim felt a round some 300 ms before the room's word, and its
+    // flash, 0.55 fading over 0.35 s, showed at 0.10 to 0.19 as they died.
+    for (const [ago, again] of [[100, false], [170, false], [180, true], [200, true], [300, true]] as const) {
+      const felt = new FakeMarker();
+      const fb = new HitFeedback(t, felt);
+      expect(fb.frame(s, { ...none(), hits: [intoPlayer(s, 4)] }, NOW)).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+      fb.died(NOW + ago);
+      const voices = fb.frame(s, none(), NOW + ago + 16);
+      if (again) {
+        expect(felt.calls, `${ago}`).toEqual([['flash', 0.55, NOW], ['flash', 1, NOW + ago]]);
+        expect(voices, `${ago}`).toEqual([{ kind: 'hurt', at: null, gain: 0.7 }]);
+        expect(fb.state(), `${ago}`).toMatchObject({ voices: { hurt: 2 }, flashes: 2 });
+      } else {
+        expect(felt.calls, `${ago}`).toEqual([['flash', 0.55, NOW]]);
+        expect(voices, `${ago}`).toEqual([]);
+        expect(fb.state(), `${ago}`).toMatchObject({ voices: { hurt: 1 }, flashes: 1 });
+      }
+    }
   });
 
   it("the front's rounds (owner 1) into the player: nothing in solo play (puppets make it together), the flash in a room (the session's, as Together.prepare sets it); others' rounds always", () => {

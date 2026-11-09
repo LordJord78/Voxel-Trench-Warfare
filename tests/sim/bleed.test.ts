@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { projectileSpec } from '../../src/combat/ballistics';
-import { BILLBOARD_FLOATS, particleSpec } from '../../src/combat/particles';
+import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, particleSpec } from '../../src/combat/particles';
 import { pose, toWorld, type Frame, type PartName, type V3 } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
 import { idleIntent, LOCAL_BODY, Session, type Body, type CombatEvents } from '../../src/sim/session';
@@ -9,13 +9,15 @@ import { P, paletteData } from '../../src/world/materials';
 
 // Blood (the shots spec's §4): every round into another's body bleeds where it struck, beside the
 // uniform's khaki dust, and a headshot bleeds critical: more droplets thrown out of the far side,
-// more mist, and sparks off the helmet. The session throws it, so it is as deterministic as its
-// other particles; a shotgun's pellets bleed a body twice a tick at most. The player's own body
-// bleeds none.
+// more mist, and sparks off the helmet. Each bleeds a small puff where it went in, on the shooter's
+// side, as well (G3 Task 6's ruling: the far side's burst is behind the body, out of the shooter's
+// sight). The session throws it, so it is as deterministic as its other particles; a shotgun's
+// pellets bleed a body twice a tick at most. The player's own body bleeds none.
 const tun = loadTunables();
 const AK = projectileSpec(tun, 'assault_rifle');
 const blood = particleSpec(tun, 'blood');
 const mist = particleSpec(tun, 'blood_mist');
+const entry = particleSpec(tun, 'blood_entry');
 const dust = particleSpec(tun, 'dust');
 
 /** 25.6 × 6.4 × 51.2 m of sod 0.4 m deep and nothing on it, the player at (12.8, 0.4, 5) facing +z, settled. */
@@ -60,15 +62,16 @@ function census(s: Session) {
   const khaki = [0, 1, 2].map((c) => dust.colourStart[c] * palette[P.SOLDIER_KHAKI * 8 + c]);
   const out = new Float32Array(s.particles.capacity * BILLBOARD_FLOATS);
   const n = s.particles.billboards(out);
-  const kinds = { droplets: [] as number[][], mists: [] as number[][], sparks: [] as number[][], dust: [] as number[][], other: [] as number[][] };
+  const kinds = { droplets: [] as number[][], mists: [] as number[][], entries: [] as number[][], sparks: [] as number[][], dust: [] as number[][], other: [] as number[][] };
   for (let i = 0; i < n; i++) {
     const b = Array.from(out.subarray(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS));
     // Its colour, unpremultiplied: blood's own and the dust's only fade.
     const rgb = [b[4] / b[7], b[5] / b[7], b[6] / b[7]];
     const is = (c: readonly number[]) => Math.hypot(rgb[0] - c[0], rgb[1] - c[1], rgb[2] - c[2]) < 2e-3;
     if (b[8] === 1) kinds.sparks.push(b);
-    else if (b[8] === 0 && is(blood.colourStart)) kinds.droplets.push(b);
-    else if (b[8] === 0 && is(mist.colourStart)) kinds.mists.push(b);
+    else if (b[8] === BLOOD_BILLBOARD && is(blood.colourStart)) kinds.droplets.push(b);
+    else if (b[8] === BLOOD_BILLBOARD && is(mist.colourStart)) kinds.mists.push(b);
+    else if (b[8] === BLOOD_BILLBOARD && is(entry.colourStart)) kinds.entries.push(b);
     else if (b[8] === 0 && is(khaki)) kinds.dust.push(b);
     else kinds.other.push(b);
   }
@@ -77,27 +80,38 @@ function census(s: Session) {
 
 const counts = (s: Session) => {
   const c = census(s);
-  return { droplets: c.droplets.length, mists: c.mists.length, sparks: c.sparks.length };
+  return { droplets: c.droplets.length, mists: c.mists.length, entries: c.entries.length, sparks: c.sparks.length };
 };
+
+/** How far `b` lies on along the round from `at`: under 0, on the shooter's side. */
+const onward = (b: readonly number[], at: readonly number[], dir: readonly number[]) => (b[0] - at[0]) * dir[0] + (b[1] - at[1]) * dir[1] + (b[2] - at[2]) * dir[2];
 
 const near = (b: readonly number[], p: readonly number[]) => Math.hypot(b[0] - p[0], b[1] - p[1], b[2] - p[2]);
 
 describe('blood', () => {
   const dir: V3 = [0, 0, 1];
 
-  it('[particles.blood] and [particles.blood_mist] are dark red, lit as dust is', () => {
-    expect(blood).toMatchObject({ lifeS: 0.8, gravity: -9.81, drag: 1.2, sizeStartM: 0.03, sizeEndM: 0.02, colourStart: [0.32, 0.02, 0.02, 1.0], emissive: false, count: 6, speed: 3.5, spread: 0.6, speedJitter: 0.3 });
+  it('[particles.blood] and [particles.blood_mist] are dark red, lit as dust is (blood: its own kind, lit no darker than its floor)', () => {
+    expect(blood).toMatchObject({ lifeS: 0.8, gravity: -9.81, drag: 1.2, sizeStartM: 0.03, sizeEndM: 0.02, colourStart: [0.32, 0.02, 0.02, 1.0], emissive: false, blood: true, count: 6, speed: 3.5, spread: 0.6, speedJitter: 0.3 });
     expect(blood.colourEnd).toEqual([0.32, 0.02, 0.02, 0]);
-    expect(mist).toMatchObject({ lifeS: 0.9, gravity: -0.4, drag: 3.0, sizeStartM: 0.15, sizeEndM: 0.6, colourStart: [0.42, 0.04, 0.04, 0.45], emissive: false, count: 1, speed: 0.8, spread: 0.8 });
+    // Its alpha 0.6 (0.45 before G3 Task 6), swelling fast and then slowly (size_ease 4).
+    expect(mist).toMatchObject({ lifeS: 0.9, gravity: -0.4, drag: 3.0, sizeStartM: 0.15, sizeEndM: 0.6, sizeEase: 4, colourStart: [0.42, 0.04, 0.04, 0.6], emissive: false, blood: true, count: 1, speed: 0.8, spread: 0.8 });
     expect(mist.colourEnd).toEqual([0.42, 0.04, 0.04, 0]);
     expect(['critical_droplets', 'critical_mist', 'helmet_sparks'].map((k) => tun.i(`hits.${k}`))).toEqual([18, 3, 4]);
+  });
+
+  it('[particles.blood_entry]: one small puff where a round went in, growing 0.1 → 0.3 m over 0.25 s, thrown back toward the shooter from [hits] entry_puff_back_m before the hit', () => {
+    expect(entry).toMatchObject({ lifeS: 0.25, sizeStartM: 0.1, sizeEndM: 0.3, sizeEase: 6, emissive: false, square: false, blood: true, count: 1 });
+    expect(entry.colourEnd[3]).toBe(0);
+    expect(entry.speed).toBeGreaterThan(0);
+    expect(tun.f('hits.entry_puff_back_m')).toBe(0.1);
   });
 
   it('a body hit throws 6 blood droplets and a puff of mist beside the dust', () => {
     const s = field();
     const t = target();
     s.targets = [t];
-    expect(counts(s)).toEqual({ droplets: 0, mists: 0, sparks: 0 });
+    expect(counts(s)).toEqual({ droplets: 0, mists: 0, entries: 0, sparks: 0 });
     const chest = toWorld(t.frames.torso, [0, 0.28, 0]);
     const [hit, ...more] = volley(s, [[chest[0], chest[1], chest[2] - 5]], dir);
     expect(more).toEqual([]);
@@ -110,7 +124,10 @@ describe('blood', () => {
     expect(after.dust).toHaveLength(dust.count);
     expect(after.other).toEqual([]);
     // All of it where the round went in, a tick on.
-    for (const b of [...after.droplets, ...after.mists, ...after.dust]) expect(near(b, hit.position)).toBeLessThan(0.25);
+    for (const b of [...after.droplets, ...after.mists, ...after.entries, ...after.dust]) expect(near(b, hit.position)).toBeLessThan(0.25);
+    // And one puff where it went in, on the shooter's side of the hit, coming back toward them.
+    expect(after.entries).toHaveLength(1);
+    expect(onward(after.entries[0], hit.position, hit.dir)).toBeLessThan(-0.09);
   });
 
   it('a headshot throws 18 droplets out the far side, 3 mists, and 4 sparks off the helmet', () => {
@@ -125,6 +142,9 @@ describe('blood', () => {
     expect(after.mists).toHaveLength(3);
     expect(after.sparks).toHaveLength(4);
     expect(after.dust).toHaveLength(dust.count);
+    // One entry puff, as every hit bleeds, on the shooter's side.
+    expect(after.entries).toHaveLength(1);
+    expect(onward(after.entries[0], hit.position, hit.dir)).toBeLessThan(-0.09);
     // Out of the far side: a tick on, the droplets have gone on along the round, on average most of
     // the way their speed takes them.
     const along = after.droplets.map((b) => (b[0] - hit.position[0]) * hit.dir[0] + (b[1] - hit.position[1]) * hit.dir[1] + (b[2] - hit.position[2]) * hit.dir[2]);
@@ -132,15 +152,15 @@ describe('blood', () => {
     for (const b of [...after.droplets, ...after.mists, ...after.sparks]) expect(near(b, hit.position)).toBeLessThan(0.4);
   });
 
-  it("bleed() is the app's own burst (a kill's): what a hit throws, its sparks only off a helmet", () => {
+  it("bleed() is the app's own burst (a kill's): what a hit throws, its sparks only off a helmet; no entry puff, its round's own hit having thrown one", () => {
     const s = field();
     const at = [12.8, 1.6, 25];
     s.bleed(at, dir, false);
-    expect(counts(s)).toEqual({ droplets: 6, mists: 1, sparks: 0 });
+    expect(counts(s)).toEqual({ droplets: 6, mists: 1, entries: 0, sparks: 0 });
     s.bleed(at, dir, true);
-    expect(counts(s)).toEqual({ droplets: 6 + 18, mists: 1 + 3, sparks: 0 });
+    expect(counts(s)).toEqual({ droplets: 6 + 18, mists: 1 + 3, entries: 0, sparks: 0 });
     s.bleed(at, dir, true, true);
-    expect(counts(s)).toEqual({ droplets: 6 + 18 + 18, mists: 1 + 3 + 3, sparks: 4 });
+    expect(counts(s)).toEqual({ droplets: 6 + 18 + 18, mists: 1 + 3 + 3, entries: 0, sparks: 4 });
     // Thrown from where it is told (billboards are float32).
     for (const b of census(s).droplets) expect(near(b, at)).toBeLessThan(1e-5);
   });
@@ -161,7 +181,7 @@ describe('blood', () => {
       return { counts: counts(s), all: Array.from(out.subarray(0, n * BILLBOARD_FLOATS)) };
     };
     const a = run();
-    expect(a.counts).toEqual({ droplets: 18 + 6 + 18, mists: 3 + 1 + 3, sparks: 4 });
+    expect(a.counts).toEqual({ droplets: 18 + 6 + 18, mists: 3 + 1 + 3, entries: 2, sparks: 4 });
     const b = run();
     expect(b.all).toEqual(a.all);
   });
@@ -180,9 +200,10 @@ describe('blood', () => {
     expect(hits.map((h) => h.body)).toEqual([...Array(9).fill(200), 201, 201, 201]);
     expect(hits.every((h) => h.zone !== 'head')).toBe(true);
     const after = census(s);
-    // Two bursts a body: four in all, not twelve.
+    // Two bursts a body: four in all, not twelve; an entry puff each.
     expect(after.droplets).toHaveLength(4 * 6);
     expect(after.mists).toHaveLength(4);
+    expect(after.entries).toHaveLength(4);
     expect(after.droplets.filter((b) => near(b, chest) < 0.5)).toHaveLength(2 * 6);
     // Each pellet still throws its dust.
     expect(after.dust).toHaveLength(12 * dust.count);
@@ -201,7 +222,7 @@ describe('blood', () => {
     const grid = Array.from({ length: 8 }, (_, k) => [chest[0] + ((k % 4) - 1.5) * 0.05, chest[1] + (Math.floor(k / 4) - 0.5) * 0.06, chest[2] - 5]);
     const hits = volley(s, [...grid, [head[0], head[1], head[2] - 5]], dir);
     expect(hits.map((h) => h.zone)).toEqual([...Array(8).fill('torso'), 'head']);
-    expect(counts(s)).toEqual({ droplets: 18 + 6, mists: 3 + 1, sparks: 4 });
+    expect(counts(s)).toEqual({ droplets: 18 + 6, mists: 3 + 1, entries: 2, sparks: 4 });
   });
 
   it("another's rounds into the player's own body bleed nothing, which would be thrown into the eye; into another's body they bleed", () => {
@@ -221,7 +242,7 @@ describe('blood', () => {
     // front of the eye: a headshot's critical burst would be thrown into the view.
     expect(near(hits[0].position, eye)).toBeLessThan(0.3);
     // Being hit is the red flash, the aim's flinch and the hurt voice (the spec's §4): no blood.
-    expect(counts(s)).toEqual({ droplets: 0, mists: 0, sparks: 0 });
+    expect(counts(s)).toEqual({ droplets: 0, mists: 0, entries: 0, sparks: 0 });
     // The same seat's round into another body bleeds, for whoever sees it.
     const them = target(3);
     s.bodies = [them];
@@ -229,6 +250,6 @@ describe('blood', () => {
     const [hit, ...more] = volley(s, [[theirs[0], theirs[1], theirs[2] - 5]], dir, 4);
     expect(more).toEqual([]);
     expect(hit).toMatchObject({ owner: 4, body: 3, zone: 'head' });
-    expect(counts(s)).toEqual({ droplets: 18, mists: 3, sparks: 4 });
+    expect(counts(s)).toEqual({ droplets: 18, mists: 3, entries: 1, sparks: 4 });
   });
 });

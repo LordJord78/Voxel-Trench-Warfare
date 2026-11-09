@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BILLBOARD_FLOATS, particleSpec, Particles, type ParticleSpec } from '../../src/combat/particles';
+import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, particleSpec, Particles, type ParticleSpec } from '../../src/combat/particles';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
 
@@ -87,6 +87,26 @@ describe('particles', () => {
     expect(b[8]).toBe(0);
   });
 
+  it('a puff may swell quickly and then slowly (its `sizeEase`, k: its size start + (end − start)(1 − (1 − t)^k) at t of its life); 1, or none, as before', () => {
+    const at = (sizeEase: number | undefined, steps: number) => {
+      const p = new Particles(8);
+      p.emit([0, 0, 0], [0, 0, 0], spec({ gravity: 0, lifeS: 30 * DT, sizeStartM: 0.1, sizeEndM: 0.3, ...(sizeEase === undefined ? {} : { sizeEase }) }), 1);
+      for (let k = 0; k < steps; k++) p.step(DT);
+      return 2 * billboards(p)[0][3];
+    };
+    for (const steps of [0, 3, 15, 29]) {
+      const t = steps / 30;
+      expect(at(undefined, steps)).toBeCloseTo(0.1 + 0.2 * t, 6);
+      expect(at(1, steps)).toBeCloseTo(0.1 + 0.2 * t, 6);
+      expect(at(4, steps)).toBeCloseTo(0.1 + 0.2 * (1 - (1 - t) ** 4), 6);
+    }
+    // A tenth of its life on, a puff of k 4 is a third of the way out, not a tenth.
+    expect(at(4, 3)).toBeGreaterThan(0.1 + 0.2 * 0.34);
+    expect(particleSpec(tun, 'blood_entry').sizeEase).toBe(tun.f('particles.blood_entry.size_ease'));
+    expect(particleSpec(tun, 'blood_mist').sizeEase).toBe(tun.f('particles.blood_mist.size_ease'));
+    expect(particleSpec(tun, 'dust').sizeEase).toBe(1);
+  });
+
   it("dust takes the struck material's colour", () => {
     const p = new Particles(8);
     p.emit([0, 0, 0], [0, 0, 0], spec({ colourStart: [1, 1, 1, 0.5], colourEnd: [1, 1, 1, 0.5] }), 1, undefined, [0.2, 0.4, 0.6]);
@@ -103,6 +123,17 @@ describe('particles', () => {
     expect(particleSpec(tun, 'debris').square).toBe(true);
     expect(particleSpec(tun, 'shell_soil').square).toBe(false);
     expect(particleSpec(tun, 'blast_flash').emissive).toBe(true);
+  });
+
+  it("blood (its table's `blood = true`) is drawn as its own kind, 5: a lit disc whose light has a floor and that is drawn at least blood_min_px across (effects-light.wgsl); every other kind is as it was", () => {
+    expect(BLOOD_BILLBOARD).toBe(5);
+    const p = new Particles(8);
+    p.emit([0, 1, 0], [0, 0, 0], spec({ blood: true }), 1);
+    p.emit([0, 1, 0], [0, 0, 0], spec({ blood: false }), 1);
+    p.emit([0, 1, 0], [0, 0, 0], spec(), 1);
+    expect(billboards(p).map((b) => b[8])).toEqual([5, 0, 0]);
+    for (const kind of ['blood', 'blood_mist', 'blood_entry']) expect(particleSpec(tun, kind).blood, kind).toBe(true);
+    for (const kind of ['muzzle_flash', 'brass', 'dust', 'spark', 'blast_flash', 'shell_soil', 'debris']) expect(particleSpec(tun, kind).blood ?? false, kind).toBe(false);
   });
 
   it('the same seed throws the same brass', () => {

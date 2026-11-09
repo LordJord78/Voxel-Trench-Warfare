@@ -379,9 +379,9 @@ export class Session {
   private debrisFalling: { tick: number; at: [number, number, number] }[] = [];
   private events: CombatEvents = noEvents();
   private readonly particleRng: Rng;
-  private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris' | 'blood' | 'mist', ParticleSpec>;
-  /** [hits]: a critical hit's droplets and mist, a helmet's sparks, and how many rounds a body bleeds (and its head spatters) a tick at most. */
-  private readonly bleeding: { criticalDroplets: number; criticalMist: number; helmetSparks: number; burstsPerTick: number };
+  private readonly kinds: Record<'flash' | 'brass' | 'dust' | 'spark' | 'blastFlash' | 'soil' | 'debris' | 'blood' | 'mist' | 'entry', ParticleSpec>;
+  /** [hits]: a critical hit's droplets and mist, a helmet's sparks, how many rounds a body bleeds (and its head spatters) a tick at most, and how far before the hit its entry puff is thrown (m). */
+  private readonly bleeding: { criticalDroplets: number; criticalMist: number; helmetSparks: number; burstsPerTick: number; entryBackM: number };
   /** [hits]: a critical hit's spatter, its rays on along the round and falling, their cones and reaches (in voxels), and how they pack. */
   private readonly spattering: SpatterTunables;
   /** Each palette entry's linear colour, for the dust it throws. */
@@ -447,12 +447,14 @@ export class Session {
       debris: particleSpec(tun, 'debris'),
       blood: particleSpec(tun, 'blood'),
       mist: particleSpec(tun, 'blood_mist'),
+      entry: particleSpec(tun, 'blood_entry'),
     };
     this.bleeding = {
       criticalDroplets: tun.i('hits.critical_droplets'),
       criticalMist: tun.i('hits.critical_mist'),
       helmetSparks: tun.i('hits.helmet_sparks'),
       burstsPerTick: tun.i('hits.bursts_per_tick'),
+      entryBackM: tun.f('hits.entry_puff_back_m'),
     };
     this.spattering = spatterTunables(tun, voxel);
     const palette = paletteData();
@@ -1099,7 +1101,8 @@ export class Session {
    * [particles.blood]'s droplets thrown out of the far side and a puff of [particles.blood_mist];
    * critical (a headshot, or the round that kills), [hits] critical_droplets and critical_mist of
    * them; and off a `helmet`, helmet_sparks sparks back along the round. combat() bleeds the rounds
-   * into others' bodies; the app bleeds a kill's.
+   * into others' bodies, each with its entry puff (entered); the app bleeds a kill's, whose round's
+   * own hit threw its entry puff as it struck.
    */
   bleed(at: readonly number[], dir: readonly number[], critical: boolean, helmet = false): void {
     const { blood, mist, spark } = this.kinds;
@@ -1111,9 +1114,22 @@ export class Session {
   }
 
   /**
+   * Where a round went into a body at `at` along unit `dir`: one [particles.blood_entry] puff on the
+   * shooter's side, [hits] entry_puff_back_m before the hit (clear of the body it is drawn over),
+   * coming back toward them. The far side's burst is behind the body, out of the shooter's sight.
+   */
+  private entered(at: readonly number[], dir: readonly number[]): void {
+    const { entry } = this.kinds;
+    const back = this.bleeding.entryBackM;
+    const from = [at[0] - dir[0] * back, at[1] - dir[1] * back, at[2] - dir[2] * back];
+    this.particles.emit(from, [-dir[0] * entry.speed, -dir[1] * entry.speed + entry.lift, -dir[2] * entry.speed], entry, entry.count, this.particleRng);
+  }
+
+  /**
    * The tick's rounds into others' bodies bled: critical in the head, whose every hit sparks off the
-   * helmet too (the ledger's ruling). A body bleeds [hits] bursts_per_tick of them at most, its
-   * headshots first: a shotgun's nine pellets bleed it twice, and never leave a headshot's burst out.
+   * helmet too (the ledger's ruling), and each with its entry puff. A body bleeds [hits]
+   * bursts_per_tick of them at most, its headshots first: a shotgun's nine pellets bleed it twice,
+   * and never leave a headshot's burst out.
    * The player's own body (LOCAL_BODY) bleeds none: no body of theirs is drawn in first person, so
    * its blood would be thrown into the eye, and being hit is the red flash, the aim's flinch and the
    * hurt voice (the shots spec's §4).
@@ -1125,6 +1141,7 @@ export class Session {
       for (const hit of hits) {
         if (hit.body === LOCAL_BODY || (hit.zone === 'head') !== head || !bleeds(hit.body)) continue;
         this.bleed(hit.position, hit.dir, head, head);
+        this.entered(hit.position, hit.dir);
       }
     }
   }

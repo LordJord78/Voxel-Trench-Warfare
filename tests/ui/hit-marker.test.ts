@@ -4,11 +4,14 @@ import { HitMarker, markerTunables } from '../../src/ui/hit-marker';
 
 // The hit marker (the shots spec's §4): four ticks at the crosshair, white for a hit, gold and larger
 // for a headshot, red, larger still and ringed for a kill; each pops in and fades, a kill over a
-// headshot over a hit. Under it HEADSHOT or KILL, a match's kill with the victim's name; over the
+// headshot over a hit. A kill's ring expands out from the marker and fades over its hold, so it frames
+// what it marks (G3 Task 6). Under it HEADSHOT or KILL, a match's kill with the victim's name; over the
 // view, the red flash of being hit. Its animations run on the frame's clock (tick), so a frozen,
 // stepped page shows each frame what that frame's time says.
 const tun = loadTunables();
 const t = markerTunables(tun);
+/** [hits] kill_ring_to: the ring's size at the end of its hold, times the marker's reach. */
+const RING_TO = tun.f('hits.kill_ring_to');
 
 /** An animation as the page's Web Animations make it: its keyframes and timing, held and set by hand. */
 class FakeAnimation {
@@ -44,9 +47,10 @@ class FakeElement {
 }
 
 function page() {
-  const els = { marker: new FakeElement(), pop: new FakeElement(), word: new FakeElement(), name: new FakeElement(), flash: new FakeElement() };
+  const els = { marker: new FakeElement(), ring: new FakeElement(), pop: new FakeElement(), word: new FakeElement(), name: new FakeElement(), flash: new FakeElement() };
   const at: Record<string, FakeElement> = {
     '#hud .marker': els.marker,
+    '#hud .kill-ring': els.ring,
     '#hud .hit-pop': els.pop,
     '#hud .hit-pop .word': els.word,
     '#hud .hit-pop .name': els.name,
@@ -58,7 +62,82 @@ function page() {
 
 describe('the hit marker', () => {
   it("reads [hits]: each kind's hold, the pop and the fade, the text's time, the flash's fade", () => {
-    expect(t).toEqual({ holdS: { hit: 0.22, head: 0.32, kill: 0.6 }, popS: 0.09, popScale: 1.6, fadeS: 0.12, textS: 0.9, textScale: 1.3, flashS: 0.35 });
+    expect(t).toEqual({ holdS: { hit: 0.22, head: 0.32, kill: 0.6 }, popS: 0.09, popScale: 1.6, fadeS: 0.12, textS: 0.9, textScale: 1.3, flashS: 0.35, ring: { from: 1.6, to: RING_TO, ease: 3 } });
+  });
+
+  /** The ring's scale and opacity at `ms` into its animation, as the page interpolates its keyframes (linearly between them). */
+  const ringAt = (a: FakeAnimation, ms: number) => {
+    const u = ms / Number(a.options.duration);
+    const k = a.keyframes;
+    const scale = (f: Keyframe) => Number(/^scale\(([\d.]+)\)$/.exec(String(f.transform))![1]);
+    for (let i = 1; i < k.length; i++) {
+      const [lo, hi] = [Number(k[i - 1].offset), Number(k[i].offset)];
+      if (u <= hi) {
+        const w = (u - lo) / (hi - lo);
+        return { scale: scale(k[i - 1]) + (scale(k[i]) - scale(k[i - 1])) * w, opacity: Number(k[i - 1].opacity) + (Number(k[i].opacity) - Number(k[i - 1].opacity)) * w };
+      }
+    }
+    return { scale: scale(k.at(-1)!), opacity: Number(k.at(-1)!.opacity) };
+  };
+
+  it("a kill's ring expands out from the marker as it pops (1.6× the marker's reach) to kill_ring_to over its 600 ms hold, easing out, and fades out as it goes, so it frames what it marks; the ticks keep their pop", () => {
+    const { els, marker } = page();
+    expect(els.ring.hidden).toBe(true);
+    marker.show('kill', 1000);
+    expect([els.ring.hidden, els.ring.className]).toEqual([false, 'kill-ring']);
+    const a = els.ring.animation;
+    expect(a.options).toMatchObject({ duration: 600, fill: 'both' });
+    expect([a.paused, a.currentTime]).toEqual([true, 0]);
+    // Its keyframes every 50 ms: the scale 1.6 + (to − 1.6)(1 − (1 − u)³), the opacity 1 − u.
+    expect(a.keyframes).toHaveLength(13);
+    const ease = (u: number) => 1.6 + (RING_TO - 1.6) * (1 - (1 - u) ** 3);
+    a.keyframes.forEach((k, i) => {
+      expect(k.offset).toBeCloseTo(i / 12, 12);
+      expect(Number(/^scale\(([\d.]+)\)$/.exec(String(k.transform))![1])).toBeCloseTo(ease(i / 12), 4);
+      expect(k.opacity).toBeCloseTo(1 - i / 12, 12);
+    });
+    // Growing all its hold, quickest at first: by 100 ms (six frames) past 42% of the way out.
+    let was = 0;
+    for (let ms = 0; ms <= 600; ms += 10) {
+      const now = ringAt(a, ms);
+      expect(now.scale).toBeGreaterThan(was);
+      was = now.scale;
+    }
+    expect(ringAt(a, 0)).toEqual({ scale: 1.6, opacity: 1 });
+    expect(ringAt(a, 100).scale).toBeGreaterThan(1.6 + 0.42 * (RING_TO - 1.6));
+    expect(ringAt(a, 100).opacity).toBeCloseTo(5 / 6, 9);
+    expect(ringAt(a, 600)).toEqual({ scale: RING_TO, opacity: 0 });
+    // On the frame's clock, and gone at the end of its hold while the ticks fade on.
+    marker.tick(1100);
+    expect(a.currentTime).toBe(100);
+    marker.tick(1599);
+    expect(els.ring.hidden).toBe(false);
+    marker.tick(1600);
+    expect([els.ring.hidden, a.cancelled, marker.state().marker, els.marker.hidden]).toEqual([true, true, 'kill', false]);
+    // The ticks' own pop, as before: 1.6× to 1× over 90 ms, held, faded.
+    expect(els.marker.animation.keyframes.map((k) => k.transform)).toEqual(['scale(1.6)', 'scale(1)', 'scale(1)', 'scale(1)']);
+  });
+
+  it('no ring for a hit or a headshot; a kill over a kill starts its ring again; clear takes it down', () => {
+    const { els, marker } = page();
+    marker.show('hit', 0);
+    marker.show('head', 50);
+    expect([els.ring.hidden, els.ring.animations.length]).toEqual([true, 0]);
+    marker.show('kill', 100);
+    const first = els.ring.animation;
+    marker.tick(300);
+    marker.show('kill', 300);
+    expect(first.cancelled).toBe(true);
+    expect([els.ring.animations.length, els.ring.animation.currentTime, els.ring.hidden]).toEqual([2, 0, false]);
+    marker.tick(899);
+    expect(els.ring.hidden).toBe(false);
+    marker.clear();
+    expect([els.ring.hidden, els.ring.animation.cancelled]).toEqual([true, true]);
+    // After a kill's ring is done, a hit shows no ring.
+    marker.show('kill', 2000);
+    marker.tick(2720);
+    marker.show('hit', 2800);
+    expect(els.ring.hidden).toBe(true);
   });
 
   it("a hit's marker pops in from 1.6× over 90 ms, is held 220 ms and fades over 120 ms, on the frame's clock; a new hit starts it again", () => {

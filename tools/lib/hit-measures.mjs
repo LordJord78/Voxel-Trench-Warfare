@@ -1,6 +1,10 @@
 // G3's proof's measures (tools/hit-captures.mjs, npm run hit-captures; the shots spec's §4): what it
-// photographs (the shots and their frames), the backstop it builds behind the dummy for the spatter to
-// land on, the blood voxels counted on it and off it, and the zoomed strips of each shot's frames.
+// photographs (the shots and their frames), the backstops it builds behind the dummy for the spatter
+// to land on, the blood voxels counted on it and off it, and the zoomed strips of each shot's frames.
+// And its gates (G3 Task 6): the burst seen (the pixels it changes against the same frame without it),
+// the kill's ring clear of the dummy, the spatter's marks a splat (a cluster), the zone by the readout.
+
+import { basis, dot, project, RAD, sub } from './camera.mjs';
 
 /**
  * The shots, one after the other on the same dummy: a torso hit from an M4 (55 of its 100: a hit, not a
@@ -18,6 +22,27 @@ export const SHOTS = [
  * lies short of it), 0.4 m deep, 1.5 m either side, from 0.6 m under the feet to 2.4 m over them.
  */
 export const BACKSTOP = { behindM: 2, halfWidthM: 1.5, aboveM: 2.4, belowM: 0.6, thickM: 0.4 };
+
+/**
+ * The nearer backstop (G3 Task 6): a trench's back wall is usually within about a metre of a head
+ * over its parapet, so the spatter is shot onto one 0.9 m past the feet as well.
+ */
+export const NEAR_BACKSTOP = { ...BACKSTOP, behindM: 0.9 };
+
+/**
+ * The burst seen: at `frame` after the hit, the pixels of the zoom about the crosshair that it changes
+ * (some channel by `threshold` of 255 or more) against the same frame drawn again without the blood,
+ * counted where its blood is drawn (each billboard's disc, and `margin` pixels round it: the rest of
+ * the frame's changes between two drawings are the TAA's and the denoiser's, not the blood's), at
+ * least `px` of a torso hit's and a headshot's.
+ */
+export const BURST = { frame: 2, threshold: 16, margin: 1.5, px: { torso: 40, head: 80 } };
+
+/** The kill's ring clear of the dummy's box on the screen by `ringFrame` after the kill; and the spatter on each backstop at least one cluster of `cluster` voxels. */
+export const GATES = { ringFrame: 6, cluster: 6 };
+
+/** The dummy as it stands, for its box on the screen: `halfWidthM` either side of its feet, `heightM` tall (its 1.8 m, its helmet, its rifle at rest). */
+export const DUMMY = { halfWidthM: 0.4, heightM: 1.9 };
 
 /** Each frame's zoom: `w` × `h` CSS pixels about the crosshair, `below` more of it under the middle than over it (the words 6vh under it, the readout under them), magnified `scale` times. */
 export const ZOOM = { w: 360, h: 280, below: 70, scale: 2 };
@@ -100,4 +125,108 @@ export function strip(imgs, gap = 12) {
     left += img.w + gap;
   }
   return { data, w, h };
+}
+
+/** How many pixels of `box` ([x0, y0, w, h], cut to the frame) differ between `a` and `b` (same size) by `threshold` or more in some channel of red, green and blue; only those `mask` (discMask's) holds, if given. */
+export function changedPixels(a, b, box, threshold, mask) {
+  if (a.w !== b.w || a.h !== b.h) throw new Error(`changedPixels: frames of a different size (${a.w} × ${a.h}, ${b.w} × ${b.h})`);
+  const x0 = Math.max(0, box[0]);
+  const y0 = Math.max(0, box[1]);
+  const x1 = Math.min(a.w, box[0] + box[2]);
+  const y1 = Math.min(a.h, box[1] + box[3]);
+  let n = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      if (mask && !mask.data[y * a.w + x]) continue;
+      const o = (y * a.w + x) * 4;
+      if (Math.max(Math.abs(a.data[o] - b.data[o]), Math.abs(a.data[o + 1] - b.data[o + 1]), Math.abs(a.data[o + 2] - b.data[o + 2])) >= threshold) n++;
+    }
+  }
+  return n;
+}
+
+/** The voxels ([x, y, z, ...] each) in clusters, those sharing a face or an edge joined (18-connected): each cluster's size, the largest first. */
+export function clusters(voxels) {
+  const key = (x, y, z) => `${x},${y},${z}`;
+  const left = new Set(voxels.map((v) => key(v[0], v[1], v[2])));
+  const sizes = [];
+  for (const [x0, y0, z0] of voxels) {
+    if (!left.delete(key(x0, y0, z0))) continue;
+    const stack = [[x0, y0, z0]];
+    let size = 0;
+    while (stack.length) {
+      const [x, y, z] = stack.pop();
+      size++;
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dz = -1; dz <= 1; dz++) {
+            if (Math.abs(dx) + Math.abs(dy) + Math.abs(dz) > 2) continue;
+            if (left.delete(key(x + dx, y + dy, z + dz))) stack.push([x + dx, y + dy, z + dz]);
+          }
+        }
+      }
+    }
+    sizes.push(size);
+  }
+  return sizes.sort((p, q) => q - p);
+}
+
+/** Whether the ring (its middle and inner edge's radius, pixels) has `box` ({x0, y0, x1, y1}) inside its inner edge: the farthest corner from its middle, and by how much it is inside (under 0: not). */
+export function ringClear(ring, box) {
+  const far = Math.max(...[[box.x0, box.y0], [box.x1, box.y0], [box.x0, box.y1], [box.x1, box.y1]].map(([x, y]) => Math.hypot(x - ring.cx, y - ring.cy)));
+  return { clear: far < ring.inner, far, margin: ring.inner - far };
+}
+
+/** The eight corners (metres) of the box `dummy` ({halfWidthM, heightM}) stands in, its feet at `feet`. */
+export function dummyCorners(feet, dummy) {
+  const out = [];
+  for (const dx of [-1, 1]) for (const dz of [-1, 1]) for (const y of [0, dummy.heightM]) out.push([feet[0] + dx * dummy.halfWidthM, feet[1] + y, feet[2] + dz * dummy.halfWidthM]);
+  return out;
+}
+
+/** The bounds ({x0, y0, x1, y1}) of points on the screen (null: behind the camera, left out); null if none is in front. */
+export function screenBox(points) {
+  const seen = points.filter((p) => p !== null);
+  if (seen.length === 0) return null;
+  return { x0: Math.min(...seen.map((p) => p[0])), y0: Math.min(...seen.map((p) => p[1])), x1: Math.max(...seen.map((p) => p[0])), y1: Math.max(...seen.map((p) => p[1])) };
+}
+
+/** The zone the range's readout names first (TORSO, HEAD, LIMB), lower case; null if it names none. */
+export function zoneOf(readout) {
+  const word = /^(TORSO|HEAD|LIMB)\b/.exec(readout ?? '');
+  return word ? word[1].toLowerCase() : null;
+}
+
+/**
+ * A blood billboard ({at, half}, metres) on a `res` frame drawn from `pose` (its fov 90 unless given):
+ * its disc's middle and radius in pixels, at least half a pixel and BURST's margin round it; null
+ * behind the camera.
+ */
+export function bloodDisc(pose, res, billboard) {
+  const centre = project(pose, res, billboard.at);
+  if (!centre) return null;
+  const depth = dot(sub(billboard.at, pose.position), basis(pose).forward);
+  const t = pose.fov === undefined || pose.fov === 90 ? 1 : Math.tan((pose.fov * RAD) / 2);
+  const half = (billboard.half * res[0]) / 2 / (depth * t);
+  return { cx: centre[0], cy: centre[1], r: Math.max(half, 0.5) + BURST.margin };
+}
+
+/** The pixels of a `w` × `h` frame whose middles lie within any of `discs` ({cx, cy, r}): one byte each, and how many. */
+export function discMask(discs, w, h) {
+  const data = new Uint8Array(w * h);
+  let count = 0;
+  for (const d of discs) {
+    const x0 = Math.max(0, Math.floor(d.cx - d.r - 0.5));
+    const x1 = Math.min(w - 1, Math.ceil(d.cx + d.r - 0.5));
+    const y0 = Math.max(0, Math.floor(d.cy - d.r - 0.5));
+    const y1 = Math.min(h - 1, Math.ceil(d.cy + d.r - 0.5));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (data[y * w + x] || Math.hypot(x + 0.5 - d.cx, y + 0.5 - d.cy) > d.r) continue;
+        data[y * w + x] = 1;
+        count++;
+      }
+    }
+  }
+  return { data, count };
 }

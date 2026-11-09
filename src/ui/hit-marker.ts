@@ -3,7 +3,11 @@
  * white for a hit, gold and larger for a headshot, red, larger still and ringed for a kill (their
  * looks are index.html's `#hud .marker`). Each pops in from [hits] marker_pop_scale to 1×, is held
  * its kind's while and fades; a kill shows over a headshot over a hit, and another of the same, or a
- * greater, starts it again. Under it "HEADSHOT" in gold or "KILL" in red, a match's kill with the
+ * greater, starts it again. A kill's ring (`#hud .kill-ring`) is its own: it leaves the ticks' tips
+ * as they pop (kill_ring_from times their reach) and expands out to kill_ring_to over the kill's
+ * hold, easing out, fading as it goes, so it frames the body it marks rather than covering it (G3
+ * Task 4's captures: a ring the marker's size covered the 25 m dummy its first frames). Under it
+ * "HEADSHOT" in gold or "KILL" in red, a match's kill with the
  * victim's name in their team's colour (`.hit-pop`): the room's word naming the victim of a round
  * whose word still shows (a match's headshot, popped as it struck) adds the name to it and goes on
  * with it, so it pops once. Over the whole view, being hit, a red flash at its strength fading out
@@ -19,7 +23,11 @@ import type { Team } from '../net/protocol';
 export type MarkerKind = 'hit' | 'head' | 'kill';
 export type PopText = 'HEADSHOT' | 'KILL';
 
-/** [hits]: each kind's marker held (s), its pop in and its fade; the words' time and pop; the flash's fade. */
+/**
+ * [hits]: each kind's marker held (s), its pop in and its fade; the words' time and pop; the flash's
+ * fade; and a kill's ring, from and to (times the ticks' reach) and how it eases out: its scale
+ * from + (to − from)(1 − (1 − u)^ease) at u of the kill's hold.
+ */
 export interface MarkerTunables {
   holdS: Record<MarkerKind, number>;
   popS: number;
@@ -28,6 +36,7 @@ export interface MarkerTunables {
   textS: number;
   textScale: number;
   flashS: number;
+  ring: { from: number; to: number; ease: number };
 }
 
 export function markerTunables(tun: Tunables): MarkerTunables {
@@ -40,8 +49,12 @@ export function markerTunables(tun: Tunables): MarkerTunables {
     textS: f('pop_s'),
     textScale: f('pop_scale'),
     flashS: f('hurt_flash_s'),
+    ring: { from: f('kill_ring_from'), to: f('kill_ring_to'), ease: f('kill_ring_ease') },
   };
 }
+
+/** A kill's ring's keyframes over its hold: this many steps, each linear between (50 ms at a 600 ms hold). */
+const RING_STEPS = 12;
 
 /** Which marker shows over which. */
 const RANK: Record<MarkerKind, number> = { hit: 0, head: 1, kill: 2 };
@@ -64,11 +77,13 @@ const ms = (s: number) => Math.round(s * 1000);
 
 export class HitMarker {
   private readonly markerEl: HTMLElement | null;
+  private readonly ringEl: HTMLElement | null;
   private readonly popEl: HTMLElement | null;
   private readonly wordEl: HTMLElement | null;
   private readonly nameEl: HTMLElement | null;
   private readonly flashEl: HTMLElement | null;
   private marker: Showing<MarkerKind> | null = null;
+  private ring: Showing<null> | null = null;
   private popped: Showing<Popped> | null = null;
   private flashed: Showing<number> | null = null;
 
@@ -77,6 +92,7 @@ export class HitMarker {
     private readonly t: MarkerTunables,
   ) {
     this.markerEl = doc.querySelector<HTMLElement>('#hud .marker');
+    this.ringEl = doc.querySelector<HTMLElement>('#hud .kill-ring');
     this.popEl = doc.querySelector<HTMLElement>('#hud .hit-pop');
     this.wordEl = doc.querySelector<HTMLElement>('#hud .hit-pop .word');
     this.nameEl = doc.querySelector<HTMLElement>('#hud .hit-pop .name');
@@ -95,6 +111,13 @@ export class HitMarker {
       el.hidden = false;
     }
     this.marker = this.start(was, el, kind, now, total, this.popIn(this.t.popScale, total, held));
+    if (kind === 'kill') {
+      if (this.ringEl) {
+        this.ringEl.className = 'kill-ring';
+        this.ringEl.hidden = false;
+      }
+      this.ring = this.start(this.ring, this.ringEl, null, now, held, this.expanding());
+    }
     return true;
   }
 
@@ -134,6 +157,7 @@ export class HitMarker {
   /** Every frame, at `now` (ms): each shown as its time since says, and gone once done. */
   tick(now: number): void {
     this.marker = this.step(this.marker, this.markerEl, now);
+    this.ring = this.step(this.ring, this.ringEl, now);
     this.popped = this.step(this.popped, this.popEl, now);
     this.flashed = this.step(this.flashed, this.flashEl, now);
   }
@@ -141,6 +165,7 @@ export class HitMarker {
   /** Everything gone at once. */
   clear(): void {
     this.marker = this.end(this.marker, this.markerEl);
+    this.ring = this.end(this.ring, this.ringEl);
     this.popped = this.end(this.popped, this.popEl);
     this.flashed = this.end(this.flashed, this.flashEl);
   }
@@ -159,6 +184,16 @@ export class HitMarker {
       { transform: 'scale(1)', opacity: 1, offset: held / total },
       { transform: 'scale(1)', opacity: 0, offset: 1 },
     ];
+  }
+
+  /** A kill's ring over its hold: from the ticks' tips as they pop out to kill_ring_to, easing out, fading as it goes. */
+  private expanding(): Keyframe[] {
+    const { from, to, ease } = this.t.ring;
+    return Array.from({ length: RING_STEPS + 1 }, (_, i) => {
+      const u = i / RING_STEPS;
+      const scale = from + (to - from) * (1 - (1 - u) ** ease);
+      return { transform: `scale(${Number(scale.toFixed(5))})`, opacity: 1 - u, offset: u };
+    });
   }
 
   /** `what` shown on `el` from `now` for `total` ms by `keyframes`, in place of what `was`: its animation held at its start. */

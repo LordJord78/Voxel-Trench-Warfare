@@ -7,7 +7,7 @@ import { Wind, windTunables } from '../../src/battle/wind';
 import { tracerTunables, type TracerState } from '../../src/battle/tracers';
 import { flareTunables, type FlareState } from '../../src/battle/flares';
 import { projectileSpec } from '../../src/combat/ballistics';
-import { BILLBOARD_FLOATS, particleSpec } from '../../src/combat/particles';
+import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, particleSpec } from '../../src/combat/particles';
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../../src/combat/rifle-model';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
@@ -329,6 +329,27 @@ describe('a frame of effects', () => {
     const both = new EffectsFrameBuilder(t).build(stand(), none(), null, undefined, { ...NO_BATTLE, seconds: 60, plumes, flames });
     const kinds = Array.from({ length: both.frame.billboardCount }, (_, i) => both.frame.billboards[i * BILLBOARD_FLOATS + 8]);
     expect(kinds.lastIndexOf(0)).toBeLessThan(kinds.indexOf(1));
+  });
+
+  it("a burst hidden (hideBurst, the capture tool's control: the same frame without its burst): the particles' blood and sparks (a helmet's, the shots spec's blood) left out, everything else as it was, in order", () => {
+    const s = stand();
+    s.particles.emit([12.8, 1, 20], [0, 0, 0], particleSpec(tun, 'dust'), 2);
+    s.bleed([12.8, 1.5, 20], [0, 0, 1], true, true);
+    s.particles.emit([12.8, 1, 21], [0, 0, 0], particleSpec(tun, 'brass'), 1);
+    const kindsOf = (b: EffectsFrameBuilder) => {
+      const built = b.build(s, none(), null, undefined, { ...NO_BATTLE, flares: [{ position: [10, 30, 60], stage: 'burn', colour: [1, 0.9, 0.7], glow: 1 } as unknown as FlareState] });
+      return Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(built.frame.billboards.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS)));
+    };
+    const shown = kindsOf(new EffectsFrameBuilder(t));
+    expect(shown.filter((q) => q[8] === BLOOD_BILLBOARD)).toHaveLength(18 + 3);
+    // Four sparks off the helmet, and the flare's disc after the particles: emissive both.
+    expect(shown.filter((q) => q[8] === 1)).toHaveLength(4 + 1);
+    const hiding = new EffectsFrameBuilder(t);
+    hiding.hideBurst = true;
+    const hidden = kindsOf(hiding);
+    // The dust, the brass and the flare's disc, as they were.
+    expect(hidden).toEqual([...shown.slice(0, 2), shown[shown.length - 2], shown[shown.length - 1]]);
+    expect(hidden.map((q) => q[8])).toEqual([0, 0, 0, 1]);
   });
 
   it("the battle's billboards keep their allowance under a full pool", () => {

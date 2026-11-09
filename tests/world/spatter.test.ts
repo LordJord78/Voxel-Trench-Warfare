@@ -11,13 +11,16 @@ import { fallAxis, inCone, offAxis } from '../support/spatter';
 // where the round went in, along it and within 25° of it, reach up to 2.5 m; 10 more fall from there,
 // within 30° of an axis tilted 30° from straight down toward the round, so a body standing in the
 // open marks the ground behind it. Both cones pack their rays toward their axis. Each ray recolours
-// the first thing it meets to its kind's blood shade, if its kind takes one. Positions and
+// the first thing it meets to its kind's blood shade, if its kind takes one, and up to 3 of that
+// voxel's neighbours on the face it struck (the splat), fewer toward its cone's edge. Positions and
 // directions are in voxels.
 const tun = loadTunables();
 const V = tun.f('world.voxel_size');
 const T = spatterTunables(tun, V);
-/** The cone along the round alone, for what is said of it. */
-const CONE: SpatterTunables = { ...T, fallRays: 0 };
+/** The rays alone, each marking the one voxel it meets: for what is said of where the rays go. */
+const RAYS: SpatterTunables = { ...T, splat: 0 };
+/** The cone along the round alone, its rays alone, for what is said of it. */
+const CONE: SpatterTunables = { ...RAYS, fallRays: 0 };
 const SEEDS = [1, 2, 3, 4, 5, 6, 7, 8];
 const N = 64;
 
@@ -54,6 +57,28 @@ function changed(before: BrickMap, after: BrickMap): number[][] {
     if (was !== now) out.push([x, y, z, was, now]);
   }
   return out;
+}
+
+/** The most voxels of `marks` ([x, y, z, ...] each) that join, a face or an edge shared, into one. */
+function largestCluster(marks: readonly (readonly number[])[]): number {
+  const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
+  const left = new Set(marks.map(([x, y, z]) => key(x, y, z)));
+  let most = 0;
+  for (const [x0, y0, z0] of marks) {
+    if (!left.delete(key(x0, y0, z0))) continue;
+    const stack = [[x0, y0, z0]];
+    let size = 0;
+    while (stack.length) {
+      const [x, y, z] = stack.pop()!;
+      size++;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+        if (Math.abs(dx) + Math.abs(dy) + Math.abs(dz) > 2) continue;
+        if (left.delete(key(x + dx, y + dy, z + dz))) stack.push([x + dx, y + dy, z + dz]);
+      }
+    }
+    most = Math.max(most, size);
+  }
+  return most;
 }
 
 /** The spatter of `seed` (with `t`) from `from` along `dir` on a fresh `make()`: what it said it marked, and what it did. */
@@ -136,7 +161,7 @@ describe('spatter', () => {
       return map;
     };
     const from = [32.37, 35, 32.61];
-    const FALL: SpatterTunables = { ...T, rays: 0 };
+    const FALL: SpatterTunables = { ...RAYS, rays: 0 };
     const unit = (v: readonly number[]) => v.map((c) => c / Math.hypot(v[0], v[1], v[2]));
     // Down, level and up, each its own way across the ground; then straight down and up, and within 1e-6 of them.
     const tilted = [[1, -0.3, 0.6], [-0.2, 0.05, -1], [0.7, 0.7, -0.1]].map(unit);
@@ -184,7 +209,7 @@ describe('spatter', () => {
 
   it('a body standing in the open: a level round through a head 1.65 m above flat sod marks at least 4 ground voxels with BLOOD_SOIL, each within 2.5 m of the hit and none more than one voxel nearer the shooter than the hit', () => {
     for (const seed of SEEDS) {
-      const { n, marks } = marked(() => open(), seed, T, HEAD);
+      const { n, marks } = marked(() => open(), seed, RAYS, HEAD);
       expect(n).toBe(marks.length);
       expect(n).toBeGreaterThanOrEqual(4);
       for (const [x, y, z, was, now] of marks) {
@@ -245,7 +270,7 @@ describe('spatter', () => {
       return map;
     };
     const from = [32.37, 35, 32.61];
-    const t: SpatterTunables = { ...T, rays: 0, fallTiltDeg: 10, fallConeDeg: 20 };
+    const t: SpatterTunables = { ...RAYS, rays: 0, fallTiltDeg: 10, fallConeDeg: 20 };
     const axis = fallAxis(DIR, 10);
     const sum = [0, 0, 0];
     let n = 0;
@@ -274,10 +299,11 @@ describe('spatter', () => {
 
   it("the falling rays never change the cone's marks: the same seed with fallRays 0 marks a subset of what it marks with 10", () => {
     // A wall of mud 1.4 m behind a head 1.65 m above sod: the cone marks the wall, the falling rays the ground.
+    // The splat on, as it is played: the falling rays' picks of neighbours come after the cone's.
     const make = () => open(25);
     expect(T.fallRays).toBe(10);
     for (const seed of SEEDS) {
-      const cone = marked(make, seed, CONE, HEAD).marks;
+      const cone = marked(make, seed, { ...T, fallRays: 0 }, HEAD).marks;
       const both = marked(make, seed, T, HEAD).marks;
       expect(cone.length).toBeGreaterThan(0);
       for (const mark of cone) expect(both).toContainEqual(mark);
@@ -494,6 +520,145 @@ describe('spatter', () => {
       inside += all.length - marks.length;
     }
     expect(inside).toBeGreaterThan(0);
+  });
+
+  it("each ray's mark splats: with spatter_splat 3, the rays' own marks and, about them, neighbours on the face they struck; a wall 1.5 m behind takes a cluster of 6 or more", () => {
+    expect(T.splat).toBe(3);
+    const make = () => wall(25, 40, P.MUD);
+    const SPLAT: SpatterTunables = { ...T, fallRays: 0 };
+    let rayMarks = 0;
+    let extraMarks = 0;
+    const biggest: number[] = [];
+    for (const seed of SEEDS) {
+      const rays = marked(make, seed, CONE).marks;
+      const all = marked(make, seed, SPLAT);
+      expect(all.n).toBe(all.marks.length);
+      // The rays' own marks, every one; the splat never moves a ray.
+      for (const m of rays) expect(all.marks).toContainEqual(m);
+      const extra = all.marks.filter((m) => !rays.some((r) => r[0] === m[0] && r[1] === m[1] && r[2] === m[2]));
+      for (const [x, y, z, was, now] of extra) {
+        // On the face the rays struck, beside one of their marks, of its kind's shade.
+        expect([z, was, now]).toEqual([25, P.MUD, P.BLOOD_SOIL]);
+        expect(rays.some(([rx, ry, rz]) => rz === z && Math.max(Math.abs(rx - x), Math.abs(ry - y)) === 1)).toBe(true);
+      }
+      // Up to 3 a ray, of up to 14 rays.
+      expect(extra.length).toBeLessThanOrEqual(3 * T.rays);
+      rayMarks += rays.length;
+      extraMarks += extra.length;
+      biggest.push(largestCluster(all.marks));
+    }
+    // A splat, not a scatter of dots: more than a neighbour a ray, and on every seed a connected cluster of 6 or more.
+    expect(extraMarks).toBeGreaterThan(rayMarks);
+    for (const b of biggest) expect(b, JSON.stringify(biggest)).toBeGreaterThanOrEqual(6);
+  });
+
+  it('one ray on the round into a flat wall: its voxel and exactly 3 of the 8 about it on the face; which 3 is the seed\'s, and over seeds every one of the 8 is taken; at the cone\'s very edge, none', () => {
+    // A core so large every ray goes along the axis (none off it): the splat's most. Core 0: every ray at the cone's edge, the least.
+    const ONE: SpatterTunables = { ...T, rays: 1, fallRays: 0, core: 1e9 };
+    const make = () => wall(25, 40, P.MUD);
+    const seen = new Set<string>();
+    for (let seed = 1; seed <= 24; seed++) {
+      const { n, marks } = marked(make, seed, ONE);
+      expect(n).toBe(4);
+      expect(marks).toContainEqual([32, 32, 25, P.MUD, P.BLOOD_SOIL]);
+      for (const [x, y, z] of marks) {
+        expect(z).toBe(25);
+        expect(Math.max(Math.abs(x - 32), Math.abs(y - 32))).toBeLessThanOrEqual(1);
+        if (x !== 32 || y !== 32) seen.add(`${x - 32},${y - 32}`);
+      }
+      expect(marked(make, seed, ONE)).toEqual({ n, marks });
+    }
+    expect(seen.size).toBe(8);
+    // At the edge of its cone a ray marks its voxel alone.
+    for (const seed of SEEDS) {
+      const edge = marked(make, seed, { ...T, fallRays: 0, core: 0 });
+      expect(edge).toEqual(marked(make, seed, { ...CONE, core: 0 }));
+    }
+  });
+
+  it("the splat stays on the struck face: a neighbour whose face is covered, or that is air, is not marked; the rest are as they would be", () => {
+    const ONE: SpatterTunables = { ...T, rays: 1, fallRays: 0, core: 1e9 };
+    // A lip in front of the wall's face from x 33 on: the wall's voxels behind it have no face to the round.
+    const lipped = () => {
+      const map = wall(25, 40, P.MUD);
+      map.fillBox(33, 0, 24, N, N, 25, P.MUD);
+      map.takeDirty();
+      return map;
+    };
+    // The wall ending at x 33: beyond it, air.
+    const edged = () => {
+      const map = new BrickMap({ x: N, y: N, z: N });
+      map.fillBox(0, 0, 25, 33, N, 40, P.MUD);
+      map.takeDirty();
+      return map;
+    };
+    let covered = 0;
+    for (let seed = 1; seed <= 24; seed++) {
+      const flat = marked(() => wall(25, 40, P.MUD), seed, ONE).marks;
+      // Without the lip or the edge, what it marks at x 33 is what either takes away.
+      const at33 = flat.filter(([x]) => x === 33);
+      covered += at33.length;
+      for (const make of [lipped, edged]) {
+        const { n, marks } = marked(make, seed, ONE);
+        expect(n).toBe(marks.length);
+        expect(marks).toEqual(flat.filter(([x]) => x !== 33));
+        // Every mark faces the round across air.
+        for (const [x, y, z] of marks) expect(make().get(x, y, z - 1)).toBe(P.AIR);
+      }
+    }
+    expect(covered).toBeGreaterThan(0);
+  });
+
+  it('water swallows a drop and its splat: a ray into a pool beside a bank level with it marks nothing on the bank', () => {
+    // Mud under a pool from x 0 to 32 (its surface the top of y 25), and a bank of mud from x 33, its top level with the water's.
+    const pool = () => {
+      const map = new BrickMap({ x: N, y: N, z: N });
+      map.fillBox(0, 0, 0, N, 20, N, P.MUD);
+      map.fillBox(0, 20, 0, 33, 26, N, P.WATER);
+      map.fillBox(33, 20, 0, N, 26, N, P.MUD);
+      map.takeDirty();
+      return map;
+    };
+    const ONE: SpatterTunables = { ...T, rays: 1, fallRays: 0, core: 1e9 };
+    for (let seed = 1; seed <= 24; seed++) {
+      const map = pool();
+      // Straight down into the pool's edge column, x 32: the water there, and the bank beside it at x 33.
+      expect(spatter(map, [32.37, 40, 32.61], [0, -1, 0], seed, ONE), `${seed}`).toBe(0);
+      expect(map.takeDirty()).toEqual([]);
+    }
+  });
+
+  it("the splat's neighbours keep every rule a ray's mark keeps: only a kind that takes blood, never inside a region out, never beyond the reach", () => {
+    const ONE: SpatterTunables = { ...T, rays: 1, fallRays: 0, core: 1e9 };
+    // Mud, and steel and a firing step's bench, in columns across the face.
+    const shades = [P.MUD, P.HULL, P.MUD, P.BENCH];
+    const striped = () => wall(25, 40, (x) => shades[(x + 2) % shades.length]);
+    // The region out: x under 32, as overlapsOut reads a box.
+    const out: Box = { x0: 0, y0: 0, z0: 0, x1: 32, y1: N, z1: N };
+    const overlaps = (b: Box) => b.x0 < out.x1 && out.x0 < b.x1 && b.z0 < out.z1 && out.z0 < b.z1;
+    let kept = 0;
+    let skipped = 0;
+    let beyond = 0;
+    for (let seed = 1; seed <= 24; seed++) {
+      // Of steel and the bench, nothing; the mud on either side as it would be on a wall of mud.
+      const flat = marked(() => wall(25, 40, P.MUD), seed, ONE).marks;
+      const s = marked(striped, seed, ONE);
+      expect(s.marks).toEqual(flat.filter(([x]) => shades[(x + 2) % shades.length] === P.MUD).map(([x, y, z, , now]) => [x, y, z, P.MUD, now]));
+      kept += s.marks.length;
+      // Inside the region out, nothing; outside it, as before.
+      const before = wall(25, 40, P.MUD);
+      const map = wall(25, 40, P.MUD);
+      const n = spatter(map, FROM, DIR, seed, ONE, overlaps);
+      const left = changed(before, map);
+      expect(n).toBe(left.length);
+      expect(left).toEqual(flat.filter(([x]) => x >= 32));
+      skipped += flat.length - left.length;
+      // Reaching 15.01 voxels: the wall's face is 15 on, and its neighbours' nearest points up to 15.017.
+      const short = marked(() => wall(25, 40, P.MUD), seed, { ...ONE, reach: 15.01 });
+      expect(short.marks).toEqual(flat.filter(([x, y, z]) => Math.hypot(gap(FROM[0], x), gap(FROM[1], y), gap(FROM[2], z)) <= 15.01));
+      beyond += flat.length - short.marks.length;
+    }
+    expect([kept, skipped, beyond].every((k) => k > 0)).toBe(true);
   });
 
   it('the same seed marks the same voxels', () => {

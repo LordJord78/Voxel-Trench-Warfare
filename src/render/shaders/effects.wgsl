@@ -16,7 +16,10 @@
 // none at whiteFarM: white-hot close by, the team's colour far off. Seen end on, a tracer's ends
 // within END_ON_PX of each other, it draws nothing: its head (a held billboard, no smaller than
 // MIN_HEAD_PX nor wider than headMaxPx, a cap never under that floor) carries it. A strike's ember is
-// held so too, between MIN_HEAD_PX and its own cap, emberMaxPx.
+// held so too, between MIN_HEAD_PX and its own cap, emberMaxPx. Blood (its alpha 2 more, from
+// effects-light.wgsl) is a firm disc, its edge only softened over its outer BLOOD_EDGE: a dust mote's
+// fades over its outer half, which at the 2 to 8 pixels blood is at 25 m left half of it unseen.
+
 // The tracers' light (their ribbons, heads and embers, the battle's and the ricochets' too) is lit to
 // keep its hue through the present pass's per-channel tone curve (keepHue): far off and in its glow a
 // tracer shows its team's colour, where the curve alone would take a bright red to white; as white as
@@ -97,6 +100,8 @@ const END_ON_PX: f32 = 1.0;
 const CORE_MAX_SHARE: f32 = 0.45;
 // Shown this near the tone curve's top, a channel is shown as bright as it can be.
 const TONE_TOP: f32 = 0.9999;
+// Blood's disc is softened over this outer share of its radius.
+const BLOOD_EDGE: f32 = 0.2;
 
 const CORNERS = array(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
 
@@ -198,6 +203,11 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
     var half = abs(b.half);
     var colour = b.colour;
     var tone = vec2f(0.0);
+    // Blood: its alpha handed on 2 more.
+    let blood = b.colour.a > 1.5;
+    if (blood) {
+      colour = vec4f(b.colour.rgb, b.colour.a - 2.0);
+    }
     if (b.colour.a < -0.5) {
       // The tracers' light: a head (its alpha -1 less its whiteness), or a strike's ember (-3 less it).
       let ember = b.colour.a < -2.5;
@@ -220,8 +230,8 @@ fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Fragmen
     f.uv = corner;
     f.colour = colour;
     f.tone = tone;
-    // A disc (-1), or a square (-2: its half size came negative).
-    f.alphas = vec2f(select(-1.0, -2.0, b.half < 0.0));
+    // A disc (-1), a square (-2: its half size came negative), or blood's firm disc (-3).
+    f.alphas = vec2f(select(select(-1.0, -2.0, b.half < 0.0), -3.0, blood));
     return f;
   }
   let r = ribbons[i - draw.billboards];
@@ -291,6 +301,9 @@ fn fs(f: Fragment) -> @location(0) vec4f {
     // Soft across, fading from the head back to the tail.
     let a = mix(f.alphas.x, f.alphas.y, f.uv.y) * exp(-3.0 * f.uv.x * f.uv.x);
     return vec4f(f.colour.rgb * a, 0.0);
+  }
+  if (f.alphas.x < -2.5) {
+    return f.colour * (1.0 - smoothstep(1.0 - BLOOD_EDGE, 1.0, length(f.uv)));
   }
   if (f.alphas.x < -1.5) {
     return f.colour;

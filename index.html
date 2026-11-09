@@ -157,7 +157,9 @@
       #hud .blue { color: #6a9be0; }
       /* The hit marker (ui/hit-marker.ts; the shots spec's §4): four ticks out along the diagonals from the
          middle, 1.4vh long and 0.28vh thick, outlined dark; white for a hit, gold and 1.25× as large for a
-         headshot, red, 1.5× and ringed for a kill. Its animation pops it in from the middle and fades it. */
+         headshot, red and 1.5× for a kill. Its animation pops it in from the middle and fades it. A kill's
+         ring is its own element: as wide as the kill's ticks reach (2.3vh × 1.5 either side) at 1×, its
+         animation sends it out from their tips as they pop and fades it, so it frames what it marks. */
       #hud .marker { position: absolute; left: 50%; top: 50%; width: 0; height: 0; --k: 1; color: #ffffff; }
       #hud .marker.head { --k: 1.25; color: #ffc83d; }
       #hud .marker.kill { --k: 1.5; color: #ff3b2f; }
@@ -166,8 +168,7 @@
       #hud .marker i:nth-child(2) { transform: rotate(-45deg) translateX(calc(0.9vh * var(--k))); }
       #hud .marker i:nth-child(3) { transform: rotate(45deg) translateX(calc(0.9vh * var(--k))); }
       #hud .marker i:nth-child(4) { transform: rotate(135deg) translateX(calc(0.9vh * var(--k))); }
-      #hud .marker .ring { display: none; position: absolute; left: 0; top: 0; width: calc(3.2vh * var(--k)); height: calc(3.2vh * var(--k)); margin: calc(-1.6vh * var(--k)) 0 0 calc(-1.6vh * var(--k)); box-sizing: border-box; border-radius: 50%; border: 0.28vh solid currentColor; box-shadow: 0 0 0 1px rgba(23, 20, 31, 0.85), inset 0 0 0 1px rgba(23, 20, 31, 0.85); }
-      #hud .marker.kill .ring { display: block; }
+      #hud .kill-ring { position: absolute; left: 50%; top: 50%; width: 6.9vh; height: 6.9vh; margin: -3.45vh 0 0 -3.45vh; box-sizing: border-box; border-radius: 50%; border: 0.2vh solid #ff3b2f; box-shadow: 0 0 0 1px rgba(23, 20, 31, 0.6), inset 0 0 0 1px rgba(23, 20, 31, 0.6); }
       /* HEADSHOT in gold or KILL in red (ui/hit-marker.ts), a line --pop-line tall --pop-top under the middle;
          a match's kill names the victim after it in their team's colour. The range's readout stands under it. */
       #hud .hit-pop {
@@ -334,7 +335,8 @@
       <div class="tags" aria-hidden="true"></div>
       <canvas class="map" aria-label="The trench map" hidden></canvas>
       <ol class="feed" aria-live="polite"></ol>
-      <div class="marker" aria-hidden="true" hidden><i></i><i></i><i></i><i></i><b class="ring"></b></div>
+      <div class="marker" aria-hidden="true" hidden><i></i><i></i><i></i><i></i></div>
+      <b class="kill-ring" aria-hidden="true" hidden></b>
       <p class="hit-pop" aria-hidden="true" hidden><span class="word"></span><span class="name"></span></p>
       <div class="readout" aria-hidden="true" hidden></div>
       <div class="harm" aria-hidden="true" hidden></div>

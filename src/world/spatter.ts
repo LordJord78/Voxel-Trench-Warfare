@@ -4,7 +4,12 @@
  * within a cone about an axis tilted from straight down toward the way the round went, so a body
  * standing in the open marks the ground behind it. Both cones pack their rays toward their axis: a
  * dense splat with a thin fringe. Each ray recolours the first thing it meets within reach to its
- * kind's blood shade (materials.ts BLOOD_OF), if its kind takes one.
+ * kind's blood shade (materials.ts BLOOD_OF), if its kind takes one, and splats: up to [hits]
+ * spatter_splat of that voxel's eight neighbours on the face it struck take it too, seeded, fewer the
+ * further the ray went from its cone's axis. A neighbour keeps every rule the voxel struck keeps (its
+ * kind must take blood, not inside a crater's region out, within the reach), and is marked only where
+ * its own face there is open to the air, so the splat lies on the face and never round a corner. A
+ * drop into water splats nothing.
  *
  * A drop of blood flies through air and wire. It lands on anything opaque, and that includes cloth,
  * which a round goes through: a gas curtain catches it. Water swallows it, so the mud under a
@@ -15,7 +20,7 @@
  * Positions and directions are in voxels. It is pure: the rays are drawn from the seed alone.
  */
 
-import { cos, pow, radians, sin, TAU } from '../core/dmath';
+import { cos, hypot, pow, radians, sin, TAU } from '../core/dmath';
 import { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import type { BrickMap } from './bricks';
@@ -28,7 +33,9 @@ import type { Box } from './region';
  * each reaches (voxels). Falling: how many rays, their cone's half-angle about an axis `fallTiltDeg`
  * from straight down toward the round, and how far each reaches (voxels). And how both cones pack
  * toward their axis: a ray's angle off it is the half-angle × r^core, r uniform in [0, 1), so 1
- * spreads the rays evenly over the cone's width and 2 packs a splat with a thin fringe.
+ * spreads the rays evenly over the cone's width and 2 packs a splat with a thin fringe. And how many
+ * of its eight neighbours on the face a ray's voxel splats onto at most (on the axis; fewer out
+ * toward the cone's edge, none at it).
  */
 export interface SpatterTunables {
   rays: number;
@@ -39,6 +46,7 @@ export interface SpatterTunables {
   fallTiltDeg: number;
   fallReach: number;
   core: number;
+  splat: number;
 }
 
 /** [hits] spatter_*, the reaches in voxels of `voxel` metres. */
@@ -52,6 +60,7 @@ export function spatterTunables(tun: Tunables, voxel: number): SpatterTunables {
     fallTiltDeg: tun.f('hits.spatter_fall_tilt_deg'),
     fallReach: tun.f('hits.spatter_fall_reach_m') / voxel,
     core: tun.f('hits.spatter_core'),
+    splat: tun.i('hits.spatter_splat'),
   };
 }
 
@@ -97,32 +106,78 @@ function fallAxis(d: readonly number[], tiltDeg: number): [number, number, numbe
   return [(d[0] / h) * s, -cos(radians(tiltDeg)), (d[2] / h) * s];
 }
 
+/** A face (raycast's: −x, +x, −y, +y, −z, +z) as the way out of it, and the two axes across it. */
+const NORMALS = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]] as const;
+const ACROSS = [[1, 2], [1, 2], [0, 2], [0, 2], [0, 1], [0, 1]] as const;
+/** A voxel's eight neighbours on a face, along its two axes across. */
+const RING = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] as const;
+
+/** The splat's own draws: how many neighbours a ray may splat onto, and the stream they are drawn from. */
+interface Splat {
+  most: number;
+  rng: Rng;
+}
+
 /**
  * `n` rays from `origin` about unit `axis`, drawn from `rng`: each off it by `coneDeg` × r^`core`
  * (r uniform in [0, 1)) and its way round uniform, recolouring the first voxel it meets within
- * `reach` to its blood shade, if it takes one and `skip` does not name it. How many it recoloured.
+ * `reach` to its blood shade, if it takes one and `skip` does not name it; and of the eight round
+ * that voxel on the face it struck, the first ⌈most × (1 − r^core)⌉ of `splat.most` drawn from
+ * `splat.rng` (every ray draws them, meeting anything or not, so what one ray splats never changes
+ * what another does), each as the voxel struck is and only where its own face there is open. How many
+ * it recoloured.
  */
-function cast(map: BrickMap, origin: [number, number, number], axis: readonly number[], n: number, coneDeg: number, reach: number, core: number, rng: Rng, skip?: (box: Box) => boolean): number {
+function cast(map: BrickMap, origin: [number, number, number], axis: readonly number[], n: number, coneDeg: number, reach: number, core: number, rng: Rng, splat: Splat, skip?: (box: Box) => boolean): number {
   const [u, w] = across(axis);
   const cone = radians(coneDeg);
   let marked = 0;
+  /** Voxel (x, y, z) marked with its blood, if it takes one, `skip` leaves it, and it is within `reach` of the origin. */
+  const mark = (x: number, y: number, z: number, material: number): void => {
+    const shade = SHADE[material];
+    // Blood is its own shade, so a voxel two rays meet counts once.
+    if (shade === material) return;
+    const gap = hypot(Math.max(0, x - origin[0], origin[0] - x - 1), Math.max(0, y - origin[1], origin[1] - y - 1), Math.max(0, z - origin[2], origin[2] - z - 1));
+    if (gap > reach) return;
+    if (skip?.({ x0: x, y0: y, z0: z, x1: x + 1, y1: y + 1, z1: z + 1 })) return;
+    map.set(x, y, z, shade);
+    marked++;
+  };
+  const picks: number[] = [];
   for (let k = 0; k < n; k++) {
-    const off = cone * pow(rng.float(), core);
+    const share = pow(rng.float(), core);
+    const off = cone * share;
     const a = rng.uniform(0, TAU);
     const c = cos(off);
     const s = sin(off);
     const cu = cos(a) * s;
     const cw = sin(a) * s;
     const ray: [number, number, number] = [axis[0] * c + u[0] * cu + w[0] * cw, axis[1] * c + u[1] * cu + w[1] * cw, axis[2] * c + u[2] * cu + w[2] * cw];
+    // Its neighbours, the first `most` of the eight shuffled.
+    const order = [0, 1, 2, 3, 4, 5, 6, 7];
+    picks.length = 0;
+    for (let j = 0; j < splat.most; j++) {
+      const i = splat.rng.randint(j, 8);
+      [order[j], order[i]] = [order[i], order[j]];
+      picks.push(order[j]);
+    }
     const hit = raycast(map, origin, ray, reach, undefined, STOPS);
     if (!hit) continue;
-    const shade = SHADE[hit.material];
-    // Blood is its own shade, so a voxel two rays meet counts once.
-    if (shade === hit.material) continue;
     const [x, y, z] = hit.cell;
-    if (skip?.({ x0: x, y0: y, z0: z, x1: x + 1, y1: y + 1, z1: z + 1 })) continue;
-    map.set(x, y, z, shade);
-    marked++;
+    mark(x, y, z, hit.material);
+    // Water swallows the drop, and its splat with it.
+    if (hit.face < 0 || kindOf(hit.material) === K.WATER) continue;
+    const out = NORMALS[hit.face];
+    const [p, q] = ACROSS[hit.face];
+    const many = Math.ceil(splat.most * (1 - share));
+    for (let j = 0; j < many; j++) {
+      const cell = [x, y, z];
+      cell[p] += RING[picks[j]][0];
+      cell[q] += RING[picks[j]][1];
+      const material = map.get(cell[0], cell[1], cell[2]);
+      // On the face: a voxel a drop stops at, whose own face there is open (air or wire before it).
+      if (!STOPS[material] || STOPS[map.get(cell[0] + out[0], cell[1] + out[1], cell[2] + out[2])]) continue;
+      mark(cell[0], cell[1], cell[2], material);
+    }
   }
   return marked;
 }
@@ -132,16 +187,20 @@ function cast(map: BrickMap, origin: [number, number, number], axis: readonly nu
  * `t.rays` rays within `t.coneDeg` of the round, reaching `t.reach`; then, from the same stream so
  * they never change what those mark, `t.fallRays` within `t.fallConeDeg` of the axis `t.fallTiltDeg`
  * from straight down toward the round (straight down for a round within 1e-6 of vertical), reaching
- * `t.fallReach`. Each recolours the first voxel it meets to its blood shade, if it takes one. A
- * voxel whose box `skip` names is left: a crater's region out (sim/destruction.ts overlapsOut), whose
- * bricks coming back would undo it. How many voxels it recoloured; a voxel two rays meet counts once.
- * A seed, origin or direction not finite, or a zero direction, marks nothing.
+ * `t.fallReach`. Each recolours the first voxel it meets to its blood shade, if it takes one, and
+ * splats onto up to `t.splat` of its neighbours on the face it struck, drawn from a stream of the
+ * seed's own (so the splat never changes where a ray goes). A voxel whose box `skip` names is left:
+ * a crater's region out (sim/destruction.ts overlapsOut), whose bricks coming back would undo it. How
+ * many voxels it recoloured; a voxel two rays meet counts once. A seed, origin or direction not
+ * finite, or a zero direction, marks nothing.
  */
 export function spatter(map: BrickMap, from: readonly number[], dir: readonly number[], seed: number, t: SpatterTunables, skip?: (box: Box) => boolean): number {
   const d = unit(dir);
   if (!d || !Number.isFinite(seed) || !(Number.isFinite(from[0]) && Number.isFinite(from[1]) && Number.isFinite(from[2]))) return 0;
-  const rng = Rng.root(Math.floor(seed)).derive('spatter');
+  const root = Rng.root(Math.floor(seed));
+  const rng = root.derive('spatter');
+  const splat: Splat = { most: Math.max(0, Math.min(RING.length, Math.floor(t.splat))), rng: root.derive('spatter.splat') };
   const origin: [number, number, number] = [from[0], from[1], from[2]];
-  const along = cast(map, origin, d, t.rays, t.coneDeg, t.reach, t.core, rng, skip);
-  return along + cast(map, origin, fallAxis(d, t.fallTiltDeg), t.fallRays, t.fallConeDeg, t.fallReach, t.core, rng, skip);
+  const along = cast(map, origin, d, t.rays, t.coneDeg, t.reach, t.core, rng, splat, skip);
+  return along + cast(map, origin, fallAxis(d, t.fallTiltDeg), t.fallRays, t.fallConeDeg, t.fallReach, t.core, rng, splat, skip);
 }

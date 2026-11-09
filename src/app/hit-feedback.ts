@@ -10,7 +10,8 @@
  * - **Every hit on a body seen** (the player's, and others' into others): the body flinches along the
  *   round, kept by its id until it has settled (figureOverlay), and its last hit is kept for a kill.
  *   Another's is heard where it struck: its thwack within [hits] hit_heard_m, a headshot's gush within
- *   gush_heard_m; its crack and its kill are the shooter's own.
+ *   gush_heard_m at gush_others_gain (the shooter's own gush_gain is for the ear, and a kill nearby in a
+ *   match is not to overpower); its crack and its kill are the shooter's own.
  * - **Rounds into the player** (LOCAL_BODY): others' (owner 2 on), and the front's (owner 1) in a room
  *   only (the session's `room`, which Together.prepare sets each frame: M6 brings the front's harm into
  *   rooms; in solo play it harms no one, though puppets make the session test the player's body);
@@ -23,9 +24,10 @@
  *   flash and one hurt voice: the blasts' share joins the flash of the last tick a round was felt in,
  *   at the larger of the two. A round's harm adds nothing: its body hit flashes already.
  * - **The player killed** (the room's death, died): the round that killed them may never be felt
- *   here (the room's word can come before the shot, and a dead body strikes nothing). Unless a round
- *   or a blast into them was felt within kill_window_s, the red flash at full strength and the hurt
- *   voice; no jolt, the player being dead.
+ *   here (the room's word can come before the shot, and a dead body strikes nothing). Unless the red
+ *   flash of a round or a blast felt is still at half its strength or more (younger than half of
+ *   hurt_flash_s), the red flash at full strength and the hurt voice; no jolt, the player being dead.
+ *   So the death reads: a round felt ~300 ms before it left a flash at a tenth as they died.
  * - **A kill** (the room's death in a match, the range's own at once): when it was the player's, the
  *   kill marker, the pop (KILL, or HEADSHOT for a headshot's), and the kill's thud and chime at the
  *   ear. The body falls along the last round seen to strike it within kill_window_s, in head_fall_s
@@ -59,13 +61,15 @@ export interface FeedbackMarker {
   clear(): void;
 }
 
-/** [hits] as the feedback reads it: the kill's window (s), each voice's gain, how near another's hit and gush are heard (m), the flash's least, the jolt's terms (°), the fall's times and the flinch's (s), and how many flinch_s a flinch is given for. */
+/** [hits] as the feedback reads it: the kill's window (s), each voice's gain (the shooter's, at the ear) and another's gush's, how near another's hit and gush are heard (m), the flash's least and its fade (s), the jolt's terms (°), the fall's times and the flinch's (s), and how many flinch_s a flinch is given for. */
 export interface HitFeedbackTunables {
   killWindowS: number;
   gains: Record<FeedbackKind, number>;
+  gushOthersGain: number;
   hitHeardM: number;
   gushHeardM: number;
   flashMin: number;
+  flashS: number;
   jolt: [number, number];
   fallS: number;
   headFallS: number;
@@ -78,9 +82,11 @@ export function hitFeedbackTunables(tun: Tunables): HitFeedbackTunables {
   return {
     killWindowS: f('kill_window_s'),
     gains: { hit: f('hit_gain'), head: f('head_gain'), gush: f('gush_gain'), kill: f('kill_gain'), ding: f('ding_gain'), hurt: f('hurt_gain') },
+    gushOthersGain: f('gush_others_gain'),
     hitHeardM: f('hit_heard_m'),
     gushHeardM: f('gush_heard_m'),
     flashMin: f('hurt_flash_min'),
+    flashS: f('hurt_flash_s'),
     jolt: tun.pair('hits.hurt_jolt_deg'),
     fallS: f('fall_s'),
     headFallS: f('head_fall_s'),
@@ -138,7 +144,7 @@ export class HitFeedback {
   private readonly tally: Partial<Record<FeedbackKind, number>> = {};
   private readonly markers: Record<MarkerKind, number> = { hit: 0, head: 0, kill: 0 };
   private flashes = 0;
-  /** When a round or a blast into the player was last felt, or the room's word of their death (ms). */
+  /** When the red flash last started: a round or a blast into the player felt, or the room's word of their death (ms). */
   private hurtAt = Number.NEGATIVE_INFINITY;
 
   constructor(
@@ -206,7 +212,7 @@ export class HitFeedback {
         const hear = (kind: FeedbackKind, within: number) => {
           if (d > within || heard.has(`${h.body} ${kind}`)) return;
           heard.add(`${h.body} ${kind}`);
-          out.push(this.voice(kind, copy(h.position)));
+          out.push(this.voice(kind, copy(h.position), kind === 'gush' ? t.gushOthersGain : undefined));
         };
         hear('hit', t.hitHeardM);
         if (h.zone === 'head') hear('gush', t.gushHeardM);
@@ -252,12 +258,14 @@ export class HitFeedback {
   }
 
   /**
-   * The player killed, by the room's word at `now` (ms): unless a round or a blast into them was felt
-   * within kill_window_s, the red flash at full strength and the hurt voice (with the next frame's), as
-   * a one-shot kill's round may never reach them here. No jolt: they are dead.
+   * The player killed, by the room's word at `now` (ms): unless the red flash of a round or a blast felt
+   * is still at half its strength or more (it fades out over hurt_flash_s, so younger than half of
+   * that), the red flash at full strength and the hurt voice (with the next frame's), as a one-shot
+   * kill's round may never reach them here, and a round felt before it may have left its flash all but
+   * gone. No jolt: they are dead.
    */
   died(now: number): void {
-    if (now - this.hurtAt <= this.t.killWindowS * 1000) return;
+    if (1 - (now - this.hurtAt) / (this.t.flashS * 1000) >= 0.5) return;
     this.hurtAt = now;
     this.marker.flash(1, now);
     this.flashes++;
@@ -338,9 +346,10 @@ export class HitFeedback {
     if (this.marker.show(kind, now)) this.markers[kind]++;
   }
 
-  private voice(kind: FeedbackKind, at: [number, number, number] | null): FeedbackVoice {
+  /** A voice of `kind` at `at` (null, the ear), at its gain unless told another. */
+  private voice(kind: FeedbackKind, at: [number, number, number] | null, gain = this.t.gains[kind]): FeedbackVoice {
     this.tally[kind] = (this.tally[kind] ?? 0) + 1;
-    return { kind, at, gain: this.t.gains[kind] };
+    return { kind, at, gain };
   }
 
   /** Bodies' hits past any use: their flinch settled and no kill to take them. */

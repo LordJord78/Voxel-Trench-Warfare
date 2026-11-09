@@ -44,6 +44,8 @@ export const EMBER_BILLBOARD = 4;
 const BILLBOARD_FLOATS = 9;
 /** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4). */
 const LIT_BYTES = 32;
+/** effects-light.wgsl's EffectsLight: the count and seven floats. */
+const LIGHT_PARAMS_BYTES = 32;
 /** effects.wgsl's EffectsDraw: two counts and ten floats, 16 bytes a row. */
 const DRAW_PARAMS_BYTES = 48;
 /** The particle pool, room for test quads, the battle's allowance (its flares, far shells' flashes and smoke, and fires' flames, embers and smoke), and a head for each tracer drawn. */
@@ -96,12 +98,17 @@ export interface SmokePuff {
  * ember_max_px), each across (effects.wgsl never caps either under its MIN_HEAD_PX floor); the
  * distances (m) over which a tracer's core goes from its whiteness near the eye to none; and how much
  * of what is behind it a tracer's light covers where it shows its colour at the tone curve's top while
- * the sun is up ([effects] tracer_cover; the frame's `cover` is its share by the sun).
+ * the sun is up ([effects] tracer_cover; the frame's `cover` is its share by the sun). And blood's
+ * (particles.ts BLOOD_BILLBOARD): the least light it takes, as a share of what the present pass's
+ * exposure shows as 1 through its tone curve (so at dusk and at night it reads dark red, not soot,
+ * and lit as dust is above it), and the fewest pixels across it is drawn.
  */
 export interface EffectsLook {
   glow: number;
   dustKey: number;
   dustSky: number;
+  bloodLightFloor: number;
+  bloodMinPx: number;
   tracerGlowMinPx: number;
   tracerGlowMaxPx: number;
   tracerHeadMaxPx: number;
@@ -117,6 +124,8 @@ export function effectsLook(tun: Tunables): EffectsLook {
     glow: tun.f('effects.particle_glow'),
     dustKey: tun.f('effects.dust_key'),
     dustSky: tun.f('effects.dust_sky'),
+    bloodLightFloor: tun.f('effects.blood_light_floor'),
+    bloodMinPx: tun.f('effects.blood_min_px'),
     tracerGlowMinPx: tun.f('effects.tracer_glow_min_px'),
     tracerGlowMaxPx: glowMaxPx,
     tracerHeadMaxPx: (glowMaxPx * tun.f('effects.tracer_head_m')) / tun.f('effects.tracer_glow_width_m'),
@@ -167,6 +176,8 @@ export class Effects {
         { binding: 4, visibility: C, buffer: { type: 'storage' } },
         { binding: 5, visibility: C, texture: { sampleType: 'unfilterable-float' } },
         { binding: 6, visibility: C, texture: { sampleType: 'unfilterable-float' } },
+        // The exposure's state, as a uniform: the stage's storage buffers are all taken.
+        { binding: 7, visibility: C, buffer: { type: 'uniform' } },
       ],
     });
     const drawLayout = device.createBindGroupLayout({
@@ -233,7 +244,7 @@ export class Effects {
     this.billboards = device.createBuffer({ label: 'effects billboards', size: MAX_BILLBOARDS * BILLBOARD_FLOATS * 4, usage: storage });
     this.lit = device.createBuffer({ label: 'effects lit', size: MAX_BILLBOARDS * LIT_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     this.ribbons = device.createBuffer({ label: 'effects ribbons', size: MAX_RIBBONS * RIBBON_FLOATS * 4, usage: storage });
-    this.lightParams = device.createBuffer({ label: 'effects light params', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.lightParams = device.createBuffer({ label: 'effects light params', size: LIGHT_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.drawParams = device.createBuffer({ label: 'effects draw params', size: DRAW_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   }
 
@@ -254,6 +265,7 @@ export class Effects {
         { binding: 4, resource: { buffer: this.lit } },
         { binding: 5, resource: gDepth.createView() },
         { binding: 6, resource: denoised.createView() },
+        { binding: 7, resource: { buffer: this.exposureState } },
       ],
     });
     this.drawGroup = this.device.createBindGroup({
@@ -278,9 +290,11 @@ export class Effects {
     const queue = this.device.queue;
     if (this.billboardCount > 0) queue.writeBuffer(this.billboards, 0, frame.billboards, 0, this.billboardCount * BILLBOARD_FLOATS);
     if (this.ribbonCount > 0) queue.writeBuffer(this.ribbons, 0, frame.ribbons, 0, this.ribbonCount * RIBBON_FLOATS);
-    const light = new ArrayBuffer(16);
+    // effects-light.wgsl's EffectsLight: the count; the glow and the dust's light; blood's floor and
+    // its fewest pixels across. The present pass's tone (its bias and the image's share) is encode's.
+    const light = new ArrayBuffer(24);
     new Uint32Array(light, 0, 1)[0] = this.billboardCount;
-    new Float32Array(light, 4, 3).set([this.look.glow, this.look.dustKey, this.look.dustSky]);
+    new Float32Array(light, 4, 5).set([this.look.glow, this.look.dustKey, this.look.dustSky, this.look.bloodLightFloor, this.look.bloodMinPx]);
     queue.writeBuffer(this.lightParams, 0, light);
     // effects.wgsl's EffectsDraw: the counts; the widest a tracer's glow and its head are drawn, and
     // the narrowest its glow is; where its core's whiteness starts to fall and where it is gone; the
@@ -300,6 +314,9 @@ export class Effects {
     if (!this.target || !this.drawGroup || !this.lightGroup || this.billboardCount + this.ribbonCount === 0) return;
     new Float32Array(this.draw, 28, 2).set([tone.bias, tone.sharpShare]);
     this.device.queue.writeBuffer(this.drawParams, 0, this.draw);
+    // Blood's floor is a share of the light the present pass shows as 1: the light pass reckons that
+    // scale as the draw does (effects.wgsl presentedScale).
+    this.device.queue.writeBuffer(this.lightParams, 24, new Float32Array([tone.bias, tone.sharpShare]));
     if (this.billboardCount > 0) {
       const p = encoder.beginComputePass({ label: 'effects light', timestampWrites: writes('effects-light') });
       p.setPipeline(this.pipelines.light);

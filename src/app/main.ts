@@ -893,6 +893,7 @@ async function start(): Promise<void> {
   let last = performance.now();
   let shown = 0;
   let hudShown = Number.NEGATIVE_INFINITY;
+  let hudAmmo = '';
   /** Smoothed frame interval, for the frame rate. */
   let interval = 0;
   /** Added to the clock, to test a long pause (simulateGap). */
@@ -906,9 +907,11 @@ async function start(): Promise<void> {
 
   // For tests: a frozen loop draws only the frames it is stepped, a sixtieth of a second apart
   // whatever time passes between steps (a longer gap would start the histories afresh), so what a
-  // test reads back stays put.
+  // test reads back stays put. A frame redrawn (redraw) is drawn at the same moment as the last: no
+  // time passes in it, so the same frame is drawn again (the capture tool's control, with its burst hidden).
   let frozen = false;
   let steps = 0;
+  let still = 0;
   // Each of the last MAIN_FRAMES frames' main-thread time (the hooks' mainMs).
   const MAIN_FRAMES = 600;
   const mainMs = new Float64Array(MAIN_FRAMES);
@@ -920,9 +923,11 @@ async function start(): Promise<void> {
       return;
     }
     if (frozen) steps--;
+    const advance = frozen && still > 0 ? 0 : 1000 / 60;
+    if (frozen && still > 0) still--;
     try {
       const t0 = performance.now();
-      step(frozen ? last - skipped + 1000 / 60 : time);
+      step(frozen ? last - skipped + advance : time);
       mainMs[mainFrames++ % MAIN_FRAMES] = performance.now() - t0;
     } catch (e) {
       // A frame that throws would otherwise freeze the last image without a word.
@@ -1153,8 +1158,13 @@ async function start(): Promise<void> {
         mapView.draw({ x: p.position.x, z: p.position.z, yaw: p.yaw, team }, draws.filter((d) => team !== null && d.team === team).map((d) => ({ x: d.feet[0], z: d.feet[2], team: d.team })));
       }
     }
-    if (hud.visible && now - hudShown >= 100) {
+    // The HUD's lines ten times a second, and at once when the gun's count or its reload changes, so
+    // the count is a shot's own frame's (G3 Task 4's captures: frame 0 of a hit still showed the
+    // count before its shot, the 100 ms throttle's lag, in play as when stepped).
+    const ammo = `${session.held}:${session.weapon.rounds}:${session.weapon.reloading}`;
+    if (hud.visible && (now - hudShown >= 100 || ammo !== hudAmmo)) {
       hudShown = now;
+      hudAmmo = ammo;
       const p = session.player;
       hud.update({
         stance: p.stance,
@@ -1615,6 +1625,16 @@ async function start(): Promise<void> {
     stepFrames(n: number) {
       steps += n;
       return waitFrames(n);
+    },
+    /** Frozen: `n` frames drawn at the moment the last was, no time passing (the same frame again, its TAA's jitter aside). */
+    redraw(n: number) {
+      steps += n;
+      still += n;
+      return waitFrames(n);
+    },
+    /** A hit's burst, the particles' blood and sparks, left out of the frames drawn (effects-frame.ts hideBurst), or put back. */
+    hideBurst(on: boolean) {
+      effects.hideBurst = on;
     },
     waitConverged: () => waitFrames(render.denoise.historyMax + 8),
     stats: () => renderer.stats,

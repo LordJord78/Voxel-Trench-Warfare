@@ -10,12 +10,15 @@
  * reference's does — speed jittered by N(0, `speedJitter`), then an N(0, 1)
  * vector times `spread` added — and a full pool refuses the rest and counts
  * them. Billboards run size and colour from start to end by age, for the
- * renderer (effects.ts), which lights the ones not emissive. A particle may be
+ * renderer (effects.ts), which lights the ones not emissive, and blood (its
+ * own kind) no darker than a floor and no smaller than a few pixels, so it reads
+ * at range and at dusk. A particle may be
  * anchored to a point the renderer draws elsewhere than the simulation holds it
  * (the shot's flash and brass, to the drawn rifle): its billboard starts off by
  * that point's drift and joins its own path as it ages.
  */
 
+import { pow } from '../core/dmath';
 import type { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 
@@ -26,12 +29,16 @@ export interface ParticleSpec {
   drag: number;
   sizeStartM: number;
   sizeEndM: number;
+  /** How its size runs from start to end: start + (end − start)(1 − (1 − t)^k) at t of its life, k this (1, or none: evenly). A puff of mist bursts out and then slows. */
+  sizeEase?: number;
   colourStart: [number, number, number, number];
   colourEnd: [number, number, number, number];
   /** Light of its own (the flash, sparks), or lit by the world (brass, dust). */
   emissive: boolean;
   /** Drawn square (a shell's debris), not round; lit, unless emissive. */
   square: boolean;
+  /** Blood (its table's `blood = true`): a lit disc of its own kind, BLOOD_BILLBOARD. */
+  blood?: boolean;
   /** How it is thrown: how many; speed along its direction, plus lift upward; spread and jitter. */
   count: number;
   speed: number;
@@ -55,16 +62,20 @@ export function particleSpec(tun: Tunables, kind: string): ParticleSpec {
   if (typeof emissive !== 'boolean') throw new TypeError(`tunable '${k}.emissive' is not true or false`);
   const square = tun.get(`${k}.square`);
   if (typeof square !== 'boolean') throw new TypeError(`tunable '${k}.square' is not true or false`);
+  const blood = tun.has(`${k}.blood`) ? tun.get(`${k}.blood`) : false;
+  if (typeof blood !== 'boolean') throw new TypeError(`tunable '${k}.blood' is not true or false`);
   return {
     lifeS: tun.f(`${k}.life_s`),
     gravity: tun.f(`${k}.gravity`),
     drag: tun.f(`${k}.drag`),
     sizeStartM: tun.f(`${k}.size_start_m`),
     sizeEndM: tun.f(`${k}.size_end_m`),
+    sizeEase: tun.has(`${k}.size_ease`) ? tun.f(`${k}.size_ease`) : 1,
     colourStart: rgba(tun, `${k}.colour_start`),
     colourEnd: rgba(tun, `${k}.colour_end`),
     emissive,
     square,
+    blood,
     count: tun.i(`${k}.count`),
     speed: tun.f(`${k}.speed`),
     lift: tun.f(`${k}.lift`),
@@ -73,8 +84,14 @@ export function particleSpec(tun: Tunables, kind: string): ParticleSpec {
   };
 }
 
-/** A billboard's floats: centre (3), half its size (1), colour premultiplied by its alpha (4), and its kind: 0 a lit disc, 1 emissive, 2 a lit square. */
+/** A billboard's floats: centre (3), half its size (1), colour premultiplied by its alpha (4), and its kind: 0 a lit disc, 1 emissive, 2 a lit square, BLOOD_BILLBOARD blood. */
 export const BILLBOARD_FLOATS = 9;
+/**
+ * Blood's kind of billboard, after effects.ts's 3 (a tracer's head) and 4 (an ember): a lit disc, lit
+ * no darker than [effects] blood_light_floor and drawn no smaller than blood_min_px across
+ * (effects-light.wgsl), so a droplet at 25 m is not a pixel of soot.
+ */
+export const BLOOD_BILLBOARD = 5;
 
 export class Particles {
   count = 0;
@@ -88,9 +105,10 @@ export class Particles {
   private readonly drag: Float64Array;
   private readonly sizeStart: Float64Array;
   private readonly sizeEnd: Float64Array;
+  private readonly sizeEase: Float64Array;
   private readonly colourStart: Float64Array;
   private readonly colourEnd: Float64Array;
-  /** 0 lit, 1 emissive, 2 lit and square: the billboard's kind. */
+  /** 0 lit, 1 emissive, 2 lit and square, BLOOD_BILLBOARD blood: the billboard's kind. */
   private readonly kind: Uint8Array;
   private readonly anchor: Uint8Array;
 
@@ -104,6 +122,7 @@ export class Particles {
     this.drag = new Float64Array(n);
     this.sizeStart = new Float64Array(n);
     this.sizeEnd = new Float64Array(n);
+    this.sizeEase = new Float64Array(n);
     this.colourStart = new Float64Array(n * 4);
     this.colourEnd = new Float64Array(n * 4);
     this.kind = new Uint8Array(n);
@@ -141,12 +160,13 @@ export class Particles {
       this.drag[i] = spec.drag;
       this.sizeStart[i] = spec.sizeStartM;
       this.sizeEnd[i] = spec.sizeEndM;
+      this.sizeEase[i] = spec.sizeEase ?? 1;
       for (let c = 0; c < 4; c++) {
         const t = c < 3 && tint ? tint[c] : 1;
         this.colourStart[i * 4 + c] = spec.colourStart[c] * t;
         this.colourEnd[i * 4 + c] = spec.colourEnd[c] * t;
       }
-      this.kind[i] = spec.emissive ? 1 : spec.square ? 2 : 0;
+      this.kind[i] = spec.emissive ? 1 : spec.blood ? BLOOD_BILLBOARD : spec.square ? 2 : 0;
       this.anchor[i] = anchor;
     }
     return n;
@@ -179,7 +199,8 @@ export class Particles {
       const off = this.anchor[i] > 0 && driftS > 0 ? drift?.[this.anchor[i] - 1] : undefined;
       const share = off ? Math.max(0, 1 - this.age[i] / driftS) : 0;
       for (let k = 0; k < 3; k++) out[o + k] = this.pos[i * 3 + k] + (off ? off[k] * share : 0);
-      out[o + 3] = (this.sizeStart[i] + (this.sizeEnd[i] - this.sizeStart[i]) * t) * 0.5;
+      const grown = this.sizeEase[i] === 1 ? t : 1 - pow(1 - t, this.sizeEase[i]);
+      out[o + 3] = (this.sizeStart[i] + (this.sizeEnd[i] - this.sizeStart[i]) * grown) * 0.5;
       const alpha = this.colourStart[i * 4 + 3] + (this.colourEnd[i * 4 + 3] - this.colourStart[i * 4 + 3]) * t;
       for (let c = 0; c < 3; c++) out[o + 4 + c] = (this.colourStart[i * 4 + c] + (this.colourEnd[i * 4 + c] - this.colourStart[i * 4 + c]) * t) * alpha;
       out[o + 7] = alpha;
@@ -198,6 +219,7 @@ export class Particles {
     this.drag[to] = this.drag[from];
     this.sizeStart[to] = this.sizeStart[from];
     this.sizeEnd[to] = this.sizeEnd[from];
+    this.sizeEase[to] = this.sizeEase[from];
     this.colourStart.copyWithin(to * 4, from * 4, from * 4 + 4);
     this.colourEnd.copyWithin(to * 4, from * 4, from * 4 + 4);
     this.kind[to] = this.kind[from];

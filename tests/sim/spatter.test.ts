@@ -86,7 +86,8 @@ describe('the session spatters', () => {
     expect(more).toEqual([]);
     expect(hit).toMatchObject({ owner: 0, body: 200, zone: 'head' });
     const behind = blood(s.map, 0, 512);
-    expect(behind.length).toBeLessThanOrEqual(T.rays + T.fallRays);
+    // Each ray's voxel and up to spatter_splat of its neighbours on the face it struck.
+    expect(behind.length).toBeLessThanOrEqual((T.rays + T.fallRays) * (1 + T.splat));
     const from = hit.position.map((m) => m / V);
     const fall = fallAxis(hit.dir, T.fallTiltDeg);
     const wall = behind.filter(([, , z]) => z === 265);
@@ -94,15 +95,19 @@ describe('the session spatters', () => {
     expect(wall.length).toBeGreaterThan(0);
     expect(ground.length).toBeGreaterThan(0);
     expect(wall.length + ground.length).toBe(behind.length);
+    /** In the cone on along the round, or the falling rays'. */
+    const ray = (c: readonly number[]) => inCone(c, from, hit.dir, T.coneDeg) || inCone(c, from, fall, T.fallConeDeg);
+    /** `o` beside `c` on the same face: the wall's (z 265) or the sod's top (y 3). */
+    const beside = (o: readonly number[], c: readonly number[]) => ((o[2] === 265 && c[2] === 265) || (o[1] === 3 && c[1] === 3)) && Math.max(Math.abs(o[0] - c[0]), Math.abs(o[1] - c[1]), Math.abs(o[2] - c[2])) === 1;
     for (const [x, y, z, p] of behind) {
       expect(p).toBe(P.BLOOD_SOIL);
-      // In the cone on along the round, or the falling rays'.
-      expect(inCone([x, y, z], from, hit.dir, T.coneDeg) || inCone([x, y, z], from, fall, T.fallConeDeg)).toBe(true);
+      // Where a ray went, or beside such a mark on the same face (the splat).
+      expect(ray([x, y, z]) || behind.some((o) => ray(o) && beside(o, [x, y, z]))).toBe(true);
     }
-    // The ground's from the falling rays, behind the body as the round went.
+    // The ground's from the falling rays (or their splat), behind the body as the round went.
     for (const [x, y, z] of ground) {
-      expect(inCone([x, y, z], from, fall, T.fallConeDeg)).toBe(true);
-      expect(z).toBeGreaterThanOrEqual(from[2] - 1);
+      expect(inCone([x, y, z], from, fall, T.fallConeDeg) || ground.some((o) => inCone(o, from, fall, T.fallConeDeg) && beside(o, [x, y, z]))).toBe(true);
+      expect(z).toBeGreaterThanOrEqual(from[2] - 2);
     }
     // Another's round (seat 2's, owner 4) into the player's own face, from 5 m in front: nothing on
     // the wall behind them, nor the ground. Being hit is the flash, the flinch and the voice (the

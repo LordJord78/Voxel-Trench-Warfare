@@ -63,7 +63,8 @@ export class AutoExposure {
   private constructor(device: GPUDevice, pipelines: AutoExposurePipelines, present: GPUBuffer) {
     this.device = device;
     this.pipelines = pipelines;
-    this.state = device.createBuffer({ label: 'exposure state', size: 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+    // A uniform as well: the effects' light pass reads it so (its storage buffers are at the stage's limit).
+    this.state = device.createBuffer({ label: 'exposure state', size: 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     this.bins = device.createBuffer({ label: 'exposure histogram', size: BINS * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     this.uniform = device.createBuffer({ label: 'exposure params', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.adaptGroup = device.createBindGroup({

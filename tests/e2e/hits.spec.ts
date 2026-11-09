@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { BLOOD_BILLBOARD } from '../../src/combat/particles';
 import { P } from '../../src/world/materials';
 import { audioRenders, hooks, openGame, type Hooks } from './support/app';
 
@@ -133,11 +134,11 @@ test('a torso hit on a dummy: the white marker, a hit voice, blood particles', a
   const seen = await fed(
     page,
     async (h, arg) => {
-      const { chest, hits } = arg as { chest: number[]; hits: number };
+      const { chest, hits, bloodKind } = arg as { chest: number[]; hits: number; bloodKind: number };
       const t0 = performance.now();
       while (performance.now() - t0 < 1500 && h.hitFeedback().markers.hit === hits) await h.waitFrames(1);
       const tick = document.querySelector<HTMLElement>('#hud .marker i')!;
-      // Blood is dark red and lit (not emissive): its droplets and mist within a metre and a half.
+      // Blood is dark red and lit (not emissive), its own kind: its droplets and mist within a metre and a half.
       const parts = h.session.particles;
       const out = new Float32Array(parts.capacity * 9);
       const n = parts.billboards(out);
@@ -145,7 +146,7 @@ test('a torso hit on a dummy: the white marker, a hit voice, blood particles', a
       for (let i = 0; i < n; i++) {
         const o = i * 9;
         const a = out[o + 7];
-        if (out[o + 8] !== 0 || a <= 0) continue;
+        if (out[o + 8] !== bloodKind || a <= 0) continue;
         const [r, g, b] = [out[o + 4] / a, out[o + 5] / a, out[o + 6] / a];
         if (r < 0.2 || r < 5 * g || r < 5 * b) continue;
         if (Math.hypot(out[o] - chest[0], out[o + 1] - chest[1], out[o + 2] - chest[2]) < 1.5) blood++;
@@ -160,7 +161,7 @@ test('a torso hit on a dummy: the white marker, a hit voice, blood particles', a
         readout: h.rangeState().readout,
       };
     },
-    { chest, hits: before.markers.hit },
+    { chest, hits: before.markers.hit, bloodKind: BLOOD_BILLBOARD },
   );
   await fed(page, (h) => h.waitFrames(3));
   const after = await tallies(page);
@@ -176,8 +177,8 @@ test('a torso hit on a dummy: the white marker, a hit voice, blood particles', a
   // One thwack at the ear, made (its hearing is the heard test's); no crack, gush or kill.
   expect((after.voices.hit ?? 0) - (before.voices.hit ?? 0), said).toBe(1);
   for (const k of ['head', 'gush', 'kill']) expect(after.voices[k] ?? 0, said).toBe(before.voices[k] ?? 0);
-  // Its 6 droplets and puff of mist.
-  expect(seen.blood, said).toBeGreaterThanOrEqual(7);
+  // Its 6 droplets, its puff of mist and its entry puff.
+  expect(seen.blood, said).toBeGreaterThanOrEqual(8);
   expect(errors).toEqual([]);
 });
 
@@ -234,16 +235,20 @@ test('a headshot: the gold marker → the red kill marker, HEADSHOT, the crack, 
       const t0 = performance.now();
       while (performance.now() - t0 < 1500 && h.hitFeedback().markers.kill === kills) await h.waitFrames(1);
       const marker = document.querySelector<HTMLElement>('#hud .marker')!;
-      const shown = { feedback: h.hitFeedback(), className: marker.className, colour: getComputedStyle(marker.querySelector('i')!).backgroundColor, ring: getComputedStyle(marker.querySelector('.ring')!).display };
+      const ringEl = document.querySelector<HTMLElement>('#hud .kill-ring')!;
+      /** The kill's ring: shown, how wide it stands on the page, and how opaque. */
+      const ring = () => ({ shown: !ringEl.hidden, width: ringEl.getBoundingClientRect().width, opacity: Number(getComputedStyle(ringEl).opacity), colour: getComputedStyle(ringEl).borderTopColor });
+      const shown = { feedback: h.hitFeedback(), className: marker.className, colour: getComputedStyle(marker.querySelector('i')!).backgroundColor, ring: ring() };
       // The words popped in, and the readout under them: where each stands on the page.
       await new Promise((resolve) => setTimeout(resolve, 200));
       await h.waitFrames(2);
+      const ringLater = ring();
       const box = (selector: string) => {
         const el = document.querySelector<HTMLElement>(selector)!;
         const r = el.getBoundingClientRect();
         return { shown: !el.hidden, text: el.textContent, top: r.top, bottom: r.bottom, left: r.left, right: r.right };
       };
-      return { ...shown, pop: box('#hud .hit-pop'), readout: box('#hud .readout'), word: getComputedStyle(document.querySelector('#hud .hit-pop .word')!).color, dummy: h.rangeState().dummies[0] };
+      return { ...shown, ringLater, pop: box('#hud .hit-pop'), readout: box('#hud .readout'), word: getComputedStyle(document.querySelector('#hud .hit-pop .word')!).color, dummy: h.rangeState().dummies[0] };
     },
     before.markers.kill,
   );
@@ -255,7 +260,11 @@ test('a headshot: the gold marker → the red kill marker, HEADSHOT, the crack, 
   // word), ringed; HEADSHOT under it in gold.
   expect([after.markers.head - before.markers.head, after.markers.kill - before.markers.kill, after.markers.hit - before.markers.hit], said).toEqual([1, 1, 0]);
   expect(seen.feedback.marker, said).toBe('kill');
-  expect([seen.className, seen.colour, seen.ring], said).toEqual(['marker kill', 'rgb(255, 59, 47)', 'block']);
+  expect([seen.className, seen.colour, seen.ring.shown, seen.ring.colour], said).toEqual(['marker kill', 'rgb(255, 59, 47)', true, 'rgb(255, 59, 47)']);
+  // Its ring going out from the marker and fading, so it frames the dummy: some 200 ms on, wider and fainter.
+  expect(seen.ringLater.shown, said).toBe(true);
+  expect(seen.ringLater.width, said).toBeGreaterThan(seen.ring.width * 1.2);
+  expect(seen.ringLater.opacity, said).toBeLessThan(seen.ring.opacity);
   expect(seen.feedback.pop, said).toBe('HEADSHOT');
   expect([seen.pop.shown, seen.pop.text, seen.word], said).toEqual([true, 'HEADSHOT', 'rgb(255, 200, 61)']);
   // The crack, the gush and the kill's thud and chime at the ear, made (their hearing is the heard test's).
@@ -424,6 +433,9 @@ test("an M870's kill at 15 m says KILL, as the readout says, and the pellets tha
   let left = hp;
   const lethal = pull.findIndex((x) => (left -= damage[x.zone]) <= 0);
   console.log(`the M870 at ${range.toFixed(1)} m: down on pull ${pulls}; its pellets into the dummy ${pull.map((x) => x.zone).join(', ')}: pellet ${lethal + 1} of ${pull.length} killing it from ${hp} hp, ${pull.length - lethal - 1} striking it dead`);
+  // What the test is about holds: a pellet of the pull killed it, and at least one after it struck it dead.
+  expect(lethal, said).toBeGreaterThanOrEqual(0);
+  expect(pull.length - lethal - 1, said).toBeGreaterThanOrEqual(1);
   // The readout's line is the pull's: not HEAD, its pellets into the head (if any) all after the kill.
   expect(seen.readout, said).toMatch(/^(TORSO|LIMB) \d+ · 1\d m\nDOWN IN \d · 1\d m$/);
   expect(pull.slice(0, lethal + 1).some((x) => x.zone === 'head'), said).toBe(false);
@@ -432,6 +444,32 @@ test("an M870's kill at 15 m says KILL, as the readout says, and the pellets tha
   expect([after.markers.kill - before.markers.kill, after.markers.head - before.markers.head], said).toEqual([1, 0]);
   for (const k of ['head', 'gush']) expect(after.voices[k] ?? 0, `${k}: ${said}`).toBe(before.voices[k] ?? 0);
   expect((after.voices.kill ?? 0) - (before.voices.kill ?? 0), said).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test("the HUD's count is each shot's own, in play: the frame a round leaves, the count says it has gone", async ({ page }) => {
+  const { errors } = await onTheStep(page, 'm4');
+  // In play, not stepped: three single shots at the ground before the step, each read the frame it leaves.
+  const seen = await fed(page, async (h) => {
+    const s = h.session;
+    const p = s.player;
+    p.pitch = -8;
+    await h.waitFrames(10);
+    const reads: { rounds: number; line: string }[] = [];
+    for (let k = 0; k < 3; k++) {
+      const fired = s.weapon.shotsFired;
+      h.trigger(true);
+      for (let f = 0; f < 30 && s.weapon.shotsFired === fired; f++) await h.waitFrames(1);
+      h.trigger(false);
+      reads.push({ rounds: s.weapon.rounds, line: h.hud().text.split('\n').find((l) => / \/ /.test(l)) ?? '' });
+      await h.waitFrames(12);
+    }
+    return { reads, magazine: (s.weapon as unknown as { spec: { magazine: number } }).spec.magazine };
+  });
+  const said = JSON.stringify(seen);
+  expect(seen.reads, said).toHaveLength(3);
+  for (const r of seen.reads) expect(r.line, said).toBe(`${r.rounds} / ${seen.magazine}`);
+  expect(seen.reads.map((r) => r.rounds), said).toEqual([seen.magazine - 1, seen.magazine - 2, seen.magazine - 3]);
   expect(errors).toEqual([]);
 });
 

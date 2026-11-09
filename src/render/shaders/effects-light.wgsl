@@ -9,7 +9,11 @@
 // debris, kind 2) is lit as a mote is, and handed on with its half size negative; a tracer's head
 // (kind 3) and a tracer strike's ember (kind 4) are emissive, their alpha their whiteness (1 near the
 // eye), handed on as -1 less it (a head, for the draw to hold it to its pixels) or -3 less it (an
-// ember), for the draw to keep their hue (effects.wgsl keepHue).
+// ember), for the draw to keep their hue (effects.wgsl keepHue). Blood (kind 5, particles.ts
+// BLOOD_BILLBOARD) is lit as a mote is, but never darker than its floor (look.bloodFloor, a share of
+// the light the present pass shows as 1: so at dusk and at night it reads dark red, not soot) and is
+// handed on no smaller than look.bloodMinPx pixels across, so a droplet at 25 m is not a pixel lost,
+// and with 2 added to its alpha (2 to 3), for the draw to give it a firm edge (effects.wgsl).
 #include "scene.wgsl"
 #include "sky.wgsl"
 #include "camera.wgsl"
@@ -22,6 +26,13 @@ struct EffectsLight {
   glow: f32,
   dustKey: f32,
   dustSky: f32,
+  // Blood's least light, as a share of what the present pass shows as 1, and its fewest pixels across.
+  bloodFloor: f32,
+  bloodMinPx: f32,
+  // The present pass's scale, as effects.wgsl's presentedScale reckons it: the hour's bias over the
+  // exposure, and the share of the sharpened image it shows.
+  bias: f32,
+  sharpShare: f32,
 }
 
 struct Lit {
@@ -40,8 +51,14 @@ struct Lit {
 @group(1) @binding(5) var gDepth: texture_2d<f32>;
 // shade.wgsl's denoised light, at the lighting resolution: what a face takes but the key's.
 @group(1) @binding(6) var worldLight: texture_2d<f32>;
+// The exposure's adaptation (auto-exposure.ts), as a uniform (the stage's storage buffers are all
+// taken): x this frame's base, y the last frame's correction.
+@group(1) @binding(7) var<uniform> exposureState: array<vec4f, 2>;
 
 const BILLBOARD_FLOATS: u32 = 9u;
+const BLOOD: f32 = 5.0;
+// The nearest a billboard's pixel is reckoned, in voxels (effects.wgsl's NEAR).
+const NEAR_PX: f32 = 0.5;
 // Within NEAR_FULL metres of a face a mote takes all of the face's light, past NEAR_NONE none.
 const NEAR_FULL: f32 = 0.5;
 const NEAR_NONE: f32 = 2.0;
@@ -143,17 +160,31 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
   let kind = billboards[o + 8u];
   let head = kind == 3.0;
   let ember = kind == 4.0;
+  let blood = kind == BLOOD;
   if (kind != 1.0 && !head && !ember) {
     let p = centre / frame.voxel;
     let near = nearLight(p);
     let around = skyAround() * look.dustSky + cellLightsAt(p);
-    let light = frame.keyColour * keyLit(p) * look.dustKey + flashesAt(p) + mix(around, near.rgb, near.a);
+    var light = frame.keyColour * keyLit(p) * look.dustKey + flashesAt(p) + mix(around, near.rgb, near.a);
+    if (blood) {
+      // No darker than its floor: the light the present pass shows as bloodFloor.
+      let shown = look.bias * exposureState[0].x * exp2(exposureState[0].y) * look.sharpShare;
+      if (shown > 0.0) {
+        light = max(light, vec3f(look.bloodFloor / shown));
+      }
+    }
     out = vec4f(colour.rgb * light, colour.a);
   }
   // Premultiplied: what covers adds the haze before it as much as it covers.
   let haze = hazeBefore(centre / frame.voxel);
-  let half = billboards[o + 3u];
+  var half = billboards[o + 3u];
+  if (blood) {
+    // A pixel's width where it is (metres), as effects.wgsl's pixelAt: blood no narrower than bloodMinPx of them.
+    let p = centre / frame.voxel;
+    let pixel = 2.0 * max(dot(p - frame.cam.origin, frame.cam.forward), NEAR_PX) * frame.cam.tanHalf / f32(frame.res.x) * frame.voxel;
+    half = max(half, 0.5 * look.bloodMinPx * pixel);
+  }
   let white = clamp(colour.a, 0.0, 1.0);
-  let alpha = select(select(out.a, -1.0 - white, head), -3.0 - white, ember);
+  let alpha = select(select(select(out.a, 2.0 + out.a, blood), -1.0 - white, head), -3.0 - white, ember);
   lit[i] = Lit(centre, select(half, -half, kind == 2.0), vec4f(out.rgb * haze.a + haze.rgb * out.a, alpha));
 }

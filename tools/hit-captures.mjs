@@ -9,28 +9,40 @@
 // of its 100, a hit), then, once the first's blood has gone, at its head (the kill). A sandbag
 // backstop is built behind the dummy first (BACKSTOP; the world put back after): the spatter's cone
 // along the round needs something within its 2.5 m to land on, and the falling rays mark the ground.
+// Then a nearer one (NEAR_BACKSTOP, 0.9 m past the feet: a trench's back wall), the range raised
+// afresh, and the head shot again onto it.
 //
 // Each shot: aimed and settled, the game frozen, the trigger pressed, and the world stepped a frame (a
 // sixtieth of a second) at a time; frame 0 is the first frame whose marker shows. Each frame stepped is
-// read: the marker and the words, the readout, the dummy's health, and the blood drawn round it
-// (droplets and puffs of mist). The spatter: the backstop and the ground photographed from beside the
-// dummy, flying (no HUD, no gun), before the headshot and after it, and the blood voxels counted.
+// read: the marker and the words, the kill's ring, the readout, the dummy's health, and the blood drawn
+// round it (droplets and puffs of mist). At BURST.frame the same frame is drawn again with no time
+// passing (the hook's redraw), the blood hidden and then shown again: the burst is the pixels about the
+// crosshair it changes, and the shown frame against its first drawing the noise the redraws make. The
+// spatter: the backstop and the ground photographed from beside the dummy, flying (no HUD, no gun),
+// before the headshot and after it, and the blood voxels counted.
 //
 //   npm run hit-captures [-- --out artifacts/sp7/hits/before]
 //
 // Writes, under artifacts/sp7/hits (or --out): torso-{0,2,6}.png and head-{0,2,6,20}.png (each frame as
 // displayed), torso-zoom.png and head-zoom.png (ZOOM about the crosshair, magnified, the frame before
-// the shot and then each photographed frame, left to right), spatter.png (after the headshot),
+// the shot and then each photographed frame, left to right), torso-burst.png and head-burst.png (the
+// zoom at BURST.frame with its blood, without it, and with it again), spatter.png (after the headshot),
 // spatter-before.png (the same view before it), spatter-marked.png (each blood voxel's middle marked
-// magenta) and report.json (each frame stepped, as read; stamped with the commit and the time). Exits 1
-// if a shot does not strike the zone it was aimed at, the torso hit kills or the headshot does not,
-// no marker shows within MAX_FRAMES, the headshot marks no blood, a page error or a GPU error is seen,
-// or a hook is missing. The look is for the eye: the pictures are read, not gated.
+// magenta), spatter-near.png and spatter-near-marked.png (the nearer backstop after its headshot), and
+// report.json (each frame stepped, as read; the gates' numbers; stamped with the commit and the time).
+// Exits 1 if:
+//   - a shot strikes another zone than it was aimed at (by its marker and the readout's word), the
+//     torso hit kills or the headshot does not, or no marker shows within MAX_FRAMES;
+//   - a burst changes fewer than BURST.px of its shot's pixels at BURST.frame;
+//   - the kill's ring's inner edge has not cleared the dummy's box on the screen by GATES.ringFrame;
+//   - the headshot leaves no new blood on the backstop's wall (the cone along the round), or on either
+//     backstop the wall's marks hold no cluster of GATES.cluster voxels;
+//   - a page error or a GPU error is seen, or a hook is missing.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { project } from './lib/camera.mjs';
-import { BACKSTOP, bloodVoxels, crop, magnify, SHOTS, strip, wallBox, ZOOM } from './lib/hit-measures.mjs';
+import { BACKSTOP, BURST, bloodDisc, bloodVoxels, changedPixels, clusters, crop, discMask, DUMMY, dummyCorners, GATES, magnify, NEAR_BACKSTOP, ringClear, screenBox, SHOTS, strip, wallBox, zoneOf, ZOOM } from './lib/hit-measures.mjs';
 import { decode, encode } from './lib/image.mjs';
 import { stamp, writeReport } from './lib/report.mjs';
 
@@ -52,7 +64,7 @@ const STEP_TIMEOUT_MS = 60_000;
 const VANTAGE = { backM: 2.6, asideM: 1.8, upM: 1.9, lookM: 1.6, lookUpM: 0.5 };
 /** Blood voxels are looked for this far round the dummy's feet (m), and from a metre under them to 3 m over. */
 const SEARCH_M = 4;
-const HOOKS = ['range', 'rangeState', 'hitFeedback', 'standAt', 'setLoadout', 'trigger', 'freeze', 'thaw', 'stepFrames', 'waitFrames', 'holdLights', 'setTimeOfDay', 'setIntensity', 'setShelling', 'setQuality', 'play', 'camera', 'mode', 'flyTo', 'walk', 'frames', 'gpuErrors'];
+const HOOKS = ['range', 'rangeState', 'hitFeedback', 'standAt', 'setLoadout', 'trigger', 'freeze', 'thaw', 'stepFrames', 'redraw', 'hideBurst', 'waitFrames', 'holdLights', 'setTimeOfDay', 'setIntensity', 'setShelling', 'setQuality', 'play', 'camera', 'mode', 'flyTo', 'walk', 'frames', 'gpuErrors', 'hud'];
 
 const withTimeout = (promise, what) =>
   Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`timed out (${STEP_TIMEOUT_MS} ms): ${what}`)), STEP_TIMEOUT_MS))]);
@@ -107,7 +119,8 @@ async function open(page) {
           for (let i = 0; i < n; i++) {
             const o = i * 9;
             const a = out[o + 7];
-            if (out[o + 8] !== 0 || a <= 0) continue;
+            // Blood: its own kind (particles.ts BLOOD_BILLBOARD, 5), or a lit disc before it had one.
+            if ((out[o + 8] !== 5 && out[o + 8] !== 0) || a <= 0) continue;
             const [r, g, b] = [out[o + 4] / a, out[o + 5] / a, out[o + 6] / a];
             if (r < 0.2 || r < 5 * g || r < 5 * b) continue;
             if (Math.hypot(out[o] - chest[0], out[o + 1] - chest[1], out[o + 2] - chest[2]) > 2.5) continue;
@@ -117,9 +130,23 @@ async function open(page) {
               mistM = Math.max(mistM, 2 * out[o + 3]);
             } else droplets++;
           }
+          // The kill's ring (ui/hit-marker.ts; before G3 Task 6, inside the marker): its middle, its outer
+          // and inner edges' radii and its opacity, as drawn now (the bounding box takes its scale).
+          const ringEl = document.querySelector('#hud .kill-ring') ?? document.querySelector('#hud .marker.kill .ring');
+          let ring = null;
+          if (ringEl && !ringEl.hidden && !ringEl.closest('[hidden]') && getComputedStyle(ringEl).display !== 'none') {
+            const r = ringEl.getBoundingClientRect();
+            const scale = ringEl.offsetWidth > 0 ? r.width / ringEl.offsetWidth : 1;
+            const cs = getComputedStyle(ringEl);
+            const marker = document.querySelector('#hud .marker');
+            const opacity = Number(cs.opacity) * (ringEl.parentElement === marker ? Number(getComputedStyle(marker).opacity) : 1);
+            ring = { cx: r.left + r.width / 2, cy: r.top + r.height / 2, outer: r.width / 2, inner: r.width / 2 - parseFloat(cs.borderTopWidth) * scale, opacity };
+          }
           return {
             frame: h.frames(),
             marker: fb.marker,
+            ring,
+            ammo: (h.hud().text.split('\n').find((l) => / \/ /.test(l)) ?? null),
             pop: fb.pop,
             markers: { ...fb.markers },
             voices: { ...fb.voices },
@@ -246,7 +273,8 @@ async function fire(page, shot, dummyId, feet) {
   const frames = [];
   const pngs = new Map();
   let zero = null;
-  const last = Math.max(...shot.frames);
+  let burst = null;
+  const last = Math.max(...shot.frames, BURST.frame);
   for (let k = 1; k <= MAX_FRAMES + last; k++) {
     const s = await withTimeout(
       page.evaluate(async (id) => {
@@ -261,24 +289,97 @@ async function fire(page, shot, dummyId, feet) {
     if (zero === null && shown > seen) zero = k;
     const at = zero === null ? null : k - zero;
     frames.push({ step: k, at, ...s });
-    if (at !== null && shot.frames.includes(at)) pngs.set(at, await withTimeout(page.screenshot(), `${shot.name}: frame ${at}`));
+    if (at !== null && (shot.frames.includes(at) || at === BURST.frame)) pngs.set(at, await withTimeout(page.screenshot(), `${shot.name}: frame ${at}`));
+    if (at === BURST.frame) {
+      // The same frame drawn again with no time passing, the TAA's jitter held: with its blood, without
+      // it, and with it again (the noise the redraws make). And where the blood is drawn: each blood
+      // billboard's middle and half its size, as the frame's camera saw it.
+      const again = async (hidden, jitter) => {
+        await page.evaluate(
+          async ({ hidden, jitter }) => {
+            const h = window.__trenchline;
+            h.jitter(jitter);
+            h.hideBurst(hidden);
+            await h.redraw(1);
+          },
+          { hidden, jitter },
+        );
+        return withTimeout(page.screenshot(), `${shot.name}: frame ${at} again`);
+      };
+      const drawn = await page.evaluate((feet) => {
+        const h = window.__trenchline;
+        const parts = h.session.particles;
+        const out = new Float32Array(parts.capacity * 9);
+        const n = parts.billboards(out);
+        const blood = [];
+        for (let i = 0; i < n; i++) {
+          const o = i * 9;
+          const a = out[o + 7];
+          const at = [out[o], out[o + 1], out[o + 2]];
+          // The burst's: blood (its own kind, or a red lit disc before it had one) and a helmet's
+          // sparks (emissive), within 2.5 m of the dummy's middle.
+          if (Math.hypot(at[0] - feet[0], at[1] - feet[1] - 1, at[2] - feet[2]) > 2.5) continue;
+          if (out[o + 8] === 1) {
+            blood.push({ at, half: out[o + 3] });
+            continue;
+          }
+          if ((out[o + 8] !== 5 && out[o + 8] !== 0) || a <= 0) continue;
+          const [r, g, b] = [out[o + 4] / a, out[o + 5] / a, out[o + 6] / a];
+          if (r < 0.2 || r < 5 * g || r < 5 * b) continue;
+          blood.push({ at, half: out[o + 3] });
+        }
+        return { blood, pose: h.camera() };
+      }, feet);
+      const withHeld = await again(false, false);
+      const without = await again(true, false);
+      const withAgain = await again(false, false);
+      await page.evaluate(() => window.__trenchline.jitter(true));
+      burst = { with: withHeld, without, withAgain, drawn };
+    }
     if (at === last) break;
     if (zero === null && k >= MAX_FRAMES) break;
   }
   await page.evaluate(() => {
     const h = window.__trenchline;
     h.trigger(false);
+    h.hideBurst(false);
     h.thaw();
   });
-  return { before, pre, frames, pngs, zero };
+  return { before, pre, frames, pngs, zero, burst };
 }
+
+/** The zoom's box about the crosshair on a frame `w` × `h`: [x0, y0, w, h]. */
+const zoomBox = (w, h) => [Math.round(w / 2 - ZOOM.w / 2), Math.round(h / 2 - (ZOOM.h - ZOOM.below) / 2), ZOOM.w, ZOOM.h];
+
+/**
+ * A burst measured, on the frame drawn again with its blood, without it, and with it again: the pixels
+ * it changes where its blood is drawn (each billboard's disc on the screen, at least a pixel across and
+ * BURST's margin round it), and the redraws' noise there (with it against with it again); and over the
+ * whole zoom, for the record.
+ */
+function burstOf(b) {
+  const [a, none, again] = [decode(b.with), decode(b.without), decode(b.withAgain)];
+  const box = zoomBox(a.w, a.h);
+  const discs = b.drawn.blood.map((d) => bloodDisc(b.drawn.pose, [a.w, a.h], d)).filter((d) => d !== null);
+  const mask = discMask(discs, a.w, a.h);
+  return {
+    px: changedPixels(a, none, box, BURST.threshold, mask),
+    noise: changedPixels(a, again, box, BURST.threshold, mask),
+    againPx: changedPixels(again, none, box, BURST.threshold, mask),
+    masked: mask.count,
+    billboards: b.drawn.blood.length,
+    zoom: { px: changedPixels(a, none, box, BURST.threshold), noise: changedPixels(a, again, box, BURST.threshold) },
+  };
+}
+
+/** The dummy whose feet are at `feet`, as `pose` drew it on a `res` frame: its box on the screen. */
+const dummyOnScreen = (pose, res, feet) => screenBox(dummyCorners(feet, DUMMY).map((p) => project(pose, res, p)));
 
 /** The frame's zoom about the crosshair, magnified. */
 function zoomOf(png) {
   const img = decode(png);
   // (h − below) / 2 over the middle, (h + below) / 2 under it.
-  const x0 = Math.round(img.w / 2 - ZOOM.w / 2);
-  const y0 = Math.round(img.h / 2 - (ZOOM.h - ZOOM.below) / 2);
+  const [x0, y0] = zoomBox(img.w, img.h);
   return magnify(crop(img, x0, y0, ZOOM.w, ZOOM.h), ZOOM.scale);
 }
 
@@ -305,16 +406,66 @@ function markVoxels(png, pose, voxels, voxel) {
 }
 
 /** What a frame read says, for the log. */
-const said = (f) => `marker ${f.marker ?? '-'}, pop ${f.pop ?? '-'}, readout ${JSON.stringify(f.readout)}, dummy ${f.dummy.hp}${f.dummy.down ? ' down' : ''}, blood ${f.blood.droplets} droplets ${f.blood.mist} mist (to ${f.blood.mistM} m)`;
+const said = (f) => `marker ${f.marker ?? '-'}, pop ${f.pop ?? '-'}, readout ${JSON.stringify(f.readout)}, dummy ${f.dummy.hp}${f.dummy.down ? ' down' : ''}, blood ${f.blood.droplets} droplets ${f.blood.mist} mist (to ${f.blood.mistM} m), ammo ${f.ammo ?? '-'}${f.ring ? `, ring ${f.ring.inner.toFixed(1)}–${f.ring.outer.toFixed(1)} px at ${f.ring.opacity.toFixed(2)}` : ''}`;
 
 // ---- run ---------------------------------------------------------------------------------------
 
 const failures = [];
 const pageErrors = [];
 mkdirSync(OUT, { recursive: true });
-const report = { ...stamp(), hours: HOURS, backstop: BACKSTOP, vantage: VANTAGE, shots: {} };
+const report = { ...stamp(), hours: HOURS, backstop: BACKSTOP, nearBackstop: NEAR_BACKSTOP, vantage: VANTAGE, burstGate: BURST, gates: GATES, shots: {} };
 let server;
 let browser;
+
+/**
+ * One shot fired and read: its frames written, the zone it struck checked by its marker and the
+ * readout's word (and the kill or none asked), the burst measured at BURST.frame. What it read.
+ */
+async function shoot(page, shot, scene, feet) {
+  const shotAt = await fire(page, shot, scene.dummy.id, feet);
+  const { before, frames, pngs, zero, burst } = shotAt;
+  const marked = frames.filter((f) => f.at !== null);
+  const entry = { ...shot, before: { ...before, pose: undefined }, zeroStep: zero, frames: frames.map((f) => ({ ...f, pose: { position: f.pose.position.map(round3), yaw: round3(f.pose.yaw), pitch: round3(f.pose.pitch) } })) };
+  report.shots[shot.name] = entry;
+  if (zero === null) {
+    failures.push(`${shot.name}: no marker within ${MAX_FRAMES} frames of the press (${frames.at(-1) ? said(frames.at(-1)) : 'no frame'})`);
+    return { entry, marked, frames };
+  }
+  const at0 = marked[0];
+  const end = marked.at(-1);
+  // The zone struck, by the marker it gave and the readout's word; and the kill, or none, as asked.
+  const zone = zoneOf(at0.readout);
+  entry.zone = zone;
+  if (shot.kills) {
+    if (zone !== 'head' || at0.markers.head <= before.markers.head || !end.dummy.down) failures.push(`${shot.name}: not a headshot that kills: ${said(at0)}; head markers ${before.markers.head} → ${at0.markers.head}`);
+  } else if (zone !== 'torso' || at0.marker !== 'hit' || end.dummy.down) failures.push(`${shot.name}: not a torso hit that leaves it standing: ${said(at0)}`);
+  for (const f of frames) if (f.gpuErrors.length) failures.push(`${shot.name}: GPU errors: ${f.gpuErrors.join(' | ')}`);
+  for (const k of shot.frames) {
+    const png = pngs.get(k);
+    if (!png) {
+      failures.push(`${shot.name}: frame ${k} not photographed`);
+      continue;
+    }
+    writeFileSync(`${OUT}/${shot.name}-${k}.png`, png);
+  }
+  if (shot.frames.length > 1) {
+    const zoom = strip([zoomOf(shotAt.pre), ...shot.frames.filter((k) => pngs.has(k)).map((k) => zoomOf(pngs.get(k)))]);
+    writeFileSync(`${OUT}/${shot.name}-zoom.png`, encode(zoom.data, zoom.w, zoom.h));
+  }
+  if (burst) {
+    entry.burst = burstOf(burst);
+    const zoom = strip([zoomOf(burst.with), zoomOf(burst.without), zoomOf(burst.withAgain)]);
+    writeFileSync(`${OUT}/${shot.name}-burst.png`, encode(zoom.data, zoom.w, zoom.h));
+  }
+  console.log(`${shot.name}: shot on step ${frames.find((f) => f.shots > before.shots)?.step ?? '-'}, its marker on step ${zero}, the zone ${zone ?? '-'}`);
+  for (const f of marked) if (shot.frames.includes(f.at)) console.log(`  frame ${f.at}: ${said(f)}`);
+  if (entry.burst) {
+    const b = entry.burst;
+    console.log(`  the burst at frame ${BURST.frame}: ${b.px} px changed by its blood where its ${b.billboards} billboards are drawn (${b.masked} px; the redraws' noise there ${b.noise} px; shown again, ${b.againPx} px); over the whole zoom ${b.zoom.px} px (noise ${b.zoom.noise} px)`);
+  }
+  return { entry, marked, frames };
+}
+
 try {
   server = await (await createServer({ server: { port: PORT, strictPort: true }, logLevel: 'error' })).listen();
   browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--enable-unsafe-webgpu'] });
@@ -343,34 +494,20 @@ try {
         report.spatterBefore = { pose: view.pose, voxels: bloodVoxels(await bloodAround(page, feet, scene.voxel, scene.blood), box) };
         if (view.mode !== 'fly') failures.push(`the spatter view was ${view.mode}, not flying`);
       }
-      const shotAt = await fire(page, shot, scene.dummy.id, feet);
-      const { before, frames, pngs, zero } = shotAt;
-      const marked = frames.filter((f) => f.at !== null);
-      const entry = { ...shot, before: { ...before, pose: undefined }, zeroStep: zero, frames: frames.map((f) => ({ ...f, pose: { position: f.pose.position.map(round3), yaw: round3(f.pose.yaw), pitch: round3(f.pose.pitch) } })) };
-      report.shots[shot.name] = entry;
-      if (zero === null) {
-        failures.push(`${shot.name}: no marker within ${MAX_FRAMES} frames of the press (${frames.at(-1) ? said(frames.at(-1)) : 'no frame'})`);
-        continue;
-      }
-      const at0 = marked[0];
-      const end = marked.at(-1);
-      // The zone struck, by the marker it gave and the dummy's health: a torso round leaves it standing at 45, a headshot drops it.
+      const { entry, marked } = await shoot(page, shot, scene, feet);
+      if (entry.burst && entry.burst.px < BURST.px[shot.name]) failures.push(`${shot.name}: its burst changed ${entry.burst.px} px at frame ${BURST.frame}, under ${BURST.px[shot.name]}`);
       if (shot.kills) {
-        if (!end.dummy.down || at0.markers.head <= before.markers.head) failures.push(`${shot.name}: not a headshot that kills: ${said(at0)}; head markers ${before.markers.head} → ${at0.markers.head}`);
-      } else if (end.dummy.down || at0.marker !== 'hit' || before.dummy.hp - at0.dummy.hp !== 55) failures.push(`${shot.name}: not a torso hit of 55: ${said(at0)} from ${before.dummy.hp}`);
-      for (const f of frames) if (f.gpuErrors.length) failures.push(`${shot.name}: GPU errors: ${f.gpuErrors.join(' | ')}`);
-      for (const k of shot.frames) {
-        const png = pngs.get(k);
-        if (!png) {
-          failures.push(`${shot.name}: frame ${k} not photographed`);
-          continue;
-        }
-        writeFileSync(`${OUT}/${shot.name}-${k}.png`, png);
+        // The kill's ring clear of the dummy's box on the screen by GATES.ringFrame.
+        const f = marked.find((x) => x.at === GATES.ringFrame);
+        const onScreen = f ? dummyOnScreen(f.pose, [SIZE.width, SIZE.height], feet) : null;
+        const ring = f?.ring ?? null;
+        const clear = ring && onScreen ? ringClear(ring, onScreen) : null;
+        entry.ringGate = { frame: GATES.ringFrame, ring, dummyBox: onScreen, ...(clear ?? {}) };
+        const each = marked.filter((x) => x.at !== null && x.at <= 12).map((x) => (x.ring ? `${x.at}: ${x.ring.inner.toFixed(0)}–${x.ring.outer.toFixed(0)} px at ${x.ring.opacity.toFixed(2)}` : `${x.at}: none`));
+        console.log(`  the kill's ring by frame (its inner and outer edges' radii): ${each.join('; ')}`);
+        if (onScreen) console.log(`  the dummy's box on the screen at frame ${GATES.ringFrame}: x ${onScreen.x0.toFixed(0)}–${onScreen.x1.toFixed(0)}, y ${onScreen.y0.toFixed(0)}–${onScreen.y1.toFixed(0)}; its farthest corner ${clear ? clear.far.toFixed(1) : '-'} px from the ring's middle`);
+        if (!clear?.clear) failures.push(`${shot.name}: the kill's ring has not cleared the dummy by frame ${GATES.ringFrame}: ${JSON.stringify(entry.ringGate)}`);
       }
-      const zoom = strip([zoomOf(shotAt.pre), ...shot.frames.filter((k) => pngs.has(k)).map((k) => zoomOf(pngs.get(k)))]);
-      writeFileSync(`${OUT}/${shot.name}-zoom.png`, encode(zoom.data, zoom.w, zoom.h));
-      console.log(`${shot.name}: shot on step ${frames.find((f) => f.shots > before.shots)?.step ?? '-'}, its marker on step ${zero}`);
-      for (const f of marked) if (shot.frames.includes(f.at)) console.log(`  frame ${f.at}: ${said(f)}`);
       if (shot.name === 'torso') {
         // Its blood gone and its flinch settled before the headshot.
         await page.evaluate((frames) => window.__trenchline.waitFrames(frames), 2 * SETTLE_FRAMES);
@@ -379,13 +516,46 @@ try {
     // After the headshot: the backstop and the ground, and the blood counted.
     const after = await bloodAround(page, feet, scene.voxel, scene.blood);
     const counted = bloodVoxels(after, box);
+    const inBox = (b) => ([x, y, z]) => x >= b[0] && y >= b[1] && z >= b[2] && x < b[3] && y < b[4] && z < b[5];
+    const wallMarks = after.filter(inBox(box));
+    counted.clusters = clusters(wallMarks);
     const view = await spatterView(page, scene.eye, feet);
     writeFileSync(`${OUT}/spatter.png`, view.png);
     writeFileSync(`${OUT}/spatter-marked.png`, markVoxels(view.png, view.pose, after, scene.voxel));
     report.spatter = { pose: view.pose, voxels: counted, list: after };
-    console.log(`spatter: ${after.length} blood voxels round the dummy (${counted.wall} on the backstop, ${counted.ground} off it; by shade ${JSON.stringify(counted.byShade)}), ${report.spatterBefore?.voxels ? `${report.spatterBefore.voxels.wall + report.spatterBefore.voxels.ground} before the headshot` : ''}`);
-    if (counted.wall + counted.ground <= (report.spatterBefore?.voxels ? report.spatterBefore.voxels.wall + report.spatterBefore.voxels.ground : 0)) failures.push('the headshot marked no blood');
+    const was = report.spatterBefore?.voxels ?? { wall: 0, ground: 0 };
+    console.log(`spatter at ${BACKSTOP.behindM} m: ${after.length} blood voxels round the dummy (${counted.wall} on the backstop, ${counted.ground} off it; by shade ${JSON.stringify(counted.byShade)}), ${was.wall + was.ground} before the headshot; the backstop's clusters ${JSON.stringify(counted.clusters)}`);
+    // The cone along the round marks the wall: the ground's marks alone are not the spatter's proof.
+    if (counted.wall <= was.wall) failures.push(`the headshot marked no new blood on the backstop at ${BACKSTOP.behindM} m (${was.wall} → ${counted.wall}; the ground ${was.ground} → ${counted.ground})`);
+    if ((counted.clusters[0] ?? 0) < GATES.cluster) failures.push(`the spatter on the backstop at ${BACKSTOP.behindM} m holds no cluster of ${GATES.cluster}: ${JSON.stringify(counted.clusters)}`);
     if (view.gpuErrors.length) failures.push(`GPU errors: ${view.gpuErrors.join(' | ')}`);
+
+    // The nearer backstop: the first put back, the near one built, the range raised afresh (its dummy
+    // standing again, whole), and the head shot again.
+    await removeBackstop(page);
+    const near = wallBox(scene.eye, feet, NEAR_BACKSTOP, scene.voxel);
+    report.nearBackstopBox = near;
+    await buildBackstop(page, near, scene.sandbag);
+    const again = await page.evaluate(async (settle) => {
+      const h = window.__trenchline;
+      h.range(false);
+      h.range(true);
+      await h.waitFrames(settle);
+      return h.rangeState().dummies.find((d) => d.id === 200) ?? null;
+    }, SETTLE_FRAMES);
+    if (!again || again.hp !== 100 || again.down || Math.hypot(again.position[0] - feet[0], again.position[2] - feet[2]) > 0.05) throw new Error(`the range raised again has no whole dummy where the first stood: ${JSON.stringify(again)}`);
+    const nearBefore = (await bloodAround(page, feet, scene.voxel, scene.blood)).filter(inBox(near));
+    await shoot(page, { ...SHOTS[1], name: 'head-near', frames: [0, 6] }, scene, feet);
+    const nearAfter = (await bloodAround(page, feet, scene.voxel, scene.blood)).filter(inBox(near));
+    const nearClusters = clusters(nearAfter);
+    const nearView = await spatterView(page, scene.eye, feet);
+    writeFileSync(`${OUT}/spatter-near.png`, nearView.png);
+    writeFileSync(`${OUT}/spatter-near-marked.png`, markVoxels(nearView.png, nearView.pose, nearAfter, scene.voxel));
+    report.spatterNear = { pose: nearView.pose, before: nearBefore.length, wall: nearAfter.length, clusters: nearClusters, list: nearAfter };
+    console.log(`spatter at ${NEAR_BACKSTOP.behindM} m: ${nearAfter.length} blood voxels on the backstop (${nearBefore.length} before its headshot); its clusters ${JSON.stringify(nearClusters)}`);
+    if (nearAfter.length <= nearBefore.length) failures.push(`the headshot marked no new blood on the backstop at ${NEAR_BACKSTOP.behindM} m`);
+    if ((nearClusters[0] ?? 0) < GATES.cluster) failures.push(`the spatter on the backstop at ${NEAR_BACKSTOP.behindM} m holds no cluster of ${GATES.cluster}: ${JSON.stringify(nearClusters)}`);
+    if (nearView.gpuErrors.length) failures.push(`GPU errors: ${nearView.gpuErrors.join(' | ')}`);
   } finally {
     await removeBackstop(page).catch(() => {});
   }
