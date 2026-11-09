@@ -106,6 +106,28 @@ describe('rounds in flight', () => {
     within(hundred.t, (Math.exp(k * 100) - 1) / (k * 880));
   });
 
+  it("dropM, a round's fall below its line by a range, is its flight's within 1 cm out to 200 m; with no drag, |g|s²/2v²", () => {
+    // Fired level over an empty field 256 m long: where it crosses each range, how far it has fallen.
+    const r = new Rounds(T, new BrickMap({ x: 32, y: 32, z: 256 }), 1);
+    r.fire([16, 8, 0.5], [0, 0, 880], RIFLE, 0, false);
+    const flown: [number, number][] = [[0, 0]];
+    while (r.count > 0 && flown[flown.length - 1][0] < 200) {
+      r.step(TICK);
+      const p = r.position(0);
+      flown.push([p[2] - 0.5, 8 - p[1]]);
+    }
+    for (const s of [38, 55, 100, 150, 185, 200]) {
+      const i = flown.findIndex(([z]) => z >= s);
+      const [[za, a], [zb, b]] = [flown[i - 1], flown[i]];
+      const fell = a + ((b - a) * (s - za)) / (zb - za);
+      expect(Math.abs(r.dropM(RIFLE, s) - fell), `${s} m`).toBeLessThanOrEqual(0.01);
+    }
+    // At the Corridor's range, a quarter of a metre: more than a level shot's straight line can spare.
+    expect(r.dropM(RIFLE, 185)).toBeGreaterThan(0.24);
+    expect(r.dropM({ ...RIFLE, dragFactor: 0 }, 185)).toBeCloseTo((9.81 * 185 * 185) / (2 * 880 * 880), 9);
+    expect(r.dropM(RIFLE, 0)).toBe(0);
+  });
+
   it('a round into water splashes once where it enters, and on through it as before', () => {
     const map = world();
     // A pool 0.2 m deep over the ground from 10 m to 100 m out, its top at 0.6 m (y 6).

@@ -22,7 +22,7 @@
  * The far field is not hit.
  */
 
-import { hypot } from '../core/dmath';
+import { exp, hypot } from '../core/dmath';
 import type { Tunables } from '../core/tunables';
 import type { BrickMap } from '../world/bricks';
 import { raycast, type WaterEntry } from '../world/raycast';
@@ -275,6 +275,23 @@ export class Rounds {
 
   isTracer(slot: number): boolean {
     return this.tracer[slot] !== 0;
+  }
+
+  /**
+   * How far a round of `spec` falls below the line it leaves on by `rangeM` along it (m), in this
+   * pool's air: its own gravity and quadratic drag, solved for a flat shot. Its speed decays as
+   * e^(−ks) over s, k = dragFactor · air density, and the fall's drag with it, so it falls
+   *
+   *     |g| · (e^(2ks) − 1 − 2ks) / (4 k² v0²)
+   *
+   * which is |g| s² / 2v0² with no drag. Integrated in substeps (step), a round falls a few mm more
+   * by 200 m. The front aims over a crest by it (front.ts).
+   */
+  dropM(spec: ProjectileSpec, rangeM: number): number {
+    const x = 2 * spec.dragFactor * this.t.airDensity * rangeM;
+    // (e^x − 1 − x) / (x²/2): 1 with no drag; its series where x is too small to take it directly.
+    const r = x > 1e-3 ? (2 * (exp(x) - 1 - x)) / (x * x) : 1 + x / 3;
+    return (-this.t.gravity * rangeM * rangeM * r) / (2 * spec.muzzleVelocity * spec.muzzleVelocity);
   }
 
   /** Who hears near misses: the player's eye (metres), within `radiusM`; null, no one. */

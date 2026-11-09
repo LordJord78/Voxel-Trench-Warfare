@@ -17,6 +17,26 @@ const TARGET: [number, number, number] = [12.8, 2, 5];
 /** A field the front's rounds cross and leave quickly. */
 const field = () => new Rounds(ballisticsTunables(tun), new BrickMap({ x: 256, y: 64, z: 512 }), 0.1);
 
+/**
+ * Where a round leaving `o` at `v` (m, m/s) crosses z = `z` in flight, flown as the session flies it
+ * (ticks of 1/60 s) over an empty field 32 × 32 × 256 m: its x and y there.
+ */
+function crossing(o: readonly number[], v: readonly number[], z: number): [number, number] {
+  const r = new Rounds(ballisticsTunables(tun), new BrickMap({ x: 32, y: 32, z: 256 }), 1);
+  r.fire([o[0], o[1], o[2]], [v[0], v[1], v[2]], SPEC, 1, false);
+  let a = r.position(0);
+  for (;;) {
+    r.step(TICK);
+    if (r.count === 0) throw new Error('the round was retired before it crossed');
+    const b = r.position(0);
+    if (b[2] <= z) {
+      const u = (a[2] - z) / (a[2] - b[2]);
+      return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+    }
+    a = b;
+  }
+}
+
 /** `seconds` of the front at `intensity` from a line 38 m off: the ticks it fired on, and how many each. */
 function run(intensity: 'off' | 'light' | 'heavy', seconds: number, seed = 7) {
   const front = new Front(T, lineSource(38, 0.4), Rng.root(seed).derive('front'));
@@ -223,40 +243,43 @@ describe('the front', () => {
     expect(planSource(plan, T.reachM)(target, rng(4))).toEqual(planSource(plan, T.reachM, 1)(target, rng(4)));
   });
 
-  it('at a player it cannot see, fires 0.3 m over where its sight was stopped', () => {
-    const origin: [number, number, number] = [10, 3, 80];
+  it('at a player it cannot see, fires 0.3 m over where its sight was stopped: in flight, its fall allowed for', () => {
+    // 50 m out (the Ravine's range), and 185 m (the Corridor's, its fronts at z 34 and 219.5), where a
+    // round falls 0.26 m below the line it leaves on: aimed straight at the 0.3 m it would clear the
+    // stop by 4 cm, through the head behind it.
     const head: [number, number, number] = [10, 1.6, 5];
-    for (const intensity of ['light', 'heavy'] as const) {
-      const front = new Front(T, () => [origin[0], origin[1], origin[2]], Rng.root(5).derive('front'));
-      front.room = true;
-      front.intensity = intensity;
-      const asked: number[][][] = [];
-      const sight = (from: readonly number[], to: readonly number[]): [number, number, number] => {
-        asked.push([[...from], [...to]]);
-        return [10, 2, 30];
-      };
-      const rounds = field();
-      const across: number[] = [];
-      for (let k = 0; k < 60 * 60; k++) {
-        const n = front.tick(TICK, head, rounds, SPEC, sight);
-        for (let s = rounds.count - n; s < rounds.count; s++) {
-          const o = rounds.position(s);
-          const v = rounds.velocity(s);
-          // Where its ray crosses z = 30, the parapet's face.
-          const t = (30 - o[2]) / v[2];
-          expect(o[1] + v[1] * t, intensity).toBeCloseTo(2.3, 6);
-          const x = o[0] + v[0] * t;
-          expect(Math.abs(x - 10), intensity).toBeLessThanOrEqual(T.spreadM + 1e-6);
-          across.push(x - 10);
+    for (const z0 of [80, 215]) {
+      const origin: [number, number, number] = [10, 3, z0];
+      for (const intensity of ['light', 'heavy'] as const) {
+        const what = `${intensity}, ${z0 - 30} m`;
+        const front = new Front(T, () => [origin[0], origin[1], origin[2]], Rng.root(5).derive('front'));
+        front.room = true;
+        front.intensity = intensity;
+        const asked: number[][][] = [];
+        const sight = (from: readonly number[], to: readonly number[]): [number, number, number] => {
+          asked.push([[...from], [...to]]);
+          return [10, 2, 30];
+        };
+        const rounds = field();
+        const across: number[] = [];
+        for (let k = 0; k < 60 * 60; k++) {
+          const n = front.tick(TICK, head, rounds, SPEC, sight);
+          for (let s = rounds.count - n; s < rounds.count; s++) {
+            // Where it crosses z = 30 in flight, the parapet's face: 0.3 m over the stop, within 1 cm.
+            const [x, y] = crossing(rounds.position(s), rounds.velocity(s), 30);
+            expect(Math.abs(y - 2.3), what).toBeLessThanOrEqual(0.01);
+            expect(Math.abs(x - 10), what).toBeLessThanOrEqual(T.spreadM + 1e-6);
+            across.push(x - 10);
+          }
+          rounds.step(TICK);
         }
-        rounds.step(TICK);
+        // Asked once a round, from its muzzle at the head; scattered sideways across the whole spread.
+        expect(asked.length, what).toBe(across.length);
+        expect(asked.every(([from, to]) => from.join() === origin.join() && to.join() === head.join()), what).toBe(true);
+        expect(across.length, what).toBeGreaterThan(20);
+        expect(Math.min(...across), what).toBeLessThan(-0.8);
+        expect(Math.max(...across), what).toBeGreaterThan(0.8);
       }
-      // Asked once a round, from its muzzle at the head; scattered sideways across the whole spread.
-      expect(asked.length, intensity).toBe(across.length);
-      expect(asked.every(([from, to]) => from.join() === origin.join() && to.join() === head.join()), intensity).toBe(true);
-      expect(across.length, intensity).toBeGreaterThan(20);
-      expect(Math.min(...across), intensity).toBeLessThan(-0.8);
-      expect(Math.max(...across), intensity).toBeGreaterThan(0.8);
     }
   });
 

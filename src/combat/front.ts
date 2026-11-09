@@ -21,11 +21,12 @@
  * to hurt: light's rounds are scattered about the head as heavy's are, at
  * light's own rate. And it fires where it can see: given a sight, a round whose
  * muzzle cannot see the head is aimed `crest_clear_m` over where that sight was
- * stopped, scattered sideways only, so it cracks over the crest in front of
- * the player and does not hit them.
+ * stopped, and higher by its own fall that far, so it crosses there
+ * `crest_clear_m` over at any range; scattered sideways only, it cracks over
+ * the crest in front of the player and does not hit them.
  */
 
-import { cos, log, sin } from '../core/dmath';
+import { cos, hypot, log, sin } from '../core/dmath';
 import type { Rng } from '../core/rng';
 import type { Tunables } from '../core/tunables';
 import type { WorldPlan } from '../world/generation/plan';
@@ -44,7 +45,7 @@ export interface FrontTunables {
   spreadM: number;
   spreadVertical: number;
   reachM: number;
-  /** [room_battle]: how far over where its sight was stopped a round at a player it cannot see is aimed (m). */
+  /** [room_battle]: how far over where its sight was stopped a round at a player it cannot see crosses it (m); it is aimed higher by its fall. */
   crestClearM: number;
 }
 
@@ -149,7 +150,7 @@ export class Front {
       const origin = this.source(target, this.rng);
       if (!origin) continue;
       const stopped = sight ? sight(origin, target) : null;
-      const aim = stopped ? this.overCrest(origin, target, stopped) : this.aimAt(origin, target);
+      const aim = stopped ? this.overCrest(origin, target, stopped, rounds, spec) : this.aimAt(origin, target);
       const d = [aim[0] - origin[0], aim[1] - origin[1], aim[2] - origin[2]];
       const len = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
       if (!(len > 0)) continue;
@@ -195,14 +196,18 @@ export class Front {
 
   /**
    * Where a round from `origin` is aimed at a head it cannot see, its sight stopped at `stopped`:
-   * crest_clear_m over that point, scattered sideways (level, across the line of fire) within
-   * ±spread_m and not up or down, so it clears the crest and cracks over the player.
+   * crest_clear_m over that point and as much again as the round of `spec` falls by it
+   * (Rounds.dropM), so in flight it crosses the stop crest_clear_m over it at any range; scattered
+   * sideways (level, across the line of fire) within ±spread_m and not up or down, so it clears the
+   * crest and cracks over the player. Aimed straight at crest_clear_m, at the Corridor's 185 m it
+   * would fall 0.26 m of the 0.3: into the crest, or over it through the head behind it.
    */
-  private overCrest(origin: readonly [number, number, number], target: readonly [number, number, number], stopped: readonly [number, number, number]): [number, number, number] {
+  private overCrest(origin: readonly [number, number, number], target: readonly [number, number, number], stopped: readonly [number, number, number], rounds: Rounds, spec: ProjectileSpec): [number, number, number] {
     const f = [target[0] - origin[0], target[1] - origin[1], target[2] - origin[2]];
     const side = sideways(f, Math.sqrt(f[0] * f[0] + f[2] * f[2]));
     const across = this.rng.uniform(-this.t.spreadM, this.t.spreadM);
-    return [stopped[0] + side[0] * across, stopped[1] + this.t.crestClearM, stopped[2] + side[2] * across];
+    const fall = rounds.dropM(spec, hypot(stopped[0] - origin[0], stopped[1] - origin[1], stopped[2] - origin[2]));
+    return [stopped[0] + side[0] * across, stopped[1] + this.t.crestClearM + fall, stopped[2] + side[2] * across];
   }
 }
 

@@ -646,7 +646,8 @@ reach_radii         = 2.2      # the spec's reach_m, in its radii: falling linea
 cover_share         = 0.35     # what is left of it when a voxel ray from it to the chest is blocked
 front_damage_scale  = 0.6      # the front's round: its zone's damage (net/match-rules DAMAGE) times this
 crest_clear_m       = 0.3      # the front at a player whose head its muzzle cannot see (combat/front.ts):
-                               # the round aimed this far over where its sight was stopped, scattered
+                               # the round crosses where its sight was stopped this far over it (aimed
+                               # higher by its own fall, 0.26 m at the Corridor's 185 m), scattered
                                # sideways only, so it cracks over the crest and does not hit
 
 [range]

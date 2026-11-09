@@ -40,6 +40,28 @@ function arena(room: boolean, wall = false): Session {
   return s;
 }
 
+/**
+ * The Corridor's range, where Task 8 plays (its fronts at z 34 and 219.5): 25.6 × 6.4 × 204.8 m of sod
+ * 0.4 m deep, the clay backstop behind the player (z 0–1 m), and a clay rim 3 m in front of them
+ * (z 8.0–8.4) with its top at `topY`; the player at (12.8, 0.4, 5) facing +z, in a room, together,
+ * and the front a muzzle fixed 185 m off, 2.45 m over their eye.
+ */
+const CORRIDOR_MUZZLE: [number, number, number] = [12.8, 4.47, 190];
+function corridor(topY: number): Session {
+  const map = new BrickMap({ x: 256, y: 64, z: 2048 });
+  map.fillBox(0, 0, 0, 256, 4, 2048, P.SOD);
+  map.fillBox(0, 4, 0, 256, 64, 10, P.CLAY);
+  map.fillBox(0, 4, 80, 256, Math.round(topY / 0.1), 84, P.CLAY);
+  map.takeDirty();
+  const s = Session.create({ map, plan: null, spawn: { position: [12.8, 0.4, 5] }, front: () => [...CORRIDOR_MUZZLE] }, tun, 7, 0);
+  s.intent = idleIntent();
+  s.room = true;
+  s.together = true;
+  for (let k = 0; k < 40; k++) s.tick();
+  s.drainEvents();
+  return s;
+}
+
 /** `seconds` of the front at heavy: everything combat did. */
 function heavy(s: Session, seconds: number): CombatEvents[] {
   s.front.intensity = 'heavy';
@@ -115,5 +137,36 @@ describe('the front in a room', () => {
     // Solo it fires about the head as ever, wall or no wall: many of its rounds strike the wall.
     const solo = all(heavy(arena(false, true), 20), 'impacts');
     expect(solo.filter((i) => i.cell[2] >= 60 && i.cell[2] < 64).length).toBeGreaterThan(shots.length / 4);
+  });
+
+  it("at the Corridor's range, a player whose eye a rim hides by a hair or by a hand is cracked over, never hit", () => {
+    // 185 m out a round falls 0.26 m below the line it leaves on. Aimed straight at 0.3 m over the
+    // stop, it would pass a hair's stop 4 cm over: through the head behind it (its top 0.16 m over the
+    // eye). And it would strike a hand's rim. Its fall allowed for, it clears both by 0.3 m.
+    for (const [topY, hidden] of [
+      [2.1, 0.035],
+      [2.2, 0.135],
+    ]) {
+      const what = `hidden by ${hidden} m`;
+      const s = corridor(topY);
+      const p = s.player.position;
+      const eye: [number, number, number] = [p.x, p.y + s.controller.eyeHeight(s.player), p.z];
+      expect(eye[1], what).toBeCloseTo(2.02, 6);
+      // The muzzle's sight of the eye stopped at the rim's face, `hidden` under its top.
+      const stop = s.sight(CORRIDOR_MUZZLE, eye);
+      expect(stop, what).not.toBeNull();
+      expect(stop![2], what).toBeCloseTo(8.4, 6);
+      expect(topY - stop![1], what).toBeCloseTo(hidden, 3);
+      const frames = heavy(s, 20);
+      const shots = all(frames, 'frontShots');
+      expect(shots.length, what).toBeGreaterThan(100);
+      expect(all(frames, 'hits'), what).toEqual([]);
+      expect(all(frames, 'harms'), what).toEqual([]);
+      // None strikes the rim; on over the player into the backstop, each heard (but those still in the air at the end).
+      const impacts = all(frames, 'impacts');
+      expect(impacts.filter((i) => i.cell[2] >= 80 && i.cell[2] < 84), what).toEqual([]);
+      expect(impacts.filter((i) => i.cell[2] < 10).length, what).toBeGreaterThan(shots.length * 0.9);
+      expect(all(frames, 'cracks').length, what).toBeGreaterThan(shots.length * 0.95);
+    }
   });
 });
