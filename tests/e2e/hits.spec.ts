@@ -14,7 +14,9 @@ test.use({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
 
 type Fed = Hooks & {
   setLoadout(l: unknown): void;
+  aim(held: boolean): void;
   session: {
+    coneDeg(): number;
     player: { position: { x: number; y: number; z: number }; yaw: number; pitch: number };
     controller: { eyeHeight(p: unknown): number };
     weapon: { shotsFired: number; semi: boolean };
@@ -396,14 +398,37 @@ test("an M870's kill at 15 m says KILL, as the readout says, and the pellets tha
   expect(range, JSON.stringify({ stood, dummy })).toBeGreaterThan(14);
   expect(range, JSON.stringify({ stood, dummy })).toBeLessThan(16);
   await record(page);
-  // A pull at a time at its belly, so its pellets keep out of the head, the pump worked between, until it is down.
-  const belly = [dummy.position[0], dummy.position[1] + 1.0, dummy.position[2]];
+  // A pull at a time at its pelvis, aimed down the sights, so its pellets keep out of the head, the
+  // pump worked between, until it is down. Where a pull's pellets go is its own (combat/weapon.ts
+  // pelletDirs: the first on the aim, the rest within the cone about it, drawn from the shot's seat and
+  // tick, so from the moment it leaves), so the cone itself keeps out of the head: aimed, the M870's
+  // pattern is 0.7 of its 160 MOA (net/gear.ts stepShare), 0.49 m out at 15 m, and from 0.9 m up it
+  // reaches 1.39 m, under the neck at 1.47 m (combat/soldier-rig.ts: the hips at 0.92, the torso 0.55
+  // over them). A kill whose pellet was the pull's last into it struck nothing dead, which is what the
+  // test is about: the dummy stands again (down_s) and is killed again, up to six times.
+  const pelvis = [dummy.position[0], dummy.position[1] + 0.9, dummy.position[2]];
+  await fed(page, async (h) => {
+    h.aim(true);
+    await h.waitFrames(30);
+  });
+  const damage: Record<string, number> = { torso: 23, head: 42, limb: 13 };
+  /** The last pull's pellets into the dummy, by tick, and which of them killed it from `hp` (−1, none). */
+  const lastPull = async (hp: number) => {
+    const { hits } = await struck(page);
+    const last = hits.filter((x) => x.body === 200).at(-1)!;
+    const pull = hits.filter((x) => x.body === 200 && x.tick >= last.tick - 2);
+    let left = hp;
+    return { pull, lethal: pull.findIndex((x) => (left -= damage[x.zone]) <= 0) };
+  };
   let pulls = 0;
+  let kills = 0;
   let killing: { before: Awaited<ReturnType<typeof tallies>>; hp: number; seen: { feedback: Awaited<ReturnType<typeof tallies>>; readout: string | null; down: boolean } } | null = null;
-  while (killing === null && pulls < 6) {
+  while (killing === null && pulls < 36 && kills < 6) {
     const before = await tallies(page);
     const hp = await fed(page, (h) => h.rangeState().dummies[0].hp);
-    expect(await shootAt(page, belly)).toBe(1);
+    const coneDeg = await fed(page, (h) => h.session.coneDeg());
+    expect(0.9 + range * Math.tan((coneDeg * Math.PI) / 180), `the pattern's top, aimed at the pelvis: ${JSON.stringify({ coneDeg, range })}`).toBeLessThan(1.47 - 0.05);
+    expect(await shootAt(page, pelvis)).toBe(1);
     pulls++;
     const seen = await fed(
       page,
@@ -416,23 +441,30 @@ test("an M870's kill at 15 m says KILL, as the readout says, and the pellets tha
       },
       before.markers.kill,
     );
-    if (seen.down) killing = { before, hp, seen };
+    if (seen.down) {
+      kills++;
+      const { pull, lethal } = await lastPull(hp);
+      if (lethal !== pull.length - 1) killing = { before, hp, seen };
+      else {
+        console.log(`the M870's kill ${kills} on pull ${pulls}: pellet ${lethal + 1} of ${pull.length} killed it, the last, striking nothing dead; once it stands again, another`);
+        await fed(page, async (h) => {
+          const t0 = performance.now();
+          while (performance.now() - t0 < 8000 && h.rangeState().dummies[0].down) await h.waitFrames(1);
+        });
+      }
+    }
     // The pump worked, the recoil settled.
     await fed(page, (h) => h.waitFrames(50));
   }
   const after = await tallies(page);
   const { hits } = await struck(page);
-  const said = JSON.stringify({ pulls, killing, after, hits });
+  const said = JSON.stringify({ pulls, kills, killing, after, hits });
   expect(killing, said).not.toBeNull();
   const { before, hp, seen } = killing!;
   // The killing pull's pellets into the dummy, by tick: those that struck it alive, the one that killed
   // it (the range's damage, 23 to the torso, 42 to the head, 13 to a limb), and those that struck it dead.
-  const last = hits.filter((x) => x.body === 200).at(-1)!;
-  const pull = hits.filter((x) => x.body === 200 && x.tick >= last.tick - 2);
-  const damage: Record<string, number> = { torso: 23, head: 42, limb: 13 };
-  let left = hp;
-  const lethal = pull.findIndex((x) => (left -= damage[x.zone]) <= 0);
-  console.log(`the M870 at ${range.toFixed(1)} m: down on pull ${pulls}; its pellets into the dummy ${pull.map((x) => x.zone).join(', ')}: pellet ${lethal + 1} of ${pull.length} killing it from ${hp} hp, ${pull.length - lethal - 1} striking it dead`);
+  const { pull, lethal } = await lastPull(hp);
+  console.log(`the M870 at ${range.toFixed(1)} m: down on pull ${pulls} (kill ${kills}); its pellets into the dummy ${pull.map((x) => x.zone).join(', ')}: pellet ${lethal + 1} of ${pull.length} killing it from ${hp} hp, ${pull.length - lethal - 1} striking it dead`);
   // What the test is about holds: a pellet of the pull killed it, and at least one after it struck it dead.
   expect(lethal, said).toBeGreaterThanOrEqual(0);
   expect(pull.length - lethal - 1, said).toBeGreaterThanOrEqual(1);
