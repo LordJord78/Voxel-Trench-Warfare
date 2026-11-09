@@ -37,7 +37,7 @@ import { battleFireLights, battleFlareLights, sceneLights, type SceneLight } fro
 import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
-import { RoomBattle, type BattleCatchUp } from '../sim/room-battle';
+import { RoomBattle } from '../sim/room-battle';
 import { idleIntent, Session, SHOVEL_HELD, type CombatEvents } from '../sim/session';
 import { MAP_SEEDS, isMapId, type MapId } from '../world/generation/params';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
@@ -78,7 +78,7 @@ import { copyRegion, type RegionCopy } from '../world/region-copy';
 import { CameraRig, rigTunables } from './camera-rig';
 import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
-import { BattleClock, runChunks } from './battle-clock';
+import { BattleClock, catchUpRunner } from './battle-clock';
 import { coverAt, daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type ShownBattle, type DebugEmber, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
@@ -715,32 +715,21 @@ async function start(): Promise<void> {
     // The room's log caught up (sim/room-battle.ts catchUp): in a match, the battle deploy has just
     // made at 0 run along it, a second at most a step, at each second's darkness (the match's time of
     // day then) and the player's feet, given each crater's strike first; its chars made at once, as
-    // nothing is pending after a settle (battle-clock.ts runChunks). With no match the battle and the
+    // nothing is pending after a settle (battle-clock.ts catchUpRunner). With no match the battle and the
     // clock are the visitor's, and left alone. Then the battle's clock is given the second it reached,
     // and the frames run it on to now, catching up silently past SILENT_STEP_S. It is that battle
     // throughout: if the room ends the match and starts the next while the log is caught up, the
     // next's deploy makes its own, from 0. A catch-up that fails stops the game (`failed`).
     catchUp: async (room, log, match, now) => {
-      let reached = 0;
-      let along: BattleCatchUp | null = null;
       const director = battle;
-      if (match) {
-        const { config } = match;
-        const inputs = (s: number) => matchInputs(config, s);
-        const made = (events: BattleEvents) => {
-          for (const c of events.chars) chars.add(c.at);
-          chars.make(session.map, (box) => session.destruction.overlapsPending(box));
-        };
-        along = {
-          runTo: (s, strikes) => {
-            made(director.tick(0, { ...inputs(reached), strikes }));
-            reached = runChunks(director, reached, s, inputs, made);
-          },
-        };
-      }
+      const made = (events: BattleEvents) => {
+        for (const c of events.chars) chars.add(c.at);
+        chars.make(session.map, (box) => session.destruction.overlapsPending(box));
+      };
+      const along = match ? catchUpRunner(director, (s) => matchInputs(match.config, s), made) : null;
       await room.catchUp(log, match?.startAt ?? null, now, along, () => new Promise<void>((resolve) => setTimeout(resolve, 0)));
       renderer.largeEdit();
-      if (match && battle === director) battleClock.given = reached;
+      if (along && battle === director) battleClock.given = along.reached;
     },
     // A crater that never goes in, or any other failure to catch up: the world can't be the room's,
     // so the game stops and says why.

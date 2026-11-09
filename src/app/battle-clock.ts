@@ -3,8 +3,8 @@
  * Director at the same moment of the same battle.
  *
  * - **Given** (`given`): the match's seconds the battle has run. Its deploy starts it at 0 (`reset`);
- *   a catch-up on the room's log (main.ts's catchUp hook, sim/room-battle.ts) sets it to the second
- *   that run reached.
+ *   a catch-up on the room's log (main.ts's catchUp hook, sim/room-battle.ts, run by `catchUpRunner`)
+ *   sets it to the second that run reached.
  * - **A frame** (`frame`): the battle run on to the match's second now, never back (a clock sample
  *   that pulls the room's time back holds it until the room's time catches up); within
  *   SILENT_STEP_S, at once, with the frame's strikes and splashes, and heard.
@@ -19,6 +19,7 @@
 
 import { noBattleEvents, type BattleEvents, type BattleInputs, type Strike } from '../battle/director';
 import { battleStep, SILENT_STEP_S } from '../net/clock';
+import type { BattleCatchUp } from '../sim/room-battle';
 
 /** The Director as the clock runs it. */
 export interface ClockedBattle {
@@ -41,6 +42,26 @@ export function runChunks(battle: ClockedBattle, fromS: number, toS: number, inp
     at = next;
   }
   return at;
+}
+
+/**
+ * The battle as a catch-up on the room's log runs it (sim/room-battle.ts catchUp, main.ts's hook):
+ * `runTo(s, strikes)` gives `battle` the strikes first, at the second it has reached (they light on its
+ * next step, as a live frame's do), then runs it on to `s` in SILENT_STEP_S chunks at the inputs of the
+ * second each ends at (runChunks), never back; every step's events to `made`, which makes their chars.
+ * `reached`: the second it has run to, from 0 (the deploy's battle), which the clock is given after.
+ */
+export function catchUpRunner(battle: ClockedBattle, inputsAt: (s: number) => BattleInputs, made: (events: BattleEvents) => void): BattleCatchUp & { readonly reached: number } {
+  let reached = 0;
+  return {
+    get reached() {
+      return reached;
+    },
+    runTo(s, strikes) {
+      made(battle.tick(0, { ...inputsAt(reached), strikes }));
+      reached = runChunks(battle, reached, s, inputsAt, made);
+    },
+  };
 }
 
 export class BattleClock {

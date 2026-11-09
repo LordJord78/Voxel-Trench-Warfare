@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { catchUpRunner } from '../../src/app/battle-clock';
 import { Director, type BattleEvents, type BattleInputs, type Strike } from '../../src/battle/director';
 import { fireTunables, roomStrike } from '../../src/battle/fires';
 import { packCell, scoopBox } from '../../src/combat/entrenching';
@@ -678,22 +679,12 @@ function liveClient(map: BrickMap) {
   return { c, frame, charred: char.craters };
 }
 
-/** A joiner's battle as main.ts's catch-up runs it: on to each second asked, at most 1 s a step, its strikes given it first, its chars made at once. */
+/** A joiner's battle as main.ts's catch-up runs it (battle-clock.ts catchUpRunner): on to each second asked, at most 1 s a step, its strikes given it first, its chars made at once. */
 function catchUpBattle(c: RoomClient) {
   const director = new Director(null, tun, BATTLE_SEED);
   const char = charring(c);
-  let reached = 0;
-  const battle: BattleCatchUp = {
-    runTo: (s, strikes) => {
-      char.made(director.tick(0, { ...battleInputs(c), strikes }));
-      while (reached < s) {
-        const next = Math.min(s, reached + 1);
-        char.made(director.tick(next - reached, battleInputs(c)));
-        reached = next;
-      }
-    },
-  };
-  return { battle, charred: char.craters, reached: () => reached };
+  const battle = catchUpRunner(director, () => battleInputs(c), char.made);
+  return { battle, charred: char.craters, reached: () => battle.reached };
 }
 
 /** A catch-up's battle that runs nothing: each runTo asked of it, as [s, strikes given], with `look` called at each. */

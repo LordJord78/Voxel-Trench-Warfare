@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BattleClock, type ClockedBattle } from '../../src/app/battle-clock';
+import { BattleClock, catchUpRunner, type ClockedBattle } from '../../src/app/battle-clock';
 import { Director, noBattleEvents, type BattleEvents, type BattleInputs, type Strike } from '../../src/battle/director';
 import { loadTunables } from '../../src/core/tunables';
 import { matchHours, SILENT_STEP_S } from '../../src/net/clock';
@@ -103,5 +103,35 @@ describe("the battle on a room's match clock", () => {
     // The page that stayed never fell behind, and ran a step a frame.
     const stayed = page();
     expect(stayed.frames.every((f) => !f.behind && f.steps === 1)).toBe(true);
+  });
+});
+
+describe("the battle as a catch-up on the room's log runs it", () => {
+  it('runs on to each second asked, a SILENT_STEP_S chunk at a time at the inputs of the second each ends at, its strikes given first and never back; it says the second it reached', () => {
+    // The darkness given is the second asked for, so each step says which second's inputs it ran at.
+    const steps: [number, number, number][] = [];
+    const battle: ClockedBattle = {
+      tick: (seconds, inputs) => {
+        steps.push([seconds, inputs.darkness, inputs.strikes?.length ?? 0]);
+        return noBattleEvents();
+      },
+    };
+    const made: BattleEvents[] = [];
+    const runner = catchUpRunner(battle, (s) => ({ intensity: 'light', darkness: s, player }), (events) => made.push(events));
+    expect(runner.reached).toBe(0);
+    runner.runTo(2.5, []);
+    expect(steps).toEqual([[0, 0, 0], [SILENT_STEP_S, 1, 0], [SILENT_STEP_S, 2, 0], [0.5, 2.5, 0]]);
+    expect(runner.reached).toBe(2.5);
+    // A crater's strike at the second it is at: given, and nothing run.
+    steps.length = 0;
+    runner.runTo(2.5, [struck[0]]);
+    expect(steps).toEqual([[0, 2.5, 1]]);
+    // Never back.
+    steps.length = 0;
+    runner.runTo(1, []);
+    expect(steps).toEqual([[0, 2.5, 0]]);
+    expect(runner.reached).toBe(2.5);
+    // Every step's events made (its chars), as they come.
+    expect(made).toHaveLength(6);
   });
 });
