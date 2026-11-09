@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { hitFeedbackTunables } from '../../src/app/hit-feedback';
-import { audioTunables, planFeedback, planVoices } from '../../src/audio/plan';
+import { audioTunables, planFeedback, planVoices, type VoiceKind } from '../../src/audio/plan';
 import { reportShape, voiceLength } from '../../src/audio/voices';
+import { armSpec } from '../../src/combat/arsenal';
 import { rangeTunables } from '../../src/combat/range';
 import { loadTunables } from '../../src/core/tunables';
-import { FRAME_S, LEAD_S, RATE, renders, TAIL_S } from '../../tools/sounds/renders';
+import { BARE } from '../../src/net/gear';
+import { FRAME_S, FRONT_M, LEAD_S, MUZZLE, RATE, renders, TAIL_S } from '../../tools/sounds/renders';
 
 // The sounds' proof (npm run sounds; the shots spec's §6, G3's Task 5): what is rendered, and what each
 // render is held to. Each hit's voice at the ear as the shooter hears it (planFeedback's placing, its
@@ -23,18 +25,31 @@ const byName = (name: string) => list.find((r) => r.name === name)!;
 const EARS = ['hit', 'head', 'gush', 'kill', 'ding', 'hurt'] as const;
 /** The hands' cues (combat/handling.ts), each heard at the ear (audio/plan.ts). */
 const CUES = ['mag-out', 'mag-in', 'bolt', 'cover', 'shell', 'pump', 'dry'] as const;
+/** The reports (the shots spec's §6): the front's, and the player's own from four guns, the SVD bare and suppressed. */
+const REPORTS = ['report', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870', 'report-pistol'] as const;
+/** Every voice's kind: a missing one is a type error here, so a kind added to audio/plan.ts is rendered too. */
+const EVERY_KIND: Record<VoiceKind, true> = {
+  report: true, crack: true, 'impact-soil': true, 'impact-timber': true, 'impact-metal': true, whistle: true, blast: true, scrape: true, flare: true, rumble: true, thump: true, chatter: true, crackle: true, splash: true,
+  hit: true, head: true, gush: true, kill: true, ding: true, hurt: true,
+  'mag-out': true, 'mag-in': true, bolt: true, cover: true, shell: true, pump: true, dry: true,
+};
+/** The kinds neither a hit's, a cue nor a report: each its own render, by its name. */
+const OTHERS = ['crack', 'impact-soil', 'impact-timber', 'impact-metal', 'whistle', 'blast', 'scrape', 'flare', 'rumble', 'thump', 'chatter', 'crackle', 'splash'] as const;
+/** How long a render's plans sound, from its start: each from its delay, a report's tail as well. */
+const sounding = (plans: readonly { delayS: number; send?: number }[]) => Math.max(...plans.map((p) => p.delayS + voiceLength(p as never, report) + ((p.send ?? 0) > 0 ? report.tailS : 0)));
 
 describe("the sounds' proof: what it renders", () => {
   it('48 kHz, a voice 10 ms in and its file 100 ms past its end; a frame at 60 Hz', () => {
     expect([RATE, LEAD_S, TAIL_S, FRAME_S]).toEqual([48000, 0.01, 0.1, 1 / 60]);
   });
 
-  it("one report shape, src/audio's, the engine is given (app/main.ts) and the renders read", () => {
-    expect(report).toEqual({ lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') });
+  it("one report shape (the reports' shared tail), src/audio's, the engine is given (app/main.ts) and the renders read", () => {
+    expect(report).toEqual({ bodyHz: tun.f('viewkick.defaults.report_body_hz'), tailS: tun.f('viewkick.defaults.report_tail_s') });
     const main = readFileSync('src/app/main.ts', 'utf8');
     expect(main).toMatch(/new AudioEngine\(hearing, reportShape\(tun\)\)/);
-    expect(main).not.toContain('report_low_hz');
-    expect(readFileSync('tools/sounds/renders.ts', 'utf8')).not.toContain('report_low_hz');
+    expect(main).not.toContain('report_tail_s');
+    expect(readFileSync('tools/sounds/renders.ts', 'utf8')).not.toContain('report_tail_s');
+    expect(readFileSync('tools/sounds/page.ts', 'utf8')).not.toContain('report_tail_s');
   });
 
   it("each hit's voice, by its kind's name, at the ear: placed as planFeedback places it, whole and at once, at its [hits] gain", () => {
@@ -47,8 +62,8 @@ describe("the sounds' proof: what it renders", () => {
     }
   });
 
-  it('every render is held, none only reported: the voices, the far rings, the headshot that kills and the hands\' cues', () => {
-    expect(list.map((r) => r.name)).toEqual([...EARS, 'ding-30m', 'ding-85m', 'headshot-kill', 'headshot-kill-dry', ...CUES]);
+  it('every render is held, none only reported: the voices, the far rings, the headshot that kills, the hands\' cues, the reports and every other kind', () => {
+    expect(list.map((r) => r.name)).toEqual([...EARS, 'ding-30m', 'ding-85m', 'headshot-kill', 'headshot-kill-dry', ...CUES, ...REPORTS, ...OTHERS]);
     for (const r of list) expect(r.gated, r.name).toBe(true);
   });
 
@@ -113,5 +128,92 @@ describe("the sounds' proof: what it renders", () => {
     expect(new Set(list.map((r) => r.name)).size).toBe(list.length);
     for (const r of list) if (r.rules?.near) expect(list.map((x) => x.name), r.name).toContain(r.rules.near.of);
     for (const r of list) if (r.rules?.over) expect(list.map((x) => x.name), r.name).toContain(r.rules.over.of);
+  });
+});
+
+// The reports and every other voice (the shots spec's §6, G5's Task 2): every VoiceKind rendered to
+// <kind>.wav, each as the game plans it, held to the peak's range; and the reports, the front's and the
+// player's own, each heard with its tail (its file runs the tail's length past its dry layers).
+describe("the sounds' proof: the reports, and every kind", () => {
+  it('every VoiceKind has a render by its name, playing that kind alone', () => {
+    const names = list.map((r) => r.name);
+    for (const kind of Object.keys(EVERY_KIND)) {
+      expect(names, kind).toContain(kind);
+      const r = byName(kind);
+      expect(r.plans.length, kind).toBeGreaterThan(0);
+      for (const p of r.plans) expect(p.kind, kind).toBe(kind);
+    }
+  });
+
+  it("the player's own reports at the muzzle, as planVoices plans the shot: the AK, the SVD bare and suppressed, the M870 and the pistol, each its gun's body", () => {
+    const own = [
+      ['report-ak', 'ak74', false, 140],
+      ['report-svd', 'svd', false, 110],
+      ['report-svd-suppressed', 'svd', true, 110],
+      ['report-m870', 'm870', false, 95],
+      ['report-pistol', 'm17', false, 210],
+    ] as const;
+    for (const [name, gun, suppressed, bodyHz] of own) {
+      const r = byName(name);
+      expect(r.plans, name).toHaveLength(1);
+      const [p] = r.plans;
+      // Placed as the player's own: at the muzzle, at once, whole and undulled; at its gun's report share.
+      expect(p, name).toMatchObject({ kind: 'report', at: MUZZLE, delayS: 0, lowpassHz: t.openLowpassHz, bodyHz, suppressed });
+      expect(p.gain, name).toBe(armSpec(tun, gun, { ...BARE, muzzle: suppressed ? 'suppressor' : 'none' }).report);
+      expect(p.send, name).toBe(suppressed ? t.reportTailSend / 2 : t.reportTailSend);
+      expect(r.lengthS, name).toBeCloseTo(LEAD_S + voiceLength(p, report) + report.tailS + TAIL_S, 9);
+    }
+    // The muzzle half a metre ahead, a little right and under the eye.
+    expect(MUZZLE).toEqual([0.1, -0.1, -0.6]);
+    // The suppressed SVD, quieter by its suppressor's report_gain.
+    expect(byName('report-svd-suppressed').plans[0].gain).toBe(tun.f('attachment.suppressor.report_gain'));
+  });
+
+  it("the front's report, FRONT_M (20 m) straight ahead: late, quieter and duller by it, its send less by the lowpass's share, the defaults' body", () => {
+    expect(FRONT_M).toBe(20);
+    const r = byName('report');
+    const [p] = r.plans;
+    expect(r.plans).toHaveLength(1);
+    expect(p).toMatchObject({ kind: 'report', at: [0, 0, -FRONT_M], bodyHz: tun.f('viewkick.defaults.report_body_hz'), suppressed: false });
+    expect(p.delayS).toBeCloseTo(FRONT_M / t.speedOfSound, 12);
+    expect(p.gain).toBeLessThan(t.frontReportGain);
+    expect(p.lowpassHz).toBeLessThan(t.openLowpassHz);
+    expect(p.send).toBeGreaterThan(0);
+    expect(p.send).toBeLessThan(t.reportTailSend);
+    expect(r.lengthS).toBeCloseTo(LEAD_S + p.delayS + voiceLength(p, report) + report.tailS + TAIL_S, 9);
+  });
+
+  it("the suppressed SVD's report is held to a peak 6 dB or more under the bare SVD's; no other report to more than its peak's range", () => {
+    expect(byName('report-svd-suppressed').rules).toEqual({ under: { of: 'report-svd', db: 6 } });
+    for (const name of REPORTS) if (name !== 'report-svd-suppressed') expect(byName(name).rules, name).toBeUndefined();
+    for (const r of list) if (r.name !== 'report-svd-suppressed') expect(r.rules?.under, r.name).toBeUndefined();
+  });
+
+  it("every other kind as planVoices plans it from its event where the game plays it whole, held to its peak's range alone, its file as long as it sounds", () => {
+    for (const name of OTHERS) {
+      const r = byName(name);
+      expect(r.gated, name).toBe(true);
+      expect(r.rules, name).toBeUndefined();
+      expect(r.lengthS, name).toBeCloseTo(LEAD_S + sounding(r.plans) + TAIL_S, 9);
+      for (const p of r.plans) expect(p.send, name).toBeUndefined();
+    }
+    // One heard afar where the game plays it whole: reference_m off, late by it, at its [audio] gain.
+    const whole: [string, number][] = [['impact-soil', t.impactGain], ['impact-timber', t.impactGain], ['impact-metal', t.impactGain], ['whistle', t.whistleGain], ['blast', t.blastGain], ['flare', t.flareGain], ['crackle', t.crackleGain], ['splash', t.splashGain]];
+    for (const [name, gain] of whole) {
+      const [p] = byName(name).plans;
+      expect(Math.hypot(...p.at), name).toBeCloseTo(t.referenceM, 12);
+      expect(p.gain, name).toBeCloseTo(gain, 12);
+      // A whistle is heard from its announcing, at once; the rest late by their distance.
+      expect(p.delayS, name).toBeCloseTo(name === 'whistle' ? 0 : t.referenceM / t.speedOfSound, 12);
+    }
+    // A distant gun at its range's nearest, whole there: a barrage's shell 1 km off, a far shell 200 m, a burst 60 m.
+    for (const [name, d, gain] of [['rumble', 1000, t.rumble.gain], ['thump', 200, t.thump.gain], ['chatter', 60, t.chatter.gain]] as const) {
+      const [p] = byName(name).plans;
+      expect(p.delayS, name).toBeCloseTo(d / t.speedOfSound, 12);
+      expect(p.gain, name).toBeCloseTo(gain, 12);
+    }
+    // A round passing a metre off; a scoop at the feet, within the reference, whole.
+    expect(byName('crack').plans[0].gain).toBeCloseTo(t.crackGain * (1 - 1 / t.crackRadiusM), 12);
+    expect(byName('scrape').plans[0].gain).toBeCloseTo(t.scrapeGain, 12);
   });
 });

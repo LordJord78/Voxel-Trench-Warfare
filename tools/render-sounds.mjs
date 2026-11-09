@@ -7,6 +7,7 @@
 // a band rule's own share, and an `over` rule's energy in its band (tools/lib/sound-measures.mjs).
 //
 //   npm run sounds [-- --only gush,ding]   (or --only=gush,ding)
+//   SOUNDS_PORT=5326 npm run sounds        (its page served there, not 5316: another checkout's run may hold that)
 //
 // Writes artifacts/sp7/sounds/<name>.wav (48 kHz stereo, 16-bit) and report.json (merged with what a run
 // of a few left, each entry stamped with the commit and the time it was rendered), and prints a table of
@@ -14,7 +15,8 @@
 // outside −30 to −1 dBFS, or silent; or, by its rules, under its floor, too little in its band or over
 // 400 Hz (the small speaker), its loudest 50 ms too far from another render's or its body's (the
 // kill's thud), or its energy in a band too little over another's (a headshot's kill over the same
-// without its gush); the other rendered too, if --only left it out; or if the page fails. Exits 2, with the
+// without its gush), or its peak too little under another's (a suppressed SVD's report under the bare
+// one's); the other rendered too, if --only left it out; or if the page fails. Exits 2, with the
 // usage, if --only has no list or names no render. A render reported and not held says what fails of
 // it, and does not fail the run.
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -26,7 +28,12 @@ import { checkSound, table, wav } from './lib/sound-measures.mjs';
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 
-const PORT = 5316;
+/** The page's port: SOUNDS_PORT, or 5316. */
+const PORT = Number(process.env.SOUNDS_PORT ?? 5316);
+if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) {
+  console.error(`SOUNDS_PORT must be a port number, not ${JSON.stringify(process.env.SOUNDS_PORT)}`);
+  process.exit(2);
+}
 const OUT = 'artifacts/sp7/sounds';
 const PAGE = '/tools/sounds/index.html';
 const USAGE = 'usage: npm run sounds [-- --only <names>]   (or --only=<names>; names comma-separated, of the renders in tools/sounds/renders.ts)';
@@ -70,8 +77,8 @@ try {
     console.error(USAGE);
     process.exitCode = 2;
   } else {
-    // A render held to another's level, or over its energy, needs the other rendered too.
-    const only = asked.only && [...new Set([...asked.only, ...known.filter((k) => asked.only.includes(k.name)).flatMap((k) => [k.near, k.over].filter((x) => x !== null))])];
+    // A render held to another's level, over its energy or under its peak, needs the other rendered too.
+    const only = asked.only && [...new Set([...asked.only, ...known.filter((k) => asked.only.includes(k.name)).flatMap((k) => [k.near, k.over, k.under].filter((x) => x !== null && x !== undefined))])];
     const rendered = await page.evaluate((o) => window.sounds.render(o), only);
     const heard = Object.fromEntries(rendered.map((r) => [r.name, r.heard]));
     const rows = [];

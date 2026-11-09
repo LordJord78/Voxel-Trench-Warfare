@@ -340,14 +340,16 @@ export function aimedMoa(a: ArmSpec): number {
 
 export function gunStats(tun: Tunables, a: ArmSpec, damageScale: number): GunStats {
   const w = a.weapon;
-  const clamp = (v: number) => Math.max(0.04, Math.min(1, v));
+  const f = (key: string) => tun.f(`loadout.${key}`);
+  const floor = f('bar_floor');
+  const clamp = (v: number) => Math.max(floor, Math.min(1, v));
   return {
-    damage: clamp((damageScale * w.pellets) / 2.2),
-    rate: clamp(w.rpm / 900),
-    accuracy: clamp(1 - aimedMoa(a) / 8),
-    control: clamp(1 - (a.recoil.kickPitchDeg + a.recoil.climbPerShotDeg * 2) / tun.f('loadout.control_span')),
-    range: clamp(w.projectile.muzzleVelocity / 950),
-    handling: clamp(1 - (a.adsTimeS - 0.1) / 0.45 - (w.reloadS - 1.5) / 12),
-    mobility: clamp((a.move - 0.75) / 0.35),
+    damage: clamp((damageScale * w.pellets) / f('damage_span')),
+    rate: clamp(w.rpm / f('rate_span_rpm')),
+    accuracy: clamp(1 - aimedMoa(a) / f('accuracy_span_moa')),
+    control: clamp(1 - (a.recoil.kickPitchDeg + a.recoil.climbPerShotDeg * 2) / f('control_span')),
+    range: clamp(w.projectile.muzzleVelocity / f('range_span_mps')),
+    handling: clamp(1 - (a.adsTimeS - f('handling_ads_from_s')) / f('handling_ads_span_s') - (w.reloadS - f('handling_reload_from_s')) / f('handling_reload_span_s')),
+    mobility: clamp((a.move - f('mobility_from')) / f('mobility_span')),
   };
 }

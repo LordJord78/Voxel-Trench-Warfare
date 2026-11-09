@@ -39,6 +39,8 @@ export interface SoundRules {
   near?: { of: string; withinDb: number; low?: boolean };
   /** Its energy in `band` (Hz), over its first `firstS` seconds from its onset if given, at least `db` dB over render `of`'s, read alike. */
   over?: OverRule;
+  /** Its peak at least `db` dB under render `of`'s (a suppressed report under the bare one's). */
+  under?: { of: string; db: number };
 }
 
 /** A render held over another: its energy in `band`, over its first `firstS` seconds if given, at least `db` dB over render `of`'s. */

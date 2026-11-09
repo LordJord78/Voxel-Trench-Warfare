@@ -435,13 +435,25 @@ move                = 1.0
 [attachment.laser]
 hip_spread          = 0.65
 
-# The loadout's bars (src/combat/arsenal.ts gunStats): each gun's numbers against the arsenal's.
+# The loadout's bars (src/combat/arsenal.ts gunStats): each gun's numbers against the arsenal's,
+# each bar held between bar_floor and 1.
 # Recoil control is 1 - (kick_pitch_deg + 2 × climb_per_shot_deg) / control_span, from the gun's
 # [recoil.*] table. The shots spec's §3 made every gun's kick + 2 × climb about 1.24 times the
 # reference's, and the span grew with it (from 4.5): the bars still set the guns against each other
 # as they did (the AK's 0.80, the SVD's 0.24), and the heavier recoil is felt, not shown.
 [loadout]
+bar_floor           = 0.04     # no bar is ever empty
+damage_span         = 2.2      # damage: the round's damage scale × its pellets over this
+rate_span_rpm       = 900.0    # rate of fire: rpm over this
+accuracy_span_moa   = 8.0      # accuracy: 1 - the aimed cone (MOA) over this
 control_span        = 5.6
+range_span_mps      = 950.0    # range: muzzle velocity over this
+handling_ads_from_s = 0.1      # handling: 1 - (ADS time - this) / handling_ads_span_s
+handling_ads_span_s = 0.45
+handling_reload_from_s = 1.5   #   - (reload - this) / handling_reload_span_s
+handling_reload_span_s = 12.0
+mobility_from       = 0.75     # mobility: (move scale - this) / mobility_span
+mobility_span       = 0.35
 
 # The hands (src/sim/session.ts): what is in them comes down and the next comes up (a gun from the
 # other, the shovel while F is held, the gun again after); aimed, the recoil is steadier and the feet
@@ -839,8 +851,15 @@ cam_shake_m         = 0.0015   # the eye moved up to this on each axis, and
 cam_shake_deg       = 0.12     # turned up to this in pitch and yaw,
 cam_shake_s         = 0.06     # drawn afresh each tick for this long after a shot
 report_peak_db      = 158.0    # 5.45 at the shooter's ear
-report_low_hz       = 70.0     # where the body of the transient sits
-report_length_s     = 0.18
+# The report (the shots spec's §6; audio/voices.ts): a 2 ms click, a body, a crack of 1.5-4 kHz
+# noise over 25 ms and the action's click 15 ms on. The body is a sine at report_body_hz falling a
+# third over 60 ms: each gun its own (its table's), the front's rifles these defaults'. Every report
+# sends report_tail_send of itself to one shared reverb (audio/engine.ts: a ConvolverNode on
+# report_tail_s of decaying noise, its highs falling faster); a suppressed one half as much, a far
+# one less by its distance's share of far_m (the share that dulls it).
+report_body_hz      = 140.0
+report_tail_send    = 0.35
+report_tail_s       = 1.2
 jitter_scale        = 0.12     # per-shot variation, as a fraction of each value
 
 [viewkick.assault_rifle]
@@ -848,11 +867,13 @@ punch_back_m        = 0.0442
 punch_pitch_deg     = 1.5625
 punch_roll_deg      = 0.55
 fov_pulse_deg       = -0.60
+report_body_hz      = 140.0
 
 [viewkick.m4]
 punch_back_m        = 0.039
 punch_pitch_deg     = 1.375
 punch_roll_deg      = 0.45
+report_body_hz      = 150.0
 
 [viewkick.mp5]
 punch_back_m        = 0.026
@@ -860,6 +881,7 @@ punch_pitch_deg     = 0.875
 punch_roll_deg      = 0.30
 fov_pulse_deg       = -0.30
 cam_roll_deg        = 0.45
+report_body_hz      = 190.0
 
 [viewkick.svd]
 punch_back_m        = 0.078
@@ -868,11 +890,13 @@ punch_roll_deg      = 1.20
 settle_time_s       = 0.32
 fov_pulse_deg       = -1.10
 cam_roll_deg        = 1.40
+report_body_hz      = 110.0
 
 [viewkick.m249]
 punch_back_m        = 0.0416
 punch_pitch_deg     = 1.25
 punch_roll_deg      = 0.70
+report_body_hz      = 135.0
 
 [viewkick.m870]
 punch_back_m        = 0.104
@@ -882,6 +906,7 @@ punch_roll_deg      = 1.80
 settle_time_s       = 0.36
 fov_pulse_deg       = -1.40
 cam_roll_deg        = 1.80
+report_body_hz      = 95.0
 
 [viewkick.m17]
 punch_back_m        = 0.0325
@@ -890,6 +915,7 @@ punch_pitch_deg     = 5.00
 punch_roll_deg      = 1.00
 settle_time_s       = 0.20
 cam_roll_deg        = 0.90
+report_body_hz      = 210.0
 
 [viewkick.pm]
 punch_back_m        = 0.0325
@@ -898,6 +924,7 @@ punch_pitch_deg     = 5.50
 punch_roll_deg      = 1.10
 settle_time_s       = 0.20
 cam_roll_deg        = 0.90
+report_body_hz      = 210.0
 
 # ---------------------------------------------------------------------------
 # PARTICLES

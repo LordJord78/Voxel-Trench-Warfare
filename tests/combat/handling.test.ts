@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Handling, ZERO_HANDS, gunClass, handlingTunables, type GunClass, type HandlingCue, type HandlingInput, type HandsDelta } from '../../src/combat/handling';
 import { weaponSpec } from '../../src/combat/weapon';
 import { TAU } from '../../src/core/dmath';
-import { loadTunables } from '../../src/core/tunables';
+import { loadTunables, Tunables } from '../../src/core/tunables';
 import { GUNS } from '../../src/net/gear';
 
 // The gun in the hands (the shots spec's §2): the stride's bob, the look's sway, breathing, the
@@ -306,6 +306,19 @@ describe('handling', () => {
     pitches.forEach((p, k) => {
       if (k >= once.length && (k < 53 || k >= 53 + once.length)) expect(p, `tick ${k}`).toBe(0);
     });
+  });
+
+  it("the overshoot rises before it settles: handlingTunables refuses aim_overshoot_rise_s at or over aim_overshoot_s, naming both", () => {
+    expect(t.aimOvershootRiseS).toBeLessThan(t.aimOvershootS);
+    const withRise = (rise: number) => {
+      const raw = tun.raw();
+      (raw.handling as Record<string, unknown>).aim_overshoot_rise_s = rise;
+      return new Tunables(raw);
+    };
+    for (const rise of [t.aimOvershootS, t.aimOvershootS + 0.05, 1]) {
+      expect(() => handlingTunables(withRise(rise)), `${rise}`).toThrow(`[handling] aim_overshoot_rise_s (${rise}) must be under aim_overshoot_s (${t.aimOvershootS}): the overshoot rises, then settles by then`);
+    }
+    expect(handlingTunables(withRise(t.aimOvershootS - 0.001)).aimOvershootRiseS).toBe(t.aimOvershootS - 0.001);
   });
 
   it('an arrival while the overshoot is still drawn carries on from where it is: up to its peak again, never a step', () => {

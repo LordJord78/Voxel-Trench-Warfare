@@ -1,7 +1,8 @@
 /**
  * The sounds' proof's page (tools/render-sounds.mjs serves it through Vite): each render of renders.ts
  * played through audio/voices.ts's own playVoice into the engine's own mix (audio/engine.ts mixInto:
- * the master gain and the compressor) in an OfflineAudioContext at RATE, and read there with both ears
+ * the master gain and the compressor; and its shared tail, engine.ts tailInto, which a report sends to)
+ * in an OfflineAudioContext at RATE, and read there with both ears
  * together (tools/lib/sound-measures.mjs: its peak, RMS and loudest 50 ms, its shares by an FFT, a
  * band rule's own share, and an `over` rule's reading, of the render held over another and of that
  * other alike). The context has four channels: 0 and 1 are what the game puts out, left and
@@ -12,7 +13,7 @@
  */
 
 import { audioTunables } from '../../src/audio/plan';
-import { mixInto, whiteNoise } from '../../src/audio/engine';
+import { mixInto, tailInto, whiteNoise } from '../../src/audio/engine';
 import { playVoice, reportShape } from '../../src/audio/voices';
 import { loadTunables } from '../../src/core/tunables';
 import { measure, ruleEnergyDb, ruleShare, type Measured, type OverRule } from '../lib/sound-measures.mjs';
@@ -86,7 +87,8 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
       const mix = mixInto(ctx, t.masterGain, heardEars);
       mix.connect(intoEars);
       const noise = whiteNoise(ctx);
-      for (const v of r.plans) playVoice(ctx, mix, noise, v, LEAD_S + v.delayS, report);
+      const tail = tailInto(ctx, mix, report);
+      for (const v of r.plans) playVoice(ctx, mix, noise, v, LEAD_S + v.delayS, report, tail);
       const buffer = await ctx.startRendering();
       const heard = [buffer.getChannelData(0), buffer.getChannelData(1)];
       const into = [buffer.getChannelData(2), buffer.getChannelData(3)];
@@ -114,7 +116,8 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
   return out;
 }
 
-/** The renders, in order: each one's name, and the renders its level is held to and over, if any (for --only). */
-const list = (): { name: string; near: string | null; over: string | null }[] => renders(loadTunables()).map((r) => ({ name: r.name, near: r.rules?.near?.of ?? null, over: r.rules?.over?.of ?? null }));
+/** The renders, in order: each one's name, and the renders its level is held to, over and under, if any (for --only). */
+const list = (): { name: string; near: string | null; over: string | null; under: string | null }[] =>
+  renders(loadTunables()).map((r) => ({ name: r.name, near: r.rules?.near?.of ?? null, over: r.rules?.over?.of ?? null, under: r.rules?.under?.of ?? null }));
 
 (window as unknown as { sounds: { render: typeof render; list: typeof list; ready: boolean } }).sounds = { render, list, ready: true };

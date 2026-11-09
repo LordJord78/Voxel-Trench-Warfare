@@ -16,17 +16,28 @@
  * the crack and the gush and a frame later the kill: a good share of its first 300 ms in 400 Hz–2 kHz
  * (which the kill's chime alone gives it), and its energy there over the same kill without the gush
  * (rendered as well, held to its peak alone), so the gush is not lost in the mix. The hands' cues (combat/handling.ts), each at the ear as planVoices
- * places it, at hands_gain, held to the peak range and the small speaker. More kinds (the reports) join
- * the list as theirs are made; one only reported (`gated` false) says what fails of it and does not
- * fail the run.
+ * places it, at hands_gain, held to the peak range and the small speaker. The reports (the shots spec's
+ * §6, G5's Task 2): the front's, FRONT_M ahead, and the player's own at the muzzle from the AK, the SVD
+ * bare and suppressed, the M870 and a pistol, each heard with the shared tail (its file runs the tail's
+ * length past its own layers), the suppressed SVD's peak held 6 dB or more under the bare one's. And
+ * every other voice's kind, each as planVoices plans it from its event where the game plays it whole
+ * (one heard afar within reference_m; a distant gun at its range's nearest), held to the peak's range:
+ * every VoiceKind has its <kind>.wav. One only reported (`gated` false)
+ * says what fails of it and does not fail the run.
  */
 
 import { hitFeedbackTunables } from '../../src/app/hit-feedback';
+import { noBattleEvents, type BattleEvents } from '../../src/battle/director';
 import { audioTunables, planFeedback, planVoices, type FeedbackKind, type VoicePlan } from '../../src/audio/plan';
+import { armSpec } from '../../src/combat/arsenal';
+import type { Impact } from '../../src/combat/ballistics';
 import type { HandlingCue } from '../../src/combat/handling';
 import { reportShape, voiceLength } from '../../src/audio/voices';
 import { rangeTunables } from '../../src/combat/range';
 import type { Tunables } from '../../src/core/tunables';
+import { BARE, encodeShotMark, type GunKey } from '../../src/net/gear';
+import type { CombatEvents, ShotEvent } from '../../src/sim/session';
+import { P } from '../../src/world/materials';
 import type { SoundRules } from '../lib/sound-measures.mjs';
 
 /** Every file's rate (Hz). */
@@ -72,17 +83,31 @@ const GUSH: SoundRules = { band: { hz: [400, 2000], share: 0.55 }, near: { of: '
 const HEADSHOT_KILL: SoundRules = { band: { hz: [400, 2000], share: 0.35, firstS: 0.3 }, over: { of: 'headshot-kill-dry', band: [400, 2000], firstS: 0.3, db: 1.0 } };
 /** The farthest plate's ring heard from the spawn: its peak at least this (dBFS). */
 const FAR_DING_DB = -24;
+/** The player's own gun's muzzle as the listener hears it (metres): half a metre ahead of the ear, a little right and under. */
+export const MUZZLE: [number, number, number] = [0.1, -0.1, -0.6];
+/** The front's report, this far straight ahead (metres): a rifle across a short stretch of the line. */
+export const FRONT_M = 20;
+/** The player's own reports: each render's name, its gun, and whether it is suppressed. */
+const OWN_REPORTS: readonly (readonly [string, GunKey, boolean])[] = [
+  ['report-ak', 'ak74', false],
+  ['report-svd', 'svd', false],
+  ['report-svd-suppressed', 'svd', true],
+  ['report-m870', 'm870', false],
+  ['report-pistol', 'm17', false],
+];
+/** A suppressed SVD's report: its peak at least this far under the bare one's (dB; G5's review focus). */
+const SUPPRESSED_UNDER: SoundRules = { under: { of: 'report-svd', db: 6 } };
 
 export function renders(tun: Tunables): Render[] {
   const t = audioTunables(tun);
   const gains = hitFeedbackTunables(tun).gains;
   const report = reportShape(tun);
   const ear: [number, number, number] = [0, 0, 0];
-  /** A render of `plans`, held: as long as the last of them sounds, from its delay, and the tail. */
+  /** A render of `plans`, held: as long as the last of them sounds, from its delay (with the shared tail's length, if it sends there), and the tail. */
   const of = (name: string, plans: VoicePlan[], rules?: SoundRules): Render => ({
     name,
     plans,
-    lengthS: LEAD_S + Math.max(...plans.map((p) => p.delayS + voiceLength(p, report))) + TAIL_S,
+    lengthS: LEAD_S + Math.max(...plans.map((p) => p.delayS + voiceLength(p, report) + ((p.send ?? 0) > 0 ? report.tailS : 0))) + TAIL_S,
     gated: true,
     ...(rules ? { rules } : {}),
   });
@@ -103,5 +128,35 @@ export function renders(tun: Tunables): Render[] {
     const events = { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [{ tick: 1, cue, at: [0.2, -0.1, -0.5] as [number, number, number] }], harms: [] };
     out.push(of(cue, planVoices(t, events, ear), { high: SMALL_SPEAKER }));
   }
+  // The reports and every other kind, each from its event as planVoices hears it (the battle's too).
+  const quiet: CombatEvents = { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [], harms: [] };
+  const heard = (events: Partial<CombatEvents>, battle?: Partial<BattleEvents>) => planVoices(t, { ...quiet, ...events }, ear, battle && { ...noBattleEvents(), ...battle });
+  const shot = (at: [number, number, number]): ShotEvent => ({ tick: 1, origin: at, dir: [0, 0, -1], tracer: false, muzzle: at });
+  // The front's report, FRONT_M ahead; the player's own at the muzzle, its word and its report's share as the session gives them.
+  out.push(of('report', heard({ frontShots: [shot([0, 0, -FRONT_M])] })));
+  for (const [name, gun, suppressed] of OWN_REPORTS) {
+    const arm = armSpec(tun, gun, { ...BARE, muzzle: suppressed ? 'suppressor' : 'none' });
+    const fired: ShotEvent = { ...shot(MUZZLE), mark: encodeShotMark({ tracer: false, kind: 0, suppressed: arm.suppressed, gun }), report: arm.report };
+    out.push(of(name, heard({ shots: [fired] }), suppressed ? SUPPRESSED_UNDER : undefined));
+  }
+  // Every other kind where the game plays it whole, so its file is the voice itself (farther, the plan
+  // only makes it quieter and duller): one heard afar, reference_m off (ahead and under, on the ground),
+  // within which its gain is whole; a distant gun's at its range's nearest (a barrage's shell 1 km off,
+  // a far shell 200 m, a machine gun's burst 60 m); a round passing a metre off; a scoop at the feet.
+  const close: [number, number, number] = [0, -0.6 * t.referenceM, -0.8 * t.referenceM];
+  const strike = (material: number): Impact & { tick: number } => ({ tick: 1, position: close, normal: [0, 1, 0], cell: [0, -12, -16], material, speed: 700, distance: 60, energyJ: 1500, owner: 2, spec: 'assault_rifle', dir: [0, 0, -1], kind: 0 });
+  out.push(of('crack', heard({ cracks: [{ tick: 1, missM: 1, at: [1, 0, -2] }] })));
+  out.push(of('impact-soil', heard({ impacts: [strike(P.SOD)] })));
+  out.push(of('impact-timber', heard({ impacts: [strike(P.TIMBER)] })));
+  out.push(of('impact-metal', heard({ impacts: [strike(P.PICKET)] })));
+  out.push(of('whistle', heard({ incoming: [{ tick: 1, at: close, landsInS: 1.5 }] })));
+  out.push(of('blast', heard({ blasts: [{ tick: 1, at: close, radiusM: 3, material: P.SOD, crater: null }] })));
+  out.push(of('scrape', heard({ scoops: [{ tick: 1, voxels: 24, at: [0, -1.2, -0.8], cells: [] }] })));
+  out.push(of('flare', heard({}, { launches: [{ id: 1, post: close, t0: 0, bearing: 0, elevation: 1.4, burstM: 40, colour: [1, 0.88, 0.7] }] })));
+  out.push(of('rumble', heard({}, { distant: [{ id: 1, position: [0, 0, -1000], t: 0, power: 1, far: false }] })));
+  out.push(of('thump', heard({}, { distant: [{ id: 2, position: [0, 0, -200], t: 0, power: 1, far: true }] })));
+  out.push(of('chatter', heard({}, { bursts: [{ id: 1, gun: [0, 0, -60], t: 0, rounds: 10, rpm: 600 }] })));
+  out.push(of('crackle', heard({}, { crackles: [{ at: close, gain: 1 }] })));
+  out.push(of('splash', heard({ splashes: [{ tick: 1, at: close, energyJ: 1500, kind: 'round' }] })));
   return out;
 }

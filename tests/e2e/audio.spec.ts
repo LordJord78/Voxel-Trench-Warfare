@@ -42,12 +42,71 @@ test('a browser that refuses sound still starts play, takes the pointer and resu
     h.trigger(false);
     await h.waitFrames(3);
   });
-  expect(await hooks(page, (h) => h.audio())).toEqual({ state: 'none', voices: 0, kinds: {}, held: 0, dropped: 0, time: null });
+  expect(await hooks(page, (h) => h.audio())).toEqual({ state: 'none', voices: 0, kinds: {}, held: 0, dropped: 0, time: null, convolvers: 0 });
   await page.keyboard.press('Escape');
   await expect(page.locator('#pause')).toBeVisible();
   await page.locator('#resume').click();
   await page.waitForFunction(() => document.pointerLockElement !== null, null, { timeout: 5000 });
   expect(await hooks(page, (h) => h.mode())).toBe('playing');
+  expect(errors).toEqual([]);
+});
+
+test('a magazine on full auto shares one reverb', async ({ page }) => {
+  // The shots spec's §6 and G5's review focus: every report sends to one shared tail, a ConvolverNode
+  // the engine makes once as it starts (audio/engine.ts), never one a voice. Counted twice over: by
+  // the engine (its convolvers, h.audio()), and by every ConvolverNode the page makes, however made
+  // (the constructor and createConvolver, counted from before the game's scripts run).
+  await page.addInitScript(() => {
+    const w = window as unknown as { convolversMade: number };
+    w.convolversMade = 0;
+    const Native = window.ConvolverNode;
+    class Counted extends Native {
+      constructor(context: BaseAudioContext, options?: ConvolverOptions) {
+        super(context, options);
+        w.convolversMade++;
+      }
+    }
+    Object.defineProperty(window, 'ConvolverNode', { value: Counted, configurable: true, writable: true });
+    const create = BaseAudioContext.prototype.createConvolver;
+    BaseAudioContext.prototype.createConvolver = function (this: BaseAudioContext) {
+      w.convolversMade++;
+      return create.call(this);
+    };
+  });
+  const errors = await openGame(page);
+  expect(await page.evaluate(() => (window as unknown as { convolversMade: number }).convolversMade)).toBe(0);
+  await page.locator('#play').click();
+  test.skip(!(await audioRenders(page)), 'the audio clock stands still here (no output renders): what is played cannot be counted as heard');
+  // The front and the shelling quiet, so every report heard is the player's own.
+  await hooks(page, (h) => {
+    h.setIntensity('off');
+    h.setShelling('off');
+  });
+  await hooks(page, (h) => h.waitFrames(10));
+  const read = () => hooks(page, (h) => ({ ...h.audio(), made: (window as unknown as { convolversMade: number }).convolversMade, rounds: h.session.weapon.rounds }));
+  const before = await read();
+  // Started: one tail, made as the engine started.
+  expect(before.state).toBe('running');
+  expect([before.convolvers, before.made]).toEqual([1, 1]);
+  expect(before.rounds).toBeGreaterThanOrEqual(25);
+  // The AK's magazine on full auto, the trigger held until it is empty (at 10 rounds a second, about 3 s).
+  await hooks(page, async (h) => {
+    h.trigger(true);
+    for (let k = 0; k < 600 && h.session.weapon.rounds > 0; k++) await h.waitFrames(1);
+    h.trigger(false);
+    await h.waitFrames(10);
+  });
+  const after = await read();
+  const reports = (after.kinds.report ?? 0) - (before.kinds.report ?? 0);
+  console.log(`a magazine on full auto: ${before.rounds - after.rounds} rounds, ${reports} reports, ${after.voices - before.voices} voices, ${after.dropped - before.dropped} dropped, at most ${after.held} held; convolvers: the engine's ${after.convolvers}, the page's ${after.made}`);
+  expect(after.rounds).toBe(0);
+  // A report a round, each a voice under the cap as before; none dropped.
+  expect(reports).toBe(before.rounds);
+  expect(after.voices - before.voices).toBeGreaterThanOrEqual(reports);
+  expect(after.dropped).toBe(before.dropped);
+  expect(after.held).toBeLessThanOrEqual(64);
+  // And still the one tail: no convolver made after the first.
+  expect([after.convolvers, after.made]).toEqual([1, 1]);
   expect(errors).toEqual([]);
 });
 

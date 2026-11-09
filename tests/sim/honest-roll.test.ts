@@ -28,7 +28,10 @@ function cameraStill(): Tunables {
  * The tunables with a camera rolling and shaking through every shot: 20° a shot, settling over a
  * second, and a shake of 5 cm and 3° that lasts a second. At their values a shot's shake is over
  * before the next round leaves (0.06 s; the quickest gun fires every 0.075 s) and little of its roll
- * is left: here the camera is never still as a round leaves, so any of it in a round would show.
+ * is left: here the camera is never still as a round leaves, so any of it in a round would show. The
+ * view's roll is capped at [camera] roll_max_deg (3°, in session.view()), so a 20° kick takes it to
+ * that cap, to the side drawn for the shot: well rolled still (over 2° on average) whenever a round
+ * leaves, and never in a round.
  */
 function cameraWild(): Tunables {
   const raw = tun.raw();

@@ -4,8 +4,9 @@
 // the share of its energy in 400 Hz–2 kHz and over 400 Hz (an FFT of each ear, their energy summed).
 // Each file's peak is held between −30 and −1 dBFS and none may be silent; a render may be held besides
 // to a band, to the small speaker (its share over 400 Hz), to a floor under its peak, to another
-// render's loudest 50 ms, or its body's (a kill's thud, apart from its chime), or over another render's
-// energy in a band (a headshot's kill over the same kill without its gush). Plain JS, so the render page
+// render's loudest 50 ms, or its body's (a kill's thud, apart from its chime), over another render's
+// energy in a band (a headshot's kill over the same kill without its gush), or its peak under another's
+// (a suppressed SVD's report under a bare one's). Plain JS, so the render page
 // (tools/sounds/page.ts, which runs the FFT where it renders) and the tests read the same code.
 
 /** A file's peak must lie in this range (dBFS): over the top it may clip, under the bottom it is too quiet. */
@@ -304,7 +305,8 @@ const pct = (x) => `${Math.round(x * 100)}%`;
  * `near.low` from its body's, under SMALL_SPEAKER_HZ alone (the kill's thud, never its louder chime);
  * or its energy in `over.band` (over its first `over.firstS` seconds if given) less than `over.db` dB
  * over render `over.of`'s, read alike (`overDb`, each): a headshot's kill over the same without its
- * gush, as the kill's chime alone fills the band a share can ask of it.
+ * gush, as the kill's chime alone fills the band a share can ask of it; or its peak less than
+ * `under.db` dB under render `under.of`'s (a suppressed SVD's report under a bare one's).
  */
 export function checkSound(m, rules = {}, others = {}) {
   if (!(m.peakDb >= SILENT_DB)) return ['it is silent'];
@@ -341,6 +343,16 @@ export function checkSound(m, rules = {}, others = {}) {
     else {
       const gap = m.overDb - other.overDb;
       if (!(gap >= db)) out.push(`${whose} is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'under' : 'over'} ${of}'s, not ${db} dB or more over it`);
+    }
+  }
+  if (rules.under) {
+    const { of, db } = rules.under;
+    const other = others[of];
+    if (!other) out.push(`its peak is held under ${of}'s, which was not rendered`);
+    else if (!(other.peakDb >= SILENT_DB)) out.push(`its peak is held under ${of}'s, which is silent`);
+    else {
+      const gap = other.peakDb - m.peakDb;
+      if (!(gap >= db)) out.push(`its peak, ${db1(m.peakDb)} dBFS, is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'over' : 'under'} ${of}'s (${db1(other.peakDb)} dBFS), not ${db} dB or more under it`);
     }
   }
   return out;
