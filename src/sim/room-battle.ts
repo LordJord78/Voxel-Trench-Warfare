@@ -23,6 +23,11 @@
  *   own scoops, while in play.
  * - **Over** (`finish`): the match ended, every shell still in the air lands at once, quietly; the
  *   scoops still held are handed on, for the next match's battle on this session.
+ * - **Caught up** (`catchUp`, spec notes 5, 6 and 10): a page that joins or reloads lands the room's
+ *   log (the welcome's) in time order, quietly, each crater settled before the next, and runs the
+ *   battle around it along the log, given each crater's strike as it goes in; so its world is a
+ *   client's that was there all along. The shells still in the air are heard for the time they have
+ *   left.
  *
  * Times are the room's clock as this page reckons it (ms).
  */
@@ -30,14 +35,36 @@
 import type { Strike } from '../battle/director';
 import { roomStrike, type FireTunables } from '../battle/fires';
 import { scoopBox } from '../combat/entrenching';
-import { SILENT_STEP_S } from '../net/clock';
-import { HURT_MAX, type ClientMsg, type Dig, type RoomShell } from '../net/protocol';
+import { matchSeconds, SILENT_STEP_S } from '../net/clock';
+import { decodeDig, decodeShell, HURT_MAX, type ClientMsg, type Dig, type MatchLog, type RoomShell } from '../net/protocol';
 import { detonationRegion } from '../world/detonation';
 import type { Box } from '../world/region';
+import type { Crater } from './destruction';
 import type { CombatEvents, Session } from './session';
 
 /** A harm smaller than this is not told: a scratch, which the room's health would not show. */
 const HURT_LEAST = 1;
+
+/**
+ * The most ticks a catch-up's settle gives its craters before it gives up, loudly: a crater whose
+ * bricks never come back, or one that waits on something nothing will do. A crater takes a few ticks
+ * once its worker hands it back, and the page yields to the worker between ticks (at least 4 ms
+ * each, in a browser), so this is a minute and more of one crater not going in.
+ */
+const SETTLE_TICKS_MAX = 20_000;
+
+/**
+ * The battle around the page (main.ts's Director) as the catch-up runs it: `runTo(s, strikes)` gives
+ * it `strikes` first, even when it is already at match second `s` (they wait to light on its next
+ * step, as a live frame's do), then runs it on to `s`, never back, in steps of at most 1 s, its
+ * fires' chars made in the world before it returns.
+ */
+export interface BattleCatchUp {
+  runTo(s: number, strikes: readonly Strike[]): void;
+}
+
+/** A log's entry: a shell at its landing, or a scoop at its stamp; ranked so a shell comes before a scoop of the same ms (`dug` lands the shells due by its stamp first). */
+type Entry = { at: number; rank: 0; n: number; shell: RoomShell } | { at: number; rank: 1; n: number; dig: Dig };
 
 /** Whether two boxes overlap across x and z, as Destruction asks of its regions. */
 const across = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
@@ -102,7 +129,80 @@ export class RoomBattle {
    */
   dug(dig: Dig, nowMs: number): void {
     this.landDue(dig.at, nowMs);
-    this.digs.push({ dig, box: scoopBox(this.session.map.dims, dig.cells), after: this.session.destruction.lastId });
+    this.hold(dig);
+  }
+
+  /**
+   * The room's log caught up: a page that joins, or reloads, mid-match given the world of one that was
+   * there all along (the shared-battle spec's "Join and reload"; notes 5, 6 and 10). `startAt` is this
+   * match's start (null in the lobby); `now` the room's clock as this page reckons it; `battle` the
+   * battle around the page, run along the log (null: none to run); `yieldNow` lets the page, and its
+   * destruction worker, breathe between a settle's ticks.
+   *
+   * - The session is set to the room first: the welcome comes between frames, before any prepare of
+   *   the match has set it (a hidden tab may run none during the whole catch-up), and a crater landed
+   *   off the room is cut where its shell landed, says nothing of what it struck, and strikes nothing.
+   * - Its entries that decode, in time order, a shell before a scoop of the same ms: in a match, those
+   *   due by the room's time as the catch-up begins; in the lobby, every one, whatever its time (a
+   *   shell still in the air at the match's end, which `finish` landed on every page there).
+   * - Each shell lands quietly and its crater settles before the next entry: its id is heard, so the
+   *   room telling it again lands nothing. (One this battle heard before, and landed, is not landed
+   *   again; one heard and still in the air lands here, in its place.) Each scoop is held and dug as
+   *   `tick` digs them.
+   * - One of this match's (at or after its start) first runs the battle on to its second; a shell's
+   *   crater, once in, is the battle's strike if it stands on what burns, and the shell is one
+   *   `landed`. An earlier match's lands with no battle run and is not `landed` (a live client's
+   *   battle holds only this match's), so that match's fires' chars are not caught up: colour only.
+   * - In a match, the battle is then run to the second the catch-up began at, and the shells still in
+   *   the air are heard at the room's time as it is then (the catch-up takes time): each whistles for
+   *   what it has left, or, already due, lands on the next tick. A scoop stamped after the catch-up
+   *   began (this page's clock a little behind the room's) is given as the room's next edits are, after
+   *   them (`dug`).
+   *
+   * While it runs, the page ticks neither the session nor this battle (together.ts caughtUp), and the
+   * room's edits wait in its queue.
+   */
+  async catchUp(log: MatchLog, startAt: number | null, now: () => number, battle: BattleCatchUp | null, yieldNow: () => Promise<void>): Promise<void> {
+    const { session } = this;
+    session.room = true;
+    const nowMs = now();
+    const shells = log.shells.map((w) => decodeShell(w)).filter((s): s is RoomShell => s !== null);
+    const digs = log.digs.map((w) => decodeDig(w)).filter((d): d is Dig => d !== null);
+    const entries: Entry[] = [
+      ...shells.map((shell): Entry => ({ at: shell.landAt, rank: 0, n: shell.id, shell })),
+      ...digs.map((dig, n): Entry => ({ at: dig.at, rank: 1, n, dig })),
+    ];
+    const due = entries.filter((e) => startAt === null || e.at <= nowMs).sort((a, b) => a.at - b.at || a.rank - b.rank || a.n - b.n);
+    for (const e of due) {
+      const s = startAt !== null && e.at >= startAt ? (e.at - startAt) / 1000 : null;
+      if (e.rank === 1) {
+        if (s !== null) battle?.runTo(s, []);
+        this.hold(e.dig);
+        this.dig();
+        continue;
+      }
+      const { shell } = e;
+      if (this.heard.has(shell.id)) {
+        // Heard before the catch-up: landed already, or still in the air, when it lands here, in its place.
+        const i = this.air.findIndex((a) => a.id === shell.id);
+        if (i < 0) continue;
+        this.air.splice(i, 1);
+      }
+      this.heard.add(shell.id);
+      if (s !== null) battle?.runTo(s, []);
+      const id = session.land(shell.at[0], shell.at[1], shell.radius, shell.seed, true);
+      const craters = await this.settle(yieldNow, shell);
+      if (s === null) continue;
+      this.down.push(shell);
+      const crater = id === null ? undefined : craters.find((c) => c.id === id);
+      const strike = crater ? roomStrike(session.map, crater, shell.seed, session.voxel, this.fireT) : null;
+      battle?.runTo(s, strike ? [strike] : []);
+    }
+    if (startAt === null) return;
+    battle?.runTo(matchSeconds(nowMs, startAt), []);
+    for (const shell of shells) if (shell.landAt > nowMs) this.hear(shell, now());
+    const later = digs.filter((d) => d.at > nowMs).sort((a, b) => a.at - b.at);
+    for (const dig of later) this.dug(dig, now());
   }
 
   /** Whether crater `id`'s job, over `box`, waits to go out: a scoop held that comes before it overlaps it across x and z. */
@@ -176,6 +276,33 @@ export class RoomBattle {
     const due = this.air.filter((s) => s.landAt <= byMs);
     this.air = this.air.filter((s) => s.landAt > byMs);
     for (const s of due) this.land(s, nowMs - s.landAt > 1000 * SILENT_STEP_S);
+  }
+
+  /** Another's scoop held, to be dug in its turn: after every crater the session has given an id by now, before every later one. */
+  private hold(dig: Dig): void {
+    this.digs.push({ dig, box: scoopBox(this.session.map.dims, dig.cells), after: this.session.destruction.lastId });
+  }
+
+  /**
+   * The catch-up's craters cut until none is pending, the page let breathe (`yieldNow`) between ticks,
+   * and the held scoops dug as they come free, before each tick as `tick` digs them before the
+   * session's (a crater after a held scoop waits for it: Destruction.waits). The craters that went in.
+   * A crater not in after SETTLE_TICKS_MAX ticks is an error, naming it, not a page spinning for ever.
+   */
+  private async settle(yieldNow: () => Promise<void>, shell: RoomShell): Promise<Crater[]> {
+    const d = this.session.destruction;
+    const landed: Crater[] = [];
+    for (let ticks = 0; d.pending > 0; ticks++) {
+      if (ticks === SETTLE_TICKS_MAX) {
+        const stuck = d.oldest!;
+        throw new Error(`The battle's catch-up is stuck: crater ${stuck.id} is still ${stuck.state} after ${SETTLE_TICKS_MAX} ticks (settling shell ${shell.id}'s; craters pending: ${d.pending}, scoops held: ${this.digs.length}).`);
+      }
+      if (ticks > 0) await yieldNow();
+      this.dig();
+      landed.push(...d.tick());
+    }
+    this.dig();
+    return landed;
   }
 
   /** Each held scoop dug, in the order they came, unless a crater pending before it holds it (Session.applyDig) or an earlier one still held overlaps it. */

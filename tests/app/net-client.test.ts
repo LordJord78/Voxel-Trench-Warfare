@@ -39,7 +39,7 @@ class StubSocket {
   }
 }
 
-const quiet: NetEvents = { changed() {}, started() {}, ended() {}, lost() {}, hurt() {}, death() {}, respawn() {}, over() {} };
+const quiet: NetEvents = { changed() {}, started() {}, welcomed() {}, ended() {}, lost() {}, hurt() {}, death() {}, respawn() {}, over() {} };
 const seats = [{ id: 0, name: 'Jordan', team: 'red', ready: false, away: false }];
 const welcome = (now: number, match: Record<string, unknown> | null = null) => ({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats, config: defaultConfig(), phase: match ? 'playing' : 'lobby', match, now });
 
@@ -90,6 +90,34 @@ describe("a player's line to the room", () => {
     StubSocket.last!.say(welcome(5_000_000));
     expect(lobby.match).toBeNull();
     expect(lobby.matchSeconds()).toBe(0);
+  });
+
+  it('a lobby welcome calls changed then welcomed, never started; a playing welcome calls changed, started, welcomed, in that order', () => {
+    // Welcomed last, with the welcome's log already the client's: the page catches up on it (together.ts).
+    const heard: string[] = [];
+    const on = (client: () => NetClient): NetEvents => ({
+      ...quiet,
+      changed: () => heard.push('changed'),
+      started: () => heard.push('started'),
+      welcomed: () => heard.push(`welcomed: ${client().log.shells.length} shells, ${client().log.digs.length} digs`),
+    });
+    const log = { shells: [[7, 5_001_500, 12_800, 15_000, 3_000, 42], [8, 4_999_000, 1_000, 2_000, 2_200, 43]], digs: [[1, 4_999_500, 412_345]] };
+    const lobby: NetClient = joined(on(() => lobby));
+    expect(lobby.log).toEqual({ shells: [], digs: [] });
+    page = 1040;
+    StubSocket.last!.say({ ...welcome(5_000_000), log });
+    expect(heard).toEqual(['changed', 'welcomed: 2 shells, 1 digs']);
+    expect(lobby.log).toEqual(log);
+    heard.length = 0;
+    const playing: NetClient = joined(on(() => playing));
+    page = 1040;
+    StubSocket.last!.say({ ...welcome(5_000_000, { startAt: 4_990_000, seed: 3, config: defaultConfig() }), log });
+    expect(heard).toEqual(['changed', 'started', 'welcomed: 2 shells, 1 digs']);
+    // A welcome with no log has an empty one.
+    heard.length = 0;
+    const bare: NetClient = joined(on(() => bare));
+    StubSocket.last!.say(welcome(5_000_000));
+    expect(heard).toEqual(['changed', 'welcomed: 0 shells, 0 digs']);
   });
 
   it("puts the room's shells on its edits, in the order they came, a malformed one dropped; taken once", () => {

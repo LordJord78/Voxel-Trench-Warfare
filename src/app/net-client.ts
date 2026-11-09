@@ -8,7 +8,7 @@
  */
 
 import { matchSeconds, ServerClock } from '../net/clock';
-import { decodeDig, decodeShell, decodeShot, defaultConfig, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type Dig, type MatchInfo, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type RoomShell, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
+import { decodeDig, decodeShell, decodeShot, defaultConfig, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type Dig, type MatchInfo, type MatchLog, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type RoomShell, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
 import { RemotePlayers } from './net-players';
 
 export interface NetEvents {
@@ -16,6 +16,11 @@ export interface NetEvents {
   changed(): void;
   /** The match is on (or was already on when this player joined). */
   started(match: MatchInfo): void;
+  /**
+   * The room welcomed this player: called last in the welcome, after `changed` and, in a match,
+   * `started`, with the welcome's log the client's (`log`), for the page to catch up on.
+   */
+  welcomed(): void;
   /** The owner ended it: back to the lobby. */
   ended(): void;
   /** The room would not have this player, or the line went: why, in a sentence. */
@@ -68,6 +73,8 @@ export class NetClient {
   match: MatchInfo | null = null;
   /** Whether the room has welcomed this player. */
   joined = false;
+  /** The room's log of its world as the welcome gave it: every shell told and scoop dug before this player came (empty until then). */
+  log: MatchLog = { shells: [], digs: [] };
   /** The match's score, and each player's kills and deaths, as the room last told them. */
   score = { red: 0, blue: 0 };
   tallies = new Map<number, { kills: number; deaths: number }>();
@@ -240,8 +247,10 @@ export class NetClient {
         this.config = m.config;
         this.phase = m.phase;
         this.match = m.match;
+        this.log = m.log;
         this.on.changed();
         if (m.phase === 'playing' && m.match) this.on.started(m.match);
+        this.on.welcomed();
         return;
       case 'refused':
         this.closedByUs = true;

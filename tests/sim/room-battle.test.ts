@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { Strike } from '../../src/battle/director';
+import { Director, type BattleEvents, type BattleInputs, type Strike } from '../../src/battle/director';
 import { fireTunables, roomStrike } from '../../src/battle/fires';
 import { packCell, scoopBox } from '../../src/combat/entrenching';
 import { loadTunables } from '../../src/core/tunables';
 import { SILENT_STEP_S } from '../../src/net/clock';
-import type { ClientMsg, Dig, RoomShell } from '../../src/net/protocol';
-import type { Crater } from '../../src/sim/destruction';
-import { RoomBattle } from '../../src/sim/room-battle';
-import { idleIntent, type Harm } from '../../src/sim/session';
+import type { ClientMsg, Dig, MatchLog, RoomShell } from '../../src/net/protocol';
+import type { Crater, DetonationRunner } from '../../src/sim/destruction';
+import { RoomBattle, type BattleCatchUp } from '../../src/sim/room-battle';
+import { idleIntent, type CombatEvents, type Harm } from '../../src/sim/session';
 import type { BrickMap } from '../../src/world/bricks';
-import { fuelNear } from '../../src/world/char';
+import { CharQueue, fuelNear } from '../../src/world/char';
 import { detonationRegion } from '../../src/world/detonation';
 import { K, kindOf, P } from '../../src/world/materials';
 import type { Box } from '../../src/world/region';
@@ -58,13 +58,14 @@ interface Made {
   ms: number;
 }
 
-/** `c`, stepped to room time `from`, digs (F held) until it has made a scoop, then lets go: the scoop. */
-function digOnce(c: RoomClient, from: number): Made {
+/** `c`, stepped to room time `from`, digs (F held) until it has made a scoop, then lets go: the scoop. Each frame's events go to `each` too. */
+function digOnce(c: RoomClient, from: number, each?: (events: CombatEvents) => void): Made {
   let made: Made | null = null;
   c.session.intent = { ...idleIntent(), dig: true };
   for (let ms = from; made === null; ms += 10) {
     if (ms > from + 10_000) throw new Error('no scoop in 10 s');
     c.step(ms, (e) => {
+      each?.(e);
       if (e.scoops.length) made = { cells: e.scoops[0].cells, ms };
     });
   }
@@ -561,4 +562,334 @@ describe("the room's shells on a page", () => {
     expect(b.session.destruction.pending).toBe(0);
     expect(sameWorld(a.session.map, b.session.map)).toBe(true);
   }, 30_000);
+});
+
+// The room's log caught up (spec notes 5, 9 and 10): a page that joins or reloads mid-match lands the
+// log's shells and scoops in time order, quietly, each crater settled before the next, and runs the
+// battle around it (the page's Director) along the log, given each crater's strike; so its world is
+// a client's that was there all along. Shells still in the air are heard for the time they have
+// left. An earlier match's entries, and in the lobby every one, land with no battle run.
+
+/** A shell as the room's log holds it: [id, landAt, x mm, z mm, radius mm, seed]. */
+const wireShell = (s: RoomShell): number[] => [s.id, s.landAt, Math.round(s.at[0] * 1000), Math.round(s.at[1] * 1000), Math.round(s.radius * 1000), s.seed];
+/** A scoop as the room's log holds it: [seat, at, ...cells]. */
+const wireDig = (d: Dig): number[] => [d.seat, d.at, ...d.cells];
+const logOf = (shells: readonly RoomShell[], digs: readonly Dig[] = []): MatchLog => ({ shells: shells.map(wireShell), digs: digs.map(wireDig) });
+
+/** Whether any voxel of `map` is `material`. */
+function holds(map: BrickMap, material: number): boolean {
+  const voxels = new Uint8Array(512);
+  for (let bi = 0; bi < map.table.length; bi++) {
+    map.readBrick(bi, voxels);
+    if (voxels.includes(material)) return true;
+  }
+  return false;
+}
+
+/** The heaped arena with a timber wall along the parapet's back, 0.8 m thick and as high as its crest: z 16.4–17.2 m. */
+function walled(): BrickMap {
+  const map = heaped();
+  map.fillBox(0, 64, 164, 256, 76, 172, P.TIMBER);
+  map.takeDirty();
+  return map;
+}
+
+/** The battle's inputs around a client: the light tempo, by day, at its player's feet. */
+const battleInputs = (c: RoomClient): BattleInputs => ({ intensity: 'light', darkness: 0, player: c.session.player.position.toArray() });
+const BATTLE_SEED = 11;
+
+/** The chars the battle's fires make at their full burn, made in `c`'s world once no crater is pending about them, as the page makes them in a match; and the crater each fire stood by. */
+function charring(c: RoomClient): { made: (events: BattleEvents) => void; craters: (number | null)[] } {
+  const chars = new CharQueue(fireT.charM, V);
+  const craters: (number | null)[] = [];
+  return {
+    craters,
+    made: (events) => {
+      for (const ch of events.chars) {
+        chars.add(ch.at);
+        craters.push(ch.crater);
+      }
+      chars.make(c.session.map, (box) => c.session.destruction.overlapsPending(box));
+    },
+  };
+}
+
+/** A client there all along, from the match's start at room time 0: each frame its shells' strikes go to the battle around it (a Director over no plan), which runs on by the frame, its chars made as they come. */
+function liveClient(map: BrickMap) {
+  const c = roomClient(map, DIGGER);
+  const director = new Director(null, tun, BATTLE_SEED);
+  const char = charring(c);
+  const frame = (e: CombatEvents) => char.made(director.tick(1 / 60, { ...battleInputs(c), strikes: c.battle.strikes(e) }));
+  return { c, frame, charred: char.craters };
+}
+
+/** A joiner's battle as main.ts's catch-up runs it: on to each second asked, at most 1 s a step, its strikes given it first, its chars made at once. */
+function catchUpBattle(c: RoomClient) {
+  const director = new Director(null, tun, BATTLE_SEED);
+  const char = charring(c);
+  let reached = 0;
+  const battle: BattleCatchUp = {
+    runTo: (s, strikes) => {
+      char.made(director.tick(0, { ...battleInputs(c), strikes }));
+      while (reached < s) {
+        const next = Math.min(s, reached + 1);
+        char.made(director.tick(next - reached, battleInputs(c)));
+        reached = next;
+      }
+    },
+  };
+  return { battle, charred: char.craters, reached: () => reached };
+}
+
+/** A catch-up's battle that runs nothing: each runTo asked of it, as [s, strikes given], with `look` called at each. */
+function spyBattle(look?: (s: number) => void): BattleCatchUp & { calls: [number, number][] } {
+  const calls: [number, number][] = [];
+  return {
+    calls,
+    runTo: (s, strikes) => {
+      calls.push([s, strikes.length]);
+      look?.(s);
+    },
+  };
+}
+
+const noYield = async () => {};
+
+describe("the room's log caught up on a page that joins or reloads", () => {
+  it("a joiner caught up from the log has the world of a client that was there: craters, scoops and fires' chars", async () => {
+    // Eight shells on the timber wall in the match's first 12 s, 3 m apart along it. Of their seeds,
+    // the first's, the fourth's and the seventh's roll a fire on timber; the rest don't. At 12 s the
+    // live client digs a scoop in the bank. Each fire chars what is about it at its full burn, 20 s on.
+    const seeds = [7_000, 7_001, 7_004, 7_002, 7_006, 7_007, 7_005, 7_008];
+    const shells = seeds.map((seed, k) => shell(k + 1, 1_000 + 1_500 * k, 2.0 + 3.0 * k, 16.8, 1.5, seed));
+    const live = liveClient(walled());
+    for (const s of shells) {
+      live.c.step(s.landAt - 1_500, live.frame);
+      live.c.battle.hear(s, s.landAt - 1_500);
+    }
+    live.c.step(12_000, live.frame);
+    const made = digOnce(live.c, 12_000, live.frame);
+    live.c.step(40_000, live.frame);
+    expect(live.c.battle.landed).toEqual(shells);
+    expect(live.c.session.destruction.pending).toBe(0);
+    expect(live.charred).toContain(1);
+    expect(live.charred.length).toBeGreaterThanOrEqual(2);
+    expect(holds(live.c.session.map, P.CHAR_TIMBER)).toBe(true);
+    const log = logOf(shells, [{ seat: 0, at: Math.round(made.ms) + 30, cells: made.cells }]);
+    // The joiner, on a fresh copy of the arena, welcomed 40 s in. Its session is not yet set to the
+    // room: the welcome comes between frames, before any prepare of the match has set it.
+    const joiner = roomClient(walled(), PLAYER);
+    joiner.session.room = false;
+    const caught = catchUpBattle(joiner);
+    await joiner.battle.catchUp(log, 0, () => 40_000, caught.battle, noYield);
+    expect(joiner.battle.landed).toEqual(shells);
+    expect(joiner.battle.waiting).toEqual([]);
+    expect(joiner.session.destruction.pending).toBe(0);
+    expect(caught.reached()).toBe(40);
+    const byId = (a: number | null, b: number | null) => (a ?? 0) - (b ?? 0);
+    expect([...caught.charred].sort(byId)).toEqual([...live.charred].sort(byId));
+    expect(holds(joiner.session.map, P.CHAR_TIMBER)).toBe(true);
+    expect(sameWorld(live.c.session.map, joiner.session.map)).toBe(true);
+  }, 60_000);
+
+  it('a shell in the air at the join whistles for the time it has left, and lands at its time', async () => {
+    // Review Focus: a late join mid-shell. The match started at 5 000; the joiner is welcomed at
+    // 10 000. The log holds a shell that landed at 8 000, which the catch-up lands and settles, so it
+    // yields; and one that lands at 10 900, 0.9 s after the catch-up began. The page's first yield
+    // takes half a second: the catch-up takes time.
+    const before = shell(1, 8_000, 9.0, 15.0, 2.0, 801);
+    const inTheAir = shell(2, 10_900, 18.0, 15.0, 2.0, 802);
+    const j = client(10_000);
+    let t = 10_000;
+    let yields = 0;
+    const spy = spyBattle();
+    await j.battle.catchUp(logOf([before, inTheAir]), 5_000, () => t, spy, async () => {
+      if (yields++ === 0) t += 500;
+    });
+    expect(yields).toBeGreaterThan(0);
+    const e = j.session.drainEvents();
+    expect(e.incoming.map((i) => i.landsInS)).toEqual([0.4]);
+    expect(e.blasts).toEqual([]);
+    expect(j.battle.landed).toEqual([before]);
+    expect(j.battle.waiting).toEqual([inTheAir]);
+    // The battle run along the log, then to the match's second the catch-up began at (5 s), not the one it ended at.
+    expect(spy.calls).toEqual([[3, 0], [3, 0], [5, 0]]);
+    // It lands at its time, once, though told again.
+    j.battle.tick(10_899);
+    expect(j.session.drainEvents().blasts).toEqual([]);
+    j.battle.tick(10_900);
+    expect(j.session.drainEvents().blasts.map((b) => b.seed)).toEqual([802]);
+    j.battle.hear(inTheAir, 11_000);
+    j.battle.tick(11_100);
+    expect(j.session.drainEvents().blasts).toEqual([]);
+    expect(j.battle.landed).toEqual([before, inTheAir]);
+  });
+
+  it('a shell that landed while the page was away lands in the catch-up, once', async () => {
+    // Review Focus: a shell landing during a reload. Two overlapping shells land on the parapet while
+    // the page regenerates its world; it is welcomed at 9 000, and both are told it again live after
+    // (as the room's edits might carry one). One crater each, as the client that stayed has them.
+    const S1 = shell(1, 3_000, 11.0, 15.0, 2.0, 811);
+    const S2 = shell(2, 5_000, 12.5, 15.2, 2.0, 812);
+    const stayed = client(1_000);
+    stayed.battle.hear(S1, 1_500);
+    stayed.battle.hear(S2, 3_500);
+    stayed.step(12_000);
+    const back = client(9_000);
+    await back.battle.catchUp(logOf([S1, S2]), 1_000, () => 9_000, null, noYield);
+    expect(back.battle.landed).toEqual([S1, S2]);
+    expect(back.session.destruction.pending).toBe(0);
+    back.battle.hear(S2, 9_000);
+    back.battle.hear(S1, 9_000);
+    const seen: CombatEvents[] = [];
+    back.step(12_000, (e) => seen.push(e));
+    expect(seen.flatMap((e) => [...e.blasts, ...e.incoming, ...e.craters])).toEqual([]);
+    expect(back.battle.landed).toEqual([S1, S2]);
+    expect(back.session.destruction.lastId).toBe(2);
+    expect(sameWorld(stayed.session.map, back.session.map)).toBe(true);
+  });
+
+  it('a shell the battle heard before the catch-up lands in its place in the log, once; one it landed, not again', async () => {
+    // Not the page's own path (Together makes the battle at the welcome), but the catch-up's rule for
+    // any battle given it: the log's order. Three overlapping shells on the parapet; the page landed
+    // the first live, and heard the second, still in the air when its frames stopped.
+    const S1 = shell(1, 3_000, 11.0, 15.0, 2.0, 851);
+    const S2 = shell(2, 5_000, 12.5, 15.2, 2.0, 852);
+    const S3 = shell(3, 7_000, 11.8, 15.4, 2.0, 853);
+    const stayed = client(1_000);
+    for (const s of [S1, S2, S3]) stayed.battle.hear(s, s.landAt - 1_500);
+    stayed.step(14_000);
+    const back = client(1_000);
+    back.battle.hear(S1, 1_500);
+    back.step(4_000);
+    back.battle.hear(S2, 4_000);
+    expect([back.battle.landed, back.battle.waiting]).toEqual([[S1], [S2]]);
+    await back.battle.catchUp(logOf([S1, S2, S3]), 1_000, () => 9_000, null, noYield);
+    expect([back.battle.landed, back.battle.waiting]).toEqual([[S1, S2, S3], []]);
+    expect(back.session.destruction.pending).toBe(0);
+    back.step(14_000);
+    expect(back.session.destruction.lastId).toBe(3);
+    expect(sameWorld(stayed.session.map, back.session.map)).toBe(true);
+  }, 30_000);
+
+  it("an earlier match's shells and scoops are caught up quietly, before this match's", async () => {
+    // The digger was there throughout. In the last match, a shell on the parapet, then a scoop in the
+    // bank; in this one, from 10 000, another shell on the parapet, then another scoop further along.
+    const S1 = shell(1, 2_000, 6.0, 15.0, 2.0, 821);
+    const S2 = shell(2, 12_000, 19.0, 15.0, 2.0, 822);
+    const a = roomClient(heaped(), DIGGER);
+    a.step(500);
+    a.battle.hear(S1, 500);
+    a.step(3_000);
+    const m1 = digOnce(a, 3_000);
+    a.step(10_500);
+    a.battle.hear(S2, 10_500);
+    a.step(13_000);
+    a.session.teleport([20.0, 6.4, 4.4], 0, 0);
+    const m2 = digOnce(a, 13_000);
+    a.step(15_000);
+    expect(m1.ms).toBeLessThan(10_000);
+    const d1: Dig = { seat: 0, at: Math.round(m1.ms) + 30, cells: m1.cells };
+    const d2: Dig = { seat: 0, at: Math.round(m2.ms) + 30, cells: m2.cells };
+    // The joiner, welcomed at 15 000: what it lands and digs, and the battle's runs, in order.
+    const j = client(15_000, heaped());
+    const order: string[] = [];
+    const land = j.session.land.bind(j.session);
+    j.session.land = (x, z, r, seed, quiet) => {
+      order.push(`shell ${seed}${quiet ? '' : ' aloud'}`);
+      return land(x, z, r, seed, quiet);
+    };
+    const applyDig = j.session.applyDig.bind(j.session);
+    j.session.applyDig = (cells, after) => {
+      order.push(`dig ${[d1, d2].findIndex((d) => d.cells.join() === cells.join()) + 1}`);
+      return applyDig(cells, after);
+    };
+    const spy = spyBattle((s) => order.push(`run ${s}`));
+    await j.battle.catchUp(logOf([S1, S2], [d1, d2]), 10_000, () => 15_000, spy, noYield);
+    const e = j.session.drainEvents();
+    expect([e.blasts, e.harms, e.incoming]).toEqual([[], [], []]);
+    expect(order).toEqual(['shell 821', 'dig 1', 'run 2', 'shell 822', 'run 2', `run ${(d2.at - 10_000) / 1000}`, 'dig 2', 'run 5']);
+    // This match's shell joins those landed; the last match's does not, as a live client's battle holds only this match's.
+    expect(j.battle.landed).toEqual([S2]);
+    expect(j.session.destruction.pending).toBe(0);
+    expect(sameWorld(a.session.map, j.session.map)).toBe(true);
+  }, 30_000);
+
+  it('in the lobby every logged shell and scoop lands quietly in time order: no runTo, no harm, nothing heard', async () => {
+    // A's last match: S1 on the bank ahead of it, its scoop in S1's rim, and S2, told after the scoop,
+    // over it. S2 was still in the air when the match ended at 5 000, so finish() landed it. The
+    // joiner is welcomed in the lobby at 5 500, before S2's time.
+    const S1 = shell(1, 3_000, 12.8, 7.0, 1.5, 831);
+    const S2 = shell(2, 6_000, 12.4, 6.6, 1.5, 832);
+    const a = roomClient(heaped(), DIGGER);
+    a.step(1_530);
+    a.battle.hear(S1, 1_530);
+    a.step(2_000);
+    const made = digOnce(a, 2_000);
+    expect(made.ms).toBeLessThan(S2.landAt - 1_500);
+    a.step(4_530);
+    a.battle.hear(S2, 4_530);
+    a.step(5_000);
+    a.battle.finish();
+    a.step(10_000);
+    const d: Dig = { seat: 0, at: Math.round(made.ms) + 30, cells: made.cells };
+    const box = scoopBox(a.session.map.dims, d.cells);
+    const region = detonationRegion(a.session.map.dims, [S2.at[0] / V, 0, S2.at[1] / V], S2.radius / V, tun.f('destruction.loosen_radius_scale'))!;
+    expect(across(box, region)).toBe(true);
+    const j = client(5_500, heaped());
+    const spy = spyBattle();
+    await j.battle.catchUp(logOf([S1, S2], [d]), null, () => 5_500, spy, noYield);
+    expect(spy.calls).toEqual([]);
+    const e = j.session.drainEvents();
+    expect([e.incoming, e.blasts, e.harms]).toEqual([[], [], []]);
+    expect([j.battle.waiting, j.battle.landed, j.battle.held]).toEqual([[], [], []]);
+    expect(j.session.destruction.pending).toBe(0);
+    // Each heard already: told again, nothing.
+    j.battle.hear(S2, 5_500);
+    j.battle.tick(6_000);
+    const again = j.session.drainEvents();
+    expect([again.incoming, again.blasts]).toEqual([[], []]);
+    expect(j.session.destruction.lastId).toBe(2);
+    expect(sameWorld(a.session.map, j.session.map)).toBe(true);
+  }, 30_000);
+
+  it("a catch-up whose log holds a dig behind a crater it overlaps completes, with the digger's world", async () => {
+    // The controller's ruling on Task 6's crater gate. A was there: S1 on the bank, its scoop in S1's
+    // rim, then S2 over the scoop.
+    const S1 = shell(1, 3_000, 12.8, 7.0, 1.5, 841);
+    const S2 = shell(2, 6_000, 12.4, 6.6, 1.5, 842);
+    const a = roomClient(heaped(), DIGGER);
+    a.step(1_530);
+    a.battle.hear(S1, 1_530);
+    a.step(2_000);
+    const made = digOnce(a, 2_000);
+    a.step(4_530);
+    a.battle.hear(S2, 4_530);
+    a.step(12_000);
+    const d: Dig = { seat: 0, at: Math.round(made.ms) + 30, cells: made.cells };
+    // B's worker hands craters back 4 s late, and its battle heard S1 and landed it before the
+    // catch-up began, at 6 500: S1's crater is still out. So the log's scoop is held behind it, and
+    // S2, which comes after the scoop, waits to go out until the scoop is in (Destruction.waits). The
+    // settle digs the held scoop once S1's crater is in, as a tick would; no tick runs while it does.
+    const b = roomClient(heaped(), AWAY, 0, 1 / 60, lateRunner(240));
+    b.step(1_530);
+    b.battle.hear(S1, 1_530);
+    b.step(3_100);
+    expect(b.battle.landed).toEqual([S1]);
+    expect(b.session.destruction.pending).toBe(1);
+    await b.battle.catchUp(logOf([S1, S2], [d]), 1_000, () => 6_500, null, noYield);
+    expect(b.battle.landed).toEqual([S1, S2]);
+    expect(b.battle.held).toEqual([]);
+    expect(b.session.destruction.pending).toBe(0);
+    expect(sameWorld(a.session.map, b.session.map)).toBe(true);
+  }, 30_000);
+
+  it('a catch-up whose crater never comes back fails loudly, naming it, rather than waiting for ever', async () => {
+    const lost: DetonationRunner = { post: () => {}, take: () => [] };
+    const j = roomClient(trenchArena(), PLAYER, 0, 1 / 60, lost);
+    let yields = 0;
+    const caught = j.battle.catchUp(logOf([shell(4, 2_000, 12.8, 15.0)]), null, () => 3_000, null, async () => void yields++);
+    await expect(caught).rejects.toThrow(/crater 1 is still out/);
+    expect(yields).toBeGreaterThan(1_000);
+  });
 });

@@ -7,7 +7,7 @@
  * (ui/hit-marker.ts), in a match and out of one.
  */
 
-import type { Team } from '../net/protocol';
+import type { Cause, Team } from '../net/protocol';
 
 export interface FeedEntry {
   killer: { name: string; team: Team } | null;
@@ -22,6 +22,17 @@ export interface BoardRow {
   kills: number;
   deaths: number;
   you: boolean;
+}
+
+/**
+ * The line over the count back in while dead: who killed the player (`by`); when the battle did
+ * (null), what of it, by its cause; and when nobody's word has come yet (undefined), only that they
+ * were killed.
+ */
+export function fallenLine(by: { name: string } | null | undefined, cause: Cause): string {
+  if (by) return `Killed by ${by.name}`;
+  if (by === undefined) return 'Killed';
+  return cause === 'shell' ? 'Killed by the shelling' : cause === 'fire' ? 'Burned' : 'Shot from the line';
 }
 
 const FEED_KEEP_MS = 7000;
@@ -101,12 +112,12 @@ export class MatchHud {
     this.aimedEl.className = `aimed ${who.team}`;
   }
 
-  /** Dead: who killed them (null, the battle) and the seconds until they are back; null when alive. */
-  fallen(by: { name: string; team: Team } | null | undefined, backIn: number | null): void {
+  /** Dead: who killed them (null, the battle, by `cause`: fallenLine) and the seconds until they are back; null when alive. */
+  fallen(by: { name: string; team: Team } | null | undefined, backIn: number | null, cause: Cause = 'shell'): void {
     this.fallenEl.hidden = backIn === null;
     if (backIn === null) return;
     const byEl = this.fallenEl.querySelector<HTMLElement>('.by')!;
-    const line = by ? `Killed by ${by.name}` : by === null ? 'Killed by the shelling' : 'Killed';
+    const line = fallenLine(by, cause);
     if (byEl.textContent !== line) byEl.textContent = line;
     byEl.className = `by ${by?.team ?? ''}`;
     const back = backIn > 0 ? `Back in ${Math.ceil(backIn)}` : 'Back in…';

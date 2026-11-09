@@ -142,6 +142,15 @@ export class Destruction {
     return this.nextId - 1;
   }
 
+  /**
+   * The oldest shell still pending, and how it stands: queued, out or landing; null with none. Every
+   * shell after it goes out behind it or beside it, so a wait that never ends is its.
+   */
+  get oldest(): { id: number; state: 'queued' | 'out' | 'landing' } | null {
+    const j = this.jobs[0];
+    return j ? { id: j.id, state: j.state } : null;
+  }
+
   /** The regions out now. */
   get out(): readonly Box[] {
     return this.jobs.filter((j) => j.state !== 'queued').map((j) => j.box);

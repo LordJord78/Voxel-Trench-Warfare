@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Gaits, mapAction, relayUrl, shotTracer, type Figure } from '../../src/app/together';
+import { Gaits, howKilled, mapAction, relayUrl, shotTracer, type Figure } from '../../src/app/together';
 import { holdOf } from '../../src/combat/arsenal';
 import { pose, type PoseInput, type V3 } from '../../src/combat/soldier-rig';
 import { decodeGear, TRACER_KIND } from '../../src/net/gear';
@@ -77,5 +77,16 @@ describe("the colour another player's shot is drawn in", () => {
     expect(shotTracer(2, [drawn(1, 'blue')], seats)).toBe(TRACER_KIND.red);
     // Seated nowhere the room has said: none given, and the shot's own word says.
     expect(shotTracer(5, [drawn(1, 'blue')], seats)).toBeUndefined();
+  });
+});
+
+describe('the kill feed', () => {
+  it("names the battle's kills in the feed: shelled, shot from the line, burned", () => {
+    expect(howKilled(-1, null, false, 'shell')).toBe('shelled');
+    expect(howKilled(-1, null, false, 'round')).toBe('shot from the line');
+    expect(howKilled(-1, null, false, 'fire')).toBe('burned');
+    expect(howKilled(2, 'head', false, 'round')).toBe('headshot');
+    expect(howKilled(2, 'torso', true, 'round')).toBe('team-killed');
+    expect(howKilled(2, 'limb', false, 'round')).toBe('shot');
   });
 });

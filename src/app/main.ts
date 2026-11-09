@@ -37,7 +37,7 @@ import { battleFireLights, battleFlareLights, sceneLights, type SceneLight } fro
 import { rendererTunables } from '../render/quality';
 import { compileFrame, Renderer, type Quality } from '../render/renderer';
 import { frameSky, skyState } from '../render/sky-state';
-import { RoomBattle } from '../sim/room-battle';
+import { RoomBattle, type BattleCatchUp } from '../sim/room-battle';
 import { idleIntent, Session, SHOVEL_HELD, type CombatEvents } from '../sim/session';
 import { MAP_SEEDS, isMapId, type MapId } from '../world/generation/params';
 import { facingYaw, pickSpawns } from '../world/generation/spawn';
@@ -459,11 +459,14 @@ async function start(): Promise<void> {
         if (matchNow !== null) {
           // On the match's clock: run on to it, never back, and with no pre-roll (a jump into the dark
           // is the match's own night). A jump past a second (a join, a hidden tab) goes unheard, its chars kept.
-          const { stepS, silent } = battleStep(battleGiven, matchNow);
-          battleGiven += stepS;
-          battleEvents = battle.tick(stepS, inputs);
-          for (const c of battleEvents.chars) chars.add(c.at);
-          if (silent) battleEvents = noBattleEvents();
+          // While the room's log is caught up, the catch-up runs it along the log (the hooks' catchUp), not the frames.
+          if (together.caughtUp) {
+            const { stepS, silent } = battleStep(battleGiven, matchNow);
+            battleGiven += stepS;
+            battleEvents = battle.tick(stepS, inputs);
+            for (const c of battleEvents.chars) chars.add(c.at);
+            if (silent) battleEvents = noBattleEvents();
+          }
         } else {
           battleEvents = jumpedIntoDark(dt, inputs.darkness) ? battle.preRoll(flareT.preRollS, dt, inputs) : battle.tick(dt, inputs);
           for (const c of battleEvents.chars) chars.add(c.at);
@@ -692,6 +695,47 @@ async function start(): Promise<void> {
       renderer.resetHistory();
     },
     battle: () => new RoomBattle(session, fireT),
+    // The room's log caught up (sim/room-battle.ts catchUp): in a match, the battle deploy has just
+    // made at 0 run along it, a second at most a step, at each second's darkness (the match's time of
+    // day then) and the player's feet, given each crater's strike first; its chars made at once, as
+    // nothing is pending after a settle. With no match the battle and the clock are the visitor's,
+    // and left alone. Then the battle is given the second it reached, and the next frame's step runs
+    // it on to now, silently past SILENT_STEP_S.
+    catchUp: async (room, log, match, now) => {
+      let reached = 0;
+      let along: BattleCatchUp | null = null;
+      if (match) {
+        const { config } = match;
+        const inputs = (s: number): BattleInputs => {
+          const sky = skyState(tun, matchHours(config, s));
+          return { intensity: config.intensity, darkness: battleDarkness(sky.sunElevationDeg, sky.flares, flareT), player: session.player.position.toArray() };
+        };
+        const made = (events: BattleEvents) => {
+          for (const c of events.chars) chars.add(c.at);
+          chars.make(session.map, (box) => session.destruction.overlapsPending(box));
+        };
+        along = {
+          runTo: (s, strikes) => {
+            made(battle.tick(0, { ...inputs(reached), strikes }));
+            while (reached < s) {
+              const next = Math.min(s, reached + 1);
+              made(battle.tick(next - reached, inputs(next)));
+              reached = next;
+            }
+          },
+        };
+      }
+      try {
+        await room.catchUp(log, match?.startAt ?? null, now, along, () => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+      } catch (e) {
+        // A crater that never goes in: the world can't be the room's, so the game stops and says why.
+        console.error(e);
+        stop(`TRENCHLINE stopped: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      renderer.largeEdit();
+      if (match) battleGiven = reached;
+    },
   }, hits);
 
   // The range (range.ts): solo play's dummies and steel plates in front of the spawn bay, from the
@@ -970,7 +1014,7 @@ async function start(): Promise<void> {
       look[1] = 0;
       pose = { ...fly.pose, fov: settings.fov };
       periscope.set(0);
-      if (spectating) {
+      if (spectating && together.caughtUp) {
         session.intent = input.intent();
         if (session.advance(ms / 1000) > 0) input.ticked();
       }
@@ -978,8 +1022,9 @@ async function start(): Promise<void> {
       // With friends the world does not wait for a paused player: they stand while the menu is open.
       // Nor for one still on the deploy screen once the match is on: its shells land and its craters
       // are cut there too; but nobody draws or shoots them (together.frame sends nothing until they go in).
+      // Nor while the room's log is caught up: the catch-up lands it on the world (together.ts caughtUp).
       const live = mode === 'playing' || (mode === 'paused' && together.inMatch);
-      const runs = live || (mode === 'ready' && together.begun);
+      const runs = together.caughtUp && (live || (mode === 'ready' && together.begun));
       if (runs) {
         if (mode === 'playing') {
           input.look(session.player, settings.sensitivity * aimTurn(), pitchLimit);
