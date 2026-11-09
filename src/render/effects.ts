@@ -52,8 +52,8 @@ const BILLBOARD_FLOATS = 12;
 /** A lit billboard (effects-light.wgsl's Lit): centre (3), half its size (1), colour premultiplied (4), and a casing's way (3) and whether it is one (1). */
 export const LIT_FLOATS = 12;
 const LIT_BYTES = LIT_FLOATS * 4;
-/** effects-light.wgsl's EffectsLight: the count and eight floats, rounded up to 16 bytes a row. */
-const LIGHT_PARAMS_BYTES = 48;
+/** effects-light.wgsl's EffectsLight: the count and seven floats. */
+const LIGHT_PARAMS_BYTES = 32;
 /** effects.wgsl's EffectsDraw: two counts and twelve floats, rounded up to 16 bytes a row. */
 const DRAW_PARAMS_BYTES = 64;
 /** The particle pool, room for test quads, the battle's allowance (its flares, far shells' flashes and smoke, and fires' flames, embers and smoke), and a head for each tracer drawn. */
@@ -110,8 +110,7 @@ export interface SmokePuff {
  * (particles.ts BLOOD_BILLBOARD): the least light it takes, as a share of what the present pass's
  * exposure shows as 1 through its tone curve (so at dusk and at night it reads dark red, not soot,
  * and lit as dust is above it), and the fewest pixels across it is drawn. And a casing's (particles.ts
- * CASING_BILLBOARD): its width as a share of its length, and the most pixels its length is drawn. And
- * the share of a shot's light the muzzle's smoke (particles.ts SMOKE_BILLBOARD) takes.
+ * CASING_BILLBOARD): its width as a share of its length, and the most pixels its length is drawn.
  */
 export interface EffectsLook {
   glow: number;
@@ -128,7 +127,6 @@ export interface EffectsLook {
   tracerCover: number;
   casingWidthShare: number;
   casingMaxPx: number;
-  smokeFlashShare: number;
 }
 
 export function effectsLook(tun: Tunables): EffectsLook {
@@ -148,7 +146,6 @@ export function effectsLook(tun: Tunables): EffectsLook {
     tracerCover: tun.f('effects.tracer_cover'),
     casingWidthShare: tun.f('effects.casing_width_share'),
     casingMaxPx: tun.f('effects.casing_max_px'),
-    smokeFlashShare: tun.f('effects.smoke_flash_share'),
   };
 }
 
@@ -312,8 +309,6 @@ export class Effects {
     new Uint32Array(light, 0, 1)[0] = this.billboardCount;
     new Float32Array(light, 4, 5).set([this.look.glow, this.look.dustKey, this.look.dustSky, this.look.bloodLightFloor, this.look.bloodMinPx]);
     queue.writeBuffer(this.lightParams, 0, light);
-    // After the present pass's tone (encode's): the share of a shot's light the muzzle's smoke takes.
-    queue.writeBuffer(this.lightParams, 32, new Float32Array([this.look.smokeFlashShare]));
     // effects.wgsl's EffectsDraw: the counts; the widest a tracer's glow and its head are drawn, and
     // the narrowest its glow is; where its core's whiteness starts to fall and where it is gone; the
     // tone's (encode's), how white a tracer's core is at least, how much its light covers, the widest a

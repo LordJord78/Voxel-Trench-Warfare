@@ -1237,20 +1237,20 @@ particle_attach_s   = 0.15     # the shot's flash and brass leave the rifle as d
                                # joining their own paths over this
 # A shot's flash (the shots spec §2), all of it drawn from a hash of the shot (its tick and its muzzle):
 # a white-hot core, an emissive disc this wide, a little out along the bore; and its star, this many
-# prongs, each this long and this far off the bore, each at its own roll about it, spread round it. A
-# compensator's two short side prongs instead, out to the gun's sides, this far off the bore; a
-# suppressor's only a glimmer of its light.
+# forward prongs, each this long and this far off the bore, each at its own roll about it, anywhere
+# round it (spread evenly from a roll of its own). A compensator's two short side prongs instead, out
+# to the gun's sides, this far off the bore; a suppressor's only a glimmer of its light.
 flash_core_m        = [0.10, 0.16]
 flash_core_colour   = [1.0, 0.97, 0.90]
 flash_core_gain     = 0.25     # the core's brightness over the prongs' (flash_intensity): at night a
                                # core as bright as them read as a white ball, its prongs lost round it
 flash_prongs        = [3, 5]
 flash_prong_m       = [0.15, 0.30]
-flash_prong_splay_deg = [30.0, 60.0]   # off the bore: nearer it, from the eye behind the gun a prong
-                               # is end on, a short stub
-flash_prong_gap_deg = 60.0     # the arc about the bore left clear about the roll toward the eye's line
-                               # (the gun's left from the hip, its top aimed): a prong there crossed
-                               # the reticle and lay along the tracer leaving, as wide as a tracer
+flash_prong_splay_deg = [15.0, 25.0]   # off the bore: forward prongs. Past 30 one rolled toward the
+                               # eye's line (from the hip, the gun's upper left) reaches across the
+                               # tracer leaving, 3 m out and on, and is measured as its width (G1's
+                               # gate (a): at 30-60, 15.5 px at dusk and 24 at night); nearer 10, from
+                               # the eye behind the gun a prong is end on, a short stub
 flash_comp_prong_m  = [0.08, 0.12]
 flash_comp_splay_deg = 80.0
 flash_comp_tip      = 0.7      # a side prong's brightness at its tip (a prong's else fades to nothing):
@@ -1288,10 +1288,6 @@ casing_width_share  = 0.36     # a casing ([particles.brass] casing): drawn alon
 casing_max_px       = 16.0     # of its length across, its length held to this many pixels of the
                                # internal image near the eye (its width with it): at the port, 0.4 m
                                # off, a 2.8 cm casing is 56 px, which the flash lit as a soft disc
-smoke_flash_share   = 0.25     # the muzzle's smoke ([particles.muzzle_smoke]) takes this share of a shot's
-                               # light (flash_light_*), which stands for a millisecond's flash held
-                               # flash_s: on a wall it reads so, but a puff a hand from the eye, lit
-                               # whole, strobed a white ball over the view with every round
 
 # Ricochets and embers (src/app/ricochets.ts): a tracer that strikes leaves an ember, and a graze
 # (within max_deg of the face's plane) sometimes glances off and flies on, burning.

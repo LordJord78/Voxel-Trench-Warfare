@@ -8,10 +8,9 @@
  * frame's ticks once more, by the same law, ending where it struck (so one
  * whose whole flight fitted in the ticks is seen), held as a live round is in
  * each frame until the next tick runs; and each shot's flash — a white-hot
- * core, a star of 3 to 5 prongs about its bore at their own rolls and lengths,
- * none toward the eye's line (a compensator's two side prongs instead), all
- * drawn from a hash of the shot
- * (flashDraw), and a transient light there — at the drawn muzzle for `flash_s`
+ * core, a star of 3 to 5 forward prongs about its bore at their own rolls and
+ * lengths (a compensator's two side prongs instead), all drawn from a hash of
+ * the shot (flashDraw), and a transient light there — at the drawn muzzle for `flash_s`
  * of the world's time, so as long at any frame rate and held while paused
  * (spec §4; the shots spec §2). The simulation's muzzle is the
  * bare eye's at the tick; the drawn rifle's follows the interpolated, bobbing
@@ -129,14 +128,13 @@ export interface EffectsTunables {
   ricochet: RicochetTunables;
   flashS: number;
   particleAttachS: number;
-  /** A shot's flash (flashDraw): its core's size across (m), colour and brightness over the prongs'; its prongs, how many, how long (m), how far off the bore and the arc they leave clear toward the eye (degrees); a compensator's side prongs' length (m), angle off the bore (degrees) and brightness at their tips; each prong's width (m). */
+  /** A shot's flash (flashDraw): its core's size across (m), colour and brightness over the prongs'; its prongs, how many, how long (m) and how far off the bore (degrees); a compensator's side prongs' length (m), angle off the bore (degrees) and brightness at their tips; each prong's width (m). */
   flashCoreM: [number, number];
   flashCoreColour: V3;
   flashCoreGain: number;
   flashProngs: [number, number];
   flashProngM: [number, number];
   flashProngSplayDeg: [number, number];
-  flashProngGapDeg: number;
   flashCompProngM: [number, number];
   flashCompSplayDeg: number;
   flashCompTip: number;
@@ -209,7 +207,6 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     flashProngs: tun.pair('effects.flash_prongs'),
     flashProngM: tun.pair('effects.flash_prong_m'),
     flashProngSplayDeg: tun.pair('effects.flash_prong_splay_deg'),
-    flashProngGapDeg: f('flash_prong_gap_deg'),
     flashCompProngM: tun.pair('effects.flash_comp_prong_m'),
     flashCompSplayDeg: f('flash_comp_splay_deg'),
     flashCompTip: f('flash_comp_tip'),
@@ -330,9 +327,8 @@ const CORE_AHEAD = 0.25;
 
 /**
  * A shot's flash as drawn: its core's size across (m), and its prongs, each its roll about the bore
- * (radians), its angle off the bore (radians) and its length (m); `comp`, a compensator's side prongs.
- * A bare gun's prongs roll from the roll toward the eye's line (the build's, each frame); a
- * compensator's from the gun's side toward its up.
+ * (radians, from the gun's side toward its up), its angle off the bore (radians) and its length (m);
+ * `comp`, a compensator's side prongs.
  */
 export interface FlashDraw {
   coreM: number;
@@ -351,16 +347,15 @@ function fmix(h: number): number {
 }
 
 /**
- * A shot's flash (the shots spec §2), drawn from a hash of the shot, its tick and its muzzle (to the
- * millimetre), so the same shot draws the same flash every frame it shows, in any builder, and the
- * next shot its own: a core flash_core_m across; and flash_prongs prongs, each flash_prong_m long and
- * flash_prong_splay_deg off the bore, at its own roll, spread round the arc about the bore that leaves
- * flash_prong_gap_deg clear about the roll toward the eye's line (each within a fifth of an even
- * spread of its place): a prong there crossed the reticle and lay along the tracer leaving, drawn as
- * wide as the tracer near the gun. Or, with a compensator, two side prongs flash_comp_prong_m long and
- * flash_comp_splay_deg off the bore, out to the gun's sides (rolls 0 and π).
+ * A shot's flash (the shots spec §2), all of it drawn from a hash of the shot, its tick and its muzzle
+ * (to the millimetre), so the same shot draws the same flash every frame it shows, in any builder, and
+ * the next shot its own: a core flash_core_m across; and flash_prongs forward prongs, each
+ * flash_prong_m long and flash_prong_splay_deg off the bore, at its own roll about it, anywhere round
+ * it: spread evenly round the bore from a roll of its own (each within a fifth of the spread of its
+ * place, so none bunches on another). Or, with a compensator, two side prongs flash_comp_prong_m long
+ * and flash_comp_splay_deg off the bore, out to the gun's sides (rolls 0 and π).
  */
-export function flashDraw(tick: number, muzzle: readonly number[], comp: boolean, t: Pick<EffectsTunables, 'flashCoreM' | 'flashProngs' | 'flashProngM' | 'flashProngSplayDeg' | 'flashProngGapDeg' | 'flashCompProngM' | 'flashCompSplayDeg'>): FlashDraw {
+export function flashDraw(tick: number, muzzle: readonly number[], comp: boolean, t: Pick<EffectsTunables, 'flashCoreM' | 'flashProngs' | 'flashProngM' | 'flashProngSplayDeg' | 'flashCompProngM' | 'flashCompSplayDeg'>): FlashDraw {
   let h = 0x9e3779b9;
   for (const word of [tick, Math.round(muzzle[0] * 1000), Math.round(muzzle[1] * 1000), Math.round(muzzle[2] * 1000)]) h = fmix(h ^ Math.imul(word | 0, 0xcc9e2d51));
   // mulberry32 from it: uniform in [0, 1).
@@ -380,10 +375,10 @@ export function flashDraw(tick: number, muzzle: readonly number[], comp: boolean
   }
   const [least, most] = t.flashProngs;
   const n = Math.min(most, least + Math.floor(next() * (most - least + 1)));
-  const clear = t.flashProngGapDeg * RAD;
-  const spread = (TAU - clear) / n;
+  const spread = TAU / n;
+  const turn = next() * TAU;
   const prongs = Array.from({ length: n }, (_, k) => ({
-    roll: clear / 2 + (k + 0.5 + (next() * 2 - 1) * PRONG_ROLL_JITTER) * spread,
+    roll: turn + (k + (next() * 2 - 1) * PRONG_ROLL_JITTER) * spread,
     splay: within(t.flashProngSplayDeg) * RAD,
     lengthM: within(t.flashProngM),
   }));
@@ -678,7 +673,8 @@ export class EffectsFrameBuilder {
     }
 
     // Each live flash: its core, its star and its light, at the drawn muzzle (where the shot left it
-    // when the rifle is not drawn), its prongs about the drawn bore by the drawn gun's own side and up.
+    // when the rifle is not drawn), its prongs rolled about the drawn bore from the drawn gun's own side
+    // toward its up, as the shot's hash drew them (flashDraw).
     let stars = 0;
     let cores = 0;
     const lights: TransientLight[] = [];
@@ -706,19 +702,8 @@ export class EffectsFrameBuilder {
       // A prong fades to nothing at its tip; a compensator's short side prongs, most of them inside the
       // core, keep flash_comp_tip of it there, so they show past it.
       const tip = f.draw.comp ? t.flashCompTip : 0;
-      // A compensator's prongs roll from the gun's side toward its up; a bare gun's from the roll toward
-      // the eye's line (where the eye is off the bore, across it), so that arc stays clear (flashDraw).
-      let from = side;
-      let to = up;
-      if (!f.draw.comp) {
-        const toEye = sub(eyeAt, at);
-        const along = toEye[0] * d[0] + toEye[1] * d[1] + toEye[2] * d[2];
-        const off = [toEye[0] - d[0] * along, toEye[1] - d[1] * along, toEye[2] - d[2] * along];
-        from = Math.hypot(off[0], off[1], off[2]) > 1e-6 ? unit(off) : up;
-        to = [d[1] * from[2] - d[2] * from[1], d[2] * from[0] - d[0] * from[2], d[0] * from[1] - d[1] * from[0]];
-      }
       for (const p of f.draw.prongs) {
-        const across = [0, 1, 2].map((k) => Math.cos(p.roll) * from[k] + Math.sin(p.roll) * to[k]);
+        const across = [0, 1, 2].map((k) => Math.cos(p.roll) * side[k] + Math.sin(p.roll) * up[k]);
         const r = [0, 1, 2].map((k) => d[k] * Math.cos(p.splay) + across[k] * Math.sin(p.splay));
         if (ribbon(at, at.map((v, k) => v + r[k] * p.lengthM), t.flashStarWidthM, flash, 1, tip)) stars++;
       }

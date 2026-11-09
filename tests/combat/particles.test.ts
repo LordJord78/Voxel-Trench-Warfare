@@ -265,13 +265,19 @@ describe('particles', () => {
     expect(look.casingMaxPx).toBeLessThanOrEqual(24);
   });
 
-  it("the muzzle's smoke takes [effects] smoke_flash_share of a shot's light (effects-light.wgsl): some of it, not all; the rest of what is lit takes it whole", () => {
-    const look = effectsLook(tun);
-    expect(look.smokeFlashShare).toBe(tun.f('effects.smoke_flash_share'));
-    // Lit by it (the flash is seen in its smoke), but a puff a hand from the eye lit whole by a light
-    // that stands for a millisecond's flash held two frames strobed a white ball over the view.
-    expect(look.smokeFlashShare).toBeGreaterThan(0);
-    expect(look.smokeFlashShare).toBeLessThan(0.5);
+  it("the muzzle's smoke is lit (the spec's: not emissive) as a mote is, by a shot's light whole: effects-light.wgsl gives no kind a share of it", () => {
+    const light = readFileSync('src/render/shaders/effects-light.wgsl', 'utf8').replace(/\/\/[^\n]*/g, '');
+    const main = light.slice(light.indexOf('fn main(')).replace(/\s+/g, ' ');
+    // The light every lit billboard takes (dust, brass, blood, smoke): the key's, the shots' and the rest.
+    expect(main).toContain('var light = frame.keyColour * keyLit(p) * look.dustKey + flashesAt(p) + mix(around, near.rgb, near.a);');
+    // Read once, and smoke has no light of its own: no share, no tunable.
+    expect(main.match(/flashesAt\(/g)).toHaveLength(1);
+    expect(light).not.toContain('smokeFlash');
+    expect(() => tun.f('effects.smoke_flash_share')).toThrow();
+    expect('smokeFlashShare' in effectsLook(tun)).toBe(false);
+    // Its kind is still its own, for the draw's soft puff (effects.wgsl), and it is not emissive.
+    expect(particleSpec(tun, 'muzzle_smoke').emissive).toBe(false);
+    expect(light.replace(/\s+/g, ' ')).toContain('if (kind != 1.0 && !core && !head && !ember) {');
   });
 
   it('the same seed throws the same brass', () => {

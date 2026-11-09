@@ -13,6 +13,7 @@ import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
 import { decodeShotMark, encodeShotMark, TRACER_KIND } from '../../src/net/gear';
 import { FLASH_CORE_BILLBOARD, MAX_BILLBOARDS, RIBBON_FLOATS } from '../../src/render/effects';
+import { cameraBasis, projectToPixel } from '../../src/render/camera';
 import { MAX_PUFFS } from '../../src/render/frame-uniforms';
 import { HAZE_PUFFS } from '../../src/render/quality';
 import { throughPose, type RiflePose } from '../../src/render/rifle';
@@ -206,14 +207,17 @@ describe('a frame of effects', () => {
     expect(built.lights.length).toBe(2);
   });
 
-  it("a shot's flash is drawn from a hash of the shot (its tick and muzzle): a core 0.10–0.16 m across and 3 to 5 prongs 0.15–0.30 m long, each at its own roll", () => {
+  it("a shot's flash is drawn from a hash of the shot (its tick and muzzle): a core 0.10–0.16 m across and 3 to 5 forward prongs 0.15–0.30 m long, each at its own roll, anywhere round the bore", () => {
     expect([t.flashCoreM, t.flashProngs, t.flashProngM]).toEqual([
       [0.1, 0.16],
       [3, 5],
       [0.15, 0.3],
     ]);
+    const TAU = 2 * Math.PI;
     const seen = new Set<number>();
     const lengths = new Set<string>();
+    // How many prongs roll into each twelfth of the turn about the bore.
+    const sectors: number[] = new Array(12).fill(0);
     for (let tick = 0; tick < 300; tick++) {
       const d = flashDraw(tick, [12.8, 1.5, 2.3], false, t);
       expect(d.coreM).toBeGreaterThanOrEqual(0.1);
@@ -221,14 +225,15 @@ describe('a frame of effects', () => {
       expect(d.prongs.length).toBeGreaterThanOrEqual(3);
       expect(d.prongs.length).toBeLessThanOrEqual(5);
       seen.add(d.prongs.length);
-      // Each its own roll about the bore, from the roll toward the eye's line: round the arc that leaves
-      // flash_prong_gap_deg clear about that roll, none in it and none bunched on another.
-      const clear = (t.flashProngGapDeg * Math.PI) / 180;
-      const spacing = (2 * Math.PI - clear) / d.prongs.length;
-      const rolls = d.prongs.map((p) => p.roll).sort((a, b) => a - b);
-      expect(rolls[0], `tick ${tick}`).toBeGreaterThan(clear / 2);
-      expect(rolls[rolls.length - 1], `tick ${tick}`).toBeLessThan(2 * Math.PI - clear / 2);
-      for (let k = 1; k < rolls.length; k++) expect(rolls[k] - rolls[k - 1], `tick ${tick}`).toBeGreaterThan(0.5 * spacing);
+      // Each its own roll about the bore, from the hash alone: spread round it (none bunched on another),
+      // the spread itself turned at random.
+      const rolls = d.prongs.map((p) => ((p.roll % TAU) + TAU) % TAU).sort((a, b) => a - b);
+      const spacing = TAU / rolls.length;
+      for (let k = 0; k < rolls.length; k++) {
+        const next = k + 1 < rolls.length ? rolls[k + 1] : rolls[0] + TAU;
+        expect(next - rolls[k], `tick ${tick}`).toBeGreaterThan(0.5 * spacing);
+        sectors[Math.min(11, Math.floor(rolls[k] / (TAU / 12)))]++;
+      }
       for (const p of d.prongs) {
         expect(p.lengthM).toBeGreaterThanOrEqual(0.15);
         expect(p.lengthM).toBeLessThanOrEqual(0.3);
@@ -240,39 +245,89 @@ describe('a frame of effects', () => {
     // Every count drawn, and lengths of every kind.
     expect([...seen].sort()).toEqual([3, 4, 5]);
     expect(lengths.size).toBeGreaterThan(200);
+    // Every way round the bore, nothing kept clear: some 100 prongs in each twelfth of the turn.
+    for (const [k, n] of sectors.entries()) expect(n, `rolls ${k * 30}°–${k * 30 + 30}°`).toBeGreaterThan(50);
+    // Forward prongs (the spec's: a compensator's go to the sides "instead of the forward ones"): nearer
+    // the bore than across it.
+    expect(t.flashProngSplayDeg[0]).toBeGreaterThan(0);
+    expect(t.flashProngSplayDeg[1]).toBeLessThan(45);
   });
 
-  it("no prong lies toward the eye's line, where it would cross the reticle and lie along the tracer leaving: from the hip none toward the gun's left, aimed none toward its top", () => {
+  it("a bare gun's prongs roll about the drawn bore from the gun's own side toward its up, as the shot's hash drew them, wherever the eye is", () => {
     const { s, events, rifle } = walkAndShoot();
-    const drawn = throughPose(rifle.toWorld, RIFLE_MUZZLE);
     const bore = unit([rifle.toWorld[6], rifle.toWorld[7], rifle.toWorld[8]]);
     const side = unit([rifle.toWorld[0], rifle.toWorld[1], rifle.toWorld[2]]);
     const up = unit([rifle.toWorld[3], rifle.toWorld[4], rifle.toWorld[5]]);
+    const drawn = throughPose(rifle.toWorld, RIFLE_MUZZLE);
     const across = (v: readonly number[]) => unit(sub(v, bore.map((b) => b * dot(v, bore))));
-    const clear = (t.flashProngGapDeg * Math.PI) / 180;
-    expect(clear).toBeGreaterThan(0);
-    // The eye as the hip holds the gun (the session's, behind the muzzle and to its left), and as the
+    // The eye as the hip holds the gun (the session's, behind the muzzle and off its left), and as the
     // sights do (straight behind it and over it).
     const hip = [s.player.position.x, s.player.position.y + s.controller.eyeHeight(s.player), s.player.position.z];
     const aimed = [0, 1, 2].map((k) => drawn[k] - bore[k] * 0.4 + up[k] * 0.06);
-    const toward = { hip: across(sub(hip, drawn)), aimed: across(sub(aimed, drawn)) };
-    expect(dot(toward.hip, side), 'from the hip the eye is off the gun\'s left').toBeLessThan(-0.5);
-    expect(dot(toward.aimed, up), 'aimed the eye is over it').toBeGreaterThan(0.9);
-    let prongs = 0;
-    for (const [name, eye] of [['hip', hip], ['aimed', aimed]] as const) {
-      for (let tick = 0; tick < 40; tick++) {
-        const shot = { ...events.shots[0], tick };
-        const built = new EffectsFrameBuilder(t).build(s, { ...events, shots: [shot] }, rifle, eye);
-        const n = drawOf(shot).prongs.length;
-        expect(built.counts.stars).toBe(n);
-        for (const p of prongsOf(built, n)) {
-          const off = Math.acos(Math.max(-1, Math.min(1, dot(across(p.dir), toward[name]))));
-          expect(off, `${name}, tick ${tick}`).toBeGreaterThan(clear / 2 - 1e-6);
-          prongs++;
-        }
+    const towardHip = across(sub(hip, drawn));
+    let nearHip = 0;
+    for (let tick = 0; tick < 40; tick++) {
+      const shot = { ...events.shots[0], tick };
+      const draw = drawOf(shot);
+      const n = draw.prongs.length;
+      const fromHip = prongsOf(new EffectsFrameBuilder(t).build(s, { ...events, shots: [shot] }, rifle, hip), n);
+      const fromSights = prongsOf(new EffectsFrameBuilder(t).build(s, { ...events, shots: [shot] }, rifle, aimed), n);
+      fromHip.forEach((p, k) => {
+        // The same prong from either eye.
+        close(fromSights[k].dir, p.dir, 6, `tick ${tick}, prong ${k} aimed`);
+        // Its roll, from the gun's side toward its up, the hash's.
+        const a = across(p.dir);
+        const roll = Math.atan2(dot(a, up), dot(a, side));
+        const off = Math.abs(Math.atan2(Math.sin(roll - draw.prongs[k].roll), Math.cos(roll - draw.prongs[k].roll)));
+        expect(off, `tick ${tick}, prong ${k}`).toBeLessThan(1e-4);
+        // Nothing keeps a prong off the eye's line.
+        if (Math.acos(Math.max(-1, Math.min(1, dot(a, towardHip)))) < (20 * Math.PI) / 180) nearHip++;
+      });
+    }
+    expect(nearHip).toBeGreaterThan(0);
+  });
+
+  it("the forward prongs keep off the tracer's line from 3 m out (where G1's gate (a) measures its width), rolled any way: from the hip, the longest at the widest splay", () => {
+    const s = stand();
+    s.handsStill = true;
+    const rig = new CameraRig(rigTunables(tun));
+    let pose = rig.pose(s, 1 / 60);
+    for (let f = 0; f < 30; f++) {
+      s.advance(1 / 60);
+      pose = rig.pose(s, 1 / 60);
+    }
+    const rifle = rig.rifle(s, pose);
+    const muzzle = throughPose(rifle.toWorld, RIFLE_MUZZLE);
+    const bore = unit([rifle.toWorld[6], rifle.toWorld[7], rifle.toWorld[8]]);
+    const side = unit([rifle.toWorld[0], rifle.toWorld[1], rifle.toWorld[2]]);
+    const up = unit([rifle.toWorld[3], rifle.toWorld[4], rifle.toWorld[5]]);
+    // As npm run tracers photographs it: 1600 × 1000.
+    const res: [number, number] = [1600, 1000];
+    const px = (p: readonly number[]) => projectToPixel(pose, res, [p[0], p[1], p[2]])!;
+    const { forward } = cameraBasis(pose.yaw, pose.pitch, pose.roll ?? 0);
+    // Whether the round's path is joined at a man 30 m out (the tracers' near burst) or at the sky's
+    // 150 m (tracer_converge_max_m): the tracer from the muzzle toward it, 3 to 10 m out.
+    const splay = (t.flashProngSplayDeg[1] * Math.PI) / 180;
+    const longest = t.flashProngM[1];
+    let nearest = Infinity;
+    for (const joinM of [30, tun.f('effects.tracer_converge_max_m')]) {
+      const aim = [0, 1, 2].map((k) => pose.position[k] + forward[k] * joinM);
+      const way = unit(sub(aim, muzzle));
+      const a = px(muzzle.map((v, k) => v + way[k] * 3));
+      const b = px(muzzle.map((v, k) => v + way[k] * 10));
+      const toLine = (q: readonly number[]) => {
+        const ab = [b[0] - a[0], b[1] - a[1]];
+        const u = Math.max(0, Math.min(1, ((q[0] - a[0]) * ab[0] + (q[1] - a[1]) * ab[1]) / (ab[0] * ab[0] + ab[1] * ab[1])));
+        return Math.hypot(q[0] - a[0] - ab[0] * u, q[1] - a[1] - ab[1] * u);
+      };
+      for (let deg = 0; deg < 360; deg += 1) {
+        const roll = (deg * Math.PI) / 180;
+        const dir = [0, 1, 2].map((k) => bore[k] * Math.cos(splay) + (Math.cos(roll) * side[k] + Math.sin(roll) * up[k]) * Math.sin(splay));
+        for (let u = 0.05; u <= 1.0001; u += 0.05) nearest = Math.min(nearest, toLine(px(muzzle.map((v, k) => v + dir[k] * longest * u))));
       }
     }
-    expect(prongs).toBeGreaterThan(200);
+    // Twice the gate's widest (14 px): a run across the tracer that reached a prong would be at least that.
+    expect(nearest).toBeGreaterThan(2 * 14);
   });
 
   it("a shot's flash is the same for the same shot, every frame it shows and in any builder, and another shot's is its own", () => {
