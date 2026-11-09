@@ -426,6 +426,16 @@ describe('the range in the app', () => {
       expect(shown(killed)).toBe('TORSO 115 · 25 m\nDOWN IN 1 · 25 m');
     });
 
+    it('a pellet in the head makes the pull HEAD though the torso took more: HEAD 88 · 25 m, not TORSO', () => {
+      const { s, view, a } = up();
+      // Torso 23, head 42, torso 23: the torso's 46 outscores the head's 42, and the pull is still the head's.
+      // The head pellet comes neither first nor last, so neither pellet's own zone is the answer.
+      const hits = [pellet(a.id, 'torso', 25, 110), pellet(a.id, 'head', 25, 110), pellet(a.id, 'torso', 25, 110)];
+      const events = view.after({ ...s.drainEvents(), hits }, now(s));
+      expect(events).toEqual([{ kind: 'hit', id: a.id, zone: 'head', damage: 88, distanceM: 25 }]);
+      expect(shown(events)).toBe('HEAD 88 · 25 m');
+    });
+
     it('no pellet in the head: the zone that took the most damage, a limb over a torso when the limbs took more', () => {
       const { s, view, a } = up();
       // A torso pellet's 23 against two limbs' 26.
