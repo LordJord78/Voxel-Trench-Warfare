@@ -96,8 +96,8 @@ describe("G3's proof: the zoomed strips", () => {
 
 describe("G3's proof: its gates (G3 Task 6)", () => {
   it('the gates: the burst seen at frame 2 (40 px for a torso hit, 80 for a headshot, a pixel changed by 16 of 255 in any channel, where its blood is drawn and 1.5 px round it), the ring clear of the dummy by frame 6, a splat of 6 at 2 m and at 0.9 m', () => {
-    expect(BURST).toEqual({ frame: 2, threshold: 16, margin: 1.5, px: { torso: 40, head: 80 } });
-    expect(GATES).toEqual({ ringFrame: 6, cluster: 6 });
+    expect(BURST).toEqual({ frame: { torso: 2, head: 4 }, threshold: 16, margin: 1.5, px: { torso: 40, head: 80 } });
+    expect(GATES).toEqual({ ringFrame: 6, cluster: 6, nearCluster: 10 });
     // The nearer backstop: a trench's back wall, about a metre behind the head; the rest as the first.
     expect(NEAR_BACKSTOP).toEqual({ ...BACKSTOP, behindM: 0.9 });
     // The dummy as it stands, for its box on the screen: 0.4 m either side of its feet, 1.9 m tall.

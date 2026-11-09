@@ -34,12 +34,14 @@ export const NEAR_BACKSTOP = { ...BACKSTOP, behindM: 0.9 };
  * (some channel by `threshold` of 255 or more) against the same frame drawn again without the blood,
  * counted where its blood is drawn (each billboard's disc, and `margin` pixels round it: the rest of
  * the frame's changes between two drawings are the TAA's and the denoiser's, not the blood's), at
- * least `px` of a torso hit's and a headshot's.
+ * least `px` of a torso hit's and a headshot's, each read at its own `frame` (G3 Task 6's ruling: a headshot's
+ * burst is thrown out of the far side and is still behind the head at frame 2; by frame 4, about 67 ms, its haze
+ * spreads round it, so the headshot is read there and the torso hit at frame 2). `frame` is by the shot's zone.
  */
-export const BURST = { frame: 2, threshold: 16, margin: 1.5, px: { torso: 40, head: 80 } };
+export const BURST = { frame: { torso: 2, head: 4 }, threshold: 16, margin: 1.5, px: { torso: 40, head: 80 } };
 
-/** The kill's ring clear of the dummy's box on the screen by `ringFrame` after the kill; and the spatter on each backstop at least one cluster of `cluster` voxels, joined face to face (clusters). */
-export const GATES = { ringFrame: 6, cluster: 6 };
+/** The kill's ring clear of the dummy's box on the screen by `ringFrame` after the kill; and the spatter on the 2 m backstop at least one cluster of `cluster` voxels, joined face to face (clusters), and on the 0.9 m one of `nearCluster` (the old dots reached 6 there; the splat's worst measured is 12). */
+export const GATES = { ringFrame: 6, cluster: 6, nearCluster: 10 };
 
 /** The dummy as it stands, for its box on the screen: `halfWidthM` either side of its feet, `heightM` tall (its 1.8 m, its helmet, its rifle at rest). */
 export const DUMMY = { halfWidthM: 0.4, heightM: 1.9 };

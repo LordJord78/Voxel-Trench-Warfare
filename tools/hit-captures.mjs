@@ -15,7 +15,7 @@
 // Each shot: aimed and settled, the game frozen, the trigger pressed, and the world stepped a frame (a
 // sixtieth of a second) at a time; frame 0 is the first frame whose marker shows. Each frame stepped is
 // read: the marker and the words, the kill's ring, the readout, the dummy's health, and the blood drawn
-// round it (droplets and puffs of mist). At BURST.frame the same frame is drawn again with no time
+// round it (droplets and puffs of mist). At its shot's BURST.frame the same frame is drawn again with no time
 // passing (the hook's redraw), the blood hidden and then shown again: the burst is the pixels about the
 // crosshair it changes, and the shown frame against its first drawing the noise the redraws make. The
 // spatter: the backstop and the ground photographed from beside the dummy, flying (no HUD, no gun),
@@ -33,7 +33,7 @@
 // Exits 1 if:
 //   - a shot strikes another zone than it was aimed at (by its marker and the readout's word), the
 //     torso hit kills or the headshot does not, or no marker shows within MAX_FRAMES;
-//   - a burst changes fewer than BURST.px of its shot's pixels at BURST.frame;
+//   - a burst changes fewer than BURST.px of its shot's pixels at its shot's BURST.frame;
 //   - the kill's ring's inner edge has not cleared the dummy's box on the screen by GATES.ringFrame;
 //   - the headshot leaves no new blood on the backstop's wall (the cone along the round), or on either
 //     backstop the wall's marks hold no cluster of GATES.cluster voxels;
@@ -274,7 +274,8 @@ async function fire(page, shot, dummyId, feet) {
   const pngs = new Map();
   let zero = null;
   let burst = null;
-  const last = Math.max(...shot.frames, BURST.frame);
+  const burstAt = BURST.frame[shot.zone];
+  const last = Math.max(...shot.frames, burstAt);
   for (let k = 1; k <= MAX_FRAMES + last; k++) {
     const s = await withTimeout(
       page.evaluate(async (id) => {
@@ -289,8 +290,8 @@ async function fire(page, shot, dummyId, feet) {
     if (zero === null && shown > seen) zero = k;
     const at = zero === null ? null : k - zero;
     frames.push({ step: k, at, ...s });
-    if (at !== null && (shot.frames.includes(at) || at === BURST.frame)) pngs.set(at, await withTimeout(page.screenshot(), `${shot.name}: frame ${at}`));
-    if (at === BURST.frame) {
+    if (at !== null && (shot.frames.includes(at) || at === burstAt)) pngs.set(at, await withTimeout(page.screenshot(), `${shot.name}: frame ${at}`));
+    if (at === burstAt) {
       // The same frame drawn again with no time passing, the TAA's jitter held: with its blood, without
       // it, and with it again (the noise the redraws make). And where the blood is drawn: each blood
       // billboard's middle and half its size, as the frame's camera saw it.
@@ -461,7 +462,7 @@ async function shoot(page, shot, scene, feet) {
   for (const f of marked) if (shot.frames.includes(f.at)) console.log(`  frame ${f.at}: ${said(f)}`);
   if (entry.burst) {
     const b = entry.burst;
-    console.log(`  the burst at frame ${BURST.frame}: ${b.px} px changed by its blood where its ${b.billboards} billboards are drawn (${b.masked} px; the redraws' noise there ${b.noise} px; shown again, ${b.againPx} px); over the whole zoom ${b.zoom.px} px (noise ${b.zoom.noise} px)`);
+    console.log(`  the burst at frame ${BURST.frame[shot.zone]}: ${b.px} px changed by its blood where its ${b.billboards} billboards are drawn (${b.masked} px; the redraws' noise there ${b.noise} px; shown again, ${b.againPx} px); over the whole zoom ${b.zoom.px} px (noise ${b.zoom.noise} px)`);
   }
   return { entry, marked, frames };
 }
@@ -495,7 +496,7 @@ try {
         if (view.mode !== 'fly') failures.push(`the spatter view was ${view.mode}, not flying`);
       }
       const { entry, marked } = await shoot(page, shot, scene, feet);
-      if (entry.burst && entry.burst.px < BURST.px[shot.name]) failures.push(`${shot.name}: its burst changed ${entry.burst.px} px at frame ${BURST.frame}, under ${BURST.px[shot.name]}`);
+      if (entry.burst && entry.burst.px < BURST.px[shot.name]) failures.push(`${shot.name}: its burst changed ${entry.burst.px} px at frame ${BURST.frame[shot.zone]}, under ${BURST.px[shot.name]}`);
       if (shot.kills) {
         // The kill's ring clear of the dummy's box on the screen by GATES.ringFrame.
         const f = marked.find((x) => x.at === GATES.ringFrame);
@@ -554,7 +555,7 @@ try {
     report.spatterNear = { pose: nearView.pose, before: nearBefore.length, wall: nearAfter.length, clusters: nearClusters, list: nearAfter };
     console.log(`spatter at ${NEAR_BACKSTOP.behindM} m: ${nearAfter.length} blood voxels on the backstop (${nearBefore.length} before its headshot); its clusters ${JSON.stringify(nearClusters)}`);
     if (nearAfter.length <= nearBefore.length) failures.push(`the headshot marked no new blood on the backstop at ${NEAR_BACKSTOP.behindM} m`);
-    if ((nearClusters[0] ?? 0) < GATES.cluster) failures.push(`the spatter on the backstop at ${NEAR_BACKSTOP.behindM} m holds no cluster of ${GATES.cluster}: ${JSON.stringify(nearClusters)}`);
+    if ((nearClusters[0] ?? 0) < GATES.nearCluster) failures.push(`the spatter on the backstop at ${NEAR_BACKSTOP.behindM} m holds no cluster of ${GATES.nearCluster}: ${JSON.stringify(nearClusters)}`);
     if (nearView.gpuErrors.length) failures.push(`GPU errors: ${nearView.gpuErrors.join(' | ')}`);
   } finally {
     await removeBackstop(page).catch(() => {});

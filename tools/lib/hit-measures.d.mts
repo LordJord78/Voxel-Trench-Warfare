@@ -26,8 +26,8 @@ export interface Rgba {
 export const SHOTS: Shot[];
 export const BACKSTOP: Wall;
 export const NEAR_BACKSTOP: Wall;
-export const BURST: { frame: number; threshold: number; margin: number; px: { torso: number; head: number } };
-export const GATES: { ringFrame: number; cluster: number };
+export const BURST: { frame: { torso: number; head: number }; threshold: number; margin: number; px: { torso: number; head: number } };
+export const GATES: { ringFrame: number; cluster: number; nearCluster: number };
 export const DUMMY: { halfWidthM: number; heightM: number };
 export const ZOOM: { w: number; h: number; below: number; scale: number };
 export function wallBox(eye: readonly number[], feet: readonly number[], wall: Wall, voxel: number): number[];
