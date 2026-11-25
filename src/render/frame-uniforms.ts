@@ -179,8 +179,10 @@ export const FRAME: StructDef = {
     ['smokeHeight', 'f32'],
     // The sky's glow a few degrees round the key light, over the key's light (see sky.wgsl).
     ['aureole', 'f32'],
-    // Shots' flashes lighting the trench this frame, outside the light buffer and the denoiser.
+    // Shots' flashes lighting the trench this frame, outside the light buffer and the denoiser (with the
+    // guns' lights' pools and a test's lights): the first shotFlashCount of them shots' (renderer.ts transientOrder).
     ['flashCount', 'u32'],
+    ['shotFlashCount', 'u32'],
     ['flashes', { element: FLASH, count: MAX_FLASHES }],
     // Shells' blasts lighting the world this frame: shadowed at the lighting resolution (lighting.wgsl), outside the denoiser.
     ['blastCount', 'u32'],

@@ -90,6 +90,8 @@ export interface TransientLight {
   radiusM: number;
   colour: [number, number, number];
   intensity: number;
+  /** A shot's flash (not a gun's light's pool, a blast or a test's light): the player's own kept smoke takes [effects] own_smoke_flash_share of these alone (renderer.ts transientOrder). */
+  shot?: boolean;
 }
 
 /** A puff of a shell's smoke in the haze: centre and radius in metres, density per metre at its middle. */

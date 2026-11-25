@@ -703,6 +703,31 @@ describe('a frame of effects', () => {
     expect(smokes({ ...t, ownSmokeFlashShare: 1 })).toEqual([1, 1]);
   });
 
+  it("only a shot's flash light is marked a shot's (the renderer puts them first and counts them, the player's own smoke taking its share of them alone): the gun's light's pool and a test's light are not", () => {
+    // The AK with a flashlight on, fired at the clay 4 m on: its flash's light, and the pool where the beam strikes.
+    const map = new BrickMap({ x: 256, y: 64, z: 512 });
+    map.fillBox(0, 0, 0, 256, 4, 512, P.SOD);
+    map.fillBox(0, 4, 60, 256, 64, 80, P.CLAY);
+    const s = Session.create({ map, plan: null, spawn: { position: [12.8, 0.4, 2] } }, tun, 7, 0);
+    s.equip({ primary: 'ak74', secondary: 'm17', fits: { ak74: { ...BARE, side: 'flashlight' } } });
+    s.lightOn = true;
+    for (let k = 0; k < 40; k++) s.tick();
+    s.drainEvents();
+    const events = shoot(s);
+    expect(events.shots).toHaveLength(1);
+    const rig = new CameraRig(rigTunables(tun));
+    const b = new EffectsFrameBuilder(t);
+    b.debugLights = [{ position: [12.8, 2, 6], radiusM: 6, colour: [1, 0.72, 0.4], intensity: 40 }];
+    const { lights } = b.build(s, events, rig.rifle(s, rig.pose(s, 1 / 60)));
+    expect(lights).toHaveLength(3);
+    const flash = lights.filter((l) => l.shot === true);
+    expect(flash).toHaveLength(1);
+    expect(flash[0]).toMatchObject({ radiusM: t.flashLightRadiusM, intensity: t.flashLightIntensity });
+    // The pool and the test's light: no shots'.
+    expect(lights.filter((l) => l.shot !== true).map((l) => l.intensity).sort((x, y) => x - y)).toEqual([expect.any(Number), 40]);
+    expect(lights.filter((l) => l.shot !== true && l.intensity !== 40)[0].radiusM).not.toBe(t.flashLightRadiusM);
+  });
+
   it("a shot's flash under flash_star_min_share (0.5, [effects]) of a whole one draws no core and no star: the suppressor's 0.12 is under it, and the line moves with the tunable", () => {
     expect(t.flashStarMinShare).toBe(0.5);
     const s = stand();

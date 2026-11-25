@@ -293,7 +293,9 @@ describe('particles', () => {
     // The share is the shots' flashes' alone: a shell's blast lights the smoke whole.
     const flashes = light.slice(light.indexOf('fn flashesAt('), light.indexOf('fn cellLightsAt(')).replace(/\s+/g, ' ');
     expect(flashes).toContain('fn flashesAt(p: vec3f, shots: f32) -> vec3f {');
-    expect(flashes).toContain('sum += facing(Light(f.pos, f.radius, f.colour, f.intensity), p) * shots;');
+    // ... and of the shots' flashes alone: the first frame.shotFlashCount of the frame's (renderer.ts transientOrder puts them
+    // first); a gun's light's pool or a test's light after them lights the smoke whole.
+    expect(flashes).toContain('sum += facing(Light(f.pos, f.radius, f.colour, f.intensity), p) * select(1.0, shots, i < frame.shotFlashCount);');
     expect(flashes).toContain('sum += facing(Light(b.pos, b.radius, b.colour, b.intensity), p);');
     expect(flashes.match(/\bshots\b/g)).toHaveLength(2);
     // No share of the light pass's own: no uniform, no look number; the billboard carries it.
