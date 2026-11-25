@@ -1602,9 +1602,13 @@ aim_overshoot_rise_s = 0.05    # carried there over this: a third of it a tick a
 aim_overshoot_s     = 0.15     # and back at the aim this long after the sights arrive
 # Reloads: curves keyed over the reload's phase (0 to 1), from rest and back to
 # it, eased between keys as the shovel's stroke is. A cue is heard as its key is
-# passed. On the firing step a curve's drop is held off by the step's raise, so no
-# reload sinks the gun into the parapet. The long guns' (rifle, carbine, SMG and
-# marksman):
+# passed. On the firing step (handling.ts) a curve's drop is held off by the step's
+# raise, so no reload sinks the gun lower than it rests, and a pistol's draw toward
+# the eye too: its grip hangs under the crest at rest, behind the parapet's face,
+# and drawn in, the grip's base came out through the face under the crest. What
+# hangs under the crest at rest (a pistol's grip, a long gun's magazine) is in the
+# parapet still; turned in place, it shows no more of it. The long guns' (rifle,
+# carbine, SMG and marksman):
 reload_tilt_at          = 0.12     # tilted: turned over, the muzzle up, low and in
 reload_tilt_m           = [-0.02, -0.04, -0.03]
 reload_tilt_pitch_deg   = 8.0

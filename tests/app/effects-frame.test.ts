@@ -626,9 +626,9 @@ describe('a frame of effects', () => {
     let nearest = Infinity;
     let highest = -Infinity;
     let frames = 0;
-    const shots: { highest: number; nearest: number }[] = [];
+    const shots: { tick: number; highest: number; nearest: number }[] = [];
     for (let n = 0; n < 24; n++) {
-      const shot = { highest: -Infinity, nearest: Infinity };
+      const shot = { tick: -1, highest: -Infinity, nearest: Infinity };
       // A pumped or slow gun's next round ready before the press (a semi-automatic's press is one shot).
       for (let k = 0; k < 120 && s.weapon.sinceShot < 60 / s.weapon.spec.rpm - 1e-9; k++) frame();
       s.intent = { ...s.intent, fire: true };
@@ -636,6 +636,7 @@ describe('a frame of effects', () => {
       for (let k = 0; k < 10 && f.events.shots.length === 0; k++) f = frame();
       s.intent = { ...s.intent, fire: false };
       expect(f.events.shots, `${gun}, shot ${n} (${s.weapon.rounds} rounds, reloading ${s.weapon.reloading})`).toHaveLength(1);
+      shot.tick = f.events.shots[0].tick;
       // Each frame the shot's flash is drawn in (flash_s: two at 60 Hz).
       for (let own = f.built.flashes.find((x) => !x.remote); own; own = (f = frame()).built.flashes.find((x) => !x.remote)) {
         frames++;
@@ -667,15 +668,14 @@ describe('a frame of effects', () => {
     return { sight: s.arm.spec.sight.y, nearest, highest, frames, shots };
   };
 
-  it("aimed, on the screen as the camera draws the flash's frames, no prong comes near the reticle: the shot's kick keeps the drawn gun's sight on the eye's line, so no tip shows more than 2 px over the screen's middle (the kick's roll), and every prong passes 3% of the screen's height or more from it, shot by shot; with the hash's own rolls most shots break one or the other", () => {
+  it("aimed, on the screen as the camera draws the flash's frames, no prong comes near the reticle: the shot's kick keeps the drawn gun's sight on the eye's line, so no tip shows more than 2 px over the screen's middle (the kick's roll), and every prong passes 3% of the screen's height or more from it, shot by shot; the same shots with the hash's own rolls reach higher in a clear majority of them, over the middle in half", () => {
     // The hands' capture's aimed AK at 1600 × 1000 once showed a tip 9.6 px over the middle: the kick
     // lifted and pitched the drawn gun aimed (kick.up × 0.6, kick.pitch × 0.5). Since G4 Task 4 the
     // kick aimed only shoves the gun back along the line of sight and rolls it about it (viewmodel.ts
     // heldPose): a tip held at the sight's height over the bore in the gun's frame stays under the line
     // but for what the roll (kick.roll × 0.3) lifts a tip out to the side, 2 px at most.
     // Measured (the final fix wave, 24 shots): every tip under the middle (the highest 2.2 px under it),
-    // the nearest prong 48.6 px from it. The hash's whole rolls: 17 of the 24 shots break the gate (12
-    // with a tip over the middle, as high as 24.6 px; 13 within 3% of it, as near as 13.0 px).
+    // the nearest prong 48.6 px from it.
     const res: [number, number] = [1600, 1000];
     const run = (tunables: typeof t) => aimedFlashesOnScreen(tunables);
     /** Whether a shot keeps the aimed gate: no tip more than 2 px over the middle, every prong 3% of the height or more from it. */
@@ -687,11 +687,27 @@ describe('a frame of effects', () => {
     for (const shot of aimed.shots) expect(keeps(shot), said).toBe(true);
     expect(aimed.highest, said).toBeLessThanOrEqual(2);
     expect(aimed.nearest, said).toBeGreaterThanOrEqual(0.03 * res[1]);
-    // The hash's rolls whole (as from the hip), aimed: over half the shots break the gate, a prong over
-    // the middle or near it, which the skipped arc keeps in every one.
+    // The control: the same 24 shots (the same ticks and muzzles, so the same hash), the rolls whole
+    // (as from the hip; the skip needs the sights' blend at flash_aimed_blend, here out of reach). Shot
+    // by shot, not on one extreme, each count's least a clear majority (two thirds) or as stated:
+    //   - the whole rolls' highest tip is higher than the skipped ones', the skip what holds it down:
+    //     23 of the 24 (the one other 5.9 px under it, both well under the middle);
+    //   - a shot breaks the gate (a tip more than 2 px over the middle, or a prong within 3% of it):
+    //     17 of the 24;
+    //   - a tip rises over the middle: 12 of the 24, as high as 24.6 px (11 more than 2 px over it). Half,
+    //     not the clear majority the final review's synthesis asked for (its item 15): a tip clears the
+    //     AK's irons, 0.0675 m over the bore, only from a prong reaching that far off it, its length
+    //     (0.15 to 0.30 m) by the sine of its splay (15° to 25°), 0.04 to 0.13 m, and rolled within the
+    //     arc that reach allows about the gun's up. A third or more is asserted: fewer, and the gate's
+    //     "no tip over the middle" would hold whatever the rolls, and prove nothing.
     const whole = run({ ...t, flashAimedBlend: 2 });
-    const broken = whole.shots.filter((shot) => !keeps(shot)).length;
-    expect(broken, JSON.stringify(whole.shots.map((x) => [+x.highest.toFixed(1), +x.nearest.toFixed(1)]))).toBeGreaterThan(whole.shots.length / 2);
+    const wholeSaid = JSON.stringify(whole.shots.map((x) => [+x.highest.toFixed(1), +x.nearest.toFixed(1)]));
+    expect(whole.shots.map((x) => x.tick)).toEqual(aimed.shots.map((x) => x.tick));
+    const clear = (2 / 3) * whole.shots.length;
+    const higher = whole.shots.filter((x, k) => x.highest > aimed.shots[k].highest).length;
+    expect(higher, `${wholeSaid} against ${said}`).toBeGreaterThanOrEqual(clear);
+    expect(whole.shots.filter((x) => !keeps(x)).length, wholeSaid).toBeGreaterThanOrEqual(clear);
+    expect(whole.shots.filter((x) => x.highest > 0).length, wholeSaid).toBeGreaterThanOrEqual(whole.shots.length / 3);
   });
 
   it("on every gun's irons too, the lowest sights among them, aimed, no tip shows more than 2 px over the screen's middle and every prong passes 3% of the screen's height or more from it", () => {

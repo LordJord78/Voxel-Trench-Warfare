@@ -14,10 +14,13 @@
 //   sprint.png    sprinting along the bay, the sprint's blend full;
 //   reload-{12,28,62,82}.png  the AK's reload at those hundredths of its phase (the tilt, the magazine
 //                 out, in, the bolt);
+//   rest-m17.png  the M17 on the firing step at 14:00, still: its grip under the crest, behind the
+//                 parapet's face, as its reload's is held to;
 //   reload-m17-{12,30,62,86}.png  the pistol's (its tilt, the magazine out and in, the slide);
 //   reload-m249-{28,45}.png  the M249's, 1.3 times as deep (the magazine out, its lowest; the feed
-//                 cover): every reload is taken on the firing step, raised, where none sinks the gun
-//                 into the parapet;
+//                 cover): every reload is taken on the firing step, raised, where a curve's drop is
+//                 held (none takes the gun lower than it rests) and a pistol's draw toward the eye too
+//                 (no part of it under the crest comes nearer than at rest);
 //   pump.png      the M870 0.24 s after a shot: the pump at its deepest;
 //   flash-ak.png, flash-m4comp.png, flash-svd.png  the frame of a shot at night (22:30): the core and
 //                 prongs, the compensator's side prongs, the casing lit by the flash;
@@ -130,6 +133,14 @@ async function rest(page) {
   await freeze(page);
   const s = await step(page, 2);
   return { pictures: { rest: await shoot(page) }, info: { hours: DAY, sun: at.sun, gun: placeOf(s.gun), hands: s.hands } };
+}
+
+/** The pistol still on the step. */
+async function restPistol(page) {
+  const at = await stand(page, { where: 'step', primary: 'ak74', hours: DAY, pistol: true });
+  await freeze(page);
+  const s = await step(page, 2);
+  return { pictures: { 'rest-m17': await shoot(page) }, info: { hours: DAY, sun: at.sun, gun: placeOf(s.gun), hands: s.hands } };
 }
 
 /** Walking along the bay: the frame of the stride's widest swing of the gun aside from where it rests. */
@@ -341,6 +352,7 @@ const CAPTURES = [
   { name: 'walk', take: walk },
   { name: 'sprint', take: sprint },
   { name: 'reload', take: reload, pictures: ['reload-12', 'reload-28', 'reload-62', 'reload-82'] },
+  { name: 'rest-m17', take: restPistol },
   { name: 'reload-m17', take: reloadPistol, pictures: ['reload-m17-12', 'reload-m17-30', 'reload-m17-62', 'reload-m17-86'] },
   { name: 'reload-m249', take: reloadMg, pictures: ['reload-m249-28', 'reload-m249-45'] },
   { name: 'pump', take: pump },

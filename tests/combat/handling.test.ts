@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
+import { sightOf } from '../../src/combat/arsenal';
+import { gunModel } from '../../src/combat/gun-models';
 import { Handling, ZERO_HANDS, gunClass, handlingTunables, type GunClass, type HandlingCue, type HandlingInput, type HandsDelta } from '../../src/combat/handling';
+import { heldPose, modelToView, viewmodelTunables } from '../../src/combat/viewmodel';
 import { weaponSpec } from '../../src/combat/weapon';
 import { TAU } from '../../src/core/dmath';
 import { loadTunables, Tunables } from '../../src/core/tunables';
-import { GUNS } from '../../src/net/gear';
+import { BARE, GUNS, type GunKey } from '../../src/net/gear';
 
 // The gun in the hands (the shots spec's §2): the stride's bob, the look's sway, breathing, the
 // sprint, a landing, the reloads and the pump, as a pose delta heldPose adds to the held gun.
@@ -478,15 +481,68 @@ describe('handling', () => {
       const lowest = (ds: HandsDelta[]) => Math.min(...ds.map((d) => d.offset[1]));
       if (gun !== 'pump') expect(lowest(hip), gun).toBeLessThan(-0.04);
       expect(lowest(step), gun).toBeGreaterThanOrEqual(0);
-      // Only the drop is held: every other channel, and a rise (the shotgun's push), as from the hip.
+      // Only the drop is held, and a pistol's draw toward the eye (the next test): every other channel,
+      // and a rise (the shotgun's push), as from the hip.
+      const drawn = (k: number) => (gun === 'pistol' ? Math.max(0, hip[k].offset[2]) : hip[k].offset[2]);
+      if (gun === 'pistol') expect(Math.min(...hip.map((d) => d.offset[2])), gun).toBeLessThan(-0.04);
       for (let k = 0; k <= n; k++) {
         expect(step[k].offset[1], `${gun} tick ${k}`).toBe(Math.max(0, hip[k].offset[1]));
-        for (const c of [0, 2] as const) expect(step[k].offset[c], `${gun} tick ${k}`).toBe(hip[k].offset[c]);
+        expect(step[k].offset[0], `${gun} tick ${k}`).toBe(hip[k].offset[0]);
+        expect(step[k].offset[2], `${gun} tick ${k}`).toBe(drawn(k));
         expect([step[k].pitch, step[k].yaw, step[k].roll], `${gun} tick ${k}`).toEqual([hip[k].pitch, hip[k].yaw, hip[k].roll]);
       }
-      // Part raised (the raise easing in or out over raise_s), its share of the drop.
+      // Part raised (the raise easing in or out over raise_s), its share of the drop and a pistol's draw.
       const part = curve(0.25);
-      for (let k = 0; k <= n; k++) expect(part[k].offset[1], `${gun} tick ${k}`).toBeCloseTo(hip[k].offset[1] < 0 ? hip[k].offset[1] * 0.75 : hip[k].offset[1], 12);
+      for (let k = 0; k <= n; k++) {
+        expect(part[k].offset[1], `${gun} tick ${k}`).toBeCloseTo(hip[k].offset[1] < 0 ? hip[k].offset[1] * 0.75 : hip[k].offset[1], 12);
+        expect(part[k].offset[2], `${gun} tick ${k}`).toBeCloseTo(gun === 'pistol' && hip[k].offset[2] < 0 ? hip[k].offset[2] * 0.75 : hip[k].offset[2], 12);
+      }
+    }
+  });
+
+  it("on the firing step a pistol's reload brings no part of it under the crest nearer the eye than it rests: its grip, hung under the crest behind the parapet's face, never comes out through the face", () => {
+    // The step's raise lifts a pistol's slide and frame over a crest crest_clearance_m under the eye;
+    // its grip still hangs under the crest, beyond the parapet's face and hidden in it, as a long gun's
+    // magazine does. Drawn toward the eye by its curve (0.03 m tilted, 0.05 at the slide), the grip's
+    // base came out through the face under the crest, a wedge of it drawn apart from the gun
+    // (hands-captures' reload-m17-30 at the final fix wave's head). The gun posed by heldPose voxel by
+    // voxel, the view level, the parapet's corner crest_clearance_m under the eye, its face anywhere
+    // from the body's radius (as near as the eye comes to it) out.
+    const crest = -tun.f('world.trench.crest_clearance_m');
+    const radius = tun.f('player.radius');
+    const vt = viewmodelTunables(tun);
+    const still = { back: 0, up: 0, side: 0, pitch: 0, yaw: 0, roll: 0 };
+    const n = Math.round(1.6 / TICK);
+    const reload = (raised: number) => run(new Handling(t), n + 1, (k) => ({ gun: 'pistol', raised, reload: { phase: k / n, shells: 0 } })).map((r) => r.delta);
+    for (const gun of ['m17', 'pm'] satisfies GunKey[]) {
+      const model = gunModel(gun, BARE);
+      const [nx, ny, nz] = model.dims;
+      const voxels: [number, number, number][] = [];
+      for (let k = 0; k < nz; k++)
+        for (let j = 0; j < ny; j++)
+          for (let i = 0; i < nx; i++)
+            if (model.voxels[i + nx * (j + ny * k)]) voxels.push([(i + 0.5 - model.origin[0]) * model.voxelM, (j + 0.5 - model.origin[1]) * model.voxelM, (k + 0.5 - model.origin[2]) * model.voxelM]);
+      /** The drawn pistol on the step, moved by `hands`: its voxels' centres (view space) under the crest. */
+      const under = (hands: HandsDelta) => {
+        const pose = heldPose(vt, { kind: 'pistol', sight: sightOf(gun, BARE) }, still, 0, 0, 1, 0, 1, null, hands);
+        return voxels.map((p) => modelToView(pose, p)).filter((c) => c[1] < crest);
+      };
+      const nearest = (cs: number[][]) => Math.min(...cs.map((c) => c[2]));
+      /** How many of them a face `face` metres off leaves in front of it, seen under the crest. */
+      const seen = (cs: number[][], face: number) => cs.filter((c) => c[2] < face).length;
+      const rest = under(ZERO_HANDS);
+      // At rest the grip hangs under the crest, and beyond the face even with the eye against it.
+      expect(rest.length, gun).toBeGreaterThan(20);
+      expect(nearest(rest), gun).toBeGreaterThan(radius);
+      // The curve as from the hip, drawn in, would bring the grip's base 2 cm or more nearer.
+      expect(Math.min(...reload(0).map((d) => nearest(under({ ...d, offset: [d.offset[0], Math.max(0, d.offset[1]), d.offset[2]] })))), gun).toBeLessThan(nearest(rest) - 0.02);
+      // On the step, tick by tick: nothing under the crest nearer than at rest, so wherever the face
+      // is, no more of the gun shows under the crest than at rest.
+      reload(1).forEach((d, k) => {
+        const cs = under(d);
+        expect(nearest(cs), `${gun} tick ${k}`).toBeGreaterThanOrEqual(nearest(rest) - 1e-9);
+        for (let face = radius; face <= 0.5; face += 0.01) expect(seen(cs, face), `${gun} tick ${k}, the face ${face.toFixed(2)} m off`).toBeLessThanOrEqual(seen(rest, face));
+      });
     }
   });
 

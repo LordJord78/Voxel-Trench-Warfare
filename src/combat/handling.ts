@@ -522,9 +522,15 @@ export class Handling {
     // The reload, but on the firing step never lower than the gun at rest: the step's raise clears the
     // parapet's crest at rest only, and a curve's tilt and jolt down would sink the frame and grip into
     // it. Its drop is held by the raise's share, which eases as the raise does, so stepping on or off
-    // mid-reload never pops.
+    // mid-reload never pops. A pistol's draw toward the eye is held so too: its grip hangs under the
+    // crest at rest, behind the parapet's face, and drawn in, the grip's base came out through the face
+    // under the crest, apart from the gun. Turned in place, no part of it under the crest comes nearer
+    // the eye than at rest. (A long gun's nearest part under the crest is its stock, in front of the
+    // face at rest, joined to the gun over it.)
     const r = this.reloadPose(i, cues);
-    if (r.offset[1] < 0) r.offset[1] *= 1 - Math.min(1, Math.max(0, i.raised));
+    const held = 1 - Math.min(1, Math.max(0, i.raised));
+    if (r.offset[1] < 0) r.offset[1] *= held;
+    if (i.gun === 'pistol' && r.offset[2] < 0) r.offset[2] *= held;
     addScaled(d, r, 1);
 
     // The pump, after a shot: back over its stroke, forward over as long again.
