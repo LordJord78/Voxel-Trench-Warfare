@@ -43,7 +43,7 @@ import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { encode, p95, round3 } from './lib/image.mjs';
 import { failedEntry, readReport, removePictures, stamp, writeReport } from './lib/report.mjs';
-import { CAPTURES, gateCapture, kindOf, LIT, marked, markedComposite, measureCapture, MIN_GPU_SAMPLES, MIN_RATIO, NOON_HEAD_MIN, pathSamples, RING_MIN_PIXELS, STREAM_AIM_PX, STREAM_FROM_M, TARGET, TEAM, TINT, trackRound, WALL } from './lib/tracer-measures.mjs';
+import { CAPTURES, gateCapture, kindOf, LIT, marked, markedComposite, measureCapture, MIN_GPU_SAMPLES, MIN_RATIO, NOON_HEAD_MIN, pathSamples, RING_MIN_PIXELS, SMOKE_KIND, STREAM_AIM_PX, STREAM_FROM_M, TARGET, TEAM, TINT, trackRound, WALL } from './lib/tracer-measures.mjs';
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 
@@ -180,11 +180,11 @@ async function captureAt(page, c) {
       }, { kind, hold: !!c.front }),
       `${c.name}: a frame`,
     );
-  /** The frame just stepped, read whole: the tracers drawn, the drawn muzzle, the internal image's size, the shooter's suppression; aimed, the G-buffer's depth round the middle. */
+  /** The frame just stepped, read whole: the tracers drawn, the drawn muzzle, the internal image's size, the shooter's suppression, the muzzle's smoke drawn ((a) reports what it covers); aimed, the G-buffer's depth round the middle. */
   const readFrame = () =>
     withTimeout(
       page.evaluate(
-        async ({ aimed, half }) => {
+        async ({ aimed, half, smokeKind }) => {
           const h = window.__trenchline;
           const info = h.tracerPixels();
           const internal = h.stats().res;
@@ -200,9 +200,10 @@ async function captureAt(page, c) {
             depth = { x0: cx - r, y0: cy - r, n: 2 * r + 1, scale: k, metres: await h.depthAt(points) };
           }
           const battle = h.battle().tracers.map((b) => ({ p: b.position, v: b.velocity, flown: b.flown }));
-          return { info, internal, muzzle: h.rifleMuzzle(), exposure: await h.exposure(), suppression: h.session.suppression.level, fx: { ricochets: fx.ricochets, embers: fx.embers, heads: fx.heads, battleTracers: fx.battleTracers }, depth, battle };
+          const smoke = h.particleBillboards().filter((b) => b.kind === smokeKind).map((b) => ({ at: b.at, half: b.half }));
+          return { info, internal, muzzle: h.rifleMuzzle(), exposure: await h.exposure(), suppression: h.session.suppression.level, fx: { ricochets: fx.ricochets, embers: fx.embers, heads: fx.heads, battleTracers: fx.battleTracers }, depth, battle, smoke };
         },
-        { aimed: !!c.aimed, half: CENTRE_BOX_PX },
+        { aimed: !!c.aimed, half: CENTRE_BOX_PX, smokeKind: SMOKE_KIND },
       ),
       `${c.name}: reading a frame`,
     );
@@ -394,10 +395,10 @@ try {
       const levels = m.window.map((w) => w.suppression);
       const bits = [
         hl ? `head ${hl.headTop} ${hl.headChannel} / ring ${hl.headTop} ${hl.ringMeanTop.toFixed(1)} = ${hl.ratioTop.toFixed(2)} (V ${hl.ratioV.toFixed(2)}, luminance ${hl.headLum.toFixed(1)} / ${hl.ringMean.toFixed(1)} = ${hl.ratio.toFixed(2)})` : `no head (${m.headsDrawn} drawn)`,
-        m.nearWidth ? `(a) ${m.nearWidth.px} px (lit ${m.nearWidth.litPx})` : null,
+        m.nearWidth ? `(a) ${m.nearWidth.px} px (lit ${m.nearWidth.litPx}; ${m.nearWidth.samples} samples${m.nearWidth.underSmoke?.samples ? `, ${m.nearWidth.underSmoke.samples} of them under lit smoke, widest there ${m.nearWidth.underSmoke.px} px` : ''})` : null,
         m.farColour ? `(b) sat ${round3(m.farColour.saturation)} hue ${m.farColour.hueDeg?.toFixed(1)} (n ${m.farColour.n}; tinted sat ${round3(m.farColour.tint.saturation)} hue ${m.farColour.tint.hueDeg?.toFixed(1)} n ${m.farColour.tint.n})` : null,
         m.battleColour ? `battle sat ${round3(m.battleColour.saturation)} hue ${m.battleColour.hueDeg?.toFixed(1)} (n ${m.battleColour.n})` : null,
-        m.stream ? `(e) ${m.stream.counts} ${round3(m.stream.share)} of ${m.stream.samples ?? 0}, reach ${m.stream.reachPx}/${m.stream.muzzlePx} = ${round3(m.stream.span)} [lit alone ${round3(m.stream.lit?.share)}, reach ${m.stream.lit?.reachPx ?? '-'} = ${round3(m.stream.lit?.span)}] (shown ${m.stream.innerPx}-${m.stream.reachPx} px: ${round3(m.stream.extent)}; ${STREAM_FROM_M} m at ${m.stream.atFromPx} px, 1 m ${m.stream.at1mPx}, 3 m ${m.stream.at3mPx})` : null,
+        m.stream ? `(e) ${m.stream.counts} ${round3(m.stream.share)} of ${m.stream.samples ?? 0}${m.stream.unread ? ` (${m.stream.unread} unread)` : ''}, reach ${m.stream.reachPx}/${m.stream.muzzlePx} = ${round3(m.stream.span)} [lit alone ${round3(m.stream.lit?.share)}, reach ${m.stream.lit?.reachPx ?? '-'} = ${round3(m.stream.lit?.span)}] (shown ${m.stream.innerPx}-${m.stream.reachPx} px: ${round3(m.stream.extent)}; ${STREAM_FROM_M} m at ${m.stream.atFromPx} px, 1 m ${m.stream.at1mPx}, 3 m ${m.stream.at3mPx})` : null,
         m.pathCover ? `(c) ${m.pathCover.counts} ${round3(m.pathCover.share)} [lit alone ${round3(m.pathCover.litShare)}] over ${m.pathCover.lengthPx} px of the ${m.pathCover.fit ?? '-'} line${m.pathCover.endOn ? ' (end on)' : ''}${m.pathCover.behindGun ? `, ${m.pathCover.behindGun} behind the gun` : ''}${m.pathCover.hiddenByWorld ? `, ${m.pathCover.hiddenByWorld} hidden` : ''} (tinted ${round3(m.pathCover.tint?.share)}, hue ${m.pathCover.tint?.hueDeg?.toFixed(1)} sat ${round3(m.pathCover.tint?.saturation)})` : null,
         m.frontColour?.drawn ? `the front's amber: ${m.frontColour.drawn} drawn, tinted n ${m.frontColour.n} hue ${m.frontColour.hueDeg?.toFixed(1)} sat ${round3(m.frontColour.saturation)}` : null,
         m.noonContrast ? `(d) ${round3(m.noonContrast.ratio)}` : null,

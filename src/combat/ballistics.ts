@@ -112,9 +112,10 @@ export type BodyTest = (owner: number, from: readonly [number, number, number], 
 /**
  * A tracer round's draw, carried by the strike that retired it (the pool's own; never sent to the
  * room): where it left and where its tracer is drawn from, how far out it joins its path (m; 0: drawn
- * on it), over how far it is lit in (m; −1 unset: the draw's own), its speed as it struck (m/s), and
- * its kind (net/gear.ts TRACER_KIND). The frame that drains the strike draws the last of its flight by
- * it (effects-frame.ts), so a round whose flight ends within the frame's ticks is seen.
+ * on it), over how far it is lit in (m; −1 unset: the draw's own), its speed as it struck (m/s), its
+ * kind (net/gear.ts TRACER_KIND), and how long it had flown (s). The frame that drains the strike draws
+ * the last of its flight by it (effects-frame.ts), so a round whose flight ends within the frame's
+ * ticks is seen.
  */
 export interface StrikeDraw {
   origin: [number, number, number];
@@ -123,6 +124,7 @@ export interface StrikeDraw {
   igniteM: number;
   speed: number;
   kind: number;
+  ageS: number;
 }
 
 export interface BodyHit {
@@ -340,10 +342,10 @@ export class Rounds {
    * Each tracer round's head and its tail, `lengthOf` its speed (m/s) back along its path, or a
    * length given outright (m), no further than it has flown, as [x, y, z] triples in metres; where
    * it left and where its tracer is drawn from, how far out its tracer joins its path and over how
-   * far it is lit in (m; −1 unset: the draw's own), how far it has flown (m), whose it is, and its
-   * kind (its colour).
+   * far it is lit in (m; −1 unset: the draw's own), how far it has flown (m) and for how long (s),
+   * whose it is, and its kind (its colour).
    */
-  tracerSegments(lengthOf: number | ((speed: number) => number)): { head: Float32Array; tail: Float32Array; origin: Float32Array; from: Float32Array; converge: Float32Array; ignite: Float32Array; flown: Float32Array; owner: Int8Array; kind: Uint8Array } {
+  tracerSegments(lengthOf: number | ((speed: number) => number)): { head: Float32Array; tail: Float32Array; origin: Float32Array; from: Float32Array; converge: Float32Array; ignite: Float32Array; flown: Float32Array; age: Float32Array; owner: Int8Array; kind: Uint8Array } {
     let n = 0;
     for (let i = 0; i < this.count; i++) if (this.tracer[i] !== 0) n++;
     const head = new Float32Array(n * 3);
@@ -353,6 +355,7 @@ export class Rounds {
     const converge = new Float32Array(n);
     const ignite = new Float32Array(n);
     const flown = new Float32Array(n);
+    const age = new Float32Array(n);
     const owner = new Int8Array(n);
     const kind = new Uint8Array(n);
     let o = 0;
@@ -371,11 +374,12 @@ export class Rounds {
       converge[o] = this.converge[i];
       ignite[o] = this.ignite[i];
       flown[o] = this.distance[i];
+      age[o] = this.age[i];
       owner[o] = this.owner[i];
       kind[o] = this.tracer[i];
       o++;
     }
-    return { head, tail, origin, from, converge, ignite, flown, owner, kind };
+    return { head, tail, origin, from, converge, ignite, flown, age, owner, kind };
   }
 
   /** One substep of round `i`: whether it is to be retired. */
@@ -496,6 +500,7 @@ export class Rounds {
       igniteM: this.ignite[i],
       speed,
       kind: this.tracer[i],
+      ageS: this.age[i],
     };
   }
 

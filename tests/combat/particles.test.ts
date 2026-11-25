@@ -30,6 +30,7 @@ const spec = (over: Partial<ParticleSpec> = {}): ParticleSpec => ({
   lift: 0,
   spread: 0,
   speedJitter: 0,
+  wind: 0,
   ...over,
 });
 
@@ -155,44 +156,60 @@ describe('particles', () => {
     // shot's own light showed as a bright ball near the eye.
     expect(SMOKE_BILLBOARD).toBe(7);
     expect(billboards(p)[0][8]).toBe(SMOKE_BILLBOARD);
-    // No way to be drawn along: that is a casing's.
-    expect(Array.from(billboards(p)[0].slice(9, 12))).toEqual([0, 0, 0]);
+    // No way to be drawn along (that is a casing's): its tenth float the share of the shots' flash light it takes, whole.
+    expect(Array.from(billboards(p)[0].slice(9, 12))).toEqual([1, 0, 0]);
     for (let k = 0; k < 30; k++) p.step(DT);
     expect(billboards(p)[0][1]).toBeGreaterThan(1);
     // Only the muzzle's smoke is a puff: the rest are as they were.
     for (const kind of ['muzzle_flash', 'brass', 'dust', 'spark', 'blast_flash', 'shell_soil', 'debris', 'blood']) expect(particleSpec(tun, kind).smoke ?? false, kind).toBe(false);
   });
 
-  it("the wind (`wind`, m/s) carries the lit particles that are not held to the drawn gun, added to their own velocity as they move; not the emissive, not the anchored, and none by default", () => {
-    const still = spec({ gravity: 0, drag: 2 });
-    const p = new Particles(8);
+  it("the wind (`wind`, m/s) carries each kind by its share ([particles.<kind>] wind), added to its own velocity as it moves: the light ones whole, blood's droplets and a shell's soil a twentieth, the rest not; none by default", () => {
+    // Smoke and mist go with the wind; a droplet of blood or a clod of soil barely; debris, the brass, a
+    // flash and sparks not at all. The kinds' shares, every [particles.*] table's.
+    const shares: Record<string, number> = { muzzle_smoke: 1, dust: 1, blood_mist: 1, blood_entry: 1, blood: 0.05, shell_soil: 0.05, debris: 0, brass: 0, muzzle_flash: 0, spark: 0, blast_flash: 0 };
+    const tables = Object.entries(tun.section('particles'))
+      .filter(([, v]) => typeof v === 'object')
+      .map(([k]) => k)
+      .sort();
+    expect(tables).toEqual(Object.keys(shares).sort());
+    const p = new Particles(16);
     expect(p.wind).toEqual([0, 0, 0]);
-    p.emit([0, 1, 0], [1, 0, 0], still, 1);
-    p.emit([0, 1, 0], [1, 0, 0], spec({ gravity: 0, drag: 2, emissive: true }), 1);
-    p.emit([0, 1, 0], [1, 0, 0], still, 1, undefined, undefined, 2);
-    p.emit([0, 1, 0], [1, 0, 0], spec({ gravity: 0, drag: 2, blood: true }), 1);
-    p.emit([0, 1, 0], [1, 0, 0], spec({ gravity: 0, drag: 2, smoke: true }), 1);
+    for (const kind of tables) {
+      const spec = particleSpec(tun, kind);
+      expect(spec.wind, kind).toBe(shares[kind]);
+      // Still, and neither falling nor slowing: it moves by the wind alone.
+      p.emit([0, 1, 0], [0, 0, 0], { ...spec, gravity: 0, drag: 0, lifeS: 10 }, 1);
+    }
     p.wind = [2, 0, -1];
     p.step(DT);
-    const own = (1 - 2 * DT) * DT;
     const at = billboards(p).map((b) => Array.from(b.slice(0, 3)));
-    const expectAt = (got: number[], want: number[], what: string) => got.forEach((v, k) => expect(v, `${what}.${k}`).toBeCloseTo(want[k], 6));
-    expectAt(at[0], [own + 2 * DT, 1, -DT], 'lit');
-    expectAt(at[1], [own, 1, 0], 'emissive');
-    expectAt(at[2], [own, 1, 0], 'anchored');
-    expectAt(at[3], [own + 2 * DT, 1, -DT], 'blood');
-    // The muzzle's smoke (its own kind, a soft puff) drifts with it.
-    expectAt(at[4], [own + 2 * DT, 1, -DT], 'smoke');
+    tables.forEach((kind, i) => [2 * DT * shares[kind], 1, -DT * shares[kind]].forEach((v, k) => expect(at[i][k], `${kind}.${k}`).toBeCloseTo(v, 7)));
+    // Held to the drawn gun or not, a kind drifts by its share: the muzzle's smoke, kept at the drawn
+    // muzzle as it was first drawn (an anchor of its own), drifts as the free smoke does.
+    const smoke = { ...particleSpec(tun, 'muzzle_smoke'), gravity: 0, drag: 0 };
+    const q = new Particles(4);
+    q.emit([0, 1, 0], [0, 0, 0], smoke, 1);
+    q.emit([0, 1, 0], [0, 0, 0], smoke, 1, undefined, undefined, 1, true);
+    q.wind = [2, 0, -1];
+    q.step(DT);
+    const out = new Float32Array(4 * BILLBOARD_FLOATS);
+    q.hold([[0, 1, 0]]);
+    q.billboards(out, [[0, 1, 0]], 0.15);
+    for (let k = 0; k < 3; k++) expect(out[BILLBOARD_FLOATS + k], `kept ${k}`).toBe(out[k]);
     // It is not their velocity: their own drag does not eat it, and with it gone they move as before.
-    for (let k = 0; k < 30; k++) p.step(DT);
-    const before = billboards(p)[0][0];
-    p.step(DT);
+    const r = new Particles(2);
+    r.emit([0, 1, 0], [1, 0, 0], spec({ gravity: 0, drag: 2, wind: 1 }), 1);
+    r.wind = [2, 0, -1];
+    for (let k = 0; k < 31; k++) r.step(DT);
+    const before = billboards(r)[0][0];
+    r.step(DT);
     const v = 1 * (1 - 2 * DT) ** 32;
-    expect(billboards(p)[0][0] - before).toBeCloseTo((v + 2) * DT, 6);
-    p.wind = [0, 0, 0];
-    const calm = billboards(p)[0][0];
-    p.step(DT);
-    expect(billboards(p)[0][0] - calm).toBeCloseTo(v * (1 - 2 * DT) * DT, 6);
+    expect(billboards(r)[0][0] - before).toBeCloseTo((v + 2) * DT, 6);
+    r.wind = [0, 0, 0];
+    const calm = billboards(r)[0][0];
+    r.step(DT);
+    expect(billboards(r)[0][0] - calm).toBeCloseTo(v * (1 - 2 * DT) * DT, 6);
   });
 
   it("the brass is a casing (its table's `casing = true`): its own kind, its long axis along its way as it flies and falls", () => {
@@ -265,19 +282,53 @@ describe('particles', () => {
     expect(look.casingMaxPx).toBeLessThanOrEqual(24);
   });
 
-  it("the muzzle's smoke is lit (the spec's: not emissive) as a mote is, by a shot's light whole: effects-light.wgsl gives no kind a share of it", () => {
+  it("the muzzle's smoke is lit (the spec's: not emissive) as a mote is, by the shots' light whole, but for the share its billboard carries (the player's own, kept a hand from the eye: app/effects-frame.ts): effects-light.wgsl takes the shots' flashes on smoke by that share, the shells' blasts whole, and every other kind takes all of it", () => {
     const light = readFileSync('src/render/shaders/effects-light.wgsl', 'utf8').replace(/\/\/[^\n]*/g, '');
     const main = light.slice(light.indexOf('fn main(')).replace(/\s+/g, ' ');
-    // The light every lit billboard takes (dust, brass, blood, smoke): the key's, the shots' and the rest.
-    expect(main).toContain('var light = frame.keyColour * keyLit(p) * look.dustKey + flashesAt(p) + mix(around, near.rgb, near.a);');
-    // Read once, and smoke has no light of its own: no share, no tunable.
+    // The light every lit billboard takes (dust, brass, blood, smoke): the key's, the shots' and the rest,
+    // the shots' flashes by `shots`: a smoke billboard's share (its tenth float, unread for it before), 1 for the rest.
+    expect(main).toContain('let shots = select(1.0, billboards[o + 9u], kind == SMOKE);');
+    expect(main).toContain('var light = frame.keyColour * keyLit(p) * look.dustKey + flashesAt(p, shots) + mix(around, near.rgb, near.a);');
     expect(main.match(/flashesAt\(/g)).toHaveLength(1);
+    // The share is the shots' flashes' alone: a shell's blast lights the smoke whole.
+    const flashes = light.slice(light.indexOf('fn flashesAt('), light.indexOf('fn cellLightsAt(')).replace(/\s+/g, ' ');
+    expect(flashes).toContain('fn flashesAt(p: vec3f, shots: f32) -> vec3f {');
+    expect(flashes).toContain('sum += facing(Light(f.pos, f.radius, f.colour, f.intensity), p) * shots;');
+    expect(flashes).toContain('sum += facing(Light(b.pos, b.radius, b.colour, b.intensity), p);');
+    expect(flashes.match(/\bshots\b/g)).toHaveLength(2);
+    // No share of the light pass's own: no uniform, no look number; the billboard carries it.
     expect(light).not.toContain('smokeFlash');
     expect(() => tun.f('effects.smoke_flash_share')).toThrow();
     expect('smokeFlashShare' in effectsLook(tun)).toBe(false);
     // Its kind is still its own, for the draw's soft puff (effects.wgsl), and it is not emissive.
     expect(particleSpec(tun, 'muzzle_smoke').emissive).toBe(false);
     expect(light.replace(/\s+/g, ' ')).toContain('if (kind != 1.0 && !core && !head && !ember) {');
+  });
+
+  it("a kept particle's billboard (the player's own smoke) carries the share of the shots' flash light the frame gives it (billboards' keptFlash, 1 unless given); another's smoke carries 1, whole; a mote's and a casing's tenth float are as they were (none, and a casing's way)", () => {
+    const smoke = particleSpec(tun, 'muzzle_smoke');
+    const p = new Particles(8);
+    p.emit([0, 1, 0], [0, 0, 0], smoke, 1);
+    p.emit([0, 1, 0], [0, 0, 0], smoke, 1, undefined, undefined, 1, true);
+    p.emit([0, 1, 0], [0, 0, 0], particleSpec(tun, 'dust'), 1);
+    p.emit([0, 1, 0], [3, 4, 0], { ...particleSpec(tun, 'brass'), spread: 0, speedJitter: 0, lift: 0 }, 1, undefined, undefined, 2);
+    const anchors = [[0.1, 1.1, 0], [0.2, 1, 0]];
+    p.hold(anchors);
+    const out = new Float32Array(8 * BILLBOARD_FLOATS);
+    const tenth = (keptFlash?: number) => {
+      out.fill(-1);
+      expect(keptFlash === undefined ? p.billboards(out, anchors, 0.15) : p.billboards(out, anchors, 0.15, keptFlash)).toBe(4);
+      return [0, 1, 2, 3].map((i) => ({ kind: out[i * BILLBOARD_FLOATS + 8], way: Array.from(out.slice(i * BILLBOARD_FLOATS + 9, i * BILLBOARD_FLOATS + 12)) }));
+    };
+    const given = tenth(0.15);
+    expect(given.map((b) => b.kind)).toEqual([SMOKE_BILLBOARD, SMOKE_BILLBOARD, 0, CASING_BILLBOARD]);
+    expect(given[0].way).toEqual([1, 0, 0]);
+    expect(given[1].way[0]).toBeCloseTo(0.15, 6);
+    expect(given[1].way.slice(1)).toEqual([0, 0]);
+    expect(given[2].way).toEqual([0, 0, 0]);
+    expect(given[3].way.map((v) => Math.round(v * 1e6) / 1e6)).toEqual([0.6, 0.8, 0]);
+    // Unless the frame gives one, the kept smoke is lit whole too.
+    expect(tenth()[1].way).toEqual([1, 0, 0]);
   });
 
   it('the same seed throws the same brass', () => {
@@ -297,45 +348,55 @@ describe('particles', () => {
     expect(run()).toEqual(a);
   });
 
-  it("an anchored particle is drawn off by its anchor's drift, less as it ages, none by the time given", () => {
-    // The shot's flash and brass leave the rifle as it is drawn, then join their own paths.
-    const still = spec({ gravity: 0, drag: 0 });
+  it("an anchored particle is drawn off by where its anchor is drawn now less where it was thrown: all of it when thrown, easing out to none by the time given (a smootherstep: a tick old, still on the drawn gun); a kept one (the muzzle's smoke) by that as the first frame held it, for good", () => {
+    // The shot's flash and brass leave the rifle as it is drawn, wherever the shot's kick has taken it
+    // since they were thrown, then join their own paths; its smoke stays where the drawn gun left it.
+    const still = spec({ gravity: 0, drag: 0, lifeS: 5 });
     const p = new Particles(8);
     p.emit([0, 1, 0], [0, 0, 0], still, 1);
     p.emit([0, 1, 0], [0, 0, 0], still, 1, undefined, undefined, 1);
-    p.emit([0, 1, 0], [0, 0, 0], still, 1, undefined, undefined, 2);
-    const drift = [
-      [0.1, -0.2, 0.05],
-      [0, 0.3, 0],
-    ];
-    const at = (d?: number[][]) => {
+    p.emit([0.5, 1, 0], [0, 0, 0], still, 1, undefined, undefined, 2);
+    p.emit([0, 1, 0], [0, 0, 0], still, 1, undefined, undefined, 1, true);
+    expect(p.thrown(2)).toEqual([0.5, 1, 0]);
+    // A frame's: the anchors held, then the billboards drawn (app/effects-frame.ts).
+    const at = (anchors?: number[][]) => {
       const out = new Float32Array(p.capacity * BILLBOARD_FLOATS);
-      expect(p.billboards(out, d, 0.15)).toBe(3);
-      return [0, 1, 2].map((i) => Array.from(out.slice(i * BILLBOARD_FLOATS, i * BILLBOARD_FLOATS + 3)));
+      p.hold(anchors);
+      expect(p.billboards(out, anchors, 0.15)).toBe(4);
+      return [0, 1, 2, 3].map((i) => Array.from(out.slice(i * BILLBOARD_FLOATS, i * BILLBOARD_FLOATS + 3)));
     };
-    const expectAt = (got: number[][], want: number[][]) => got.forEach((g, i) => g.forEach((v, k) => expect(v, `${i}.${k}`).toBeCloseTo(want[i][k], 6)));
-    expectAt(at(drift), [
-      [0, 1, 0],
-      [0.1, 0.8, 0.05],
-      [0, 1.3, 0],
-    ]);
-    expectAt(at(), [
-      [0, 1, 0],
-      [0, 1, 0],
-      [0, 1, 0],
-    ]);
+    // Drawn before any frame held it, the kept one is where it is; drawing changes nothing.
+    const before = new Float32Array(p.capacity * BILLBOARD_FLOATS);
+    p.billboards(before, [[0.1, 0.8, 0.05], [0.5, 1.3, 0]], 0.15);
+    expect(Array.from(before.slice(3 * BILLBOARD_FLOATS, 3 * BILLBOARD_FLOATS + 3))).toEqual([0, 1, 0]);
+    const expectAt = (got: number[][], want: number[][], what: string) => got.forEach((g, i) => g.forEach((v, k) => expect(v, `${what} ${i}.${k}`).toBeCloseTo(want[i][k], 6)));
+    // Where the muzzle and the port are drawn: the kept one takes its drift as first drawn.
+    expectAt(at([[0.1, 0.8, 0.05], [0.5, 1.3, 0]]), [[0, 1, 0], [0.1, 0.8, 0.05], [0.5, 1.3, 0], [0.1, 0.8, 0.05]], 'thrown');
+    // The gun drawn elsewhere: the held ones go with it, the kept one stays where it was first drawn.
+    const moved = [[0.2, 0.7, 0.05], [0.5, 1.5, 0]];
+    expectAt(at(moved), [[0, 1, 0], [0.2, 0.7, 0.05], [0.5, 1.5, 0], [0.1, 0.8, 0.05]], 'moved');
+    expectAt(at(), [[0, 1, 0], [0, 1, 0], [0.5, 1, 0], [0.1, 0.8, 0.05]], 'no anchors');
+    // A tick old: 1 − smootherstep(u), u its age over the time given, still nearly all of it.
+    const eased = (u: number) => 1 - u * u * u * (u * (u * 6 - 15) + 10);
+    p.step(DT);
+    const tick = eased(DT / 0.15);
+    expect(tick).toBeGreaterThan(0.988);
+    expectAt(at(moved), [[0, 1, 0], [0.2 * tick, 1 - 0.3 * tick, 0.05 * tick], [0.5, 1 + 0.5 * tick, 0], [0.1, 0.8, 0.05]], 'a tick old');
+    // Half way, half of it.
+    p.step(0.075 - DT);
+    expect(eased(0.5)).toBeCloseTo(0.5, 12);
+    expectAt(at(moved), [[0, 1, 0], [0.1, 0.85, 0.025], [0.5, 1.25, 0], [0.1, 0.8, 0.05]], 'half way');
+    // None by the time given; the kept one as it was.
     p.step(0.075);
-    expectAt(at(drift), [
-      [0, 1, 0],
-      [0.05, 0.9, 0.025],
-      [0, 1.15, 0],
-    ]);
-    p.step(0.075);
-    expectAt(at(drift), [
-      [0, 1, 0],
-      [0, 1, 0],
-      [0, 1, 0],
-    ]);
+    expectAt(at(moved), [[0, 1, 0], [0, 1, 0], [0.5, 1, 0], [0.1, 0.8, 0.05]], 'joined');
+    // A kept particle first held with no anchor drawn (the rifle not drawn, as through a scope) keeps none.
+    const q = new Particles(2);
+    q.emit([0, 1, 0], [0, 0, 0], still, 1, undefined, undefined, 1, true);
+    const out = new Float32Array(2 * BILLBOARD_FLOATS);
+    q.hold(undefined);
+    q.hold([[0.3, 0.3, 0.3]]);
+    q.billboards(out, [[0.3, 0.3, 0.3]], 0.15);
+    expect(Array.from(out.slice(0, 3))).toEqual([0, 1, 0]);
   });
 
   it("a shell's debris comes back down before it is gone", () => {

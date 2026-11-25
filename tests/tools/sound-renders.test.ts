@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { Session } from '../../src/sim/session';
+import { BrickMap } from '../../src/world/bricks';
+import { P } from '../../src/world/materials';
+import { cueEvents } from '../../tools/sounds/renders';
 import { hitFeedbackTunables } from '../../src/app/hit-feedback';
 import { audioTunables, planFeedback, planVoices } from '../../src/audio/plan';
 import { reportShape, voiceLength } from '../../src/audio/voices';
@@ -55,11 +59,26 @@ describe("the sounds' proof: what it renders", () => {
   it("each of the hands' cues, by its name, at the ear: placed as planVoices places a cue, whole and at once, at hands_gain", () => {
     for (const cue of CUES) {
       const r = byName(cue);
-      const placed = planVoices(t, { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [{ tick: 1, cue, at: [0.2, -0.1, -0.5] }], harms: [] }, [0, 0, 0]);
+      const placed = planVoices(t, cueEvents(cue), [0, 0, 0]);
       expect(r.plans, cue).toEqual(placed);
       expect(r.plans[0], cue).toMatchObject({ kind: cue, at: [0, 0, 0], delayS: 0, gain: t.handsGain, lowpassHz: t.openLowpassHz });
+      // Its sound's shape, [audio.cues]'s, carried by its plan.
+      expect(r.plans[0].cue, cue).toEqual(t.cues[cue]);
       expect(r.lengthS, cue).toBeCloseTo(LEAD_S + voiceLength(placed[0], report) + TAIL_S, 9);
     }
+  });
+
+  it("a cue's frame of events, the one hand-built frame the renders and this test share: nothing but the cue, by the gun's muzzle", () => {
+    for (const cue of CUES) {
+      const e = cueEvents(cue);
+      expect(e.handling).toEqual([{ tick: 1, cue, at: [0.2, -0.1, -0.5] }]);
+      for (const [key, list] of Object.entries(e)) if (key !== 'handling') expect(list, key).toEqual([]);
+    }
+    // Every kind of event a frame drains (a fresh session's drain), each empty but the cue.
+    const map = new BrickMap({ x: 64, y: 32, z: 64 });
+    map.fillBox(0, 0, 0, 64, 4, 64, P.SOD);
+    const drained = Session.create({ map, plan: null, spawn: { position: [3.2, 0.4, 3.2] } }, tun, 7, 0).drainEvents();
+    expect(Object.keys(cueEvents('dry')).sort()).toEqual(Object.keys(drained).sort());
   });
 
   it('every voice at the ear is held to the small speaker: at least a quarter of its energy over 400 Hz', () => {

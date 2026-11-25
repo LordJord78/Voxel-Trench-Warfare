@@ -17,13 +17,15 @@
  *   low splat; a kill's thud and its low chime; a steel plate's ring of four partials, each dying
  *   at its own rate; and being hit, a low thump and a high ring in the ears.
  * - The hands' cues (combat/handling.ts), each a few tens of milliseconds of filtered noise and a
- *   clipped tone, mostly over 400 Hz so a laptop plays them: the magazine out, a dull click and a
- *   scrape (60 ms); in, a sharp clack (40 ms); the bolt, a two-part rack (120 ms); the machine gun's
- *   feed cover, a clap (50 ms); a shotgun's shell, a click (30 ms); its pump, chk-chk, two clacks
- *   90 ms apart; and an empty trigger, a thin click (15 ms).
+ *   clipped tone, mostly over 400 Hz so a laptop plays them, each made as the shape its plan carries
+ *   says ([audio.cues], cues.ts): the magazine out, a dull click and a scrape (60 ms); in, a sharp
+ *   clack (40 ms); the bolt, a two-part rack (120 ms); the machine gun's feed cover, a clap (50 ms); a
+ *   shotgun's shell, a click (30 ms); its pump, chk-chk, two clacks 90 ms apart; and an empty
+ *   trigger, a thin click (15 ms).
  */
 
 import type { Tunables } from '../core/tunables';
+import type { CueShape } from './cues';
 import type { VoicePlan } from './plan';
 
 /** The report's body, from the reference's WeaponReport. */
@@ -192,14 +194,32 @@ const DING: readonly (readonly [number, number, number])[] = [
   [4100, 0.25, 0.08],
 ];
 
-/** The pump's two clacks, this far apart (s); the bolt's two parts. */
-const PUMP_GAP_S = 0.09;
-const BOLT_GAP_S = 0.075;
+/** A hands' cue's shape, as its plan carries it (planVoices gives every cue's plan its own). */
+function cueShape(v: VoicePlan): CueShape {
+  if (!v.cue) throw new TypeError(`the cue '${v.kind}' was planned without its shape ([audio.cues]; planVoices gives it)`);
+  return v.cue;
+}
 
-/** A clack of metal on metal: a burst of noise about `hz` and a clipped square tone falling from `toneHz`, `peak` loud, dying over `decay` seconds. */
-function clack(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, hz: number, toneHz: number, peak: number, decay: number): void {
-  burst(ctx, noise, into, when, { type: 'bandpass', frequency: hz, Q: 1.2 }, 2.2 * peak, 0.0005, decay, 0.05);
-  tone(ctx, into, when, 'square', toneHz, toneHz * 0.7, 0.18 * peak, decay * 0.8, 0.05);
+/** A hands' cue played into `into` from `when`, `gain` loud, as its shape says ([audio.cues], cues.ts). */
+function cue(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, gain: number, shape: CueShape): void {
+  const { fall, clack } = shape;
+  for (const p of shape.parts) {
+    const at = when + p.atS;
+    const peak = p.peak * gain;
+    switch (p.part) {
+      case 'clack':
+        // Metal on metal: a band of noise about its pitch, and a clipped square tone falling from its own.
+        burst(ctx, noise, into, at, { type: 'bandpass', frequency: p.hz, Q: clack.q }, clack.noise * peak, clack.attackS, p.decayS, fall);
+        tone(ctx, into, at, 'square', p.toneHz, p.toneHz * clack.glide, clack.tone * peak, p.decayS * clack.toneDecay, fall);
+        break;
+      case 'burst':
+        burst(ctx, noise, into, at, { type: p.filter, frequency: p.hz, ...(p.q === undefined ? {} : { Q: p.q }) }, peak, p.attackS, p.decayS, fall);
+        break;
+      case 'tone':
+        tone(ctx, into, at, p.wave, p.fromHz, p.toHz, peak, p.decayS, fall);
+        break;
+    }
+  }
 }
 
 /** A voice played: cut, it falls silent over 20 ms from `at` (seconds on its context's clock), whether sounding yet or not. */
@@ -250,19 +270,13 @@ export function voiceLength(v: VoicePlan, report: ReportShape): number {
     case 'hurt':
       return 0.6 + 0.05;
     case 'mag-out':
-      return 0.06 + 0.01;
     case 'mag-in':
-      return 0.04 + 0.01;
     case 'bolt':
-      return BOLT_GAP_S + 0.045 + 0.01;
     case 'cover':
-      return 0.05 + 0.01;
     case 'shell':
-      return 0.03 + 0.01;
     case 'pump':
-      return PUMP_GAP_S + 0.03 + 0.01;
     case 'dry':
-      return 0.015 + 0.005;
+      return cueShape(v).lengthS;
   }
 }
 
@@ -379,39 +393,14 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       tone(ctx, dull, when, 'sine', 3000, 2990, 0.25 * g, 0.6, 1e-2);
       break;
     case 'mag-out':
-      // A dull click as the catch lets go, and the magazine scraping out over 60 ms.
-      clack(ctx, noise, dull, when, 1100, 520, 0.8 * g, 0.018);
-      burst(ctx, noise, dull, when + 0.012, { type: 'bandpass', frequency: 2600, Q: 2 }, 1.1 * g, 0.012, 0.036, 0.05);
-      break;
     case 'mag-in':
-      // A sharp clack, seated: bright, over 40 ms, a knock of the body under it.
-      clack(ctx, noise, dull, when, 2200, 1150, g, 0.035);
-      tone(ctx, dull, when, 'sine', 260, 180, 0.35 * g, 0.03, 0.05);
-      break;
     case 'bolt':
-      // A two-part rack: the bolt back with a scrape, and home.
-      clack(ctx, noise, dull, when, 1600, 820, 0.85 * g, 0.03);
-      burst(ctx, noise, dull, when + 0.01, { type: 'bandpass', frequency: 3200, Q: 2.5 }, 0.9 * g, 0.015, 0.045, 0.05);
-      clack(ctx, noise, dull, when + BOLT_GAP_S, 2000, 1000, g, 0.045);
-      break;
     case 'cover':
-      // The feed cover slapped shut: a broad clap over 50 ms.
-      burst(ctx, noise, dull, when, { type: 'bandpass', frequency: 1300, Q: 0.7 }, 2.4 * g, 0.001, 0.049, 0.05);
-      tone(ctx, dull, when, 'triangle', 420, 300, 0.3 * g, 0.04, 0.05);
-      break;
     case 'shell':
-      // A shell thumbed into the tube: a click over 30 ms.
-      clack(ctx, noise, dull, when, 2600, 1400, 0.8 * g, 0.03);
-      break;
     case 'pump':
-      // Chk-chk: the fore-end back and forward, two clacks PUMP_GAP_S apart.
-      clack(ctx, noise, dull, when, 1500, 640, g, 0.03);
-      clack(ctx, noise, dull, when + PUMP_GAP_S, 1900, 760, g, 0.03);
-      break;
     case 'dry':
-      // An empty trigger: a thin click over 15 ms.
-      burst(ctx, noise, dull, when, { type: 'highpass', frequency: 3000 }, 1.4 * g, 0.0005, 0.0145, 0.05);
-      tone(ctx, dull, when, 'square', 2600, 2100, 0.12 * g, 0.012, 0.05);
+      // The hands' cues, each as the shape its plan carries says ([audio.cues]).
+      cue(ctx, noise, dull, when, g, cueShape(v));
       break;
   }
   return {

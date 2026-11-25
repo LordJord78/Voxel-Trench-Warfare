@@ -13,12 +13,18 @@
  * renderer (effects.ts), which lights the ones not emissive, and blood (its
  * own kind) no darker than a floor and no smaller than a few pixels, so it reads
  * at range and at dusk; a casing (the brass, its own kind) is drawn along its
- * way, its billboard carrying its velocity's direction. A particle may be
- * anchored to a point the renderer draws elsewhere than the simulation holds it
- * (the shot's flash and brass, to the drawn rifle): its billboard starts off by
- * that point's drift and joins its own path as it ages. The wind (`wind`, set
- * each frame from the battle's) carries the lit particles not so anchored (the
- * muzzle's smoke, dust, blood): a velocity added to their own as they move.
+ * way, its billboard carrying its velocity's direction.
+ *
+ * A particle may be anchored to a point the renderer draws elsewhere than the
+ * simulation holds it (the shot's flash, brass and smoke, to the drawn rifle's
+ * muzzle and port): its billboard is drawn off by where that point is drawn now
+ * less where the particle was thrown, so it leaves the rifle as drawn whatever
+ * has moved it since (the shot's own kick, thrown before it, 17 cm at the SVD's
+ * muzzle). The flash and brass then join their own paths as they age (`heldShare`);
+ * a kept one (the smoke) keeps that drift as the frame that first drew it held it
+ * (`hold`), for good: it stays where the drawn gun left it. The wind (`wind`, set each frame from the
+ * battle's) carries each kind by its share ([particles.<kind>] wind): a velocity
+ * added to its own as it moves, the light ones whole, the heavy barely or not.
  */
 
 import { pow } from '../core/dmath';
@@ -52,6 +58,8 @@ export interface ParticleSpec {
   lift: number;
   spread: number;
   speedJitter: number;
+  /** How much of the wind carries it: 1 the light (smoke, mist, dust), a little or none the heavy (droplets, soil, debris, brass), none the emissive. */
+  wind: number;
 }
 
 function rgba(tun: Tunables, key: string): [number, number, number, number] {
@@ -94,14 +102,26 @@ export function particleSpec(tun: Tunables, kind: string): ParticleSpec {
     lift: tun.f(`${k}.lift`),
     spread: tun.f(`${k}.spread`),
     speedJitter: tun.f(`${k}.speed_jitter`),
+    wind: tun.f(`${k}.wind`),
   };
+}
+
+/**
+ * How much of an anchored particle's drift it is drawn off by at `ageS` (s), joining its own path by
+ * `driftS`: all of it when thrown, none from `driftS` on, eased out and in between (1 − a smootherstep),
+ * so a particle a tick old is still on the drawn gun and none jolts as it lets go.
+ */
+export function heldShare(ageS: number, driftS: number): number {
+  if (!(driftS > 0)) return 0;
+  const u = Math.min(1, Math.max(0, ageS / driftS));
+  return 1 - u * u * u * (u * (u * 6 - 15) + 10);
 }
 
 /**
  * A billboard's floats: centre (3), half its size (1), colour premultiplied by its alpha (4), its kind
  * (0 a lit disc, 1 emissive, 2 a lit square, BLOOD_BILLBOARD blood, CASING_BILLBOARD a casing,
- * SMOKE_BILLBOARD smoke), and a casing's way, the unit direction it is drawn along (3; zero for the
- * rest, and unread).
+ * SMOKE_BILLBOARD smoke), and a casing's way, the unit direction it is drawn along (3); smoke's, the
+ * share of the shots' flash light it takes, and two zeros (SMOKE_BILLBOARD); zero for the rest, and unread.
  */
 export const BILLBOARD_FLOATS = 12;
 /**
@@ -119,7 +139,11 @@ export const CASING_BILLBOARD = 6;
 /**
  * Smoke's kind of billboard (the muzzle's): lit as a mote is, and drawn as a soft puff (effects.wgsl), its
  * light falling away from its middle to nothing at its rim. A mote's firm disc, lit by the shot's own light a
- * hand from the eye, read as a bright ball over the view and widened the tracer it hung about.
+ * hand from the eye, read as a bright ball over the view and widened the tracer it hung about. Its tenth
+ * float is the share of the shots' flash light it takes (effects-light.wgsl): 1, whole, but a kept one's
+ * (the player's own, at the drawn muzzle on the next round's line), which takes what the frame gives
+ * (`billboards`' keptFlash: [effects] own_smoke_flash_share), its earlier puffs lit by each shot's flash
+ * having read again as a bright ball round the tracer leaving through them.
  */
 export const SMOKE_BILLBOARD = 7;
 
@@ -127,7 +151,7 @@ export class Particles {
   count = 0;
   /** Particles a full pool refused. */
   dropped = 0;
-  /** The wind (m/s), added to the velocity of the lit particles not anchored as they move: the battle's, set each frame (app/main.ts); none unless set. */
+  /** The wind (m/s), added to each particle's velocity as it moves, times its kind's share: the battle's, set each frame (app/main.ts); none unless set. */
   wind: [number, number, number] = [0, 0, 0];
   /** A billboard's floats (BILLBOARD_FLOATS), for what reads them in the page (the capture tools, the e2e tests). */
   readonly floats = BILLBOARD_FLOATS;
@@ -145,6 +169,13 @@ export class Particles {
   /** 0 lit, 1 emissive, 2 lit and square, BLOOD_BILLBOARD blood, CASING_BILLBOARD a casing, SMOKE_BILLBOARD smoke: the billboard's kind. */
   private readonly kind: Uint8Array;
   private readonly anchor: Uint8Array;
+  /** Where each was thrown (m): an anchored one is drawn off by where its anchor is drawn less this. */
+  private readonly from: Float64Array;
+  /** Its kind's share of the wind. */
+  private readonly windShare: Float64Array;
+  /** An anchored one's drift kept for good: 0 not kept (eased out by heldShare), 1 kept and not yet held (`hold`), 2 kept as `kept` holds it. */
+  private readonly keep: Uint8Array;
+  private readonly kept: Float64Array;
 
   constructor(readonly capacity: number) {
     const n = capacity;
@@ -161,13 +192,18 @@ export class Particles {
     this.colourEnd = new Float64Array(n * 4);
     this.kind = new Uint8Array(n);
     this.anchor = new Uint8Array(n);
+    this.from = new Float64Array(n * 3);
+    this.windShare = new Float64Array(n);
+    this.keep = new Uint8Array(n);
+    this.kept = new Float64Array(n * 3);
   }
 
   /**
    * `count` particles of `spec` from `origin` (m) at `velocity` (m/s), drawn about it with `rng` if
-   * given, their colour times `tint` if given, anchored to `anchor` (0: none): how many the pool took.
+   * given, their colour times `tint` if given, anchored to `anchor` (0: none), and `kept` at the drift
+   * they are first drawn with rather than joining their own paths: how many the pool took.
    */
-  emit(origin: readonly number[], velocity: readonly number[], spec: ParticleSpec, count: number, rng?: Rng, tint?: readonly [number, number, number], anchor = 0): number {
+  emit(origin: readonly number[], velocity: readonly number[], spec: ParticleSpec, count: number, rng?: Rng, tint?: readonly [number, number, number], anchor = 0, kept = false): number {
     const n = Math.max(0, Math.min(count, this.capacity - this.count));
     this.dropped += count - n;
     for (let k = 0; k < n; k++) {
@@ -185,6 +221,9 @@ export class Particles {
       this.pos[i * 3] = origin[0];
       this.pos[i * 3 + 1] = origin[1];
       this.pos[i * 3 + 2] = origin[2];
+      this.from[i * 3] = origin[0];
+      this.from[i * 3 + 1] = origin[1];
+      this.from[i * 3 + 2] = origin[2];
       this.vel[i * 3] = velocity[0] * scale + dx;
       this.vel[i * 3 + 1] = velocity[1] * scale + dy;
       this.vel[i * 3 + 2] = velocity[2] * scale + dz;
@@ -202,6 +241,9 @@ export class Particles {
       }
       this.kind[i] = spec.emissive ? 1 : spec.blood ? BLOOD_BILLBOARD : spec.casing ? CASING_BILLBOARD : spec.smoke ? SMOKE_BILLBOARD : spec.square ? 2 : 0;
       this.anchor[i] = anchor;
+      this.windShare[i] = spec.wind;
+      this.keep[i] = anchor > 0 && kept ? 1 : 0;
+      this.kept.fill(0, i * 3, i * 3 + 3);
     }
     return n;
   }
@@ -213,9 +255,9 @@ export class Particles {
       const keep = Math.max(0, 1 - this.drag[i] * dt);
       for (let k = 0; k < 3; k++) this.vel[i * 3 + k] *= keep;
       this.vel[i * 3 + 1] += this.gravity[i] * dt;
-      // The wind carries what is lit and loose: not the emissive (a flash, sparks), nor what is held to the drawn gun.
-      const carried = this.kind[i] !== 1 && this.anchor[i] === 0;
-      for (let k = 0; k < 3; k++) this.pos[i * 3 + k] += (this.vel[i * 3 + k] + (carried ? wind[k] : 0)) * dt;
+      // The wind carries each by its kind's share: smoke and mist whole, a droplet or a clod barely.
+      const share = this.windShare[i];
+      for (let k = 0; k < 3; k++) this.pos[i * 3 + k] += (this.vel[i * 3 + k] + wind[k] * share) * dt;
       this.age[i] += dt;
       if (this.age[i] >= this.life[i]) continue;
       if (w !== i) this.move(i, w);
@@ -225,28 +267,51 @@ export class Particles {
   }
 
   /**
-   * Each live particle's billboard into `out` (BILLBOARD_FLOATS each): how many. A particle anchored
-   * to `a` is drawn off by `drift[a - 1]` (metres), all of it when thrown and none by `driftS`.
+   * A frame's drawing of the anchors, `anchors[a - 1]` where anchor `a` is drawn now (metres; none: not
+   * drawn, as the rifle through a scope): each kept particle not yet held takes its drift from it,
+   * where it is drawn less where it was thrown (none where its anchor is not drawn), for good. The
+   * frame's builder holds them before it draws the billboards (app/effects-frame.ts).
    */
-  billboards(out: Float32Array, drift?: readonly (readonly number[] | undefined)[], driftS = 0): number {
+  hold(anchors?: readonly (readonly number[] | undefined)[]): void {
+    for (let i = 0; i < this.count; i++) {
+      if (this.keep[i] !== 1) continue;
+      const a = anchors?.[this.anchor[i] - 1];
+      for (let k = 0; k < 3; k++) this.kept[i * 3 + k] = a ? a[k] - this.from[i * 3 + k] : 0;
+      this.keep[i] = 2;
+    }
+  }
+
+  /**
+   * Each live particle's billboard into `out` (BILLBOARD_FLOATS each): how many. A particle anchored
+   * to `a` is drawn off by where that anchor is drawn now, `anchors[a - 1]` (metres), less where it was
+   * thrown: all of it when thrown and none by `driftS` (heldShare); a kept one by its drift as it was
+   * held (`hold`), whatever its age, and where it is if not yet held. Smoke carries the share of the
+   * shots' flash light it takes (SMOKE_BILLBOARD): a kept one's `keptFlash`, another's 1. It changes nothing.
+   */
+  billboards(out: Float32Array, anchors?: readonly (readonly number[] | undefined)[], driftS = 0, keptFlash = 1): number {
     const n = Math.min(this.count, Math.floor(out.length / BILLBOARD_FLOATS));
     for (let i = 0; i < n; i++) {
       const t = Math.min(1, Math.max(0, this.age[i] / this.life[i]));
       const o = i * BILLBOARD_FLOATS;
-      const off = this.anchor[i] > 0 && driftS > 0 ? drift?.[this.anchor[i] - 1] : undefined;
-      const share = off ? Math.max(0, 1 - this.age[i] / driftS) : 0;
-      for (let k = 0; k < 3; k++) out[o + k] = this.pos[i * 3 + k] + (off ? off[k] * share : 0);
+      const a = this.anchor[i];
+      const drawn = a > 0 && this.keep[i] === 0 ? anchors?.[a - 1] : undefined;
+      if (this.keep[i] === 2) for (let k = 0; k < 3; k++) out[o + k] = this.pos[i * 3 + k] + this.kept[i * 3 + k];
+      else if (drawn) {
+        const share = heldShare(this.age[i], driftS);
+        for (let k = 0; k < 3; k++) out[o + k] = this.pos[i * 3 + k] + (drawn[k] - this.from[i * 3 + k]) * share;
+      } else for (let k = 0; k < 3; k++) out[o + k] = this.pos[i * 3 + k];
       const grown = this.sizeEase[i] === 1 ? t : 1 - pow(1 - t, this.sizeEase[i]);
       out[o + 3] = (this.sizeStart[i] + (this.sizeEnd[i] - this.sizeStart[i]) * grown) * 0.5;
       const alpha = this.colourStart[i * 4 + 3] + (this.colourEnd[i * 4 + 3] - this.colourStart[i * 4 + 3]) * t;
       for (let c = 0; c < 3; c++) out[o + 4 + c] = (this.colourStart[i * 4 + c] + (this.colourEnd[i * 4 + c] - this.colourStart[i * 4 + c]) * t) * alpha;
       out[o + 7] = alpha;
       out[o + 8] = this.kind[i];
-      // A casing's way: its velocity's direction (none while it is still).
+      // A casing's way: its velocity's direction (none while it is still). Smoke's share of the shots' flash light.
       let ax = 0;
       let ay = 0;
       let az = 0;
-      if (this.kind[i] === CASING_BILLBOARD) {
+      if (this.kind[i] === SMOKE_BILLBOARD) ax = this.keep[i] === 0 ? 1 : keptFlash;
+      else if (this.kind[i] === CASING_BILLBOARD) {
         const vx = this.vel[i * 3];
         const vy = this.vel[i * 3 + 1];
         const vz = this.vel[i * 3 + 2];
@@ -258,6 +323,11 @@ export class Particles {
       out[o + 11] = az;
     }
     return n;
+  }
+
+  /** Where particle `i` was thrown (metres). */
+  thrown(i: number): [number, number, number] {
+    return [this.from[i * 3], this.from[i * 3 + 1], this.from[i * 3 + 2]];
   }
 
   /** Copy particle `from` into slot `to`. */
@@ -275,5 +345,9 @@ export class Particles {
     this.colourEnd.copyWithin(to * 4, from * 4, from * 4 + 4);
     this.kind[to] = this.kind[from];
     this.anchor[to] = this.anchor[from];
+    this.from.copyWithin(to * 3, from * 3, from * 3 + 3);
+    this.windShare[to] = this.windShare[from];
+    this.keep[to] = this.keep[from];
+    this.kept.copyWithin(to * 3, from * 3, from * 3 + 3);
   }
 }

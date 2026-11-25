@@ -38,6 +38,8 @@ export interface Frame {
   depth?: { x0: number; y0: number; n: number; scale: number; metres: ArrayLike<number> } | null;
   battle?: { p: [number, number, number]; v: [number, number, number]; flown: number }[];
   suppression?: number;
+  /** The muzzle's smoke drawn in the frame (particles.ts SMOKE_BILLBOARD): each puff's centre and half its size (m). */
+  smoke?: { at: [number, number, number]; half: number }[];
 }
 
 export interface Track {
@@ -67,6 +69,8 @@ export const FAR_M: number;
 export const FAR_LIT_MIN: number;
 export const STREAM_FROM_M: number;
 export const STREAM_AIM_PX: number;
+export const STREAM_READ_MIN: number;
+export const SMOKE_KIND: number;
 export const PATH_M: readonly number[];
 export const NOON_RING_PX: readonly number[];
 /** (b)'s saturation is its kind's: red's, and Blue's derived from it (tracer-measures.mjs). */
@@ -82,11 +86,12 @@ export function tracerMasks(frames: readonly Frame[], w: number, h: number): Uin
 export function teamChannel(kind: number): number;
 export function byDay(c: Capture): boolean;
 export function headRing(img: Image, info: Frame['info'], kind: number, anyKind?: boolean): Measures;
+/** (a): the widest run at half height (`px`) over every sample read (`samples`); of them, those a lit puff of smoke nearer the eye covers, counted with their widest run (`underSmoke`), read as the rest are. */
 export function nearWidth(imgs: readonly Image[], frames: readonly Frame[], kind: number): Measures;
 export function farColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[], kind: number, team: Hsv): Measures;
 export function frontColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[]): Measures;
 export function battleColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[]): Measures;
-/** (e): by day (`day`) a sample lit or tinted by `team`'s colour is shown, after dark a lit one; `lit` beside it, the share and span lit alone. */
+/** (e): by day (`day`) a sample lit or tinted by `team`'s colour is shown, after dark a lit one; `lit` beside it, the share and span lit alone; `unread`, the samples left out: a pixel across the line brighter than its own background, one that cannot be lit, and none shown. Each pixel across the line is read over its own background. */
 export function streamCover(comp: Composite, frames: readonly Frame[], track: Track | null, team?: Hsv | null, day?: boolean): Measures;
 export function trackRound(frames: readonly Frame[], kind: number): Track | null;
 export function pathSamples(frames: readonly Frame[], track: Track | null): { points: [number, number][]; metres: number[]; n: number[]; lengthPx: number; end: number } | null;

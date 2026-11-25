@@ -18,7 +18,8 @@
  *
  * The hands' cues (combat/handling.ts: a reload's magazine out and in, its bolt, the machine gun's
  * feed cover, the shotgun's shells and pump, an empty trigger's click) at the ear, at once and whole,
- * at `hands_gain`: the gun is in the player's own hands.
+ * at `hands_gain`: the gun is in the player's own hands. Each cue's plan carries its sound's shape
+ * ([audio.cues], cues.ts), which voices.ts plays.
  */
 
 import type { BattleEvents } from '../battle/director';
@@ -26,6 +27,7 @@ import type { HandlingCue } from '../combat/handling';
 import type { Tunables } from '../core/tunables';
 import type { CombatEvents } from '../sim/session';
 import { K, kindOf } from '../world/materials';
+import { cueShapes, type CueShape } from './cues';
 
 /** A hit's feedback (the shots spec's §4): a body hit's thwack, a headshot's crack and its gush, a kill's thud and chime, a steel plate's ring, being hit. */
 export type FeedbackKind = 'hit' | 'head' | 'gush' | 'kill' | 'ding' | 'hurt';
@@ -50,6 +52,8 @@ export interface VoicePlan {
   lowpassHz: number;
   /** A whistle's time to its landing; a blast's rumble; a distant shell's rumble or thump. */
   lengthS?: number;
+  /** A hands' cue's sound: its parts and how long it sounds ([audio.cues]). */
+  cue?: CueShape;
   /** A whistle's pitch, falling from and to. */
   fromHz?: number;
   toHz?: number;
@@ -96,6 +100,8 @@ export interface AudioTunables {
   splashShellS: number;
   /** The most voices sounding or waiting to (cap.ts). */
   maxVoices: number;
+  /** Each hands' cue's sound ([audio.cues], cues.ts), its plan carries. */
+  cues: Record<HandlingCue, CueShape>;
 }
 
 export interface DistantVoice {
@@ -139,6 +145,7 @@ export function audioTunables(tun: Tunables): AudioTunables {
     splashShellGain: f('splash_shell_gain'),
     splashShellS: f('splash_shell_s'),
     maxVoices: tun.i('audio.max_voices'),
+    cues: cueShapes(tun),
   };
 }
 
@@ -209,7 +216,7 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
   for (const b of events.blasts) out.push({ ...afar(b.at, t.blastGain, 'blast'), lengthS: t.blastRumbleS });
   for (const s of events.scoops) out.push(afar(s.at, t.scrapeGain, 'scrape'));
   // The hands' cues: the gun is in the player's own hands, heard at the ear, at once and whole.
-  for (const h of events.handling) out.push({ kind: h.cue, at: [listener[0], listener[1], listener[2]], delayS: 0, gain: t.handsGain, lowpassHz: t.openLowpassHz });
+  for (const h of events.handling) out.push({ kind: h.cue, at: [listener[0], listener[1], listener[2]], delayS: 0, gain: t.handsGain, lowpassHz: t.openLowpassHz, cue: t.cues[h.cue] });
   for (const w of events.splashes) {
     if (w.kind === 'shell') out.push({ ...afar(w.at, t.splashShellGain, 'splash'), lengthS: t.splashShellS });
     else if (distance(w.at) <= t.impactWithinM) out.push(afar(w.at, t.splashGain, 'splash'));

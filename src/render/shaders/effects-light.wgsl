@@ -16,9 +16,10 @@
 // and with 2 added to its alpha (2 to 3), for the draw to give it a firm edge (effects.wgsl). A casing
 // (kind 6, particles.ts CASING_BILLBOARD: the brass) is lit as a mote is, and handed on with its way (the
 // billboard's last three floats) for the draw to lay it along. The muzzle's smoke (kind 7, particles.ts
-// SMOKE_BILLBOARD) is lit as a mote is, the shots' light and all; a shot's flash's core (kind 8,
-// effects.ts FLASH_CORE_BILLBOARD) is emissive; each is handed on marked soft (its way's w), for the draw
-// to fade it to its rim.
+// SMOKE_BILLBOARD) is lit as a mote is, the shots' flashes by the share its tenth float carries (1,
+// whole, but the player's own, kept a hand from the eye: [effects] own_smoke_flash_share); a shot's
+// flash's core (kind 8, effects.ts FLASH_CORE_BILLBOARD) is emissive; each is handed on marked soft (its
+// way's w), for the draw to fade it to its rim.
 #include "scene.wgsl"
 #include "sky.wgsl"
 #include "camera.wgsl"
@@ -52,7 +53,8 @@ struct Lit {
 
 // Group 1 after the light cells' grid and cells (light-cells.wgsl); group 3 is the haze's.
 @group(1) @binding(2) var<uniform> look: EffectsLight;
-// Twelve floats a billboard (particles.ts): centre, half its size, colour premultiplied, its kind, a casing's way.
+// Twelve floats a billboard (particles.ts): centre, half its size, colour premultiplied, its kind, a casing's
+// way (smoke's: the share of the shots' flash light it takes, and two zeros).
 @group(1) @binding(3) var<storage, read> billboards: array<f32>;
 @group(1) @binding(4) var<storage, read_write> lit: array<Lit>;
 @group(1) @binding(5) var gDepth: texture_2d<f32>;
@@ -92,12 +94,12 @@ fn skyAround() -> vec3f {
   return (x + y + z) / 6.0;
 }
 
-// The shots' flashes and the shells' blasts at p (voxels).
-fn flashesAt(p: vec3f) -> vec3f {
+// The shots' flashes, by `shots` of them, and the shells' blasts at p (voxels).
+fn flashesAt(p: vec3f, shots: f32) -> vec3f {
   var sum = vec3f(0.0);
   for (var i = 0u; i < min(frame.flashCount, 4u); i++) {
     let f = frame.flashes[i];
-    sum += facing(Light(f.pos, f.radius, f.colour, f.intensity), p);
+    sum += facing(Light(f.pos, f.radius, f.colour, f.intensity), p) * shots;
   }
   for (var i = 0u; i < min(frame.blastCount, 4u); i++) {
     let b = frame.blasts[i];
@@ -177,7 +179,9 @@ fn main(@builtin(global_invocation_id) g: vec3u) {
     let p = centre / frame.voxel;
     let near = nearLight(p);
     let around = skyAround() * look.dustSky + cellLightsAt(p);
-    var light = frame.keyColour * keyLit(p) * look.dustKey + flashesAt(p) + mix(around, near.rgb, near.a);
+    // The shots' flashes whole, but on smoke by the share it carries (particles.ts SMOKE_BILLBOARD).
+    let shots = select(1.0, billboards[o + 9u], kind == SMOKE);
+    var light = frame.keyColour * keyLit(p) * look.dustKey + flashesAt(p, shots) + mix(around, near.rgb, near.a);
     if (blood) {
       // No darker than its floor: the light the present pass shows as bloodFloor.
       let shown = look.bias * exposureState[0].x * exp2(exposureState[0].y) * look.sharpShare;

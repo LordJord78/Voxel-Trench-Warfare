@@ -100,8 +100,17 @@ export function renders(tun: Tunables): Render[] {
   out.push(of('headshot-kill-dry', [...atEar(['head']), { ...kill, delayS: FRAME_S }]));
   // The hands' cues, each as planVoices places it (at the ear, whatever the muzzle it came from).
   for (const cue of CUES) {
-    const events = { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [{ tick: 1, cue, at: [0.2, -0.1, -0.5] as [number, number, number] }], harms: [] };
+    const events = cueEvents(cue);
     out.push(of(cue, planVoices(t, events, ear), { high: SMALL_SPEAKER }));
   }
   return out;
+}
+
+/**
+ * A frame's events with nothing in them but one of the hands' `cue`s, by the gun's muzzle (planVoices
+ * places it at the ear wherever it came from): the one such frame this tool builds by hand, which its
+ * test shares.
+ */
+export function cueEvents(cue: HandlingCue): Parameters<typeof planVoices>[1] {
+  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [{ tick: 1, cue, at: [0.2, -0.1, -0.5] }], harms: [] };
 }

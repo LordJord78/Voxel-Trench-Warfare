@@ -11,7 +11,8 @@ import { BILLBOARD_FLOATS, BLOOD_BILLBOARD, CASING_BILLBOARD, particleSpec, SMOK
 import { RIFLE_MUZZLE, RIFLE_PORT } from '../../src/combat/rifle-model';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
-import { decodeShotMark, encodeShotMark, TRACER_KIND } from '../../src/net/gear';
+import { BARE, decodeShotMark, encodeShotMark, GUNS, TRACER_KIND } from '../../src/net/gear';
+import { GUN_DEFS, sightOf } from '../../src/combat/arsenal';
 import { FLASH_CORE_BILLBOARD, MAX_BILLBOARDS, RIBBON_FLOATS } from '../../src/render/effects';
 import { cameraBasis, projectToPixel } from '../../src/render/camera';
 import { MAX_PUFFS } from '../../src/render/frame-uniforms';
@@ -170,31 +171,99 @@ describe('a frame of effects', () => {
     close(built.lights[0].position, throughPose(moved, RIFLE_MUZZLE), 5, 'moved');
   });
 
-  it("the shot's flash and brass leave the drawn rifle, joining their own paths over particle_attach_s", () => {
+  it("the shot's flash, brass and smoke leave the drawn rifle wherever it is drawn now, less where they were thrown: the flash and brass joining their own paths over particle_attach_s, the smoke kept where it was first drawn", () => {
     const { s, events, rifle } = walkAndShoot();
-    const loose = new EffectsFrameBuilder(t).build(s, events).frame;
+    // Where the simulation holds them: a twin's frame drawn with no rifle (the smoke takes its drift
+    // when it is first drawn, so the same session is not drawn twice).
+    const twin = walkAndShoot();
+    const loose = new EffectsFrameBuilder(t).build(twin.s, twin.events).frame;
     const free = Array.from(loose.billboards.slice(0, loose.billboardCount * BILLBOARD_FLOATS));
-    const built = new EffectsFrameBuilder(t).build(s, events, rifle);
+    const b = new EffectsFrameBuilder(t);
+    const built = b.build(s, events, rifle);
     const held = built.frame;
     // The shot's flash, casing and smoke, and after them its tracer's head and its flash's core.
     expect(built.counts.heads).toBe(1);
     expect(built.counts.cores).toBe(1);
     expect(held.billboardCount).toBe(5);
-    // Thrown in the shot's tick and stepped once with it.
-    const share = 1 - 1 / 60 / t.particleAttachS;
-    const drift: Record<number, V3> = { 1: sub(throughPose(rifle.toWorld, RIFLE_MUZZLE), s.muzzle()), [CASING_BILLBOARD]: sub(throughPose(rifle.toWorld, RIFLE_PORT), s.port()) };
+    // Thrown in the shot's tick and stepped once with it: 1 − smootherstep of its age over particle_attach_s.
+    const u = 1 / 60 / t.particleAttachS;
+    const share = 1 - u * u * u * (u * (u * 6 - 15) + 10);
+    const drawnAt = (m: Float32Array) => ({ 1: throughPose(m, RIFLE_MUZZLE), [CASING_BILLBOARD]: throughPose(m, RIFLE_PORT), [SMOKE_BILLBOARD]: throughPose(m, RIFLE_MUZZLE) }) as Record<number, V3>;
+    const want = (m: Float32Array, i: number, kind: number) => sub(drawnAt(m)[kind], s.particles.thrown(i)).map((d) => (kind === SMOKE_BILLBOARD ? d : d * share));
     const kinds: number[] = [];
     for (let i = 0; i < 3; i++) {
       const o = i * BILLBOARD_FLOATS;
       const kind = held.billboards[o + 8];
       kinds.push(kind);
       const what = kind === 1 ? 'flash' : kind === CASING_BILLBOARD ? 'brass' : 'smoke';
-      // The smoke is not held to the drawn gun: it stays where the simulation threw it.
-      const want = kind === SMOKE_BILLBOARD ? [0, 0, 0] : drift[kind].map((d) => d * share);
-      if (kind !== SMOKE_BILLBOARD) expect(Math.hypot(...want), what).toBeGreaterThan(0.005);
-      close(sub(Array.from(held.billboards.slice(o, o + 3)), free.slice(o, o + 3)), want, 5, what);
+      // The flash and the smoke were thrown where the shot left, its muzzle before its kick.
+      if (kind !== CASING_BILLBOARD) close(s.particles.thrown(i), events.shots[0].muzzle, 9, what);
+      expect(Math.hypot(...want(rifle.toWorld, i, kind)), what).toBeGreaterThan(0.005);
+      close(sub(Array.from(held.billboards.slice(o, o + 3)), free.slice(o, o + 3)), want(rifle.toWorld, i, kind), 5, what);
     }
     expect(kinds).toEqual([1, CASING_BILLBOARD, SMOKE_BILLBOARD]);
+    // The gun drawn elsewhere the next frame: the flash and brass go with it, the smoke stays.
+    const moved = new Float32Array(rifle.toWorld);
+    moved[9] += 0.05;
+    moved[10] -= 0.04;
+    moved[11] += 0.03;
+    const next = b.build(s, none(), { toWorld: moved, prevToWorld: rifle.toWorld }).frame;
+    for (let i = 0; i < 3; i++) {
+      const o = i * BILLBOARD_FLOATS;
+      close(sub(Array.from(next.billboards.slice(o, o + 3)), free.slice(o, o + 3)), want(kinds[i] === SMOKE_BILLBOARD ? rifle.toWorld : moved, i, kinds[i]), 5, `moved ${i}`);
+    }
+  });
+
+  it("the SVD's kick (17 cm at its muzzle the frame its shot leaves) takes the shot's flash, brass and smoke and its tracer's start with the drawn gun: each leaves the drawn muzzle (the brass the port) within a few millimetres", () => {
+    /** The SVD's shot's frame: a tick a frame, each drawn 0.99 of the way to the latest tick, so its kick is all but whole in it. */
+    const svdShot = () => {
+      const s = stand();
+      s.equip({ primary: 'svd', secondary: 'm17', fits: {} });
+      for (let k = 0; k < 120; k++) s.tick();
+      s.drainEvents();
+      const rig = new CameraRig(rigTunables(tun));
+      s.advance(0.99 / 60);
+      const frame = () => {
+        s.advance(1 / 60);
+        return { rifle: rig.rifle(s, rig.pose(s, 1 / 60)), events: s.drainEvents() };
+      };
+      for (let f = 0; f < 10; f++) frame();
+      s.intent = { ...s.intent, fire: true };
+      const shot = frame();
+      s.intent = { ...s.intent, fire: false };
+      return { s, ...shot };
+    };
+    const { s, rifle, events } = svdShot();
+    expect(s.arm.spec.gun.key).toBe('svd');
+    expect(events.shots).toHaveLength(1);
+    const shot = events.shots[0];
+    const muzzle = throughPose(rifle.toWorld, s.arm.spec.muzzle);
+    const port = throughPose(rifle.toWorld, s.arm.spec.port);
+    // The kick: the drawn muzzle far from where the shot left.
+    const kick = Math.hypot(...sub(muzzle, shot.muzzle));
+    expect(kick).toBeGreaterThan(0.12);
+    // Where the simulation holds them: its twin's, drawn with no rifle.
+    const twin = svdShot();
+    const loose = new EffectsFrameBuilder(t).build(twin.s, twin.events).frame.billboards;
+    const built = new EffectsFrameBuilder(t).build(s, events, rifle);
+    const held = built.frame.billboards;
+    const at = (b: Float32Array, i: number) => Array.from(b.slice(i * BILLBOARD_FLOATS, i * BILLBOARD_FLOATS + 3));
+    const kinds = [0, 1, 2].map((i) => held[i * BILLBOARD_FLOATS + 8]);
+    expect(kinds).toEqual([1, CASING_BILLBOARD, SMOKE_BILLBOARD]);
+    const off: Record<string, number> = {};
+    kinds.forEach((kind, i) => {
+      // Its own flight since it was thrown, from where it is drawn from.
+      const flight = sub(at(loose, i), s.particles.thrown(i));
+      const from = kind === CASING_BILLBOARD ? port : muzzle;
+      off[kind === 1 ? 'flash' : kind === CASING_BILLBOARD ? 'brass' : 'smoke'] = Math.hypot(...sub(at(held, i), from.map((v, k) => v + flight[k])));
+    });
+    // The tracer: its streak back to the muzzle in its first frame, drawn from the drawn muzzle.
+    const path = s.rounds.tracerSegments(streak);
+    const ahead = [0, 1, 2].map((k) => path.tail[k] - path.origin[k]);
+    expect(built.drawn).toHaveLength(1);
+    off.tracer = Math.hypot(...sub(built.drawn[0].tail, muzzle.map((v, k) => v + ahead[k])));
+    expect(off, JSON.stringify({ kick, off })).toEqual({ flash: expect.any(Number), brass: expect.any(Number), smoke: expect.any(Number), tracer: expect.any(Number) });
+    for (const [what, m] of Object.entries(off)) expect(m, `${what}: ${JSON.stringify({ kick, off })}`).toBeLessThan(0.003);
   });
 
   it('two shots in one frame show two stars and two lights', () => {
@@ -391,6 +460,173 @@ describe('a frame of effects', () => {
     for (const [tail, tip] of alphas(bare, bare.counts.stars)) expect([tail, tip]).toEqual([1, 0]);
   });
 
+  it("aimed down the sights, no prong's tip rises over the line of sight (the sight's height over the bore, in the gun's frame): the rolls skip the arc about the gun's up, flash_aimed_gap_deg (45°) either way or as wide as the shot's farthest-reaching prong needs, drawn from the same hash", () => {
+    expect(t.flashAimedGapDeg).toBe(45);
+    const TAU = 2 * Math.PI;
+    const least = (t.flashAimedGapDeg * Math.PI) / 180;
+    // Every sight the guns take: the AK's irons 0.0675 m over its bore (viewmodel.ts RIFLE_HOLDING), the
+    // M870's 0.0375, a dot's 0.105, a pistol's.
+    const sights = new Set<number>();
+    for (const gun of GUNS) for (const optic of GUN_DEFS[gun].fits.optic) sights.add(sightOf(gun, { ...BARE, optic }).y);
+    expect([...sights].sort()).toContain(0.0675);
+    let widened = 0;
+    for (const sight of sights) {
+      for (let tick = 0; tick < 300; tick++) {
+        const at: V3 = [12.8, 1.5 + tick * 0.003, 2.3];
+        const hip = flashDraw(tick, at, false, t);
+        const aimed = flashDraw(tick, at, false, t, sight);
+        // The same shot: its core, its count, each prong's length and splay; only the rolls are moved.
+        expect(aimed.coreM).toBe(hip.coreM);
+        expect(aimed.prongs.map((p) => [p.lengthM, p.splay])).toEqual(hip.prongs.map((p) => [p.lengthM, p.splay]));
+        const reach = Math.max(...hip.prongs.map((p) => p.lengthM * Math.sin(p.splay)));
+        const gap = Math.max(least, reach > sight ? Math.acos(sight / reach) : 0);
+        if (gap > least + 1e-9) widened++;
+        const fromUp = (roll: number) => Math.abs(Math.atan2(Math.sin(roll - Math.PI / 2), Math.cos(roll - Math.PI / 2)));
+        for (const p of aimed.prongs) {
+          // Its tip, over the bore along the gun's up: under the line of sight.
+          expect(p.lengthM * Math.sin(p.splay) * Math.sin(p.roll), `sight ${sight}, tick ${tick}`).toBeLessThanOrEqual(sight + 1e-12);
+          expect(fromUp(p.roll), `sight ${sight}, tick ${tick}`).toBeGreaterThanOrEqual(gap - 1e-9);
+        }
+        // Still spread round the rest of the turn in the hash's order, none bunched on another.
+        const order = (rolls: number[]) => rolls.map((r, k) => [((r - Math.PI / 2 - gap) % TAU + TAU) % TAU, k]).sort((a, b) => a[0] - b[0]).map(([, k]) => k);
+        expect(order(aimed.prongs.map((p) => p.roll))).toEqual(order(hip.prongs.map((p) => p.roll)));
+        const spread = (TAU - 2 * gap) / aimed.prongs.length;
+        const sorted = aimed.prongs.map((p) => ((p.roll - Math.PI / 2 - gap) % TAU + TAU) % TAU).sort((a, b) => a - b);
+        for (let k = 1; k < sorted.length; k++) expect(sorted[k] - sorted[k - 1]).toBeGreaterThan(0.5 * spread);
+      }
+    }
+    // The AK's irons widen it for its farthest-reaching prongs (0.30 m at 25°: 0.127 m out from the bore).
+    expect(widened).toBeGreaterThan(100);
+    // A compensator's side prongs are as they were: level with the bore.
+    expect(flashDraw(7, [12.8, 1.5, 2.3], true, t, 0.0675)).toEqual(flashDraw(7, [12.8, 1.5, 2.3], true, t));
+  });
+
+  it("the shot's flash built aimed (the sights' blend 0.5 or more) keeps its prongs' tips under the line of sight in the drawn gun's frame; less aimed, the hash's rolls whole", () => {
+    const s = stand();
+    const rig = new CameraRig(rigTunables(tun));
+    s.advance(0.99 / 60);
+    const frame = () => {
+      s.advance(1 / 60);
+      return { rifle: rig.rifle(s, rig.pose(s, 1 / 60)), events: s.drainEvents() };
+    };
+    s.intent = { ...s.intent, aim: true };
+    for (let f = 0; f < 90; f++) frame();
+    expect(s.aimed).toBe(1);
+    const sight = s.arm.spec.sight.y;
+    expect(sight).toBe(0.0675);
+    let shots = 0;
+    for (let n = 0; n < 12; n++) {
+      s.intent = { ...s.intent, fire: true };
+      const { rifle, events } = frame();
+      s.intent = { ...s.intent, fire: false };
+      expect(events.shots).toHaveLength(1);
+      const shot = events.shots[0];
+      const muzzle = throughPose(rifle.toWorld, s.arm.spec.muzzle);
+      const side = unit([rifle.toWorld[0], rifle.toWorld[1], rifle.toWorld[2]]);
+      const up = unit([rifle.toWorld[3], rifle.toWorld[4], rifle.toWorld[5]]);
+      const rollsOf = (aimed: number) => {
+        s.aimed = aimed;
+        const built = new EffectsFrameBuilder(t).build(s, events, rifle);
+        s.aimed = 1;
+        return built.flashes[0].tips.map((tip) => {
+          const d = sub(tip, muzzle);
+          // Its tip over the bore along the drawn gun's up.
+          return { rise: dot(d, up), roll: Math.atan2(dot(d, up), dot(d, side)) };
+        });
+      };
+      const want = (aimedSight?: number) => flashDraw(shot.tick, shot.muzzle, false, t, aimedSight).prongs.map((p) => p.roll);
+      const angleOff = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+      for (const [aimed, rolls] of [[1, want(sight)], [0.5, want(sight)], [0.49, want()]] as const) {
+        const got = rollsOf(aimed);
+        expect(got.map((g, k) => angleOff(g.roll, rolls[k]))).toEqual(rolls.map(() => expect.closeTo(0, 6)));
+        if (aimed >= 0.5) for (const g of got) expect(g.rise, `shot ${n}`).toBeLessThanOrEqual(sight + 1e-9);
+      }
+      shots++;
+      for (let f = 0; f < 20; f++) frame();
+    }
+    expect(shots).toBe(12);
+  });
+
+  it("aimed, on the screen as the camera draws the flash's frames, no prong comes near the reticle: the shot's kick lifts the drawn gun over the eye's line (a tip at the line of sight in the gun's frame shows a few pixels over the screen's middle), but every prong passes 3% of the screen's height or more from its middle, where the hash's own rolls lay one across it", () => {
+    // The hands' capture's aimed AK at 1600 × 1000: of 12 shots one tip showed 9.6 px over the middle.
+    // That is the kick, not a prong up the tracer: aimed, it still lifts and pitches the drawn gun
+    // (viewmodel.ts heldPose: kick.up × 0.6, kick.pitch × 0.5), so a tip held at the sight's height over
+    // the bore in the gun's frame rises over the eye's line for the flash's frames, well aside of it.
+    const res: [number, number] = [1600, 1000];
+    const run = (tunables: typeof t) => {
+      const s = stand();
+      const rig = new CameraRig(rigTunables(tun));
+      const b = new EffectsFrameBuilder(tunables);
+      s.advance(0.5 / 60);
+      const frame = () => {
+        s.advance(1 / 60);
+        const pose = rig.pose(s, 1 / 60);
+        const events = s.drainEvents();
+        return { pose, events, built: b.build(s, events, rig.rifle(s, pose)) };
+      };
+      s.intent = { ...s.intent, aim: true };
+      for (let f = 0; f < 90; f++) frame();
+      expect(s.aimed).toBe(1);
+      let nearest = Infinity;
+      let highest = -Infinity;
+      let frames = 0;
+      for (let n = 0; n < 24; n++) {
+        s.intent = { ...s.intent, fire: true };
+        let f = frame();
+        for (let k = 0; k < 10 && f.events.shots.length === 0; k++) f = frame();
+        s.intent = { ...s.intent, fire: false };
+        expect(f.events.shots, `shot ${n}`).toHaveLength(1);
+        // Each frame the shot's flash is drawn in (flash_s: two at 60 Hz).
+        for (let own = f.built.flashes.find((x) => !x.remote); own; own = (f = frame()).built.flashes.find((x) => !x.remote)) {
+          frames++;
+          const a = projectToPixel(f.pose, res, own.at)!;
+          const c = [res[0] / 2, res[1] / 2];
+          for (const tip of own.tips) {
+            const q = projectToPixel(f.pose, res, tip)!;
+            highest = Math.max(highest, c[1] - q[1]);
+            // The prong's drawn segment's nearest to the screen's middle.
+            const d = [q[0] - a[0], q[1] - a[1]];
+            const u = Math.max(0, Math.min(1, ((c[0] - a[0]) * d[0] + (c[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1])));
+            nearest = Math.min(nearest, Math.hypot(a[0] + d[0] * u - c[0], a[1] + d[1] * u - c[1]));
+          }
+        }
+        for (let k = 0; k < 20; k++) frame();
+        // A magazine's worth, then a fresh one (its reload run out aimed down).
+        if (s.weapon.rounds === 0) for (let k = 0; k < 300 && s.weapon.rounds === 0; k++) frame();
+      }
+      return { nearest, highest, frames };
+    };
+    const aimed = run(t);
+    expect(aimed.frames).toBeGreaterThanOrEqual(48);
+    expect(aimed.nearest, JSON.stringify(aimed)).toBeGreaterThanOrEqual(0.03 * res[1]);
+    // The kick's lift over the line: a little, for the flash's two frames.
+    expect(aimed.highest, JSON.stringify(aimed)).toBeLessThan(0.03 * res[1]);
+    // The hash's rolls whole (as from the hip), aimed: a prong lies across the reticle, far over the line.
+    const whole = run({ ...t, flashAimedBlend: 2 });
+    expect(whole.nearest, JSON.stringify(whole)).toBeLessThan(0.01 * res[1]);
+    expect(whole.highest, JSON.stringify(whole)).toBeGreaterThan(0.03 * res[1]);
+  });
+
+  it("the flash's look numbers are [effects]'s: a prong's roll strays flash_prong_jitter (0.2) of a spread from its place, and the core is drawn flash_core_ahead (0.25) of its size out along the bore", () => {
+    expect([t.flashProngJitter, t.flashCoreAhead]).toEqual([0.2, 0.25]);
+    const TAU = 2 * Math.PI;
+    // No stray: an even spread from the hash's turn.
+    for (let tick = 0; tick < 50; tick++) {
+      const rolls = flashDraw(tick, [12.8, 1.5, 2.3], false, { ...t, flashProngJitter: 0 }).prongs.map((p) => p.roll);
+      for (let k = 1; k < rolls.length; k++) expect(rolls[k] - rolls[k - 1]).toBeCloseTo(TAU / rolls.length, 12);
+    }
+    const s = stand();
+    const events = shoot(s);
+    const shot = events.shots[0];
+    const coreM = drawOf(shot).coreM;
+    for (const ahead of [0.25, 0.6]) {
+      const built = new EffectsFrameBuilder({ ...t, flashCoreAhead: ahead }).build(s, events);
+      const out = built.frame.billboards;
+      const core = Array.from({ length: built.frame.billboardCount }, (_, i) => Array.from(out.slice(i * BILLBOARD_FLOATS, (i + 1) * BILLBOARD_FLOATS))).find((q) => q[8] === FLASH_CORE_BILLBOARD)!;
+      expect(Math.hypot(...sub(core.slice(0, 3), shot.muzzle))).toBeCloseTo(coreM * ahead, 5);
+    }
+  });
+
   it("a suppressed shot's flash is today's wisp: no core and no prongs, a glimmer of its light", () => {
     const s = stand();
     const events = shoot(s);
@@ -399,6 +635,41 @@ describe('a frame of effects', () => {
     expect(built.counts.cores).toBe(0);
     expect(built.lights.length).toBe(1);
     expect(built.lights[0].intensity).toBeCloseTo(t.flashLightIntensity * 0.12, 9);
+  });
+
+  it("the player's smoke, kept at the drawn muzzle a hand from the eye, takes own_smoke_flash_share (0.15, [effects]) of the shots' flash light: the frame gives its billboard that share for the light pass, and another's smoke takes it whole", () => {
+    expect(t.ownSmokeFlashShare).toBe(0.15);
+    const { s, events, rifle } = walkAndShoot();
+    // Another's smoke, thrown where it is and not kept (Session.throwSmoke's, for a remote shot).
+    s.particles.emit([12.8, 1.5, 8], [0, 0, 0], particleSpec(tun, 'muzzle_smoke'), 1);
+    const smokes = (look: typeof t) => {
+      const f = new EffectsFrameBuilder(look).build(s, events, rifle).frame;
+      const out: number[] = [];
+      for (let i = 0; i < f.billboardCount; i++) if (f.billboards[i * BILLBOARD_FLOATS + 8] === SMOKE_BILLBOARD) out.push(f.billboards[i * BILLBOARD_FLOATS + 9]);
+      return out;
+    };
+    // The shot's own (thrown kept) first, then the other.
+    const [own, other] = smokes(t);
+    expect(own).toBeCloseTo(0.15, 6);
+    expect(other).toBe(1);
+    // The share is the tunable's.
+    expect(smokes({ ...t, ownSmokeFlashShare: 0.6 })[0]).toBeCloseTo(0.6, 6);
+    expect(smokes({ ...t, ownSmokeFlashShare: 1 })).toEqual([1, 1]);
+  });
+
+  it("a shot's flash under flash_star_min_share (0.5, [effects]) of a whole one draws no core and no star: the suppressor's 0.12 is under it, and the line moves with the tunable", () => {
+    expect(t.flashStarMinShare).toBe(0.5);
+    const s = stand();
+    const events = shoot(s);
+    const at = (share: number, least: number) => new EffectsFrameBuilder({ ...t, flashStarMinShare: least }).build(s, { ...events, shots: [{ ...events.shots[0], flash: share }] }).counts;
+    // Today's line: 0.5 draws its star and core, a hair under it neither.
+    expect(at(0.5, 0.5).cores).toBe(1);
+    expect(at(0.5, 0.5).stars).toBeGreaterThanOrEqual(3);
+    expect(at(0.49, 0.5)).toMatchObject({ cores: 0, stars: 0, lights: 1 });
+    // The line moved: the suppressor's wisp drawn whole under 0.1, none over 0.13.
+    expect(at(0.12, 0.1).cores).toBe(1);
+    expect(at(0.12, 0.1).stars).toBeGreaterThanOrEqual(3);
+    expect(at(0.12, 0.13)).toMatchObject({ cores: 0, stars: 0, lights: 1 });
   });
 
   it("the player's tracer leaves the muzzle and joins the round's path where it was aimed", () => {

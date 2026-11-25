@@ -925,7 +925,9 @@ pool_capacity       = 4096     # the spec's (the reference's was 1024): heavy fi
 # Each kind: how it lives (life, gravity, drag, size and colour from start to end,
 # emissive or lit by the world), and how it is thrown (count; speed along its
 # direction, plus lift upward; a normal spread and a share of speed jitter, as
-# the reference's emit draws them).
+# the reference's emit draws them). `wind`: how much of the battle's wind carries
+# it (Particles.wind): the light whole (smoke, mist, dust), a droplet of blood or
+# a clod of soil a twentieth, debris, brass and anything emissive not at all.
 
 [particles.muzzle_flash]
 life_s              = 0.045    # two or three frames: a stab, not a flare
@@ -942,6 +944,7 @@ speed               = 2.0      # out along the bore
 lift                = 0.0
 spread              = 0.0
 speed_jitter        = 0.0
+wind                = 0.0      # a flash, of its own light
 
 [particles.brass]
 life_s              = 1.30
@@ -959,10 +962,12 @@ speed               = 2.6      # to the right
 lift                = 1.5
 spread              = 0.55
 speed_jitter        = 0.2
+wind                = 0.0      # a casing: heavy
 
 # A shot's smoke at the muzzle (the shots spec §2): a lit grey puff thrown along the bore, rising
 # (gravity up) and slowing, growing and fading out; it drifts on the battle's wind (Particles.wind). A
-# suppressed gun throws two.
+# suppressed gun throws two. The player's leaves the drawn muzzle and stays where the drawn gun left
+# it (particles.ts: kept), whatever the shot's kick does to the gun after.
 [particles.muzzle_smoke]
 life_s              = 1.4
 gravity             = 0.25     # it rises
@@ -979,6 +984,7 @@ speed               = 0.6      # along the bore
 lift                = 0.0
 spread              = 0.4
 speed_jitter        = 0.0
+wind                = 1.0      # it drifts on the wind
 
 [particles.dust]
 life_s              = 0.90
@@ -998,6 +1004,7 @@ speed               = 2.2      # off the struck face
 lift                = 0.0
 spread              = 0.9
 speed_jitter        = 0.35
+wind                = 1.0
 
 [particles.spark]
 life_s              = 0.22
@@ -1014,6 +1021,7 @@ speed               = 7.0
 lift                = 0.0
 spread              = 2.5
 speed_jitter        = 0.3
+wind                = 0.0      # sparks, of their own light
 
 # A shell's: its flash, the soil it throws (the struck ground's colour, paler as
 # dust is), and debris, drawn square.
@@ -1032,6 +1040,7 @@ speed               = 0.0
 lift                = 1.0      # it rises
 spread              = 0.0
 speed_jitter        = 0.0
+wind                = 0.0
 
 [particles.shell_soil]
 life_s              = 1.60
@@ -1048,6 +1057,7 @@ speed               = 7.0      # up out of the crater
 lift                = 5.0
 spread              = 3.0
 speed_jitter        = 0.35
+wind                = 0.05     # clods: barely
 
 [particles.debris]
 life_s              = 4.00     # long enough to come back down: under the ground the
@@ -1064,6 +1074,7 @@ speed               = 6.0      # up about 5 m on average
 lift                = 4.0
 spread              = 2.5
 speed_jitter        = 0.25
+wind                = 0.0      # debris: heavy
 
 # Blood (the shots spec's §4): a round into a body throws droplets and a puff
 # of mist out along it, beside the uniform's khaki dust; a critical hit throws
@@ -1087,6 +1098,7 @@ speed               = 3.5      # out of the far side, along the round
 lift                = 0.0
 spread              = 0.6
 speed_jitter        = 0.3
+wind                = 0.05     # droplets: barely
 
 [particles.blood_mist]
 life_s              = 0.9
@@ -1105,6 +1117,7 @@ speed               = 0.8      # along the round
 lift                = 0.0
 spread              = 0.8
 speed_jitter        = 0.0
+wind                = 1.0      # a mist: with it
 
 # Where the round went in: every hit that bleeds throws one small puff on the
 # shooter's side, [hits] entry_puff_back_m before the hit and coming back toward
@@ -1127,6 +1140,7 @@ speed               = 0.6      # back toward the shooter
 lift                = 0.0
 spread              = 0.15
 speed_jitter        = 0.0
+wind                = 1.0      # a puff of mist
 
 # The sound (src/audio): every voice made in WebAudio, nothing loaded. A sound is
 # late by its distance at the speed of sound, quieter past reference_m, and duller
@@ -1181,6 +1195,82 @@ splash_shell_s      = 1.2
 crackle_gain        = 0.4
 crackle_within_m    = 30.0
 max_voices          = 64       # sounding or waiting to (a distant one is scheduled seconds ahead); the farthest dropped first
+
+# The hands' cues' sounds (src/audio/voices.ts cueShapes; the cues are combat/handling.ts's), each at the
+# ear at hands_gain: a few tens of milliseconds of filtered noise and clipped tones, mostly over 400 Hz
+# so a laptop plays them. A cue is its parts, each `at_s` into it and `peak` loud (of hands_gain):
+# - "clack", metal on metal: noise in a band about `hz` and a clipped square tone falling from
+#   `tone_hz`, dying over `decay_s`, shaped as clack_* below;
+# - "burst", noise through a `filter` ("lowpass", "highpass" or "bandpass" at `hz`; a band's `q`), up
+#   to its peak in `attack_s` and down over `decay_s`;
+# - "tone", a `wave` ("sine", "square", "triangle", "sawtooth") gliding `from_hz` to `to_hz` as it
+#   dies over `decay_s`.
+# Each falls to `fall` of its peak, then to nothing over 4 ms. `length_s`: how long the cue sounds,
+# when it frees its place under max_voices.
+[audio.cues]
+fall                = 0.05
+clack_q             = 1.2      # a clack's noise: its band's Q,
+clack_noise         = 2.2      # its peak (of the clack's),
+clack_attack_s      = 0.0005   # and its attack;
+clack_tone          = 0.18     # its tone: its peak (of the clack's),
+clack_glide         = 0.7      # where it falls to (of where it starts),
+clack_tone_decay    = 0.8      # and its decay (of the clack's)
+
+# The magazine out: a dull click as the catch lets go, and the magazine scraping out over 60 ms.
+[audio.cues.mag-out]
+length_s            = 0.07
+parts = [
+  { part = "clack", at_s = 0.0, hz = 1100.0, tone_hz = 520.0, peak = 0.8, decay_s = 0.018 },
+  { part = "burst", at_s = 0.012, filter = "bandpass", hz = 2600.0, q = 2.0, peak = 1.1, attack_s = 0.012, decay_s = 0.036 },
+]
+
+# The magazine in: a sharp clack, seated, over 40 ms, and a knock of the body under it.
+[audio.cues.mag-in]
+length_s            = 0.05
+parts = [
+  { part = "clack", at_s = 0.0, hz = 2200.0, tone_hz = 1150.0, peak = 1.0, decay_s = 0.035 },
+  { part = "tone", at_s = 0.0, wave = "sine", from_hz = 260.0, to_hz = 180.0, peak = 0.35, decay_s = 0.03 },
+]
+
+# The bolt: a two-part rack, back with a scrape and home 75 ms on, over 120 ms.
+[audio.cues.bolt]
+length_s            = 0.13
+parts = [
+  { part = "clack", at_s = 0.0, hz = 1600.0, tone_hz = 820.0, peak = 0.85, decay_s = 0.03 },
+  { part = "burst", at_s = 0.01, filter = "bandpass", hz = 3200.0, q = 2.5, peak = 0.9, attack_s = 0.015, decay_s = 0.045 },
+  { part = "clack", at_s = 0.075, hz = 2000.0, tone_hz = 1000.0, peak = 1.0, decay_s = 0.045 },
+]
+
+# The machine gun's feed cover slapped shut: a broad clap over 50 ms.
+[audio.cues.cover]
+length_s            = 0.06
+parts = [
+  { part = "burst", at_s = 0.0, filter = "bandpass", hz = 1300.0, q = 0.7, peak = 2.4, attack_s = 0.001, decay_s = 0.049 },
+  { part = "tone", at_s = 0.0, wave = "triangle", from_hz = 420.0, to_hz = 300.0, peak = 0.3, decay_s = 0.04 },
+]
+
+# A shell thumbed into the shotgun's tube: a click over 30 ms.
+[audio.cues.shell]
+length_s            = 0.04
+parts = [
+  { part = "clack", at_s = 0.0, hz = 2600.0, tone_hz = 1400.0, peak = 0.8, decay_s = 0.03 },
+]
+
+# The pump: chk-chk, the fore-end back and forward, two clacks 90 ms apart.
+[audio.cues.pump]
+length_s            = 0.13
+parts = [
+  { part = "clack", at_s = 0.0, hz = 1500.0, tone_hz = 640.0, peak = 1.0, decay_s = 0.03 },
+  { part = "clack", at_s = 0.09, hz = 1900.0, tone_hz = 760.0, peak = 1.0, decay_s = 0.03 },
+]
+
+# An empty trigger: a thin click over 15 ms.
+[audio.cues.dry]
+length_s            = 0.02
+parts = [
+  { part = "burst", at_s = 0.0, filter = "highpass", hz = 3000.0, peak = 1.4, attack_s = 0.0005, decay_s = 0.0145 },
+  { part = "tone", at_s = 0.0, wave = "square", from_hz = 2600.0, to_hz = 2100.0, peak = 0.12, decay_s = 0.012 },
+]
 
 # What is drawn over the world after sharpening (render/effects.ts): tracers, each
 # shot's flash star and light, and how the particles take the world's light. The
@@ -1261,8 +1351,16 @@ tracer_converge_max_m = 150.0  # path (from the eye) where the shot was aimed: t
                                # the line of sight, within these (the sky: the farthest)
 flash_s             = 0.03     # a shot's flash star and its light, in the world's
                                # seconds: two frames at 60 Hz, five at 144
-particle_attach_s   = 0.15     # the shot's flash and brass leave the rifle as drawn,
-                               # joining their own paths over this
+particle_attach_s   = 0.15     # the shot's flash and brass, and the player's tracer's start, leave the
+                               # rifle as drawn (wherever the shot's kick has taken it since they left),
+                               # joining their own paths over this (eased: particles.ts heldShare); its
+                               # smoke stays where the drawn gun left it
+own_smoke_flash_share = 0.15   # of the shots' flash light, what the player's own smoke takes (another's,
+                               # and the shells' blasts' light, whole): kept at the drawn muzzle a hand
+                               # from the eye, on the next round's line, its puffs lit whole by each
+                               # shot's flash read as a cream ball round the tracer leaving through them.
+                               # G1's (a), its limit 14 px: at night 35.5 px at 1, 30.5 at 0.5, 26.5 at
+                               # 0.35, 3.5 at 0.25; at dusk 25.5 at 0.3; under 8 at 0.2 and 0.15
 # A shot's flash (the shots spec §2), all of it drawn from a hash of the shot (its tick and its muzzle):
 # a white-hot core, an emissive disc this wide, a little out along the bore; and its star, this many
 # forward prongs, each this long and this far off the bore, each at its own roll about it, anywhere
@@ -1272,8 +1370,17 @@ flash_core_m        = [0.10, 0.16]
 flash_core_colour   = [1.0, 0.97, 0.90]
 flash_core_gain     = 0.25     # the core's brightness over the prongs' (flash_intensity): at night a
                                # core as bright as them read as a white ball, its prongs lost round it
+flash_core_ahead    = 0.25     # the core drawn this share of its size out along the bore from the muzzle
 flash_prongs        = [3, 5]
 flash_prong_m       = [0.15, 0.30]
+flash_prong_jitter  = 0.2      # each prong's roll strays up to this share of an even spread from its
+                               # place round the bore, so none bunches on another
+flash_aimed_blend   = 0.5      # aimed down the sights (their blend this or more), no prong's tip rises
+flash_aimed_gap_deg = 45.0     # over the line of sight (the sight's height over the bore): the rolls
+                               # skip the arc about the gun's up, this either way, or as wide as keeps
+                               # the shot's farthest-reaching prong under the line (the AK's irons, 0.0675
+                               # m over the bore, ask up to 58 for a 0.30 m prong at 25); a prong rolled
+                               # up lay along the tracer across the reticle
 flash_prong_splay_deg = [15.0, 25.0]   # off the bore: forward prongs. Past 30 one rolled toward the
                                # eye's line (from the hip, the gun's upper left) reaches across the
                                # tracer leaving, 3 m out and on, and is measured as its width (G1's
@@ -1284,6 +1391,8 @@ flash_comp_splay_deg = 80.0
 flash_comp_tip      = 0.7      # a side prong's brightness at its tip (a prong's else fades to nothing):
                                # most of it lies inside the core, and faded it was lost there
 flash_star_width_m  = 0.025    # each prong's width: at 0.06 a prong half a metre off was a bar
+flash_star_min_share = 0.5     # a shot's flash under this share of a whole one (a suppressor's 0.12)
+                               # draws no core and no star: its light's glimmer alone
 flash_colour        = [1.0, 0.86, 0.55]
 flash_intensity     = 60.0
 flash_light_radius_m  = 6.0    # a shot's light: warm, falling to nothing at this
