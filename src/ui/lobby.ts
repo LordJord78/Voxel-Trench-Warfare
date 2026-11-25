@@ -173,9 +173,10 @@ export class Lobby {
     this.deployLine.textContent = line;
     this.goButton.hidden = !canGo;
     // Go takes the focus as it appears, so Enter or Space goes in; not every frame after, so the
-    // keys can reach the loadout and fullscreen.
+    // keys can reach the loadout and fullscreen. Offered only once the focus landed: under the open
+    // loadout the way in is hidden and a focus does nothing, so the frame after it closes tries again.
     if (canGo && !this.goOffered) this.goButton.focus();
-    this.goOffered = canGo;
+    this.goOffered = canGo && (this.goOffered || this.doc.activeElement === this.goButton);
   }
 
   /** The line to the room is gone: nothing here can be done but going back to the start screen (Leave, which reloads the page without the room). */

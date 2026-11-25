@@ -89,6 +89,20 @@ describe("the lobby's way in", () => {
     expect(page.activeElement).toBe(fullscreen);
   });
 
+  it('gives Go the focus once the loadout closes, if Go appeared while the loadout covered the way in', () => {
+    const { page, lobby, go } = lobbyOn();
+    const focus = go.focus.bind(go);
+    // Under the open loadout the way in is visibility:hidden, and a focus there does nothing.
+    go.focus = () => {};
+    lobby.deploy('The match is on. You fight for Red.', true);
+    lobby.deploy('The match is on. You fight for Red.', true);
+    expect(page.activeElement).not.toBe(go);
+    // The loadout closed: the next frame gives Go the focus.
+    go.focus = focus;
+    lobby.deploy('The match is on. You fight for Red.', true);
+    expect(page.activeElement).toBe(go);
+  });
+
   it('gives Go the focus at once to a player joining a match already on, and again at each match after', () => {
     const { page, lobby, go } = lobbyOn();
     lobby.deploy('The match is on. You fight for Blue.', true);

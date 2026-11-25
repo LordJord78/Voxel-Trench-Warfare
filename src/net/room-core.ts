@@ -238,7 +238,8 @@ export class RoomCore {
   restore(memory: RoomMemory): void {
     this.config = { ...defaultConfig(), ...memory.config };
     this.left.clear();
-    for (const [token, l] of memory.left) this.left.set(token, { ...l });
+    // A memory from before names were held (R2) has none: such a seat holds no name.
+    for (const [token, l] of memory.left) this.left.set(token, { ...l, name: typeof l.name === 'string' ? l.name : '', asked: typeof l.asked === 'string' ? l.asked : '' });
     this.claims = [...memory.claims];
   }
 
@@ -463,7 +464,7 @@ export class RoomCore {
   private namesTaken(m: Member): Set<string> {
     const taken = new Set<string>();
     for (const s of this.seated()) if (s !== m) taken.add(s.seat!.name.toLowerCase());
-    for (const l of this.left.values()) taken.add(l.name.toLowerCase());
+    for (const l of this.left.values()) if (l.name) taken.add(l.name.toLowerCase());
     return taken;
   }
 
@@ -516,6 +517,8 @@ export class RoomCore {
         }
         return;
       case 'name':
+        // Holds past REJOIN_MS go first, so a rename isn't numbered against one that ran out.
+        this.forget(now);
         m.asked = msg.name;
         seat.name = freeName(msg.name, this.namesTaken(m));
         this.broadcastRoster();

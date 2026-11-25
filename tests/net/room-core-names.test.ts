@@ -119,4 +119,31 @@ describe("a room's names", () => {
     join(room, 'Max', 200_300);
     expect(names(room)).toContain('Max');
   });
+
+  it('lets a rename have a name whose hold ran out, with no hello or tick between', () => {
+    const room = new RoomCore('LAPSE');
+    const sam = join(room, 'Sam');
+    const kit = join(room, 'Kit', 10, token('k'));
+    room.close(kit, 100);
+    // Held: a rename to it is numbered.
+    say(room, sam, { t: 'name', name: 'Kit' }, 200);
+    expect(names(room)).toEqual(['Kit 2']);
+    // The hold ran out: the same rename has it, though nothing else has happened since.
+    say(room, sam, { t: 'name', name: 'Kit' }, 100 + REJOIN_MS + 1);
+    expect(names(room)).toEqual(['Kit']);
+  });
+
+  it("restores a room's memory from before names were held without failing a hello", () => {
+    const room = new RoomCore('OLDMM');
+    join(room, 'Jord', 0, token('j'));
+    const sam = join(room, 'Sam', 10, token('s'));
+    room.close(sam, 100);
+    const memory = room.snapshot();
+    // A memory written before R2: its left seats carry no name.
+    const old = { ...memory, left: memory.left.map(([t, l]) => [t, { ...l, name: undefined, asked: undefined }] as unknown as (typeof memory.left)[number]) };
+    const next = new RoomCore('OLDMM');
+    next.restore(old);
+    expect(() => join(next, 'Sam', 200)).not.toThrow();
+    expect(names(next)).toEqual(['Sam']);
+  });
 });
