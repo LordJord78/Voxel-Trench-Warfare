@@ -120,8 +120,9 @@ export class LoadingScreen {
     setTimeout(remove, 1000);
   }
 
-  /** The sheet gone, and the still with it at once (play, or flying, before or during its fade). */
+  /** The sheet gone, and the still with it at once (play, or flying, before or during its fade, or the lobby up); never over a failure, which stays. */
   hide(): void {
+    if (this.failed) return;
     this.root.hidden = true;
     if (this.still) this.still.hidden = true;
   }

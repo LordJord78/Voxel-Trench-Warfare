@@ -63,10 +63,12 @@ describe('the start screen, as a join uses it', () => {
     expect(el('loading').hidden).toBe(false);
     expect(el('join-note').textContent).toBe('No game with that code');
     expect(off()).toEqual([false, false, false, false]);
-    // A page that has stopped keeps its failure: no join can cover it.
+    // A page that has stopped keeps its failure: no join can cover it, nor a lobby put it away.
     loading.fail('The graphics device was lost.');
     loading.back('Joining game KXQRT…', true);
     expect(el('status').textContent).toBe('The graphics device was lost.');
     expect(el('join-note').textContent).toBe('No game with that code');
+    loading.hide();
+    expect(el('loading').hidden).toBe(false);
   });
 });
