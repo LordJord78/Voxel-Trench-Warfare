@@ -12,9 +12,24 @@ You hold a fire bay on the shoulder of a dry ravine. Across fifty metres of shel
 
 Every wall, sandbag and duckboard is made of 10 cm voxels. A shell cuts into the ground you were counting on, and you dig yourself back out.
 
+You carry a long gun and a pistol. Every round is a tracer; a hit is marked, heard and bled, and a kill rings.
+
 ## Play
 
 Play it at [lordjord78.github.io/Voxel-Trench-Warfare](https://lordjord78.github.io/Voxel-Trench-Warfare/), in a desktop browser with WebGPU: Chrome or Edge 113 or later, or Safari 26. Where WebGPU is missing, the page shows a video of the game instead. Click to play; the mouse looks around.
+
+**Play solo** puts you on a range in front of your fire bay:
+- dummies stand at 25 to 150 m, and two walk back and forth at 50 and 90 m;
+- steel plates ring at 30 to 85 m, with head-sized ones at 45 and 70 m;
+- each hit reads out where it struck, how hard and from how far, and a kill how many shots it took;
+- the battle goes on around you.
+
+**Loadout**, on the start screen, in the lobby and in the pause menu, picks your guns:
+- the long gun: a 5.45 assault rifle, a 5.56 carbine, a 9 mm submachine gun, a 7.62 marksman rifle, a 5.56 light machine gun or a 12 gauge shotgun;
+- the pistol: a 9 mm or a 9x18;
+- each gun's fit: an optic (iron sights, a red dot, a holographic sight or a scope), a muzzle (a suppressor or a compensator), a grip, and a light or a laser.
+
+You choose before you go in, and again while you wait to come back after a death.
 
 ## Play with friends
 
@@ -22,6 +37,11 @@ Up to eight players, Red against Blue:
 1. Click **Host a game with friends** and send the link it gives you (Discord works well). Friends who open it land in your lobby.
 2. Everyone names themselves and picks Red or Blue. The host sets the kills to win, the time of day and the battle, then starts the match.
 3. Each side wears its colour on the arm and the helmet; friendly fire is on, and a team kill costs your side a point. The first side to the kill target wins.
+4. The battle is everyone's (quiet, light fire or heavy fire):
+   - every shell lands at the same moment and place for everyone, and cuts the same crater;
+   - the enemy line fires on both sides, in amber;
+   - what one player digs, everyone sees dug;
+   - a friend who joins mid-match, or reloads, catches up on the battle so far before they deploy.
 
 The rooms run on a small Cloudflare Worker ([server/](server/)). Everyone needs a desktop browser with WebGPU, and the same version of the page (reload if the lobby says otherwise).
 
@@ -37,9 +57,16 @@ The rooms run on a small Cloudflare Worker ([server/](server/)). Everyone needs 
 | <kbd>W</kbd> + <kbd>Space</kbd> at a wall | Climb over it: out of the trench, over the parapet or the parados |
 | <kbd>Q</kbd> | Periscope, on a firing step |
 | Left mouse | Fire |
+| Right mouse, held | Aim down the sights |
 | <kbd>R</kbd> | Reload |
-| <kbd>F</kbd>, held | Dig out loose earth |
-| <kbd>Esc</kbd> | Pause: quality, mouse sensitivity, field of view, the time of day and how fast it passes, incoming fire |
+| <kbd>1</kbd> / <kbd>2</kbd>, or the wheel | The long gun / the pistol |
+| <kbd>B</kbd> | Single shots or automatic, on a gun that has both |
+| <kbd>L</kbd> | The gun's light or laser, on and off |
+| <kbd>F</kbd>, held | Out with the shovel: dig out loose earth |
+| <kbd>M</kbd>, held | The trench map |
+| <kbd>Tab</kbd>, held | The score, in a match with friends |
+| <kbd>H</kbd> | The keys, on screen |
+| <kbd>Esc</kbd> | Pause: the loadout, quality, mouse sensitivity, field of view, the time of day and how fast it passes, incoming fire |
 | <kbd>Alt</kbd> + <kbd>Enter</kbd> (<kbd>Option</kbd> + <kbd>Return</kbd> on a Mac) | Fullscreen and back, as the Fullscreen buttons on the start screen, in the lobby and in the pause menu do. In Chrome and Edge, Esc still pauses when fullscreen; hold it down to leave fullscreen |
 | <kbd>F3</kbd> | Frame timings |
 
@@ -53,7 +80,8 @@ TypeScript and raw WebGPU, with no engine:
   - a physically based sky with the moon and stars, and a full day-to-night cycle;
   - denoising, temporal anti-aliasing, bloom, automatic exposure and film grain.
 - **Destruction at 10 cm:** shells carve craters, soil slumps, and the player digs it out.
-- **Combat:** weapons with ballistics and recoil, suppression, and the effects of fire.
+- **Combat:** eight guns and their attachments, drawn in the hands, with ballistics, recoil, suppression and the effects of fire. Every round is a tracer in its side's colour, and hits have their own marks, sounds and blood.
+- **Playing together:** a relay on a Cloudflare Worker runs each room's match and its shelling. Every client cuts the same craters from the shells' seeds, and a late joiner replays the room's log.
 - **The battle around the player:** a deterministic director fires flares, barrages, tracers and fires, and the water reflects them.
 - **Quality:** two quality presets and dynamic resolution hold a 14 ms GPU budget at 1.5 megapixels; a first visit whose machine cannot hold the high preset is moved to the low one.
 
@@ -83,7 +111,7 @@ The build works from any path. [The Pages workflow](.github/workflows/pages.yml)
 
 ## Design
 
-The design is in six specs, from [the world](docs/superpowers/specs/2026-10-21-trenchline-web-world-design.md) to [the showcase](docs/superpowers/specs/2026-10-25-trenchline-web-showcase-design.md) and [playing it together](docs/superpowers/specs/2026-10-30-trenchline-multiplayer-design.md). The build plans are in [docs/superpowers/plans/](docs/superpowers/plans/).
+The design is in eight specs, from [the world](docs/superpowers/specs/2026-10-21-trenchline-web-world-design.md) to [the showcase](docs/superpowers/specs/2026-10-25-trenchline-web-showcase-design.md), [playing it together](docs/superpowers/specs/2026-10-30-trenchline-multiplayer-design.md), [the shots](docs/superpowers/specs/2026-11-03-trenchline-shots-design.md) and [the shared battle](docs/superpowers/specs/2026-11-04-trenchline-shared-battle-design.md). The build plans are in [docs/superpowers/plans/](docs/superpowers/plans/).
 
 ## Python reference
 
