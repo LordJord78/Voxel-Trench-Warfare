@@ -9,6 +9,7 @@
  * the link, and a client from whatever answers at the relay's address.
  */
 
+import { CLOCK_KEYS } from '../core/clock-keys';
 import { hypot } from '../core/dmath';
 import { GUNS } from './gear';
 import type { ScheduledShell } from './shelling';
@@ -82,7 +83,10 @@ export interface RoomConfig {
   map: string;
   /** Kills that win the match. */
   killTarget: number;
-  /** The clock at the start, in hours, and how fast it runs (game minutes a second). */
+  /**
+   * The clock at the start, in hours, and how fast it runs (game minutes a second). The lobby offers
+   * the game's named hours (core/clock-keys.ts); any hour in [0, 24] is taken (cleanConfig).
+   */
   timeOfDay: number;
   lapse: number;
   /** The battle's fire and shells. */
@@ -98,8 +102,9 @@ export interface MatchInfo {
   config: RoomConfig;
 }
 
+/** A room's settings until its owner changes them: the Ravine, 30 kills, the game's dusk (17:35, as solo starts) held there, light fire. */
 export function defaultConfig(): RoomConfig {
-  return { map: 'ravine', killTarget: 30, timeOfDay: 19.5, lapse: 0, intensity: 'light', respawnS: 5 };
+  return { map: 'ravine', killTarget: 30, timeOfDay: CLOCK_KEYS.dusk, lapse: 0, intensity: 'light', respawnS: 5 };
 }
 
 /** A player's body as others need it: where, how fast, which way they look and how they stand. */
@@ -354,6 +359,21 @@ export function cleanName(raw: unknown): string {
   const spaced = raw.slice(0, 256).replace(/\s+/g, ' ');
   const name = [...[...spaced].filter((ch) => !hidden(ch.codePointAt(0)!)).join('').trim()].slice(0, NAME_MAX).join('').trim();
   return name || 'Soldier';
+}
+
+/**
+ * `name` (a clean one) as a room gives it, the names in use there (`taken`, any case) aside: itself if
+ * nobody has it, else numbered, "Soldier 2", "Soldier 3" and on, the lowest free, its words cut to keep
+ * it within NAME_MAX, so two friends never read the same.
+ */
+export function freeName(name: string, taken: Iterable<string>): string {
+  const used = new Set([...taken].map((n) => n.toLowerCase()));
+  if (!used.has(name.toLowerCase())) return name;
+  for (let n = 2; ; n++) {
+    const tail = ` ${n}`;
+    const numbered = [...name].slice(0, NAME_MAX - tail.length).join('').trimEnd() + tail;
+    if (!used.has(numbered.toLowerCase())) return numbered;
+  }
 }
 
 const INTENSITIES: readonly Intensity[] = ['off', 'light', 'heavy'];

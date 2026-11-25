@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { battleStep, matchHours, matchSeconds, ServerClock, SILENT_STEP_S } from '../../src/net/clock';
 import { BARE, encodeGear } from '../../src/net/gear';
 import { INTERP_DELAY_MS, SnapshotBuffer } from '../../src/net/interp';
-import type { PlayerState } from '../../src/net/protocol';
+import { CLOCK_KEYS } from '../../src/core/clock-keys';
+import { defaultConfig, type PlayerState } from '../../src/net/protocol';
 
 const at = (x: number, yaw: number, tick: number, stance = 0): PlayerState => ({ tick, position: [x, 0, 0], velocity: [0, 0, 0], yaw, pitch: 0, stance, height: 1.8, flags: 0 });
 
@@ -24,7 +25,9 @@ describe("the room's clock", () => {
   });
 
   it("keeps the match's hours: the config's start, run on by its lapse", () => {
-    expect(matchHours({ timeOfDay: 19.5, lapse: 0 }, 600)).toBe(19.5);
+    // The room's default (net/protocol.ts defaultConfig): the clock's dusk, 17:35, held there.
+    expect(matchHours(defaultConfig(), 600)).toBe(CLOCK_KEYS.dusk);
+    expect(matchHours({ timeOfDay: CLOCK_KEYS.night, lapse: 0 }, 600)).toBe(CLOCK_KEYS.night);
     expect(matchHours({ timeOfDay: 23.5, lapse: 2 }, 900)).toBeCloseTo(5.5, 9); // 30 game hours on, round the clock
   });
 

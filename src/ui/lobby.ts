@@ -5,6 +5,8 @@
  * way in: the countdown, then Go, the click that lets the game take the mouse.
  */
 
+import { CLOCK_KEY_NAMES, CLOCK_KEYS, nearestClockKey, type ClockKey } from '../core/clock-keys';
+import { clockText } from '../core/sky-clock';
 import type { RoomConfig, Seat, Team } from '../net/protocol';
 
 export interface LobbyHandlers {
@@ -75,6 +77,17 @@ export class Lobby {
     this.startButton.addEventListener('click', () => handlers.start());
     this.leaveButton.addEventListener('click', () => handlers.leave());
     this.goButton.addEventListener('click', () => handlers.go());
+    // The time of day's choices are the game clock's named hours, each at its time: what a choice
+    // sends is the key's hour exactly (the room's default is dusk's).
+    const hours = this.settings.elements.namedItem('timeOfDay') as HTMLSelectElement | null;
+    hours?.replaceChildren(
+      ...(Object.keys(CLOCK_KEYS) as ClockKey[]).map((key) => {
+        const option = doc.createElement('option');
+        option.value = String(CLOCK_KEYS[key]);
+        option.textContent = `${CLOCK_KEY_NAMES[key]} \u00b7 ${clockText(CLOCK_KEYS[key])}`;
+        return option;
+      }),
+    );
     this.settings.addEventListener('submit', (e) => e.preventDefault());
     this.settings.addEventListener('change', () => {
       const f = new FormData(this.settings);
@@ -134,7 +147,8 @@ export class Lobby {
     };
     set('map', view.config.map);
     set('killTarget', String(view.config.killTarget));
-    set('timeOfDay', String(view.config.timeOfDay));
+    // An hour of no key (a room an older page set) shows as the key nearest it, which a change of the settings then sends.
+    set('timeOfDay', String(CLOCK_KEYS[nearestClockKey(view.config.timeOfDay)]));
     set('intensity', view.config.intensity);
     const waiting = view.seats.filter((s) => !s.ready && s.id !== view.owner).length;
     if (!this.root.classList.contains('deploying')) {

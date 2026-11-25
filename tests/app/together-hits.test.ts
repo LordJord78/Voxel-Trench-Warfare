@@ -27,7 +27,7 @@ const { lines, FakeNet } = vi.hoisted(() => {
     owner = 0;
     seats: { id: number; name: string; team: 'red' | 'blue'; ready: boolean; away: boolean }[] = [];
     phase = 'playing';
-    match: unknown = { startAt: 0, seed: 1, config: { map: 'ravine', killTarget: 30, timeOfDay: 19.5, lapse: 0, intensity: 'off', respawnS: 5 } };
+    match: unknown = { startAt: 0, seed: 1, config: { map: 'ravine', killTarget: 30, timeOfDay: 17 + 35 / 60, lapse: 0, intensity: 'off', respawnS: 5 } };
     joined = true;
     score = { red: 0, blue: 0 };
     tallies = new Map<number, { kills: number; deaths: number }>();

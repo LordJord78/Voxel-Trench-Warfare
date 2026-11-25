@@ -129,7 +129,11 @@ class FakeElement {
   }
   /** As a player's click: its listeners called. */
   click(): void {
-    for (const fn of this.listeners.get('click') ?? []) fn();
+    this.fire('click');
+  }
+  /** An event of `type` on it: its listeners called (a field's change). */
+  fire(type: string): void {
+    for (const fn of this.listeners.get(type) ?? []) fn();
   }
   querySelector(): FakeElement {
     return new FakeElement();
@@ -729,8 +733,8 @@ describe('joining a game from the start screen', () => {
     vi.unstubAllGlobals();
   });
 
-  /** A page with the start screen up (what it says kept), its tab's storage `tab`. */
-  function aPage(tab: FakeStorage | null = null) {
+  /** A page with the start screen up (what it says kept), its tab's storage `tab` and its own (localStorage) `local`. */
+  function aPage(tab: FakeStorage | null = null, local: Pick<Storage, 'getItem' | 'setItem'> | null = null) {
     const doc = new FakePage();
     const said: [string, boolean][] = [];
     const notes: string[] = [];
@@ -751,7 +755,7 @@ describe('joining a game from the start screen', () => {
       catchUp: async () => {},
       failed() {},
     };
-    const together = new Together(doc as unknown as Document, 'http://relay.test', 'build', null, hooks, null, { tab: tab as unknown as Storage | null, silentS: 10 });
+    const together = new Together(doc as unknown as Document, 'http://relay.test', 'build', local as Storage | null, hooks, null, { tab: tab as unknown as Storage | null, silentS: 10 });
     return { doc, said, notes, count, together, session: () => (b ??= roomClient(trenchArena(), PLAYER)).session };
   }
 
@@ -825,6 +829,43 @@ describe('joining a game from the start screen', () => {
     const odd = new FakeStorage();
     odd.setItem('trenchline.rejoin.ABCDE', 'x');
     expect(isToken(rejoinToken(odd as unknown as Storage, 'ABCDE'))).toBe(true);
+  });
+
+  it("remembers the name the player types (the G6 playtest's P4), and says it in the next hello; storage refused, nothing kept and nothing broken", () => {
+    const helloName = (local: Pick<Storage, 'getItem' | 'setItem'> | null) => {
+      const page = aPage(null, local);
+      page.together.join('ABCDE');
+      StubSocket.last!.open();
+      return { page, name: StubSocket.last!.sent.find((m) => m.t === 'hello')!.name };
+    };
+    const local = new FakeStorage();
+    // Nothing typed yet: the page says no name, and the room calls them Soldier (net/protocol.ts cleanName).
+    const first = helloName(local);
+    expect(first.name).toBe('');
+    StubSocket.last!.say({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats: [{ id: 0, name: 'Soldier', team: 'red', ready: false, away: false }], config: defaultConfig(), phase: 'lobby', match: null, now: 9_000, log: { shells: [], digs: [] } });
+    // The player types their name in the lobby: the room told, and the name kept.
+    const field = first.page.doc.getElementById('name');
+    field.value = 'Jordan';
+    field.fire('change');
+    expect(StubSocket.last!.took('name')).toEqual([{ t: 'name', name: 'Jordan' }]);
+    expect(local.getItem('trenchline.name')).toBe('Jordan');
+    // The next visit (another game, another day) says it from the first word.
+    expect(helloName(local).name).toBe('Jordan');
+    // Storage that refuses: no name kept or read, and the page plays on.
+    const refusing = {
+      getItem(): string | null {
+        throw new Error('denied');
+      },
+      setItem(): void {
+        throw new Error('denied');
+      },
+    };
+    const shut = helloName(refusing);
+    expect(shut.name).toBe('');
+    const shutField = shut.page.doc.getElementById('name');
+    shutField.value = 'Sam';
+    expect(() => shutField.fire('change')).not.toThrow();
+    expect(StubSocket.last!.took('name')).toEqual([{ t: 'name', name: 'Sam' }]);
   });
 
   /** Welcomed into the match from the room's 9 000, caught up. */

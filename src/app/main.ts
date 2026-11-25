@@ -573,6 +573,8 @@ async function start(): Promise<void> {
     lapse: (speed) => (lapse = speed),
     leave: () => together.leave(),
     endMatch: () => together.endMatch(),
+    // Solo's way back to the start screen (to host or join) is a room's Leave: the page loaded again.
+    toStart: () => together.leave(),
   });
   // The loadout (ui/loadout.ts): chosen on the start screen, in the lobby, or from the pause menu.
   const loadoutMenu = new LoadoutMenu(document, tun);

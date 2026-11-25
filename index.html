@@ -107,7 +107,7 @@
       .choice label { display: flex; gap: 0.4rem; align-items: center; cursor: pointer; }
       .choice input { accent-color: var(--haze); margin: 0; }
       #resume { margin-top: 0.5rem; }
-      #pause-match { display: flex; gap: 0.75rem; margin-top: 1rem; }
+      #pause-match, #pause-solo { display: flex; gap: 0.75rem; margin-top: 1rem; }
       #pause.together .solo-only { display: none; }
 
       /* Playing with friends: the way in on the loading screen, and the lobby's two teams. */
@@ -249,6 +249,11 @@
 
       /* The loadout: the guns to carry down the left, the one being fitted on the right, drawn as its voxels are. */
       #loadout { z-index: 5; align-items: center; overflow-y: auto; background: rgba(23, 20, 31, 0.93); }
+      /* The sheet the loadout is opened over (the start screen, the lobby, the way in) is not drawn while
+         it is open, so no word of it shows through: it comes back as the loadout closes, however it does
+         (Done, Back, Deploy), whatever the lobby sets of its own each frame. Nor can its controls be
+         reached under it, by the mouse or by Tab. */
+      body:has(> #loadout:not([hidden])) :is(#loading, #lobby) { visibility: hidden; }
       #loadout .block { max-width: 64rem; }
       #loadout .arms { display: grid; grid-template-columns: minmax(14rem, 18rem) 1fr; gap: 1.25rem 2.25rem; }
       #loadout h3 { font-weight: 400; letter-spacing: 0.08em; margin: 0 0 0.45rem; color: var(--duckboard); font-size: 0.92rem; text-transform: uppercase; }
@@ -472,12 +477,8 @@
               <input name="killTarget" type="number" min="1" max="200" step="1" />
             </label>
             <label>Time of day
-              <select name="timeOfDay">
-                <option value="5.5">Dawn</option>
-                <option value="12">Noon</option>
-                <option value="19.5">Dusk</option>
-                <option value="22">Night</option>
-              </select>
+              <!-- The game clock's named hours (core/clock-keys.ts), filled in by ui/lobby.ts. -->
+              <select name="timeOfDay"></select>
             </label>
             <label>The battle
               <select name="intensity">
@@ -553,6 +554,9 @@
         <div class="actions" id="pause-match" hidden>
           <button id="end-match" type="button" class="quiet" hidden>End the match</button>
           <button id="leave-match" type="button" class="quiet">Leave the game</button>
+        </div>
+        <div class="actions" id="pause-solo">
+          <button id="to-start" type="button" class="quiet">Back to the start screen</button>
         </div>
       </form>
     </section>

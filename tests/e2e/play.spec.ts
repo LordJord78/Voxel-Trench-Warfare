@@ -136,6 +136,28 @@ test('Esc pauses, and the menu changes the game', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("solo's pause goes back to the start screen as a room's Leave does: the page loaded again at its address, the kit kept, Play solo and Host there", async ({ page }) => {
+  // The G6 self-playtest's P3: a room's pause had "Leave the game", solo's nothing, so a player who
+  // wanted to host or join had to reload the page by hand.
+  const errors = await playing(page);
+  const address = page.url();
+  // A kit of the player's own, to see it kept.
+  await hooks(page, (h) => (h as unknown as { setLoadout(l: unknown): void }).setLoadout({ primary: 'svd', secondary: 'pm', fits: {} }));
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#pause')).toBeVisible();
+  await expect(page.locator('#leave-match')).toBeHidden();
+  const back = page.locator('#to-start');
+  await expect(back).toHaveText('Back to the start screen');
+  await Promise.all([page.waitForEvent('load'), back.click()]);
+  await page.waitForFunction(() => (window as unknown as { __trenchline?: { ready: boolean } }).__trenchline?.ready === true, null, { timeout: 90_000 });
+  await expect(page.locator('#play')).toBeVisible();
+  await expect(page.locator('#host')).toBeVisible();
+  expect(await hooks(page, (h) => h.mode())).toBe('ready');
+  expect(page.url()).toBe(address);
+  await expect(page.locator('#kit-line')).toHaveText('SVD \u00b7 PM');
+  expect(errors).toEqual([]);
+});
+
 /** Horizontal distance the player covers over `frames` frames. */
 async function drift(page: Page, frames: number): Promise<number> {
   const a = await hooks(page, (h) => h.player().position);

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
 import { encodeShotMark } from '../../src/net/gear';
-import { CLIENT_TEXT_MAX, cleanConfig, CODE_LETTERS, isRoomCode, isToken, cleanName, decodeDig, decodeShell, decodeShot, decodeState, defaultConfig, DIG_CELLS_MAX, DIG_SPAN_MAX, encodeShot, encodeState, HURT_MAX, NAME_MAX, parseClient, parseRoom, PROTOCOL, ROOM_TEXT_MAX, sent, SHOTS_MAX, WORLD_DIMS, type PlayerState, type ShotState, type WireDig } from '../../src/net/protocol';
+import { CLOCK_KEYS, clockText } from '../../src/core/sky-clock';
+import { CLIENT_TEXT_MAX, cleanConfig, CODE_LETTERS, freeName, isRoomCode, isToken, cleanName, decodeDig, decodeShell, decodeShot, decodeState, defaultConfig, DIG_CELLS_MAX, DIG_SPAN_MAX, encodeShot, encodeState, HURT_MAX, NAME_MAX, parseClient, parseRoom, PROTOCOL, ROOM_TEXT_MAX, sent, SHOTS_MAX, WORLD_DIMS, type PlayerState, type ShotState, type WireDig } from '../../src/net/protocol';
 import { genParams, MAP_IDS } from '../../src/world/generation/params';
 import { LAST_CELL as LAST, MOST_CELLS as MOST, worldCell as cell } from '../support/cells';
 
@@ -210,5 +211,35 @@ describe('the protocol', () => {
     expect(cleanConfig({ map: 'corridor', killTarget: 25.4, timeOfDay: 22, lapse: 1, intensity: 'heavy', respawnS: 3 })).toEqual({ map: 'corridor', killTarget: 25, timeOfDay: 22, lapse: 1, intensity: 'heavy', respawnS: 3 });
     expect(cleanConfig({ map: 'moon', killTarget: 0, timeOfDay: 25, lapse: -1, intensity: 'nuclear', respawnS: 999 })).toEqual({});
     expect(cleanConfig('no')).toEqual({});
+  });
+
+  it("plays a room by the game's clock: its default the clock's dusk, 17:35 (the G6 playtest's P1: it was 19:30, the sun 14° under); any other hour, as an older page's room says, still parses", () => {
+    expect(defaultConfig().timeOfDay).toBe(CLOCK_KEYS.dusk);
+    expect(clockText(defaultConfig().timeOfDay)).toBe('17:35');
+    for (const hours of [...Object.values(CLOCK_KEYS), 5.5, 19.5, 22, 0]) {
+      expect(cleanConfig({ timeOfDay: hours })).toEqual({ timeOfDay: hours });
+      const told = parseRoom(JSON.stringify({ t: 'config', config: { ...defaultConfig(), timeOfDay: hours } }));
+      expect(told).toEqual({ t: 'config', config: { ...defaultConfig(), timeOfDay: hours } });
+    }
+  });
+
+  it('numbers a name already taken, in any case: Soldier 2, then the lowest free, cut to fit NAME_MAX', () => {
+    expect(freeName('Soldier', [])).toBe('Soldier');
+    expect(freeName('Soldier', ['Sam'])).toBe('Soldier');
+    expect(freeName('Soldier', ['Soldier'])).toBe('Soldier 2');
+    expect(freeName('Soldier', ['Soldier', 'Soldier 2'])).toBe('Soldier 3');
+    expect(freeName('Soldier', ['Soldier', 'Soldier 3'])).toBe('Soldier 2');
+    expect(freeName('soldier', ['SOLDIER', 'Soldier 2'])).toBe('soldier 3');
+    // Sixteen letters and a number: the name gives way, never past NAME_MAX, and what a page makes of it is the same.
+    const long = 'Abcdefghijklmnop';
+    expect(long).toHaveLength(NAME_MAX);
+    const named = freeName(long, [long]);
+    expect(named).toBe('Abcdefghijklmn 2');
+    expect(cleanName(named)).toBe(named);
+    const taken = [long, ...[2, 3, 4, 5, 6, 7, 8, 9].map((n) => `Abcdefghijklmn ${n}`)];
+    expect(freeName(long, taken)).toBe('Abcdefghijklm 10');
+    // A cut at a space leaves none at the end, so no run of them before the number.
+    expect(freeName('Abcdefghijklm op', ['Abcdefghijklm op'])).toBe('Abcdefghijklm 2');
+    expect(freeName('Jord the Great', ['Jord the Great'])).toBe('Jord the Great 2');
   });
 });

@@ -9,8 +9,8 @@
 import { horizontal, julianDay, moonEquatorial, moonIllumination, sunEquatorial, toWorld } from './ephemeris';
 import type { Tunables } from './tunables';
 
-/** The hours the game names: dusk and night are sub-project 1's keys, by the sun's elevation. */
-export const CLOCK_KEYS = { dawn: 6 + 50 / 60, noon: 12, dusk: 17 + 35 / 60, night: 21 } as const;
+/** The hours the game names (clock-keys.ts, which reads no tunables, so the room and the lobby take them too). */
+export { CLOCK_KEYS } from './clock-keys';
 
 /** An hour of the clock as a 24-hour time, to the minute: 17.5833 is 17:35. */
 export function clockText(hours: number): string {

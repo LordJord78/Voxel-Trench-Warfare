@@ -229,10 +229,11 @@ describe('a friend who comes back', () => {
     expect(teams(room)).toEqual([['Jordan', 'blue'], ['Sam', 'red']]);
     room.close(host, 1_000);
     room.close(sam, 1_000);
-    // A friend in another browser (no token), with the host's name: a newcomer, not the host's seat.
+    // A friend in another browser (no token), with the host's name: a newcomer, not the host's seat,
+    // side or name (the host's held for their return, and the newcomer's numbered: room-core-names.test.ts).
     const other = join(room, 'Jordan', 2_000);
     expect(other.last('welcome')).toMatchObject({ you: 0 });
-    expect(room.seats().find((s) => s.name === 'Jordan')!.team).toBe('red');
+    expect(room.seats().find((s) => s.id === 0)).toMatchObject({ name: 'Jordan 2', team: 'red' });
     // A made-up token, and one too short to be a page's (a guess): newcomers, on the balanced side (not Sam's red).
     const madeUp = join(room, 'Sam', 2_100, token('f'));
     expect(room.seats().find((s) => s.id === madeUp.last('welcome')!.you)!.team).toBe('blue');

@@ -29,6 +29,11 @@
  * - closes every socket, told it was idle, once nobody has played in the room for ROOM_IDLE_MS
  *   (protocol.ts: anything but a ping, a state unchanged but for its tick, or the battle's hurt).
  *
+ * Names: a name already taken in the room is given a number, "Soldier", then "Soldier 2" and on, the
+ * lowest free (protocol.ts freeName), on a hello and on a rename, so two friends never read the same.
+ * A seat that leaves with a rejoin token holds its name while it is remembered (below), so a reload,
+ * or the map change that reloads every page in any order, gives each its own name back.
+ *
  * A seat that leaves is remembered for REJOIN_MS by its page's rejoin token (protocol.ts isToken,
  * kept by the tab per room code): a hello with it gets its place back, its seat if free, its team,
  * its kills and deaths if the match is the same, and the host role if it held it as it left (by
@@ -58,7 +63,7 @@
  */
 
 import { MatchRules, type MatchEvent } from './match-rules';
-import { cleanName, defaultConfig, encodeShell, MAX_PLAYERS, parseClient, PROTOCOL, ROOM_IDLE_MS, type ClientMsg, type Closing, type MatchInfo, type MatchLog, type Phase, type RoomConfig, type RoomMsg, type Seat, type Team, type WireDig, type WireShell, type WireState } from './protocol';
+import { defaultConfig, encodeShell, freeName, MAX_PLAYERS, parseClient, PROTOCOL, ROOM_IDLE_MS, type ClientMsg, type Closing, type MatchInfo, type MatchLog, type Phase, type RoomConfig, type RoomMsg, type Seat, type Team, type WireDig, type WireShell, type WireState } from './protocol';
 import { SHELL_FIELDS } from './shell-fields';
 import { SHELLING, Shelling, shellingSeed } from './shelling';
 
@@ -128,6 +133,8 @@ interface Member {
   seat: Seat | null;
   /** Its page's rejoin token, if its hello gave one. */
   token: string | null;
+  /** The name it asked for (its hello's, or its last rename's), before the room numbered it. */
+  asked: string;
   openedAt: number;
   joinedAt: number;
   heardAt: number;
@@ -141,10 +148,12 @@ interface Member {
   tokensAt: number;
 }
 
-/** A seat that left, as its rejoin token gets it back: its id, team, the match it left (its start) and its tallies there, and when it left. */
+/** A seat that left, as its rejoin token gets it back: its id, team, name (as shown, and as it asked for it), the match it left (its start) and its tallies there, and when it left. */
 export interface Left {
   id: number;
   team: Team;
+  name: string;
+  asked: string;
   startAt: number | null;
   kills: number;
   deaths: number;
@@ -256,7 +265,7 @@ export class RoomCore {
   }
 
   open(conn: Conn, now: number): void {
-    this.members.set(conn, { conn, seat: null, token: null, openedAt: now, joinedAt: now, heardAt: now, saysAway: false, state: null, said: null, shots: [], tokens: BURST, tokensAt: now });
+    this.members.set(conn, { conn, seat: null, token: null, asked: '', openedAt: now, joinedAt: now, heardAt: now, saysAway: false, state: null, said: null, shots: [], tokens: BURST, tokensAt: now });
   }
 
   /** `conn`'s line closed (at `now`, the clock as last given if not said): its seat leaves, remembered by its rejoin token. */
@@ -267,7 +276,7 @@ export class RoomCore {
     if (!m.seat) return;
     if (m.token) {
       const f = this.rules?.fighters.get(m.seat.id);
-      this.left.set(m.token, { id: m.seat.id, team: m.seat.team, startAt: this.match?.startAt ?? null, kills: f?.kills ?? 0, deaths: f?.deaths ?? 0, at: now });
+      this.left.set(m.token, { id: m.seat.id, team: m.seat.team, name: m.seat.name, asked: m.asked, startAt: this.match?.startAt ?? null, kills: f?.kills ?? 0, deaths: f?.deaths ?? 0, at: now });
     }
     this.rules?.leave(m.seat.id);
     if (this.seated().length === 0) {
@@ -379,8 +388,13 @@ export class RoomCore {
     else while (taken.has(id)) id++;
     const count = (team: Team) => this.seated().filter((s) => s.seat!.team === team).length;
     const team: Team = back?.team ?? (count('blue') < count('red') ? 'blue' : 'red');
+    // Its own name back if it asks for the one it left with (a reload says the page's kept name), else
+    // the name it asks for, numbered if taken.
+    const names = this.namesTaken(m);
+    const name = back && back.asked === msg.name && !names.has(back.name.toLowerCase()) ? back.name : freeName(msg.name, names);
     m.token = token;
-    m.seat = { id, name: cleanName(msg.name), team, ready: false, away: false };
+    m.asked = msg.name;
+    m.seat = { id, name, team, ready: false, away: false };
     m.joinedAt = now;
     this.actedAt = now;
     const claim = token === null ? -1 : this.claims.indexOf(token);
@@ -445,6 +459,14 @@ export class RoomCore {
     this.claimHost();
   }
 
+  /** The names in use, lower-cased: every seated player's but `m`'s, and every seat's remembered by its token (REJOIN_MS), held for its return. */
+  private namesTaken(m: Member): Set<string> {
+    const taken = new Set<string>();
+    for (const s of this.seated()) if (s !== m) taken.add(s.seat!.name.toLowerCase());
+    for (const l of this.left.values()) taken.add(l.name.toLowerCase());
+    return taken;
+  }
+
   /** The holder's claim on the host role, the last: whoever holds it by succession may have it back on their return. */
   private claimHost(): void {
     const token = this.seated().find((s) => s.seat!.id === this.ownerId)?.token ?? null;
@@ -494,7 +516,8 @@ export class RoomCore {
         }
         return;
       case 'name':
-        seat.name = msg.name;
+        m.asked = msg.name;
+        seat.name = freeName(msg.name, this.namesTaken(m));
         this.broadcastRoster();
         return;
       case 'hit':

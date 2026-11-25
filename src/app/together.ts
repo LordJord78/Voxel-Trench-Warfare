@@ -687,12 +687,18 @@ export class Together {
     this.net?.end();
   }
 
-  /** Out of the game: the page as it was, without the room. */
+  /**
+   * Out of the game, or (solo's pause) out of play: the page loaded again at its address without the
+   * room, so the start screen comes up on a world as generated (no solo crater or scoop in a world a
+   * room would share), the loadout kept with the page's storage.
+   */
   leave(): void {
     this.net?.close();
     this.net = null;
     const url = new URL(location.href);
     url.searchParams.delete('room');
+    // A fragment alone would be a navigation within the page, not a load.
+    url.hash = '';
     location.href = url.toString();
   }
 

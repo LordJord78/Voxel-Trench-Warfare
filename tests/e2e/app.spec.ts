@@ -155,6 +155,27 @@ test('the start screen stands at its foot from 1280 × 720 up, as it did, and in
   expect(errors).toEqual([]);
 });
 
+test('the loadout opened from the start screen covers it: no word of the sheet beneath shows until Back, and Deploy goes in', async ({ page }) => {
+  // The G6 self-playtest's P2: the start screen's title, buttons and keys card showed through the
+  // loadout, text over text. The sheet is not drawn while the loadout is open (index.html).
+  const errors = await openGame(page);
+  const sheet = ['#loading h1', '#loading .lede', '#loadout-open', '#play', '#host', '#controls'];
+  for (const s of sheet) await expect(page.locator(s), `${s} on the start screen`).toBeVisible();
+  await page.locator('#loadout-open').click();
+  await expect(page.locator('#loadout')).toBeVisible();
+  for (const s of sheet) await expect.soft(page.locator(s), `${s} under the loadout`).toBeHidden();
+  await page.locator('#loadout-back').click();
+  await expect(page.locator('#loadout')).toBeHidden();
+  for (const s of sheet) await expect(page.locator(s), `${s} once the loadout is closed`).toBeVisible();
+  await page.locator('#loadout-open').click();
+  await expect(page.locator('#play')).toBeHidden();
+  await page.locator('#loadout-go').click();
+  await expect(page.locator('#loadout')).toBeHidden();
+  await expect(page.locator('#loading')).toBeHidden();
+  expect(await hooks(page, (h) => h.mode())).toBe('playing');
+  expect(errors).toEqual([]);
+});
+
 test('the lights move with their own clock, frame by frame, and stop for the pause menu', async ({ page }) => {
   const errors = await openGame(page);
   // Held, as every other test has them: as planned, frame after frame.

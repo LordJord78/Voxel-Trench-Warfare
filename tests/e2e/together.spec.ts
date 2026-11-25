@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { CLOCK_KEYS } from '../../src/core/clock-keys';
 import { MAX_PLAYERS, PROTOCOL } from '../../src/net/protocol';
 import { PROTECT_MS } from '../../src/net/match-rules';
 import { makeRoom, RelayClient } from './support/relay-client';
@@ -46,6 +47,8 @@ type H = {
    */
   session: { team: 'red' | 'blue'; front: { intensity: string; readonly fired: number }; frontSide: number; artillery: { intensity: string } };
   waitFrames(n: number): Promise<void>;
+  /** The clock, in hours. */
+  timeOfDay(): number;
 };
 
 const h = <T>(page: Page, fn: (h: H) => T | Promise<T>): Promise<T> =>
@@ -189,12 +192,40 @@ test("under the room's default light battle, the front firing on both: each sees
   for (const p of [host.page, friend.page]) await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.seats().length === 2);
   // The lobby's battle left as it is: light, the room's default.
   for (const p of [host.page, friend.page]) await expect(p.locator('#match-settings select[name="intensity"]')).toHaveValue('light');
+  // Its hour too: the game clock's dusk, 17:35, as solo's (the G6 self-playtest's P1: it was 19:30, the
+  // sun 14° under and the screen near-black), and the lobby offers the clock's four named hours.
+  for (const p of [host.page, friend.page]) {
+    const hours = p.locator('#match-settings select[name="timeOfDay"]');
+    await expect.soft(hours).toHaveValue(String(CLOCK_KEYS.dusk));
+    await expect.soft(hours.locator('option')).toHaveText(['Dawn \u00b7 06:50', 'Noon \u00b7 12:00', 'Dusk \u00b7 17:35', 'Night \u00b7 21:00']);
+  }
+  // The loadout covers what it is opened over (P2): nothing of the lobby shows through it until Back.
+  const lobbySheet = ['#lobby-title', '#invite', '#name', '#red-list', '#match-settings', '#lobby-loadout', '#leave'];
+  await friend.page.locator('#lobby-loadout').click();
+  await expect(friend.page.locator('#loadout')).toBeVisible();
+  for (const s of lobbySheet) await expect.soft(friend.page.locator(s), `${s} under the lobby's loadout`).toBeHidden();
+  await friend.page.locator('#loadout-back').click();
+  await expect(friend.page.locator('#loadout')).toBeHidden();
+  for (const s of lobbySheet) await expect(friend.page.locator(s), `${s} once the loadout is closed`).toBeVisible();
   await host.page.locator('#start').click();
+  // Nor of the way in, though the lobby shows itself each frame of it (lobby.ts deploy), and Go comes as the countdown ends; Done brings it back.
+  const wayIn = ['#lobby-title', '#deploy-line', '#deploy-kit', '#deploy-loadout', '#go'];
+  await expect(host.page.locator('#deploy-line')).toContainText('You fight for');
+  await host.page.locator('#deploy-loadout').click();
+  await expect(host.page.locator('#loadout')).toBeVisible();
+  await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.begun(), null, { timeout: 15_000 });
+  await h(host.page, (x) => x.waitFrames(5));
+  for (const s of wayIn) await expect.soft(host.page.locator(s), `${s} under the way in's loadout`).toBeHidden();
+  await host.page.locator('#loadout-go').click();
+  await expect(host.page.locator('#loadout')).toBeHidden();
+  for (const s of wayIn) await expect(host.page.locator(s), `${s} once the loadout is done`).toBeVisible();
   for (const p of [host.page, friend.page]) {
     await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.begun(), null, { timeout: 15_000 });
     await p.locator('#go').click();
     await expect(p.locator('#lobby')).toBeHidden();
   }
+  // The match plays at the room's hour on both pages: 17:35.
+  for (const p of [host.page, friend.page]) expect.soft(await h(p, (x) => x.timeOfDay())).toBeCloseTo(CLOCK_KEYS.dusk, 6);
   // On each page the room's battle, light: its front from the line across from the page's team, the shells the room's alone.
   const battleOf = (p: Page) => h(p, (x) => ({ front: x.session.front.intensity, side: x.session.frontSide, artillery: x.session.artillery.intensity }));
   expect(await battleOf(host.page)).toEqual({ front: 'light', side: 1, artillery: 'off' });
@@ -224,6 +255,11 @@ test("under the room's default light battle, the front firing on both: each sees
   console.log(`the front fired ${fired[0]} rounds at the host and ${fired[1]} at the friend; its amber drawn in ${amber.join(', ')} frames of the bursts' watches`);
   expect(fired[0]).toBeGreaterThan(0);
   expect(fired[1]).toBeGreaterThan(0);
+  // A room's pause offers Leave, not solo's way back to the start screen (P3).
+  await host.page.keyboard.press('Escape');
+  await expect(host.page.locator('#pause')).toBeVisible();
+  await expect(host.page.locator('#leave-match')).toBeVisible();
+  await expect(host.page.locator('#to-start')).toBeHidden();
   expect(host.errors).toEqual([]);
   expect(friend.errors).toEqual([]);
   await host.page.context().close();

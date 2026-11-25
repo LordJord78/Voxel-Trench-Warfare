@@ -12,6 +12,8 @@ export interface PauseHandlers {
   /** In a game with friends: leave it, and (the owner's) end the match for everyone. */
   leave?(): void;
   endMatch?(): void;
+  /** Playing solo: back to the start screen, to host or join from there. */
+  toStart?(): void;
   /** A preference changed; the menu passes the whole set. */
   /** The form's settings, and whether this input was the visitor picking a preset (the game decides what is theirs). */
   change(settings: Omit<Settings, 'presetChosen'>, picked: boolean): void;
@@ -45,6 +47,7 @@ export class PauseMenu {
     this.resumeButton.addEventListener('click', () => handlers.resume());
     doc.getElementById('leave-match')?.addEventListener('click', () => handlers.leave?.());
     doc.getElementById('end-match')?.addEventListener('click', () => handlers.endMatch?.());
+    doc.getElementById('to-start')?.addEventListener('click', () => handlers.toStart?.());
     this.form.addEventListener('submit', (e) => e.preventDefault());
     this.form.addEventListener('input', (e) => {
       if (e.target === this.time) {
@@ -86,12 +89,15 @@ export class PauseMenu {
 
   /**
    * In a game with friends the clock and the battle are the room's, so the menu keeps only the
-   * player's own settings, and offers to leave (and the owner, to end the match).
+   * player's own settings, and offers to leave (and the owner, to end the match). Solo, it offers the
+   * way back to the start screen in their place.
    */
   together(on: boolean, owner: boolean): void {
     this.root.classList.toggle('together', on);
     const match = this.root.ownerDocument.getElementById('pause-match');
     if (match) match.hidden = !on;
+    const solo = this.root.ownerDocument.getElementById('pause-solo');
+    if (solo) solo.hidden = on;
     const end = this.root.ownerDocument.getElementById('end-match');
     if (end) end.hidden = !(on && owner);
   }
