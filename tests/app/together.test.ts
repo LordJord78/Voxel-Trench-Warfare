@@ -458,6 +458,35 @@ describe("a page catching up on the room's log while the room plays on", () => {
     expect([ready, start]).toEqual([false, false]);
   });
 
+  it("a match's end keeps its battle as it left it, its shell in the air landed, and counts the scoops it carries to the next match's battle until that takes them", async () => {
+    // The match on at the room's 9 000; told before the end: a shell landing at 9 500 on the heap's
+    // crest, and Sam's scoop of its spoil stamped 9 600, inside its crater's region. The end lands the
+    // shell quietly, its crater not yet cut (the lobby runs no frame), so the scoop is held behind it.
+    const { b, together } = await welcomed(async () => {});
+    const battle = together.battle!;
+    expect(together.lastBattle).toBeNull();
+    expect(together.carriedScoops).toBe(0);
+    const S = shell(5, 9_500, 11.8, 15.4, 865);
+    const D: Dig = { seat: 1, at: 9_600, cells: [packCell(b.session.map.dims, 118, 70, 154), packCell(b.session.map.dims, 119, 70, 154)] };
+    StubSocket.last!.say({ t: 'shell', s: wire(S) });
+    StubSocket.last!.say({ t: 'dig', d: [D.seat, D.at, ...D.cells] });
+    StubSocket.last!.say({ t: 'end' });
+    expect(together.battle).toBeNull();
+    expect(together.lastBattle).toBe(battle);
+    expect(battle.landed).toEqual([S]);
+    expect(together.carriedScoops).toBe(1);
+    // The next match: its battle, made with its first frame, takes them.
+    StubSocket.last!.say({ t: 'start', match: { ...MATCH, startAt: 12_000 } });
+    together.prepare(b.session, 1 / 60);
+    expect(together.battle).not.toBeNull();
+    expect(together.battle!.held).toEqual([D]);
+    expect(together.carriedScoops).toBe(0);
+    expect(together.lastBattle).toBe(battle);
+  }, 30_000);
+
+  // The only test of the `failed` hook (TogetherHooks.failed, main.ts's stop): no e2e reaches it, and
+  // the game has no dev fault hook to make a catch-up fail on purpose (the shared-battle plan's Task 8b,
+  // item 11: none is to be added).
   it("a catch-up whose hook fails outside the room's log stops the page with its error, rather than leaving it catching up", async () => {
     const boom = new Error('the regions could not be copied');
     const failed: unknown[] = [];

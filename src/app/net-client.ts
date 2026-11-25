@@ -89,6 +89,8 @@ export class NetClient {
   /** Scoops this player sent (`dig` calls), and the others' the room relayed to it, this visit (for the tests). */
   digsSent = 0;
   digsHeard = 0;
+  /** The battle's harms this player told the room (`hurt` calls), this visit (for the tests). */
+  hurtsSent = 0;
   /** Others' shots heard and not yet taken by the game, oldest first, at most SHOT_QUEUE_MAX. */
   private shots: RemoteShot[] = [];
   /** The room's edits heard since the game last took them, in the order they came. */
@@ -185,6 +187,7 @@ export class NetClient {
 
   /** The battle hurt this player by `amount`. */
   hurt(amount: number, cause: Cause): void {
+    this.hurtsSent++;
     this.send({ t: 'hurt', a: amount, c: cause });
   }
 

@@ -80,6 +80,12 @@ beforeAll(async () => {
   base.takeDirty();
 }, 180_000);
 
+/** Whether a column of voxels (x, z) differs between two worlds, anywhere from the bottom to the top. */
+function columnDiffers(a: BrickMap, b: BrickMap, x: number, z: number): boolean {
+  for (let y = 0; y < a.dims.y; y++) if (a.get(x, y, z) !== b.get(x, y, z)) return true;
+  return false;
+}
+
 /** Where two worlds differ: how many voxels, and the first few (for a failure's message). */
 function differences(a: BrickMap, b: BrickMap): string {
   const x = new Uint8Array(512);
@@ -181,6 +187,66 @@ async function play(): Promise<Played> {
   return { A, B, C, hash: { A: a, B: b, C: c }, chipped, startAt, lastStrikeS };
 }
 
+interface Hidden {
+  A: NodeClient;
+  D: NodeClient;
+  hash: { A: string; D: string };
+  startAt: number;
+}
+
+/**
+ * A tab hidden mid-match (the final review's item 15.5): A hosts and D joins in the lobby; A sets the
+ * Corridor and heavy shelling and starts. D's tab is hidden from 10 s to 35 s of the match (25 s): it
+ * runs no frame, and the room's shells, A's scoops and A's shots queue on its line. Meanwhile A digs at
+ * the heap from 14 s to 17 s, between two shells (S1 < dig < S2), and from 20 s fires an M249's belt
+ * into the block, more than 64 shots (NetClient kept only 64 before the final review's item 3). D comes
+ * back at 35 s: its first frames land the overdue shells quietly and give the scoops in their stamps'
+ * order, and fly the shots, all of them, as many a frame as the round pool has room for, silently (each
+ * is far more than SILENT_STEP_S old). The room ticks to 50 s and stops; both run on until 20 s after
+ * the last strike, and settle.
+ */
+async function hide(): Promise<Hidden> {
+  const net = new RoomNet();
+  const player = (name: string, offsetMs: number, lineMs: number, frameS: number, more: Partial<PlayerSpec> = {}): PlayerSpec => ({ name, map: cloneMap(base), plan, seed: SEED, offsetMs, lineMs, frameS, ...more });
+  let pulled: number | null = null;
+  const A = net.connect(
+    player('A', 0, 30, 1 / 60, {
+      loadout: { primary: 'm249', secondary: 'm17', fits: {} },
+      place: (p) => p.session.teleport(stand, 180, 0),
+      act: (p, s) => {
+        const session = p.session;
+        session.intent = idleIntent();
+        if (s === null) return;
+        if (s >= 14 && s < 17) session.intent = { ...idleIntent(), dig: true };
+        if (s < 18) return;
+        // Turned to the block, at its middle from the eye, every frame (the belt's climb held down).
+        const me = session.player;
+        const [, cy, cz] = centre(block);
+        const eye = me.position.y + session.controller.eyeHeight(me);
+        me.yaw = 0;
+        me.pitch = (Math.atan2(cy - eye, cz - me.position.z) * 180) / Math.PI;
+        pulled ??= session.weapon.shotsFired;
+        if (s >= 20 && session.weapon.shotsFired - pulled < 80) session.intent = { ...idleIntent(), fire: true };
+      },
+    }),
+  );
+  await net.runTo(300);
+  A.say({ t: 'config', config: { map: 'corridor', intensity: 'heavy' } });
+  const D = net.connect(player('D', 60, 80, 1 / 60, { hidden: [10, 35] }));
+  await net.runTo(1_000);
+  A.say({ t: 'start' });
+  await net.runTo(1_500);
+  const startAt = A.match!.startAt;
+  await net.runTo(startAt + 50_000);
+  net.stopTicking();
+  await net.runTo(startAt + 52_000);
+  const lastStrikeS = Math.max(...net.players.map((p) => p.lastStrikeS));
+  if (lastStrikeS + 21 > 52) await net.runTo(startAt + (lastStrikeS + 21) * 1000);
+  expect(await net.settle()).toBe(true);
+  const [a, d] = await Promise.all([fingerprint(A.map), fingerprint(D.map)]);
+  return { A, D, hash: { A: a, D: d }, startAt };
+}
+
 let played: Promise<Played> | null = null;
 const scenario = () => (played ??= play());
 
@@ -199,6 +265,13 @@ describe("the room's battle, in Node: every page one world", () => {
     expect(A.shotsSent).toBe(3);
     expect(B.shotsFired).toBe(3);
     expect(chipped).toBeGreaterThanOrEqual(2);
+    // The shelling reached the world: a strike lit on each page, and the column under every landed
+    // shell's centre is no longer the generated world's (a crater was cut there), so the hashes agree
+    // on a cratered world, not a quiet one.
+    expect(A.strikes).toBeGreaterThanOrEqual(1);
+    expect(B.strikes).toBeGreaterThanOrEqual(1);
+    const cut = A.battle!.landed.filter((s) => columnDiffers(base, A.map, Math.floor(s.at[0] / V), Math.floor(s.at[1] / V)));
+    expect(cut.map((s) => s.id)).toEqual(landed);
   }, 900_000);
 
   it('a third who joins at 45 s and catches up from the log hashes the same at the end', async () => {
@@ -209,5 +282,34 @@ describe("the room's battle, in Node: every page one world", () => {
     expect(C.battle!.landed.map((s) => s.id)).toEqual(A.battle!.landed.map((s) => s.id));
     expect(C.shotsFired).toBe(3);
     expect(C.battle!.held).toEqual([]);
+  }, 900_000);
+});
+
+describe("the room's battle, in Node: a tab hidden mid-match", () => {
+  it('a page hidden for 25 s across a shell, a scoop and a shell comes back to the same world, flying its backlog of more than 64 shots, silently', async () => {
+    const { A, D, hash, startAt } = await hide();
+    const landed = A.battle!.landed;
+    const hid = D.hid!;
+    // Hidden 25 s, from 10 s into the match on its clock.
+    expect((hid.to - hid.from) / 1000).toBeCloseTo(25, 1);
+    // S1 < dig < S2, all of them while D was hidden (the room's clock: D's is 60 ms ahead of the true one).
+    const inWindow = (ms: number) => ms > hid.from + 60 && ms < hid.to + 60;
+    const digs = D.digStamps.filter(inWindow);
+    expect(digs.length).toBeGreaterThan(0);
+    const before = landed.filter((s) => inWindow(s.landAt) && s.landAt < digs[0]);
+    const after = landed.filter((s) => inWindow(s.landAt) && s.landAt > digs[digs.length - 1]);
+    console.log(`D hidden ${((hid.from - startAt) / 1000).toFixed(1)}-${((hid.to - startAt) / 1000).toFixed(1)} s: ${landed.filter((s) => inWindow(s.landAt)).length} shells landed meanwhile (${before.length} before the first of ${digs.length} scoops, ${after.length} after the last); ${A.shotsSent} shots sent by A, ${D.shotsFired} fired on D (${D.shotsSilent} silent, ${D.shotsSeen} seen); ${landed.length} shells in all, ${A.strikes} and ${D.strikes} strikes; hashes ${hash.A.slice(0, 12)} and ${hash.D.slice(0, 12)}`);
+    expect(before.length).toBeGreaterThan(0);
+    expect(after.length).toBeGreaterThan(0);
+    expect(D.digsGiven).toBe(A.digsSent);
+    // The backlog: every shot A sent, more than 64, flown on D, every one silent, none seen.
+    expect(A.shotsSent).toBeGreaterThan(64);
+    expect(D.shotsFired).toBe(A.shotsSent);
+    expect(D.shotsSilent).toBe(D.shotsFired);
+    expect(D.shotsSeen).toBe(0);
+    // One world.
+    expect(D.battle!.landed.map((s) => s.id)).toEqual(landed.map((s) => s.id));
+    expect(D.battle!.held).toEqual([]);
+    expect(hash.D, hash.A === hash.D ? '' : differences(A.map, D.map)).toBe(hash.A);
   }, 900_000);
 });

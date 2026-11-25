@@ -162,6 +162,12 @@ describe("a player's line to the room", () => {
     expect(StubSocket.last!.sent.slice(-2)).toEqual([{ t: 'dig', c: [412_345, 412_346] }, { t: 'dig', c: [7] }]);
     expect(client.digsSent).toBe(2);
     expect(client.digsHeard).toBe(2);
+    // The battle's harm told the room, counted as the scoops are.
+    expect(client.hurtsSent).toBe(0);
+    client.hurt(40, 'shell');
+    client.hurt(12.5, 'round');
+    expect(StubSocket.last!.sent.slice(-2)).toEqual([{ t: 'hurt', a: 40, c: 'shell' }, { t: 'hurt', a: 12.5, c: 'round' }]);
+    expect(client.hurtsSent).toBe(2);
   });
 
   it("keeps the others' shots until the game takes them, each with its frame's time: past SHOT_QUEUE_MAX the oldest go; taken in order while they fit", () => {

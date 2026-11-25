@@ -230,6 +230,8 @@ export class Together {
   private frameNow = 0;
   /** The match's shells on this page: made with its first frame, dropped as it starts and once it is over. */
   battle: RoomBattle | null = null;
+  /** The last match's battle as its end left it, every shell it heard landed (for the tests: what a page landed once the match is over). */
+  lastBattle: RoomBattle | null = null;
   /**
    * Whether this page's world has caught up with the room's: true, but from the room's welcome until
    * its log is caught up (RoomBattle.catchUp). Until then the session does not run, the battle is
@@ -261,6 +263,11 @@ export class Together {
    * and are fed after these, with the next match's first edits.
    */
   private carried: Dig[] = [];
+
+  /** The others' scoops the last match's battle handed on and the next match's has not yet taken (`carried`): world work still to do. */
+  get carriedScoops(): number {
+    return this.carried.length;
+  }
 
   /**
    * `hits`, the hit feedback (hit-feedback.ts): the others' flinches and falls come from it, and a
@@ -654,6 +661,7 @@ export class Together {
         this.battle = null;
         this.give(b, edits, Number.POSITIVE_INFINITY);
         this.carried = b.finish();
+        this.lastBattle = b;
       };
       if (this.caughtUp) over();
       else {

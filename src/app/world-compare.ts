@@ -3,10 +3,11 @@
  * spatter is per page and colour only (the shared-battle plan's note 12: each page spatters a
  * headshot or a kill from its own tick, the victim's none), so a comparison of two pages' worlds
  * masks every voxel where either holds a BLOOD_* id. Here a page finds its own blood, and hashes its
- * world (world/fingerprint.ts) with the union of both pages' set to air.
+ * world (world/fingerprint.ts) with the union of both pages' set to air, only while its frames are
+ * held; and says where a foot stands on its ground (standTop), for the specs that put a player there.
  */
 
-import { packCell } from '../combat/entrenching';
+import { packCell, unpackCell } from '../combat/entrenching';
 import { UNIFORM, type BrickMap } from '../world/bricks';
 import { fingerprint } from '../world/fingerprint';
 import { P, PALETTE } from '../world/materials';
@@ -43,14 +44,12 @@ export function bloodCells(map: BrickMap): number[] {
  * see the air.
  */
 export async function maskedFingerprint(map: BrickMap, mask: readonly number[]): Promise<string> {
-  const { x: X, y: Y, z: Z } = map.dims;
   const kept: [number, number, number, number][] = [];
   try {
     for (const c of mask) {
-      if (!Number.isInteger(c) || c < 0 || c >= X * Y * Z) continue;
-      const x = c % X;
-      const y = Math.floor(c / X) % Y;
-      const z = Math.floor(c / (X * Y));
+      const cell = unpackCell(map.dims, c);
+      if (!cell) continue;
+      const [x, y, z] = cell;
       kept.push([x, y, z, map.get(x, y, z)]);
       map.set(x, y, z, P.AIR);
     }
@@ -61,4 +60,30 @@ export async function maskedFingerprint(map: BrickMap, mask: readonly number[]):
       map.set(x, y, z, id);
     }
   }
+}
+
+/**
+ * The page's fingerprint, as main.ts's hook gives it: the world's; with `mask`, maskedFingerprint, and
+ * only while the page's frames are held (`frozen`, a test's freeze()), as a frame run while the masked
+ * voxels are air would see them so, and could cut, dig or spatter there. Unheld, a mask is refused.
+ */
+export function pageFingerprint(map: BrickMap, mask: readonly number[] | undefined, frozen: boolean): Promise<string> {
+  if (!mask) return fingerprint(map);
+  if (!frozen) return Promise.reject(new Error('fingerprint(mask) sets voxels to air while it hashes: hold the frames first (freeze()), and thaw() after'));
+  return maskedFingerprint(map, mask);
+}
+
+/**
+ * The ground's top at (`x`, `z`) metres in `map` of `voxel`-metre voxels: the top (metres) of the
+ * highest voxel there that is neither air nor water, where a foot stands; null with none, or off the world.
+ */
+export function standTop(map: BrickMap, x: number, z: number, voxel: number): number | null {
+  const gx = Math.floor(x / voxel);
+  const gz = Math.floor(z / voxel);
+  if (!map.inBounds(gx, 0, gz)) return null;
+  for (let y = map.dims.y - 1; y >= 0; y--) {
+    const v = map.get(gx, y, gz);
+    if (v !== P.AIR && v !== P.WATER) return (y + 1) * voxel;
+  }
+  return null;
 }

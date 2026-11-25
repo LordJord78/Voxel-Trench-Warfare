@@ -152,11 +152,9 @@ test('a shell kills: the feed says shelled', async () => {
     const t0 = performance.now();
     for (;;) {
       const next = x.together.shells().next;
-      if (next && next.landsInS > 1) {
-        const [gx, gz] = next.at.map((m) => Math.floor(m / 0.1));
-        let y = 319;
-        while (y > 0 && (x.world.map.get(gx, y, gz) === 0 || x.world.map.get(gx, y, gz) === 34)) y--;
-        x.teleport({ position: [next.at[0], (y + 1) * 0.1 + 0.05, next.at[1]], yaw: 0, pitch: 0 });
+      const top = next ? x.footAt(next.at[0], next.at[1]) : null;
+      if (next && next.landsInS > 1 && top !== null) {
+        x.teleport({ position: [next.at[0], top + 0.05, next.at[1]], yaw: 0, pitch: 0 });
         return { at: next.at, landsInS: next.landsInS };
       }
       if (performance.now() - t0 > 30_000) return null;
@@ -168,6 +166,12 @@ test('a shell kills: the feed says shelled', async () => {
   console.log(`B stood where a shell landed ${stood!.landsInS.toFixed(2)} s later, at ${stood!.at.join(', ')}, and died of it`);
   await expect(A.page.locator('#hud .feed')).toContainText('shelled');
   await expect(B.page.locator('#hud .fallen')).toContainText('Killed by the shelling');
+  // The worlds after a death, blood masked (a shell's kill spatters nothing: HitFeedback.kill bursts only
+  // a round's; friends.spec compares them after a round's kill, where the mask is not empty).
+  const same = await sameWorlds(A.page, B.page);
+  console.log(`after the kill, ${same.landed[0].length} shells: the worlds ${same.same ? 'hash the same' : 'differ'} (try ${same.tries}, ${same.masked} voxels of blood masked)`);
+  expect(same.same, says(same)).toBe(true);
+  expect(same.landed[1], says(same)).toEqual(same.landed[0]);
   expect(A.errors).toEqual([]);
   expect(B.errors).toEqual([]);
 });

@@ -80,7 +80,7 @@ import { CameraRig, rigTunables } from './camera-rig';
 import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
 import { BattleClock, catchUpRunner } from './battle-clock';
-import { bloodCells, maskedFingerprint } from './world-compare';
+import { bloodCells, pageFingerprint, standTop } from './world-compare';
 import { coverAt, daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type ShownBattle, type DebugEmber, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
@@ -669,6 +669,12 @@ async function start(): Promise<void> {
       breathing.port1.onmessage = () => resolve();
       breathing.port2.postMessage(0);
     });
+  /**
+   * Each welcome's catch-up on this page, for the tests: when it began (performance.now: the welcome's
+   * arrival, which starts it), how long it took (ms; null while it runs, or if it failed), and each of
+   * the log's entries done as it said (ms from its start, entries done) of how many (`total`).
+   */
+  const catchUps: { from: number; ms: number | null; total: number; done: [number, number][] }[] = [];
   // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
   const searchParams = new URLSearchParams(location.search);
   const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
@@ -740,7 +746,15 @@ async function start(): Promise<void> {
         chars.make(session.map, (box) => session.destruction.overlapsPending(box));
       };
       const along = match ? catchUpRunner(director, (s) => matchInputs(match.config, s), made) : null;
-      await room.catchUp(log, match?.startAt ?? null, now, along, breathe, { clock: () => performance.now(), progress });
+      const record: (typeof catchUps)[number] = { from: performance.now(), ms: null, total: 0, done: [] };
+      catchUps.push(record);
+      const told = (done: number, total: number) => {
+        record.total = total;
+        record.done.push([performance.now() - record.from, done]);
+        progress(done, total);
+      };
+      await room.catchUp(log, match?.startAt ?? null, now, along, breathe, { clock: () => performance.now(), progress: told });
+      record.ms = performance.now() - record.from;
       renderer.largeEdit();
       if (along && battle === director) battleClock.given = along.reached;
     },
@@ -1470,6 +1484,10 @@ async function start(): Promise<void> {
     renderer,
     session,
     views,
+    /** Where a foot stands at (x, z) metres: the top of the highest voxel neither air nor water (world-compare.ts standTop), metres; null, none. */
+    footAt: (x: number, z: number) => standTop(session.map, x, z, voxelM),
+    /** The visitor's settings as they stand (the pause menu's; their battle's intensity among them). */
+    settings: () => ({ ...settings }),
     /** Playing with friends: the room, this player's seat, the seats, and the others as drawn. */
     together: {
       relay: () => together.relay,
@@ -1488,7 +1506,12 @@ async function start(): Promise<void> {
       /**
        * The room's shells on this page (sim/room-battle.ts), this match's: how many it has heard (landed
        * or in the air), those landed (id, where as [x, z] metres, how big) in the order they landed, and
-       * the next to land (where, and in how long on the room's clock; null with none in the air).
+       * the next to land (its id, where, and in how long on the room's clock; null with none in the air).
+       * A page that stayed holds the match's from its start; one caught up on the log (a reload, a late
+       * join) the match's too, as RoomBattle.catchUp lists only this match's shells (an earlier match's
+       * land quietly, unlisted), with the same ids. Their ids run on from the last match's (the room
+       * numbers them across matches), so a match is told from another by its ids. Out of a match, none:
+       * the last match's, as its end left them, are lastLanded's.
        */
       shells: () => {
         const battle = together.battle;
@@ -1498,15 +1521,29 @@ async function start(): Promise<void> {
         return {
           heard: (battle?.landed.length ?? 0) + air.length,
           landed: (battle?.landed ?? []).map((s) => ({ id: s.id, at: [s.at[0], s.at[1]], radius: s.radius })),
-          next: next ? { at: [next.at[0], next.at[1]], landsInS: (next.landAt - now) / 1000 } : null,
+          next: next ? { id: next.id, at: [next.at[0], next.at[1]], landsInS: (next.landAt - now) / 1000 } : null,
         };
       },
       /** Whether the room's log is caught up on this page (together.ts caughtUp). */
       caughtUp: () => together.caughtUp,
       /** The scoops this player sent, and the others' the room relayed to this page, this visit. */
       digs: () => ({ sent: together.net?.digsSent ?? 0, heard: together.net?.digsHeard ?? 0 }),
-      /** The world's work still to do: craters queued or out, and others' scoops held behind them. */
-      pending: () => session.destruction.pending + (together.battle?.held.length ?? 0),
+      /**
+       * The world's work still to do: craters queued or out, others' scoops held behind them, and those
+       * the last match handed on to the next (Together.carriedScoops). In the lobby the session runs no
+       * frame, so a match's end leaves its last craters queued until the next match's frames cut them.
+       */
+      pending: () => session.destruction.pending + (together.battle?.held.length ?? 0) + together.carriedScoops,
+      /** The ids of the shells the last match's battle landed, as its end left it (Together.lastBattle); [] before any match has ended here. */
+      lastLanded: () => (together.lastBattle?.landed ?? []).map((s) => s.id),
+      /** The battle's harms this player told the room, this visit (NetClient.hurtsSent). */
+      hurts: () => together.net?.hurtsSent ?? 0,
+      /** The owner's: the match ended for everyone, as the pause menu's End match does. */
+      end: () => together.endMatch(),
+      /** The room's log as the last welcome gave it (NetClient.log). */
+      log: () => together.net?.log ?? null,
+      /** Each welcome's catch-up on this page (main.ts's catchUp hook): when it began, how long it took (null: running, or failed), and each entry done, as it said. */
+      catchUps: () => catchUps,
       /** Every voxel holding a BLOOD_* id, as packed cells (world-compare.ts): per page, and masked when pages compare worlds. */
       blood: () => bloodCells(world.map),
     },
@@ -1810,9 +1847,10 @@ async function start(): Promise<void> {
       }),
     /**
      * The world's fingerprint; with `mask` (packed cells), with those voxels as air, each put back after
-     * (world-compare.ts): for a page whose frames are held (freeze), as two pages' worlds are compared.
+     * (world-compare.ts): only while the page's frames are held (freeze), as two pages' worlds are
+     * compared. Unheld, a mask is refused.
      */
-    fingerprint: (mask?: readonly number[]) => (mask ? maskedFingerprint(world.map, mask) : fingerprint(world.map)),
+    fingerprint: (mask?: readonly number[]) => pageFingerprint(world.map, mask, frozen),
     setQuality: (q: Partial<Quality> & { budgetMs?: number }) => {
       renderer.setQuality(q);
       if (q.preset) {

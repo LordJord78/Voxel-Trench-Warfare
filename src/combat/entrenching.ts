@@ -77,13 +77,18 @@ export function packCell(dims: Dims, x: number, y: number, z: number): number {
   return (z * dims.y + y) * dims.x + x;
 }
 
+/** A cell packed by packCell, unpacked to its voxel; null for one that is no cell of `dims` (no integer, or outside the world). */
+export function unpackCell(dims: Dims, cell: number): [number, number, number] | null {
+  if (!Number.isInteger(cell) || cell < 0 || cell >= dims.x * dims.y * dims.z) return null;
+  return [cell % dims.x, Math.floor(cell / dims.x) % dims.y, Math.floor(cell / (dims.x * dims.y))];
+}
+
 /** Each of `cells` inside `dims`, unpacked to its voxel: one past the world's end is none of its. */
 function unpacked(dims: Dims, cells: readonly number[]): [number, number, number][] {
   const out: [number, number, number][] = [];
-  const all = dims.x * dims.y * dims.z;
   for (const c of cells) {
-    if (!Number.isInteger(c) || c < 0 || c >= all) continue;
-    out.push([c % dims.x, Math.floor(c / dims.x) % dims.y, Math.floor(c / (dims.x * dims.y))]);
+    const v = unpackCell(dims, c);
+    if (v) out.push(v);
   }
   return out;
 }

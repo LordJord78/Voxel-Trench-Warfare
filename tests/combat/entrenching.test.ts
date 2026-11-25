@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyScoop, Entrenching, entrenchingTunables, packCell, scoopBox, type Scoop } from '../../src/combat/entrenching';
+import { applyScoop, Entrenching, entrenchingTunables, packCell, scoopBox, unpackCell, type Scoop } from '../../src/combat/entrenching';
 import { loadTunables } from '../../src/core/tunables';
 import { BrickMap } from '../../src/world/bricks';
 import { isGranular, isLoose, P } from '../../src/world/materials';
@@ -333,6 +333,16 @@ describe('what a scoop leaves', () => {
       expect(scoops[0].cells).toEqual(first);
       if (waterTable !== undefined) expect(count(map, (p) => p === P.WATER)).toBeGreaterThan(0);
     }
+  });
+
+  it("a packed cell unpacks to its voxel; one that is no cell of the world's is none", () => {
+    const dims = { x: 64, y: 32, z: 16 };
+    for (const [x, y, z] of [[0, 0, 0], [5, 6, 7], [63, 31, 15], [17, 0, 9]] as const) expect(unpackCell(dims, packCell(dims, x, y, z))).toEqual([x, y, z]);
+    // Past the world's end, before its start, and no integer: none.
+    expect(unpackCell(dims, dims.x * dims.y * dims.z)).toBeNull();
+    expect(unpackCell(dims, -1)).toBeNull();
+    expect(unpackCell(dims, 2.5)).toBeNull();
+    expect(unpackCell(dims, Number.NaN)).toBeNull();
   });
 
   it('digging is deterministic', () => {

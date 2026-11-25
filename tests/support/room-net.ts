@@ -39,6 +39,12 @@
  *
  * The front is left off on every player: in a room its rounds chip nothing (sim/session.ts), so it
  * changes no world, and nothing here is drawn for it to hurt.
+ *
+ * A player may hide its tab for a while (`hidden`, Task 8b's hidden tab): from the first frame at or
+ * past the window's start on its match clock it says it is away and runs no frame (a hidden tab runs no
+ * requestAnimationFrame) until the window's end, while the room's messages queue on its line as a
+ * page's socket queues them; then it says it is back, and its next frame takes them all, as a page's
+ * first frame back does.
  */
 
 import { BattleClock, catchUpRunner } from '../../src/app/battle-clock';
@@ -91,6 +97,8 @@ export interface PlayerSpec {
   place?(player: NodeClient, team: Team, index: number): void;
   /** Each frame, before its session runs: the test's hands on it, at the match's second on its clock (null out of a match). */
   act?(player: NodeClient, matchS: number | null): void;
+  /** Its tab hidden from the first of these match seconds (its clock) to the second: no frame runs between. */
+  hidden?: [number, number];
 }
 
 /** A shot another player fired, as the room's frame relayed it: their seat, the shot, and the room's clock of the frame. */
@@ -207,9 +215,15 @@ export class NodeClient {
   digsSent = 0;
   digsHeard = 0;
   digsGiven = 0;
-  /** Shots it fired that went out in its states, and others' it fired from the room's frames. */
+  /** Shots it fired that went out in its states, and others' it fired from the room's frames: all of them, those flown silent, and those seen (a `remoteShots` event). */
   shotsSent = 0;
   shotsFired = 0;
+  shotsSilent = 0;
+  shotsSeen = 0;
+  /** The stamps (the room's clock) of the others' scoops the room relayed to it, in the order they came. */
+  digStamps: number[] = [];
+  /** Its tab's hidden window as it went (the room's true clock, ms): when it hid and came back; null until it did. */
+  hid: { from: number; to: number } | null = null;
   /** The catch-up of its welcome: how long it took (wall clock, ms), and how many of the log's entries it took in. */
   catchUp: { ms: number; entries: number } | null = null;
   /** The match second of the last strike given its battle (−∞ none yet), the strikes given it, and the chars its fires asked for. */
@@ -219,7 +233,7 @@ export class NodeClient {
   /** Frames run, and when the next is due (the room's true clock). */
   frames = 0;
   nextFrameAt: number;
-  private readonly startedAt: number;
+  private startedAt: number;
   private inbox: { at: number; text: string }[] = [];
   private edits: Edit[] = [];
   private shots: Heard[] = [];
@@ -275,6 +289,7 @@ export class NodeClient {
 
   /** One frame at the room's true time `t`. */
   async frame(t: number): Promise<void> {
+    if (this.hid && this.hid.to === t) this.say({ t: 'away', away: false });
     this.frames++;
     this.nextFrameAt = this.startedAt + this.frames * this.spec.frameS * 1000;
     const arrived = this.inbox.filter((m) => m.at <= t);
@@ -306,8 +321,10 @@ export class NodeClient {
       }
       for (const { seat, shot, at } of this.shots.splice(0, n)) {
         const team = this.seats.find((x) => x.id === seat)?.team;
-        s.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, shot.origin, shot.mark, team ? teamTracer(team) : undefined, shot.tick, nowMs - at > 1000 * SILENT_STEP_S);
+        const silent = nowMs - at > 1000 * SILENT_STEP_S;
+        s.fireRemote(2 + seat, shot.origin, shot.dir, shot.tracer, shot.origin, shot.mark, team ? teamTracer(team) : undefined, shot.tick, silent);
         this.shotsFired++;
+        if (silent) this.shotsSilent++;
       }
     }
     const matchS = this.matchS(t);
@@ -323,8 +340,18 @@ export class NodeClient {
       this.say({ t: 's', s: encodeState(stateOf(s)), ...(sh.length ? { sh } : {}) });
     }
     const events = s.drainEvents();
+    this.shotsSeen += events.remoteShots.length;
     this.after(events, begun);
     this.light(events, matchS);
+    // Hidden from here (its last frame before) until the window's end: no frame runs, and its messages queue.
+    const hidden = this.spec.hidden;
+    if (hidden && !this.hid && matchS !== null && matchS >= hidden[0]) {
+      const to = Math.ceil(t + (hidden[1] - matchS) * 1000);
+      this.hid = { from: t, to };
+      this.say({ t: 'away', away: true });
+      this.startedAt += to - this.nextFrameAt;
+      this.nextFrameAt = to;
+    }
   }
 
   /** Together.after: the player's shots kept to send, and the battle's hurts and its scoops told the room. */
@@ -414,6 +441,7 @@ export class NodeClient {
         const dig = decodeDig(m.d);
         if (!dig) return;
         this.digsHeard++;
+        this.digStamps.push(dig.at);
         this.edits.push({ t: 'dig', dig });
         return;
       }

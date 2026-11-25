@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bloodCells, maskedFingerprint } from '../../src/app/world-compare';
+import { bloodCells, maskedFingerprint, pageFingerprint, standTop } from '../../src/app/world-compare';
 import { packCell } from '../../src/combat/entrenching';
 import { BrickMap } from '../../src/world/bricks';
 import { fingerprint } from '../../src/world/fingerprint';
@@ -66,6 +66,38 @@ describe("a page's world as two pages compare it", () => {
     // Put back as they were.
     expect(sameWorld(mine, kept)).toBe(true);
     expect(await fingerprint(mine)).toBe(unmasked);
+  });
+
+  it("a page's fingerprint with a mask only while its frames are held: unheld, it refuses, naming freeze()", async () => {
+    const map = arena();
+    map.set(21, 25, 20, P.BLOOD_TIMBER);
+    map.takeDirty();
+    const mask = bloodCells(map);
+    const kept = cloneMap(map);
+    // Without a mask it is the plain fingerprint, held or not.
+    expect(await pageFingerprint(map, undefined, false)).toBe(await fingerprint(map));
+    expect(await pageFingerprint(map, undefined, true)).toBe(await fingerprint(map));
+    // With one, held: the masked fingerprint.
+    expect(await pageFingerprint(map, mask, true)).toBe(await maskedFingerprint(map, mask));
+    // With one, unheld: a frame run while the masked voxels are air would see them so. Refused, the world untouched.
+    await expect(pageFingerprint(map, mask, false)).rejects.toThrow(/freeze\(\)/);
+    expect(sameWorld(map, kept)).toBe(true);
+  });
+
+  it("the ground's top at (x, z) metres: the highest voxel neither air nor water, or none", () => {
+    const map = arena();
+    // Water over the clay at one column, a post at another.
+    map.fillBox(10, 16, 10, 11, 19, 11, P.WATER);
+    map.takeDirty();
+    const V = 0.1;
+    expect(standTop(map, 0.55, 0.55, V)).toBeCloseTo(1.6, 9);
+    expect(standTop(map, 1.05, 1.05, V)).toBeCloseTo(1.6, 9);
+    expect(standTop(map, 2.05, 2.05, V)).toBeCloseTo(3.0, 9);
+    // A column of air, and one off the world: none.
+    const empty = new BrickMap({ x: 32, y: 32, z: 32 });
+    expect(standTop(empty, 0.5, 0.5, V)).toBeNull();
+    expect(standTop(map, -0.05, 1, V)).toBeNull();
+    expect(standTop(map, 6.4, 1, V)).toBeNull();
   });
 
   it('takes no cell outside the world, and with none masked is the plain fingerprint', async () => {
