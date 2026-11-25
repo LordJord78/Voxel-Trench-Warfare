@@ -1,25 +1,32 @@
 /**
  * The relay: `POST /rooms` makes a room and gives its five-letter code; `GET /room/CODE`, as a
  * WebSocket upgrade, joins it. Each room is a Durable Object named by its code, running the
- * room's logic (src/net/room-core.ts) over its players' sockets and ticking it every 50 ms while
- * anyone is connected.
+ * room's logic (src/net/room-core.ts) over its players' sockets: ticked every 50 ms while a match
+ * is on, and otherwise only at its next deadline (pacer.ts). The room closes a seat silent too long
+ * and, once nobody has played in it for 20 minutes, every socket, so a forgotten tab does not hold
+ * its Durable Object (billed for every second a socket is open to it) all day.
+ *
+ * Its sockets are not hibernated (ctx.acceptWebSocket): the room lives in the object's memory (its
+ * seats, the match's rules, the world's log), which hibernation would drop with the object, and a
+ * page's pings carry its clock and are answered with the room's (net/clock.ts), which the runtime's
+ * fixed auto-response cannot do; so every ping would wake it anyway.
  *
  * Only the game's pages may make or join rooms: its GitHub Pages origin (ALLOWED_ORIGINS) and
  * any localhost, for development. A room forgets itself a day after its last player left.
  */
 
 import { DurableObject } from 'cloudflare:workers';
+import { CODE_LETTERS } from '../../src/net/protocol';
 import { RoomCore, type Conn } from '../../src/net/room-core';
+import { Pacer, RUNTIME_TIMERS } from './pacer';
 
 export interface Env {
   ROOM: DurableObjectNamespace<Room>;
   ALLOWED_ORIGINS: string;
 }
 
-/** Letters a code is made of: no I or O, which read as 1 and 0. */
-const CODE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+/** A join's path: five of the code's letters (protocol.ts CODE_LETTERS, ROOM_CODE), no I or O. */
 const CODE = /^\/room\/([A-HJ-NP-Z]{5})$/;
-const TICK_MS = 50;
 const FORGET_MS = 24 * 3600 * 1000;
 
 function newCode(): string {
@@ -67,7 +74,7 @@ export default {
 
 export class Room extends DurableObject<Env> {
   private core: RoomCore | null = null;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private pacer: Pacer | null = null;
 
   /** Make the room, if its code is free: whether it was. */
   async create(): Promise<boolean> {
@@ -88,22 +95,23 @@ export class Room extends DurableObject<Env> {
       return new Response(null, { status: 101, webSocket: client });
     }
     const core = (this.core ??= new RoomCore(code));
+    const pacer = (this.pacer ??= new Pacer(core, RUNTIME_TIMERS));
     const conn: Conn = {
       send: (text) => socket.send(text),
       close: (c, reason) => socket.close(c, reason),
     };
     core.open(conn, Date.now());
-    socket.addEventListener('message', (e) => core.message(conn, typeof e.data === 'string' ? e.data : null, Date.now()));
+    socket.addEventListener('message', (e) => {
+      core.message(conn, typeof e.data === 'string' ? e.data : null, Date.now());
+      pacer.pace();
+    });
     const gone = () => {
-      core.close(conn);
-      if (core.empty && this.timer) {
-        clearInterval(this.timer);
-        this.timer = null;
-      }
+      core.close(conn, Date.now());
+      pacer.pace();
     };
     socket.addEventListener('close', gone);
     socket.addEventListener('error', gone);
-    this.timer ??= setInterval(() => core.tick(Date.now()), TICK_MS);
+    pacer.pace();
     await this.ctx.storage.setAlarm(Date.now() + FORGET_MS);
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -116,5 +124,6 @@ export class Room extends DurableObject<Env> {
     }
     await this.ctx.storage.deleteAll();
     this.core = null;
+    this.pacer = null;
   }
 }

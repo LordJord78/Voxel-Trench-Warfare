@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
 import { encodeShotMark } from '../../src/net/gear';
-import { CLIENT_TEXT_MAX, cleanConfig, cleanName, decodeDig, decodeShell, decodeShot, decodeState, defaultConfig, DIG_CELLS_MAX, DIG_SPAN_MAX, encodeShot, encodeState, HURT_MAX, NAME_MAX, parseClient, parseRoom, PROTOCOL, ROOM_TEXT_MAX, sent, SHOTS_MAX, WORLD_DIMS, type PlayerState, type ShotState, type WireDig } from '../../src/net/protocol';
+import { CLIENT_TEXT_MAX, cleanConfig, CODE_LETTERS, isRoomCode, isToken, cleanName, decodeDig, decodeShell, decodeShot, decodeState, defaultConfig, DIG_CELLS_MAX, DIG_SPAN_MAX, encodeShot, encodeState, HURT_MAX, NAME_MAX, parseClient, parseRoom, PROTOCOL, ROOM_TEXT_MAX, sent, SHOTS_MAX, WORLD_DIMS, type PlayerState, type ShotState, type WireDig } from '../../src/net/protocol';
 import { genParams, MAP_IDS } from '../../src/world/generation/params';
 import { LAST_CELL as LAST, MOST_CELLS as MOST, worldCell as cell } from '../support/cells';
 
@@ -41,6 +41,26 @@ describe('the protocol', () => {
     expect(parseClient(JSON.stringify({ t: 'hurt', a: 500, c: 'shell' }))).toBeNull();
     expect(parseRoom(JSON.stringify({ t: 'roster', owner: 0, seats: [{ id: 9, name: 'x', team: 'red' }] }))).toBeNull();
     expect(parseRoom(JSON.stringify({ t: 'f', s: 5, ps: [[1, ...encodeState(state)], [2, 1, 2], 'x'] }))).toEqual({ t: 'f', s: 5, ps: [[1, ...encodeState(state)]], sh: [] });
+  });
+
+  it("carries a page's rejoin token in its hello when it is one, the room's word that it is closing a line, and the relay's letters for codes", () => {
+    const hello = { t: 'hello', v: PROTOCOL, build: 'b', name: 'n' };
+    // A page's token (together.ts rejoinToken): 32 hex digits, 128 random bits.
+    const token = '0123456789abcdef0123456789abcdef';
+    expect(isToken(token)).toBe(true);
+    expect(parseClient(JSON.stringify({ ...hello, token }))).toEqual({ ...hello, token });
+    // One that is not a page's (short enough to guess, too long, not its letters, not a string): the hello stands, without it.
+    for (const bad of ['short', 'aaaaaaaaaaaaaaaaaaaa', 'x'.repeat(65), 'has spaces in it, and is long enough', 42, null]) {
+      expect(isToken(bad), String(bad)).toBe(false);
+      expect(parseClient(JSON.stringify({ ...hello, token: bad })), String(bad)).toEqual(hello);
+    }
+    for (const reason of ['idle', 'replaced'] as const) expect(parseRoom(JSON.stringify({ t: 'closing', reason }))).toEqual({ t: 'closing', reason });
+    expect(parseRoom(JSON.stringify({ t: 'closing', reason: 'bored' }))).toBeNull();
+    // A code is five of the relay's letters: never I or O, which read as 1 and 0.
+    expect(CODE_LETTERS).toBe('ABCDEFGHJKLMNPQRSTUVWXYZ');
+    for (const ok of ['KXQRT', 'ABCDE', 'ZZZZZ']) expect(isRoomCode(ok), ok).toBe(true);
+    for (const bad of ['HOUSE', 'OOOOO', 'IIIII', 'abcde', 'ABCD', 'ABCDEF', 'AB DE']) expect(isRoomCode(bad), bad).toBe(false);
+    for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') expect(isRoomCode(letter.repeat(5)), letter).toBe(CODE_LETTERS.includes(letter));
   });
 
   it('carries shells and digs as integers, and believes no malformed one', () => {
