@@ -34,6 +34,8 @@
  * job is a function of what it is given: world/detonation.ts). Anything written there in between (a
  * crater, a scoop, a char) and the work is dropped, and the job is cut afresh. So the craters go in
  * as they would have, in their order, each from the ground it would have been cut from; only sooner.
+ * One its runner loses once its shell's job has taken it over (a pool worker gone) goes out again on
+ * the copy it was given; one lost before is cut again in its shell's turn, or dropped with the rest.
  */
 
 import type { Tunables } from '../core/tunables';
@@ -45,7 +47,11 @@ import { groundTop } from '../world/raycast';
 import { overlapXZ, type Box } from '../world/region';
 import { applyPatch, copyRegion, sameCopy, type BrickPatch, type RegionCopy } from '../world/region-copy';
 
-/** Where a crater's job runs: post it, and take what has come back since. */
+/**
+ * Where a crater's job runs: post it, and take what has come back since. A job its runner loses (a
+ * worker gone) comes back as a wider region that is the job's own, to be copied and posted again; a
+ * job's own ask for a wider region is always wider.
+ */
 export interface DetonationRunner {
   post(req: DetonationRequest): void;
   take(): DetonationResult[];
@@ -127,8 +133,8 @@ interface Ahead {
   seed: number;
   box: Box;
   material: number;
-  /** As it was sent; none once a shell's job has taken the work over. */
-  copy: RegionCopy | null;
+  /** As it was sent: to check against the world's at its shell's turn, and to post again if its runner loses it. */
+  copy: RegionCopy;
   back: DetonationResult[];
   job: Job | null;
 }
@@ -136,6 +142,7 @@ interface Ahead {
 /** A job's crater, `bricks` written: what it struck, if it was cut on the ground. */
 const crater = (j: Job, bricks: number): Crater => ({ id: j.id, centre: j.centre, radius: j.radius, bricks, ...(j.material === undefined ? {} : { material: j.material }) });
 const inside = (b: Box, x: number, y: number, z: number) => x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1 && z >= b.z0 && z < b.z1;
+const sameBox = (a: Box, b: Box) => a.x0 === b.x0 && a.y0 === b.y0 && a.z0 === b.z0 && a.x1 === b.x1 && a.y1 === b.y1 && a.z1 === b.z1;
 
 export class Destruction {
   /** Queued, out or landing, in the order they were shelled. */
@@ -152,6 +159,13 @@ export class Destruction {
   /** Of the jobs sent ahead (`ahead`): those whose shell's own job took the work over, and those dropped, the world changed under them. */
   aheadTaken = 0;
   aheadDropped = 0;
+  /**
+   * Ticks run, and their ms by `clock` while it is given one: the page's own, to profile a catch-up
+   * (main.ts catchUps()[k].parts). With no clock nothing is timed.
+   */
+  ticks = 0;
+  tickMs = 0;
+  clock: (() => number) | null = null;
   private nextId = 1;
   /** The jobs sent ahead and not yet done with, by their runner ids (−1, −2, …: never a shell's). */
   private readonly aheads = new Map<number, Ahead>();
@@ -257,6 +271,18 @@ export class Destruction {
 
   /** One tick: what has come back, the write-back's budget of it, and the shells now free to go out; the craters that settled (their cuts in `cuts`). */
   tick(): Crater[] {
+    this.ticks++;
+    const clock = this.clock;
+    if (!clock) return this.once();
+    const t0 = clock();
+    try {
+      return this.once();
+    } finally {
+      this.tickMs += clock() - t0;
+    }
+  }
+
+  private once(): Crater[] {
     this.cuts = [];
     for (let r of [...this.early.splice(0), ...this.runner.take()]) {
       if (r.id < 0) {
@@ -267,8 +293,16 @@ export class Destruction {
           a.back.push(r);
           continue;
         }
+        const taker = a.job;
         if (!('stage' in r) || r.stage === 'settled') this.aheads.delete(r.id);
-        r = { ...r, id: a.job.id };
+        if ('wider' in r && sameBox(r.wider, a.box)) {
+          // Its runner lost it: it goes out again, as its shell's, on the copy it was given. Whatever of
+          // its cut is in already is the same again, and nothing else has written there (its region is out);
+          // a copy of the world as its cut left it would be cut a second time (a tree's branch to air).
+          this.runner.post({ id: taker.id, centre: taker.centre, radius: taker.radius, seed: taker.seed, options: this.t.options, copy: a.copy, world: this.map.dims });
+          continue;
+        }
+        r = { ...r, id: taker.id };
       }
       const j = this.jobs.find((o) => o.id === r.id);
       if (!j || j.state !== 'out') continue;
@@ -342,13 +376,12 @@ export class Destruction {
     for (const [id, a] of this.aheads) {
       if (a.job || a.seed !== j.seed || a.radius !== j.radius || a.centre[0] !== j.centre[0] || a.centre[2] !== j.centre[2]) continue;
       const box = a.box;
-      if (a.centre[1] !== j.centre[1] || a.material !== j.material || box.x0 !== j.box.x0 || box.z0 !== j.box.z0 || box.x1 !== j.box.x1 || box.z1 !== j.box.z1 || !sameCopy(a.copy!, copy)) {
+      if (a.centre[1] !== j.centre[1] || a.material !== j.material || box.x0 !== j.box.x0 || box.z0 !== j.box.z0 || box.x1 !== j.box.x1 || box.z1 !== j.box.z1 || !sameCopy(a.copy, copy)) {
         this.aheads.delete(id);
         this.aheadDropped++;
         return false;
       }
       a.job = j;
-      a.copy = null;
       this.aheadTaken++;
       this.early.push(...a.back.splice(0));
       return true;

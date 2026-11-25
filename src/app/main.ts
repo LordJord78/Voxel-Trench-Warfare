@@ -77,7 +77,7 @@ import { fingerprint } from '../world/fingerprint';
 import { groundTop, standTop } from '../world/raycast';
 import { copyRegion, type RegionCopy } from '../world/region-copy';
 import { CameraRig, rigTunables } from './camera-rig';
-import { workerRunner } from './destruction-in-worker';
+import { aheadOn, workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
 import { BattleClock, catchUpRunner } from './battle-clock';
 import { bloodCells, cellsHolding, pageFingerprint, sectorHashes } from './world-compare';
@@ -274,7 +274,8 @@ async function start(): Promise<void> {
 
   const views = standardViews(world.plan, world.spawn);
   // Craters are cut in a worker, off the frame; a catch-up's cut ahead of their turn on a pool of more
-  // ([destruction] catch_up_workers), one core left for the page and one for the session's worker.
+  // ([destruction] catch_up_workers), one core left for the page and one for the session's worker. Two
+  // cores have no pool, so a catch-up there cuts nothing ahead (aheadOn): each crater in its turn.
   const runner = workerRunner(Math.max(0, Math.min(tun.i('destruction.catch_up_workers'), (navigator.hardwareConcurrency || 4) - 2)));
   const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn, runner }, tun, SEED, views.bay.yaw);
   // Each team's starts, picked once from the world as loaded (before any crater): the starts the
@@ -684,21 +685,13 @@ async function start(): Promise<void> {
    */
   type CatchUpParts = { jobs: number; jobMs: number; tripMs: number; ticks: number; tickMs: number; runs: number; runMs: number; breaths: number; breathMs: number; frames: number; frameMs: number };
   const catchUps: { from: number; ms: number | null; total: number; done: [number, number][]; parts: CatchUpParts }[] = [];
-  /** The catch-up running, whose frames and destruction ticks are counted in its parts; null with none. And how many run. */
+  /**
+   * The catch-up running, whose frames are counted in its parts; null with none. And how many run:
+   * while any does, the session's destruction times its ticks by the page's clock (Destruction.clock),
+   * and each catch-up's parts take the ticks, and their ms, run while it ran.
+   */
   let catching: CatchUpParts | null = null;
   let catchingUp = 0;
-  const tickOf = session.destruction.tick.bind(session.destruction);
-  session.destruction.tick = () => {
-    const parts = catching;
-    if (!parts) return tickOf();
-    const t0 = performance.now();
-    try {
-      return tickOf();
-    } finally {
-      parts.ticks++;
-      parts.tickMs += performance.now() - t0;
-    }
-  };
   // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
   const searchParams = new URLSearchParams(location.search);
   const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
@@ -770,7 +763,9 @@ async function start(): Promise<void> {
         chars.make(session.map, (box) => session.destruction.overlapsPending(box));
       };
       const ran = match ? catchUpRunner(director, (s) => matchInputs(match.config, s), made) : null;
-      const parts: CatchUpParts = { jobs: -runner.stats.jobs, jobMs: -runner.stats.jobMs, tripMs: -runner.stats.tripMs, ticks: 0, tickMs: 0, runs: 0, runMs: 0, breaths: 0, breathMs: 0, frames: 0, frameMs: 0 };
+      const d = session.destruction;
+      d.clock = () => performance.now();
+      const parts: CatchUpParts = { jobs: -runner.stats.jobs, jobMs: -runner.stats.jobMs, tripMs: -runner.stats.tripMs, ticks: -d.ticks, tickMs: -d.tickMs, runs: 0, runMs: 0, breaths: 0, breathMs: 0, frames: 0, frameMs: 0 };
       const record: (typeof catchUps)[number] = { from: performance.now(), ms: null, total: 0, done: [], parts };
       catchUps.push(record);
       const told = (done: number, total: number) => {
@@ -795,12 +790,27 @@ async function start(): Promise<void> {
       };
       catching = parts;
       catchingUp++;
+      // The log's next shells cut ahead of their turn only on a pool beside the session's worker, asked
+      // at each send: none in-process or with no pool (two cores), and none more once the pool has failed.
+      const most = tun.i('room_battle.catch_up_ahead');
       try {
-        await room.catchUp(log, match?.startAt ?? null, now, along, breath, { clock: () => performance.now(), progress: told, ahead: tun.i('room_battle.catch_up_ahead') });
+        await room.catchUp(log, match?.startAt ?? null, now, along, breath, {
+          clock: () => performance.now(),
+          progress: told,
+          get ahead() {
+            return aheadOn(runner, most);
+          },
+        });
       } finally {
         if (catching === parts) catching = null;
-        // The pool's work is done once no catch-up runs (each crater cut ahead is in, or was dropped): it goes.
-        if (--catchingUp === 0) runner.rest();
+        parts.ticks += d.ticks;
+        parts.tickMs += d.tickMs;
+        // The pool's work is done once no catch-up runs (each crater cut ahead is in, or was dropped): it
+        // goes; and a live page's ticks go untimed, as before.
+        if (--catchingUp === 0) {
+          runner.rest();
+          d.clock = null;
+        }
         parts.jobs += runner.stats.jobs;
         parts.jobMs += runner.stats.jobMs;
         parts.tripMs += runner.stats.tripMs;

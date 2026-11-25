@@ -121,7 +121,7 @@ The spec is silent on the following; they are decided here.
     - (a) a very long-lived room's welcome grows past `ROOM_TEXT_MAX` on shells alone (about 17,600 shells), and the joiner then waits at "Joining…"; long before that, each new scoop leaves the log on arrival (ledger, Task 2);
     - (f) the log holds about 3,200 scoops, roughly 14 digger-minutes over a map's life; past that, a reloader or joiner lacks the earliest scoops; the owner changing the map, or everyone leaving, resets the log;
     - (g) a catch-up costs about 0.3–0.47 s of crater work per shell the map has seen, on one destruction worker (benched: 55 heavy shells in 17.4 s, 120 in 56 s). The wait is shown with its progress and unthrottled in a hidden tab; the cost itself is parked until Task 8 measures a realistic log.
-      - *Since cut:* Task 8c cuts the log's craters ahead of their turn on a pool of workers, about 75–100 ms a shell; the spec's Deferred (g) holds the new measure.
+      - *Since cut:* Task 8c cuts the log's craters ahead of their turn on a pool of workers: a mean of 69–97 ms a shell (median 13–15 ms), the heavy reload 4.3–5.8 s, and 20 minutes of heavy 28–39 s or of light 12–16 s, projected (three runs). A page with two cores cuts nothing ahead (Task 8d), about 0.2 s a shell by the Node bench's estimate. The spec's Deferred (g) holds the measure.
 
     The spec's Deferred section lists these.
 

@@ -6,7 +6,9 @@ import { chip, detonate } from '../../src/world/destruction';
 import { detonationRegion, runDetonation, type DetonationRequest, type DetonationResult } from '../../src/world/detonation';
 import { P } from '../../src/world/materials';
 import { groundTop } from '../../src/world/raycast';
-import type { BrickMap } from '../../src/world/bricks';
+import { BRICK, type BrickMap } from '../../src/world/bricks';
+import type { Box } from '../../src/world/region';
+import { sameCopy } from '../../src/world/region-copy';
 import { sameWorld, shellOptions, trenchArena } from '../support/worlds';
 
 // The session's craters land through a queue (the spec's §3): posted to a runner, written back a
@@ -429,5 +431,75 @@ describe('craters cut ahead of their turn', () => {
     expect(runner.posted.map((r) => r.id)).toEqual([-1, east]);
     expect([d.aheadTaken, d.aheadDropped]).toEqual([0, 0]);
     expect(sameWorld(inTurn([[EAST, 32]]), map)).toBe(true);
+  });
+
+  it('one taken over whose worker is lost after its cut came back and went in (handed back as its own region) goes out again on the copy it was given: the world is as if it was never lost', () => {
+    // The page's runner hands back each job a pool worker had out when the pool fails
+    // (app/destruction-in-worker.ts): as a "wider" region that is the job's own. A tree's trunk stands
+    // in the crater's rim, 0.9–1.1 m from its centre: a cut makes the rim's trunk branch (spoilOf), and a
+    // cut again over that ground would make the branch air. Every other material's spoil is its own.
+    const treed = () => {
+      const m = trenchArena();
+      m.fillBox(EAST[0] + 9, 64, EAST[2] - 1, EAST[0] + 11, 72, EAST[2] + 1, P.TRUNK);
+      m.takeDirty();
+      return m;
+    };
+    const inPlace = treed();
+    const alone = new Destruction(inPlace, inProcessRunner(), t());
+    alone.shell(EAST, R, 32, true);
+    land(alone);
+    const map = treed();
+    const done: DetonationResult[] = [];
+    const posted: DetonationRequest[] = [];
+    let lost: { cut: DetonationResult; region: Box } | null = null;
+    const runner: DetonationRunner = {
+      post: (req) => {
+        posted.push(req);
+        if (req.id >= 0) return void done.push(runDetonation(req, (cut) => done.push(cut)));
+        let cut: DetonationResult | null = null;
+        runDetonation(req, (c) => (cut = c));
+        const [ox, , oz] = req.copy.origin;
+        const [sx, sy, sz] = req.copy.size;
+        lost = { cut: cut!, region: { x0: ox * BRICK, y0: 0, z0: oz * BRICK, x1: (ox + sx) * BRICK, y1: sy * BRICK, z1: (oz + sz) * BRICK } };
+      },
+      take: () => done.splice(0),
+    };
+    const d = new Destruction(map, runner, t());
+    d.ahead([EAST[0], 64, EAST[2]], R, 32);
+    const east = d.shell(EAST, R, 32, true);
+    d.tick();
+    expect([d.aheadTaken, d.out.length]).toEqual([1, 1]);
+    // Its cut comes back, and goes in.
+    done.push(lost!.cut);
+    d.tick();
+    expect(d.cuts.map((c) => c.id)).toEqual([east]);
+    expect(map.get(EAST[0] + 9, 64, EAST[2])).toBe(P.BRANCH);
+    // Then its worker is lost: the job goes out again, on the copy it was first given, not the world as its cut left it.
+    done.push({ id: -1, wider: lost!.region });
+    d.tick();
+    expect(posted.map((r) => r.id)).toEqual([-1, east]);
+    expect(sameCopy(posted[1].copy, posted[0].copy)).toBe(true);
+    expect(land(d).craters.map((c) => c.id)).toEqual([east]);
+    expect(sameWorld(inPlace, map)).toBe(true);
+  });
+});
+
+// The page profiles a catch-up's destruction ticks (main.ts catchUps()[k].parts) by Destruction's own
+// counters, timed with the page's clock while it gives one, rather than by swapping its tick.
+describe("the destruction's ticks, counted", () => {
+  it('counts every tick, and sums their ms by the clock it is given while it has one; none without', () => {
+    const map = trenchArena();
+    const d = new Destruction(map, inProcessRunner(), t());
+    d.tick();
+    d.tick();
+    expect([d.ticks, d.tickMs]).toEqual([2, 0]);
+    let now = 100;
+    d.clock = () => (now += 3);
+    d.shell([128, 0, 60], 8, 5, true);
+    const { ticks } = land(d);
+    expect([d.ticks, d.tickMs]).toEqual([2 + ticks, 3 * ticks]);
+    d.clock = null;
+    d.tick();
+    expect([d.ticks, d.tickMs]).toEqual([3 + ticks, 3 * ticks]);
   });
 });

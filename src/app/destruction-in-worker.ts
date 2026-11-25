@@ -14,6 +14,13 @@
  * (world/detonation.ts), so a crater is the same whichever cut it. The
  * session's own jobs keep the one worker, in the order they are posted, as
  * before: a page at play cuts and lands its craters as it did.
+ *
+ * A catch-up cuts ahead only while the runner can run a job beside the
+ * session's (`parallel`, `aheadOn`): in-process, or with no pool, none. A pool
+ * worker that fails, or a job that throws in one, ends only the pool: the jobs
+ * out on it are handed back, none is cut ahead again until `rest`, and the
+ * session's worker runs on. A job sent ahead with nowhere else to go goes to the
+ * session's worker, never dropped: its shell's job may take its work over.
  */
 
 import { inProcessRunner, type DetonationRunner } from '../sim/destruction';
@@ -36,44 +43,91 @@ type FromWorker = { type: 'result'; result: DetonationResult; ms: number } | { t
 
 const spawn = () => new Worker(new URL('./workers/destruction-worker.ts', import.meta.url), { type: 'module' });
 
+/** The page's runner: the session's worker, and a pool for the craters a catch-up cuts ahead of their turn. */
+export interface PageRunner extends DetonationRunner {
+  /**
+   * How many workers it runs beside the session's for craters cut ahead of their turn: its pool's,
+   * made or still to be made; none in-process, with no pool, or once its pool has failed (until `rest`).
+   */
+  readonly parallel: number;
+  terminate(): void;
+  /** The pool let go, a catch-up done with it: the next job cut ahead makes it again. */
+  rest(): void;
+  readonly stats: RunnerStats;
+}
+
+/**
+ * How many of a catch-up's next shells to have cut ahead of their turn on `runner`: `most` ([room_battle]
+ * catch_up_ahead) if it runs a worker beside the session's, else none. In-process, a job sent ahead
+ * would be cut at once, on the page (8 craters of some 200 ms in one task); with no pool, it would
+ * queue on the session's one worker in front of the next shell's own job, for nothing.
+ */
+export function aheadOn(runner: DetonationRunner & { readonly parallel?: number }, most: number): number {
+  return (runner.parallel ?? 0) >= 1 ? most : 0;
+}
+
 /** The session's worker, and `pool` more for the craters a catch-up cuts ahead of their turn. */
-export function workerRunner(pool = 0): DetonationRunner & { terminate(): void; rest(): void; readonly stats: RunnerStats } {
+export function workerRunner(pool = 0): PageRunner {
   const done: DetonationResult[] = [];
-  /** Each job out with a worker: the region its copy was taken from, the worker (null: the session's), and when it was posted (performance.now). */
-  const out = new Map<number, { box: Box; worker: Worker | null; at: number }>();
+  /** Each job out with a worker: the region its copy was taken from, the worker it is on, whether that is the pool's, and when it was posted (performance.now). */
+  const out = new Map<number, { box: Box; on: Worker; pooled: boolean; at: number }>();
   const stats: RunnerStats = { jobs: 0, jobMs: 0, tripMs: 0 };
   const local = inProcessRunner();
   let worker: Worker | null = null;
-  /** The pool, made at the first job sent ahead (none if `pool` is 0, or it cannot start); and the jobs out with each. */
+  /** The pool, made at the first job sent ahead (none if `pool` is 0, it cannot start, or it failed, until `rest`); and the jobs out with each. */
   let ahead: Worker[] | null = pool > 0 ? null : [];
   const load = new Map<Worker, number>();
-  const rest = () => {
+  /** Whether `w` is one of this runner's workers still: one let go says nothing more. */
+  const ours = (w: Worker) => w === worker || (ahead?.includes(w) ?? false);
+  /**
+   * Each job out on the pool handed back, never dropped: its copy went with it, so the session copies
+   * that region again and posts it again (sim/destruction.ts: a job sent ahead is cut again in its
+   * shell's turn, on the copy it was given, or dropped with the catch-up).
+   */
+  const handBack = (only: (job: { pooled: boolean }) => boolean) => {
+    for (const [id, job] of out) {
+      if (!only(job)) continue;
+      out.delete(id);
+      done.push({ id, wider: job.box });
+    }
+  };
+  /** The pool let go, the jobs out on it handed back. */
+  const letPoolGo = () => {
     for (const w of ahead ?? []) w.terminate();
-    for (const [id, job] of out) if (job.worker) out.delete(id);
-    ahead = pool > 0 ? null : [];
     load.clear();
+    handBack((job) => job.pooled);
+  };
+  const rest = () => {
+    letPoolGo();
+    ahead = pool > 0 ? null : [];
+  };
+  /** A pool worker failed: the pool goes, and none is made again until `rest`; the session's worker runs on. */
+  const poolFailed = (reason: string) => {
+    console.warn(`[destruction] no pool for the rest of this catch-up: ${reason}`);
+    letPoolGo();
+    ahead = [];
   };
   const fallBack = (reason: string) => {
     console.warn(`[destruction] in-process: ${reason}`);
     worker?.terminate();
     worker = null;
-    for (const w of ahead ?? []) w.terminate();
+    letPoolGo();
     ahead = [];
-    load.clear();
-    // Their copies went to the workers: the session copies those regions again (one sent ahead, once its shell's job takes it up).
-    for (const [id, { box }] of out) done.push({ id, wider: box });
-    out.clear();
+    // Their copies went to the worker: the session copies those regions again, and posts them in-process.
+    handBack(() => true);
   };
-  const listen = (w: Worker) => {
+  /** `w`'s results taken in, and its failure `fail`'s: the session's worker's falls back, a pool worker's ends the pool. */
+  const listen = (w: Worker, fail: (reason: string) => void) => {
     w.onmessage = (event: MessageEvent<FromWorker>) => {
+      if (!ours(w)) return;
       const m = event.data;
-      if (m.type === 'failed') return fallBack(`a job failed in the worker: ${m.message}`);
+      if (m.type === 'failed') return fail(`a job failed in the worker: ${m.message}`);
       // A cut comes first; the job is out with its worker until its settled crater, or a wider region, comes back.
       const job = out.get(m.result.id);
-      if (!job) return;
+      if (!job || job.on !== w) return;
       if (!('stage' in m.result) || m.result.stage === 'settled') {
         out.delete(m.result.id);
-        if (job.worker) load.set(job.worker, load.get(job.worker)! - 1);
+        if (job.pooled) load.set(w, load.get(w)! - 1);
         stats.jobs++;
         stats.jobMs += m.ms;
         stats.tripMs += performance.now() - job.at - m.ms;
@@ -82,12 +136,12 @@ export function workerRunner(pool = 0): DetonationRunner & { terminate(): void; 
     };
     w.onerror = (event) => {
       event.preventDefault();
-      fallBack(`the worker failed: ${event.message}`);
+      if (ours(w)) fail(`the worker failed: ${event.message}`);
     };
     return w;
   };
   try {
-    worker = listen(spawn());
+    worker = listen(spawn(), fallBack);
   } catch (e) {
     worker = null;
     ahead = [];
@@ -98,7 +152,7 @@ export function workerRunner(pool = 0): DetonationRunner & { terminate(): void; 
     if (!ahead) {
       const made: Worker[] = [];
       try {
-        while (made.length < pool) made.push(listen(spawn()));
+        while (made.length < pool) made.push(listen(spawn(), poolFailed));
       } catch (e) {
         for (const w of made.splice(0)) w.terminate();
         console.warn(`[destruction] no pool for a catch-up (${e instanceof Error ? e.message : String(e)})`);
@@ -116,11 +170,15 @@ export function workerRunner(pool = 0): DetonationRunner & { terminate(): void; 
         local.post(req);
         return;
       }
+      // Only a crater cut ahead goes to the pool; with none (a page of two cores, or one whose pool
+      // failed) it goes to the session's worker all the same, never dropped: its shell's job may take
+      // its work over, and wait for it.
       const to = req.id < 0 ? pooled() : null;
+      const on = to ?? worker;
       const { origin, size } = req.copy;
-      out.set(req.id, { box: { x0: origin[0] * BRICK, y0: 0, z0: origin[2] * BRICK, x1: (origin[0] + size[0]) * BRICK, y1: size[1] * BRICK, z1: (origin[2] + size[2]) * BRICK }, worker: to, at: performance.now() });
+      out.set(req.id, { box: { x0: origin[0] * BRICK, y0: 0, z0: origin[2] * BRICK, x1: (origin[0] + size[0]) * BRICK, y1: size[1] * BRICK, z1: (origin[2] + size[2]) * BRICK }, on, pooled: to !== null, at: performance.now() });
       if (to) load.set(to, load.get(to)! + 1);
-      (to ?? worker).postMessage(req, [req.copy.entries.buffer as ArrayBuffer, req.copy.dense.buffer as ArrayBuffer]);
+      on.postMessage(req, [req.copy.entries.buffer as ArrayBuffer, req.copy.dense.buffer as ArrayBuffer]);
     },
     take() {
       return [...done.splice(0), ...local.take()];
@@ -133,5 +191,8 @@ export function workerRunner(pool = 0): DetonationRunner & { terminate(): void; 
     },
     rest,
     stats,
+    get parallel() {
+      return worker ? (ahead?.length ?? pool) : 0;
+    },
   };
 }
