@@ -5,14 +5,80 @@
  * camera, facing as it faces, so each voice's HRTF panner turns it about the
  * head. A frame's voices (plan.ts) start at their delays into one mix through
  * a compressor, which keeps a burst's reports from clipping.
+ *
+ * Every report's tail (the shots spec's §6) is one reverb, made as the context
+ * is and shared by every voice that sends to it: a ConvolverNode on an impulse
+ * generated then, from a seeded stream. A magazine on full auto makes no more
+ * convolvers than a single shot: each report adds only its own send to it.
  */
 
+import { Rng } from '../core/rng';
 import { cameraBasis, type CameraPose } from '../render/camera';
 import { VoiceCap } from './cap';
 import type { AudioTunables, VoiceKind, VoicePlan } from './plan';
 import { playVoice, voiceLength, type ReportShape, type VoiceHandle } from './voices';
 
 const NOISE_S = 2;
+
+/** The tail's impulse: falling this far over its length (dB), its corner falling from TAIL_OPEN_HZ to TAIL_DULL_HZ over it (its highs dying first). */
+const TAIL_FALL_DB = 60;
+const TAIL_OPEN_HZ = 8000;
+const TAIL_DULL_HZ = 400;
+/**
+ * What the tail returns of a report's body, in dB of the send squared: the send squared itself (G5's
+ * final review), which the heard renders hold (npm run sounds, its compressor settled as the game's
+ * is): the M870's and the SVD's tails 3 dB or more under their reports, an AK burst's 6 dB or more
+ * under its last (on the mean of nine draws, 6.7, 8.9 and 12.7 dB under).
+ */
+const TAIL_RETURN_DB = 0;
+
+/**
+ * The reports' tail's impulse at `rate`: `lengthS` of noise in each ear (each its own draw, so the
+ * tail is wide), falling TAIL_FALL_DB over it, through a lowpass of two one-pole stages (12 dB an
+ * octave) whose corner falls geometrically from TAIL_OPEN_HZ to TAIL_DULL_HZ, so its highs die faster
+ * than its lows (over 2 kHz, about 9 dB further over its first 0.6 s than under 500 Hz). Each ear
+ * scaled so that its noise, before the lowpass, has TAIL_RETURN_DB's energy (unity): the lowpass
+ * passes a report's body (under 400 Hz) whole, so what a voice sends of its body comes back as its
+ * energy times the send squared (engine.test holds the bodies' band there within 1 dB);
+ * its highs, which the lowpass thins, come back less. Drawn from one seeded stream (core/rng,
+ * 'audio.tail'), so it is the same every start and in every render.
+ */
+export function tailImpulse(rate: number, lengthS: number): [Float32Array<ArrayBuffer>, Float32Array<ArrayBuffer>] {
+  const n = Math.round(lengthS * rate);
+  const rng = Rng.root(0).derive('audio.tail');
+  const ears: [Float32Array<ArrayBuffer>, Float32Array<ArrayBuffer>] = [new Float32Array(n), new Float32Array(n)];
+  for (const [k, ear] of ears.entries()) {
+    const draw = rng.derive(`ear.${k}`);
+    let y1 = 0;
+    let y2 = 0;
+    // The energy of the noise as drawn and falling, before the lowpass: what the body's band returns.
+    let drawn = 0;
+    for (let i = 0; i < n; i++) {
+      const along = i / n;
+      const corner = TAIL_OPEN_HZ * Math.pow(TAIL_DULL_HZ / TAIL_OPEN_HZ, along);
+      const a = Math.exp((-2 * Math.PI * corner) / rate);
+      const fall = Math.pow(10, (-TAIL_FALL_DB * along) / 20);
+      const u = draw.uniform(-1, 1);
+      y1 = (1 - a) * u + a * y1;
+      y2 = (1 - a) * y1 + a * y2;
+      ear[i] = y2 * fall;
+      drawn += (u * fall) ** 2;
+    }
+    const scale = Math.sqrt(Math.pow(10, TAIL_RETURN_DB / 10) / drawn);
+    for (let i = 0; i < n; i++) ear[i] *= scale;
+  }
+  return ears;
+}
+
+/** The reports' one shared tail into `mix`: a ConvolverNode on tailImpulse at the context's rate, as the engine makes it, and the sounds' proof (tools/sounds) too. */
+export function tailInto(ctx: BaseAudioContext, mix: AudioNode, shape: ReportShape): ConvolverNode {
+  const ears = tailImpulse(ctx.sampleRate, shape.tailS);
+  const buffer = ctx.createBuffer(2, ears[0].length, ctx.sampleRate);
+  for (const [k, ear] of ears.entries()) buffer.copyToChannel(ear, k);
+  const tail = new ConvolverNode(ctx, { buffer, disableNormalization: true });
+  tail.connect(mix);
+  return tail;
+}
 
 /**
  * The mix every voice plays into: `masterGain`, through a compressor that keeps a burst's reports from
@@ -39,12 +105,15 @@ export class AudioEngine {
   readonly kinds: Partial<Record<VoiceKind, number>> = {};
   /** Voices the cap did not play: farther than all it held. */
   dropped = 0;
+  /** Convolvers made: the reports' one shared tail, made as the context is (for the tests). */
+  convolvers = 0;
   private readonly cap: VoiceCap<VoiceHandle>;
   /** Where the listener stands (metres): a voice's distance, for the cap. */
   private ear: readonly number[] = [0, 0, 0];
   private ctx: AudioContext | null = null;
   private mix: GainNode | null = null;
   private noise: AudioBuffer | null = null;
+  private reverb: ConvolverNode | null = null;
 
   constructor(
     private readonly t: AudioTunables,
@@ -67,6 +136,11 @@ export class AudioEngine {
     return this.ctx?.state ?? 'none';
   }
 
+  /** The reports' one shared tail, into the mix: every voice with a send sends to it. Null without sound. */
+  get tail(): ConvolverNode | null {
+    return this.reverb;
+  }
+
   /**
    * In the click that starts or resumes play: make the context the first time, and start it. A
    * browser that refuses sound leaves the game silent, never stopped: the click goes on to lock the
@@ -75,9 +149,10 @@ export class AudioEngine {
   start(): void {
     if (!this.ctx) {
       let ctx: AudioContext | null = null;
+      let mix: GainNode;
       try {
         ctx = new AudioContext({ latencyHint: 'interactive' });
-        const mix = mixInto(ctx, this.t.masterGain);
+        mix = mixInto(ctx, this.t.masterGain);
         const noise = whiteNoise(ctx);
         this.mix = mix;
         this.noise = noise;
@@ -86,6 +161,14 @@ export class AudioEngine {
         void ctx?.close().catch(() => {});
         console.warn(`[audio] no sound: ${e instanceof Error ? e.message : String(e)}`);
         return;
+      }
+      // The reports' tail on its own: one that fails to build leaves every voice dry (playVoice sends
+      // nothing to no tail), never the game silent.
+      try {
+        this.reverb = tailInto(ctx, mix, this.report);
+        this.convolvers++;
+      } catch (e) {
+        console.warn(`[audio] no tail, the reports dry: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     this.ctx.resume().catch(() => {});
@@ -125,11 +208,12 @@ export class AudioEngine {
     const now = ctx.currentTime;
     const mix = this.mix;
     const noise = this.noise;
+    const tail = this.reverb;
     for (const v of plans) {
       // Under the cap: the farthest dropped first, a nearer voice cutting the farthest held.
       const when = now + v.delayS;
       const distance = Math.hypot(v.at[0] - this.ear[0], v.at[1] - this.ear[1], v.at[2] - this.ear[2]);
-      const r = this.cap.admit(distance, when + voiceLength(v, this.report), now, () => playVoice(ctx, mix, noise, v, when, this.report));
+      const r = this.cap.admit(distance, when + voiceLength(v), now, () => playVoice(ctx, mix, noise, v, when, this.report, tail));
       r.cut?.cut(now);
       if (!r.play) {
         this.dropped++;

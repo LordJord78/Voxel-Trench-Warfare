@@ -124,6 +124,10 @@ export interface HandlingTunables {
 export function handlingTunables(tun: Tunables): HandlingTunables {
   const f = (key: string) => tun.f(`handling.${key}`);
   const v = (key: string) => tun.triple(`handling.${key}`);
+  // The aim-in's overshoot rises to its peak, then settles back by aim_overshoot_s: a rise as long or
+  // longer would never settle, and its ease back would run backwards.
+  const [rise, settled] = [f('aim_overshoot_rise_s'), f('aim_overshoot_s')];
+  if (!(rise < settled)) throw new Error(`[handling] aim_overshoot_rise_s (${rise}) must be under aim_overshoot_s (${settled}): the overshoot rises, then settles by then`);
   return {
     bobUpM: f('bob_up_m'),
     bobSideM: f('bob_side_m'),
@@ -155,8 +159,8 @@ export function handlingTunables(tun: Tunables): HandlingTunables {
     landingSettleS: f('landing_settle_s'),
     landingDamping: f('landing_damping'),
     aimOvershootDeg: f('aim_overshoot_deg'),
-    aimOvershootRiseS: f('aim_overshoot_rise_s'),
-    aimOvershootS: f('aim_overshoot_s'),
+    aimOvershootRiseS: rise,
+    aimOvershootS: settled,
     reloadTiltAt: f('reload_tilt_at'),
     reloadTiltM: v('reload_tilt_m'),
     reloadTiltPitchDeg: f('reload_tilt_pitch_deg'),
@@ -342,8 +346,8 @@ export class Handling {
    * pitch it carries on from (null once it is back at the aim); and the pitch it drew last tick.
    */
   private lastAimed!: number;
-  private overshoot!: { t: number; from: number } | null;
-  private overshot!: number;
+  private overshootRun!: { t: number; from: number } | null;
+  private overshootPitch!: number;
   /** The stride's last phase, and whether this is the second of a pair (the swing across runs over two). */
   private lastBob!: number;
   private secondStride!: boolean;
@@ -389,8 +393,8 @@ export class Handling {
     this.landSpeed = 0;
     this.wasOnGround = true;
     this.lastAimed = 0;
-    this.overshoot = null;
-    this.overshot = 0;
+    this.overshootRun = null;
+    this.overshootPitch = 0;
     this.lastBob = 0;
     this.secondStride = false;
     this.lastReload = null;
@@ -475,19 +479,19 @@ export class Handling {
     // back to it, as a reload let go is, until aim_overshoot_s after they arrived. The sights arrive
     // with no speed, so it starts from nothing rather than all at once, which would pop; arriving
     // again while it is drawn, it carries on up from where it is.
-    if (aimed >= 1 && this.lastAimed < 1) this.overshoot = { t: 0, from: this.overshot };
+    if (aimed >= 1 && this.lastAimed < 1) this.overshootRun = { t: 0, from: this.overshootPitch };
     this.lastAimed = aimed;
-    this.overshot = 0;
-    if (this.overshoot !== null) {
-      const o = this.overshoot;
-      o.t += i.dt;
-      if (o.t >= t.aimOvershootS) {
-        this.overshoot = null;
+    this.overshootPitch = 0;
+    if (this.overshootRun !== null) {
+      const run = this.overshootRun;
+      run.t += i.dt;
+      if (run.t >= t.aimOvershootS) {
+        this.overshootRun = null;
       } else {
         const peak = t.aimOvershootDeg;
         const rise = t.aimOvershootRiseS;
-        this.overshot = o.t < rise ? o.from + (peak - o.from) * (o.t / rise) : peak * (1 - smooth((o.t - rise) / (t.aimOvershootS - rise)));
-        d.pitch += this.overshot;
+        this.overshootPitch = run.t < rise ? run.from + (peak - run.from) * (run.t / rise) : peak * (1 - smooth((run.t - rise) / (t.aimOvershootS - rise)));
+        d.pitch += this.overshootPitch;
       }
     }
 

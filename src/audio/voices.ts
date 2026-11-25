@@ -3,8 +3,12 @@
  * loaded (spec §5). A voice's sources run through a low-pass for its distance
  * and an HRTF panner where it happened, into the engine's mix.
  *
- * - The report: a high crack of noise, a thump at the reference's
- *   `report_low_hz` falling over `report_length_s`, and a low tail.
+ * - The report (the shots spec's §6), in layers: a click of broadband noise (2 ms); its body, a sine
+ *   at its gun's `report_body_hz` falling a third over 60 ms, each shot's pitch and level drawn a little
+ *   about it; its crack, noise in 1.5–4 kHz over 25 ms; and the action, a click in 3–6 kHz 15 ms on,
+ *   over 10 ms. Its tail is the engine's, shared by every report (engine.ts): each sends its share
+ *   there. Suppressed, its click and body lose their highs (over [attachment.suppressor] blast_hz) and
+ *   fall to its blast_share, and its crack and action are kept.
  * - A crack: a few milliseconds of high noise and a snap.
  * - Strikes: soil a low thud; timber a knock and its ring; metal a ping and an
  *   inharmonic partial over a tick of noise.
@@ -28,43 +32,129 @@ import type { Tunables } from '../core/tunables';
 import type { CueShape } from './cues';
 import type { VoicePlan } from './plan';
 
-/** The report's body, from the reference's WeaponReport. */
+/**
+ * What every report shares: the body of one whose gun is not known (the defaults', the front's rifles'),
+ * its tail, one reverb (engine.ts) on an impulse `tailS` seconds long, and what a suppressor leaves of
+ * its blast (its click and body): what is under `suppressedHz`, at `suppressedBlast` of its level.
+ */
 export interface ReportShape {
-  lowHz: number;
-  lengthS: number;
+  bodyHz: number;
+  tailS: number;
+  suppressedHz: number;
+  suppressedBlast: number;
 }
 
-/** The report's body the engine is given (app/main.ts), and the sounds' proof renders with (tools/sounds). */
+/**
+ * The reports' shape the engine is given (app/main.ts), and the sounds' proof renders with (tools/sounds).
+ * A tail of no length is refused here, at boot: the engine could not build it, and would go silent.
+ */
 export function reportShape(tun: Tunables): ReportShape {
-  return { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') };
+  const tailS = tun.f('viewkick.defaults.report_tail_s');
+  if (!(tailS > 0)) throw new Error(`[viewkick.defaults] report_tail_s (${tailS}) must be over 0: the reports' tail is an impulse that long`);
+  return {
+    bodyHz: tun.f('viewkick.defaults.report_body_hz'),
+    tailS,
+    suppressedHz: tun.f('attachment.suppressor.blast_hz'),
+    suppressedBlast: tun.f('attachment.suppressor.blast_share'),
+  };
 }
+
+/** The report's layers (the shots spec's §6): its click's length (s); its body's, the share of its pitch it falls to, and of its peak; its crack's length; the action's, and when it comes. */
+const CLICK_S = 0.002;
+const BODY_S = 0.06;
+const BODY_FALL = 2 / 3;
+const BODY_FADE = 0.1;
+const CRACK_S = 0.025;
+const ACTION_AT_S = 0.015;
+const ACTION_S = 0.01;
+/**
+ * The crack's band (1.5–4 kHz) and the action's (3–6 kHz), each a highpass and a lowpass, a pair of
+ * each: steep enough that little leaks past. Made once, not each report.
+ */
+const band = (lo: number, hi: number): readonly BiquadFilterOptions[] => {
+  const high: BiquadFilterOptions = { type: 'highpass', frequency: lo };
+  const low: BiquadFilterOptions = { type: 'lowpass', frequency: hi };
+  return [high, high, low, low];
+};
+const CRACK_FILTERS = band(1500, 4000);
+const ACTION_FILTERS = band(3000, 6000);
+/** Each layer's peak, as a share of the report's gain. */
+const CLICK_PEAK = 0.35;
+const BODY_PEAK = 0.45;
+const CRACK_PEAK = 1.1;
+const ACTION_PEAK = 0.55;
+/**
+ * Each shot's body its own (a magazine is not one tone thirty times): its pitch drawn within this share
+ * of its gun's, and its peak within this many dB of its share, each from Math.random as a noise's
+ * offset is (the sounds' proof seeds it, so its files are the same every run).
+ */
+const BODY_PITCH_JITTER = 0.03;
+const BODY_LEVEL_JITTER_DB = 1;
+/** How long a report's own layers sound (s): its body's, the longest, and its fade. */
+export const REPORT_S = BODY_S + 0.01;
 
 /** A voice that falls to a share of its peak (`fall`) fades from there to nothing over this (s). */
 const FALL_FADE_S = 0.004;
 
 /**
  * A gain at `peak` falling away by `to`: to 1e-4 (inaudible), or, given `fall`, to `fall` × `peak` and
- * then to nothing over FALL_FADE_S: a gentler fall, heard to its end.
+ * then to nothing over FALL_FADE_S: a gentler fall, heard to its end. A peak of nothing falls to nothing
+ * in a line: an exponential ramp to 0 throws (WebAudio), and would stop the game.
  */
 function fallAway(gain: AudioParam, peak: number, to: number, fall?: number): void {
   if (fall === undefined) {
     gain.exponentialRampToValueAtTime(1e-4, to);
     return;
   }
+  if (!(peak * fall > 0)) {
+    gain.linearRampToValueAtTime(0, to);
+    return;
+  }
   gain.exponentialRampToValueAtTime(peak * fall, to);
   gain.linearRampToValueAtTime(0, to + FALL_FADE_S);
 }
 
-/** Noise filtered and shaped: up to `peak` in `attack` seconds, then down by `decay` (to `fall` × `peak` and away, if given). */
-function burst(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, filter: BiquadFilterOptions, peak: number, attack: number, decay: number, fall?: number): void {
+/**
+ * Noise filtered and shaped: through `filters` in turn (one, a list, or none), up to `peak` in `attack`
+ * seconds, then down by `decay` (to `fall` × `peak` and away, if given).
+ */
+function burst(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, filters: BiquadFilterOptions | readonly BiquadFilterOptions[], peak: number, attack: number, decay: number, fall?: number): void {
   const source = new AudioBufferSourceNode(ctx, { buffer: noise });
   const shape = new GainNode(ctx, { gain: 0 });
   shape.gain.setValueAtTime(0, when);
   shape.gain.linearRampToValueAtTime(peak, when + attack);
   fallAway(shape.gain, peak, when + attack + decay, fall);
-  source.connect(new BiquadFilterNode(ctx, filter)).connect(shape).connect(into);
+  let chain: AudioNode = source;
+  for (const filter of Array.isArray(filters) ? filters : [filters]) chain = chain.connect(new BiquadFilterNode(ctx, filter));
+  chain.connect(shape).connect(into);
   const length = attack + decay + 0.05;
   source.start(when, Math.random() * Math.max(0, noise.duration - length), length);
+}
+
+/** A draw from Math.random, uniform in [−1, 1). */
+const drawn = () => Math.random() * 2 - 1;
+
+/**
+ * A report (the shots spec's §6) into `into`, `g` loud: its click, its body about `bodyHz` (this shot's
+ * pitch and level drawn within BODY_PITCH_JITTER and BODY_LEVEL_JITTER_DB), its crack and its action.
+ * Suppressed, the click and the body pass a lowpass at the shape's suppressedHz first, at its
+ * suppressedBlast of their level.
+ */
+function report(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, g: number, bodyHz: number, suppressed: boolean, shape: ReportShape): void {
+  let blast: AudioNode = into;
+  if (suppressed) {
+    blast = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: shape.suppressedHz });
+    blast.connect(new GainNode(ctx, { gain: shape.suppressedBlast })).connect(into);
+  }
+  // The click: broadband, unfiltered, 2 ms.
+  burst(ctx, noise, blast, when, [], CLICK_PEAK * g, 0.0002, CLICK_S - 0.0002);
+  // The body: a sine about its gun's pitch falling a third over 60 ms, to a tenth of its peak and away.
+  const hz = bodyHz * (1 + drawn() * BODY_PITCH_JITTER);
+  const level = Math.pow(10, (drawn() * BODY_LEVEL_JITTER_DB) / 20);
+  tone(ctx, blast, when, 'sine', hz, hz * BODY_FALL, BODY_PEAK * g * level, BODY_S, BODY_FADE);
+  // The crack, 1.5–4 kHz over 25 ms; the action's click, 3–6 kHz, 15 ms on, over 10 ms.
+  burst(ctx, noise, into, when, CRACK_FILTERS, CRACK_PEAK * g, 0.0005, CRACK_S - 0.0005, 0.05);
+  burst(ctx, noise, into, when + ACTION_AT_S, ACTION_FILTERS, ACTION_PEAK * g, 0.0003, ACTION_S - 0.0003, 0.05);
 }
 
 /** Noise rolling in over `attack` and away over the rest of `length` seconds, through a lowpass: looped, as a distant rumble outlasts the noise buffer. */
@@ -156,6 +246,8 @@ const GUSH_FALL = 1e-2;
 const GUSH_Q = 3;
 /** Its last fade to nothing (s), before its noise stops. */
 const GUSH_END_S = 0.05;
+/** Its splat's peak, a share of its own: the settled master compressor no longer hides the splat, so at 0.7 it outweighed the band once the gush sat under the gun. */
+const GUSH_SPLAT = 0.5;
 
 /**
  * A wet gush: noise through a bandpass sweeping 1.8 kHz down to 500 Hz over 0.45 s, its loudness
@@ -183,7 +275,7 @@ function gush(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: 
   source.start(when, Math.random() * Math.max(0, noise.duration - length), length);
   rate.start(when);
   rate.stop(when + length);
-  burst(ctx, noise, into, when, { type: 'lowpass', frequency: 400 }, 0.7 * peak, 0.002, 0.08);
+  burst(ctx, noise, into, when, { type: 'lowpass', frequency: 400 }, GUSH_SPLAT * peak, 0.002, 0.08);
 }
 
 /** A steel plate struck: each partial (Hz), how long it rings (s), and its share of the voice. */
@@ -228,10 +320,11 @@ export interface VoiceHandle {
 }
 
 /** How long a voice sounds from its start, in seconds: when it frees its place under the cap (cap.ts). */
-export function voiceLength(v: VoicePlan, report: ReportShape): number {
+export function voiceLength(v: VoicePlan): number {
   switch (v.kind) {
     case 'report':
-      return Math.max(report.lengthS, 0.47);
+      // Its own layers: its tail is the engine's, shared.
+      return REPORT_S;
     case 'crack':
       return 0.02;
     case 'impact-soil':
@@ -280,18 +373,23 @@ export function voiceLength(v: VoicePlan, report: ReportShape): number {
   }
 }
 
-export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuffer, v: VoicePlan, when: number, report: ReportShape): VoiceHandle {
+/**
+ * Play `v` at `when` into `out`, the mix: its sources through a lowpass for its distance and an HRTF
+ * panner where it happened, at its own level. A voice with a send (a report's) sends that share of
+ * itself, after its level (so a voice cut sends no more), to `tail`, the engine's shared reverb, if
+ * there is one.
+ */
+export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuffer, v: VoicePlan, when: number, shape: ReportShape, tail: AudioNode | null = null): VoiceHandle {
   const panner = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'linear', rolloffFactor: 0, positionX: v.at[0], positionY: v.at[1], positionZ: v.at[2] });
   const dull = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: v.lowpassHz });
   // Its own level, so the cap can cut it.
   const level = new GainNode(ctx, { gain: 1 });
   dull.connect(panner).connect(level).connect(out);
+  if (tail && v.send !== undefined && v.send > 0) level.connect(new GainNode(ctx, { gain: v.send })).connect(tail);
   const g = v.gain;
   switch (v.kind) {
     case 'report':
-      burst(ctx, noise, dull, when, { type: 'highpass', frequency: 1000 }, 0.9 * g, 0.001, 0.025);
-      tone(ctx, dull, when, 'sine', report.lowHz, report.lowHz * 0.55, 0.8 * g, report.lengthS);
-      burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 900 }, 0.25 * g, 0.005, 0.45);
+      report(ctx, noise, dull, when, g, v.bodyHz ?? shape.bodyHz, v.suppressed ?? false, shape);
       break;
     case 'crack':
       burst(ctx, noise, dull, when, { type: 'highpass', frequency: 3000 }, g, 0.0005, 0.004);
@@ -387,10 +485,11 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       break;
     case 'hurt':
       // Being hit: a low thump, and a 3 kHz ring in the ears fading over 0.6 s to a hundredth: on a
-      // laptop's speakers the ring is what is heard of it.
+      // laptop's speakers the ring is what is heard of it (npm run sounds holds a quarter of it over
+      // 400 Hz, the compressor settled: the thump's start no longer cut).
       tone(ctx, dull, when, 'sine', 95, 50, 0.85 * g, 0.18);
       burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 250 }, 0.6 * g, 0.003, 0.1);
-      tone(ctx, dull, when, 'sine', 3000, 2990, 0.25 * g, 0.6, 1e-2);
+      tone(ctx, dull, when, 'sine', 3000, 2990, 0.33 * g, 0.6, 1e-2);
       break;
     case 'mag-out':
     case 'mag-in':

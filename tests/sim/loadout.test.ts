@@ -45,7 +45,7 @@ describe('the loadout in the hands', () => {
     const shot = s.drainEvents().shots[0];
     expect(shot).toBeDefined();
     expect(decodeShotMark(shot.mark!)).toMatchObject({ gun: 'm4', suppressed: true, comp: false });
-    expect(shot.report!).toBeLessThan(0.5);
+    expect(shot.report!).toBe(tun.f('attachment.suppressor.report_gain'));
     expect(shot.flash!).toBeLessThan(0.5);
   });
 

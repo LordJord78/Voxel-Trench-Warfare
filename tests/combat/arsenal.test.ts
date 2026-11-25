@@ -139,6 +139,54 @@ describe('the arsenal', () => {
     expect(control('svd', old)).toBeLessThan(0.1);
   });
 
+  it("every bar of every gun's loadout card stands where it did, each against its [loadout] span", () => {
+    // The bars as they stood with their spans written into gunStats: each gun bare, and with each muzzle it takes.
+    const old = (gun: GunKey, fit = BARE) => {
+      const a = armSpec(tun, gun, fit);
+      const w = a.weapon;
+      const clamp = (v: number) => Math.max(0.04, Math.min(1, v));
+      return {
+        damage: clamp((DAMAGE_SCALE[gun] * w.pellets) / 2.2),
+        rate: clamp(w.rpm / 900),
+        accuracy: clamp(1 - aimedMoa(a) / 8),
+        control: clamp(1 - (a.recoil.kickPitchDeg + a.recoil.climbPerShotDeg * 2) / 5.6),
+        range: clamp(w.projectile.muzzleVelocity / 950),
+        handling: clamp(1 - (a.adsTimeS - 0.1) / 0.45 - (w.reloadS - 1.5) / 12),
+        mobility: clamp((a.move - 0.75) / 0.35),
+      };
+    };
+    for (const gun of GUNS) {
+      for (const muzzle of GUN_DEFS[gun].fits.muzzle) {
+        const fit = { ...BARE, muzzle };
+        expect(gunStats(tun, armSpec(tun, gun, fit), DAMAGE_SCALE[gun]), `${gun} ${muzzle}`).toEqual(old(gun, fit));
+      }
+    }
+    // Each span, and the bars' floor, is the tunable's.
+    const spans: Record<string, number> = {
+      bar_floor: 0.04, damage_span: 2.2, rate_span_rpm: 900, accuracy_span_moa: 8, control_span: 5.6, range_span_mps: 950,
+      handling_ads_from_s: 0.1, handling_ads_span_s: 0.45, handling_reload_from_s: 1.5, handling_reload_span_s: 12, mobility_from: 0.75, mobility_span: 0.35,
+    };
+    expect(tun.section('loadout')).toEqual(spans);
+    const bars = (key: string, value: number, gun: GunKey = 'm4') => {
+      const raw = tun.raw();
+      (raw.loadout as Record<string, unknown>)[key] = value;
+      const t2 = new Tunables(raw);
+      return gunStats(t2, armSpec(t2, gun, BARE), DAMAGE_SCALE[gun]);
+    };
+    const m4 = gunStats(tun, armSpec(tun, 'm4', BARE), DAMAGE_SCALE.m4);
+    expect(bars('damage_span', 4.4).damage).toBeCloseTo(m4.damage / 2, 12);
+    expect(bars('rate_span_rpm', 1800).rate).toBeCloseTo(m4.rate / 2, 12);
+    expect(bars('range_span_mps', 1900).range).toBeCloseTo(m4.range / 2, 12);
+    expect(bars('accuracy_span_moa', 4).accuracy).toBeLessThan(m4.accuracy);
+    expect(bars('handling_ads_span_s', 0.2).handling).toBeLessThan(m4.handling);
+    expect(bars('handling_ads_from_s', 0.2).handling).toBeGreaterThan(m4.handling);
+    expect(bars('handling_reload_span_s', 4).handling).not.toBeCloseTo(m4.handling, 6);
+    expect(bars('handling_reload_from_s', 3).handling).toBeGreaterThan(m4.handling);
+    expect(bars('mobility_span', 0.7).mobility).toBeCloseTo(m4.mobility / 2, 12);
+    expect(bars('mobility_from', 0.8).mobility).toBeLessThan(m4.mobility);
+    expect(bars('bar_floor', 0.1, 'm870').control).toBe(0.1);
+  });
+
   it('cleans a loadout: anything not one is the default, a fit only what its gun takes', () => {
     expect(cleanLoadout(null)).toEqual(defaultLoadout());
     expect(defaultLoadout()).toEqual({ primary: 'ak74', secondary: 'm17', fits: {} });

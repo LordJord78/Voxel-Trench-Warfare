@@ -213,8 +213,8 @@ export interface Hooks {
   craters(): number;
   /** Each of the last 600 frames' main-thread time, ms, from the frame's start to its render's return. */
   mainMs(): number[];
-  /** The sound: its context's state ('none' before the click that starts play) and how many voices have started. */
-  audio(): { state: 'none' | 'suspended' | 'running' | 'closed'; voices: number; kinds: Record<string, number>; held: number; dropped: number; time: number | null };
+  /** The sound: its context's state ('none' before the click that starts play), how many voices have started, and the convolvers the engine has made (its one shared tail, once started). */
+  audio(): { state: 'none' | 'suspended' | 'running' | 'closed'; voices: number; kinds: Record<string, number>; held: number; dropped: number; time: number | null; convolvers: number };
 }
 
 /**

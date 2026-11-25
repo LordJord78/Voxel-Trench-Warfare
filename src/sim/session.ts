@@ -388,6 +388,8 @@ export class Session {
   private readonly remoteGuns = new Map<string, { spec: ProjectileSpec; pellets: number; coneDeg: number }>();
   /** A suppressor's share of its gun's muzzle velocity ([attachment.suppressor] velocity). */
   private readonly suppressorVelocity: number;
+  /** A suppressor's share of its gun's report ([attachment.suppressor] report_gain): another's suppressed shot is heard at it. */
+  private readonly suppressorReport: number;
   /** The most rounds in the pool that others' shots fill it to: [ballistics] others_fill of its capacity (roundRoom). */
   private readonly othersMax: number;
   private readonly chipEnergyJ: number;
@@ -441,6 +443,7 @@ export class Session {
     this.suppressionRng = this.streams.derive('combat.suppression');
     this.chipEnergyJ = tun.f('destruction.chip_energy_j');
     this.suppressorVelocity = attachmentTerms(tun, 'suppressor').velocity;
+    this.suppressorReport = attachmentTerms(tun, 'suppressor').reportGain;
     this.othersMax = Math.floor(tun.f('ballistics.others_fill') * tun.i('ballistics.pool_capacity'));
     this.splashEnergyJ = tun.f('artillery.splash_energy_j');
     this.harmT = harmTunables(tun);
@@ -570,7 +573,7 @@ export class Session {
     const flashShare = m?.suppressed ? 0.12 : 1;
     this.events.remoteShots.push({
       tick: this.ticks, owner, origin: [origin[0], origin[1], origin[2]], dir: [dir[0], dir[1], dir[2]], tracer, muzzle: from,
-      ...(mark === undefined ? {} : { mark, flash: flashShare, report: m?.suppressed ? 0.3 : 1 }),
+      ...(mark === undefined ? {} : { mark, flash: flashShare, report: m?.suppressed ? this.suppressorReport : 1 }),
     });
     const { flash } = this.kinds;
     this.particles.emit(muzzle, [dir[0] * flash.speed, dir[1] * flash.speed + flash.lift, dir[2] * flash.speed], flash, Math.round(flash.count * flashShare), this.particleRng);

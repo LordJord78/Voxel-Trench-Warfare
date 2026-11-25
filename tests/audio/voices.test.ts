@@ -112,7 +112,7 @@ describe("the hands' cues' sounds", () => {
     for (const cue of CUES) {
       const [plan] = planVoices(t, cueEvents(cue), [0, 0, 0]);
       expect(plan.cue, cue).toBe(t.cues[cue]);
-      expect(voiceLength(plan, report), cue).toBe(t.cues[cue].lengthS);
+      expect(voiceLength(plan), cue).toBe(t.cues[cue].lengthS);
     }
   });
 
@@ -144,7 +144,7 @@ describe("the hands' cues' sounds", () => {
       ['square', 900, 0.2],
       ['sine', 300, 0.1],
     ]);
-    expect(voiceLength(planOf('pump', other), report)).toBe(0.3);
+    expect(voiceLength(planOf('pump', other))).toBe(0.3);
     // Every cue makes something, and only from its shape: a burst's filter as its part says.
     for (const cue of CUES) expect(play(planOf(cue, shapes[cue])).length, cue).toBeGreaterThan(0);
     const dry = play(planOf('dry', shapes.dry));
@@ -152,7 +152,7 @@ describe("the hands' cues' sounds", () => {
   });
 
   it("a cue planned without its shape is refused, naming it: no cue's sound is drawn but from [audio.cues]", () => {
-    expect(() => voiceLength(planOf('mag-in'), report)).toThrow(/mag-in/);
+    expect(() => voiceLength(planOf('mag-in'))).toThrow(/mag-in/);
     expect(() => play(planOf('bolt'))).toThrow(/bolt/);
   });
 

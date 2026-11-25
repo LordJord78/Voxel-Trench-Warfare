@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { noBattleEvents } from '../../src/battle/director';
 import { audioTunables, planFeedback, planVoices } from '../../src/audio/plan';
+import { armSpec, GUN_DEFS } from '../../src/combat/arsenal';
 import type { Impact } from '../../src/combat/ballistics';
 import { loadTunables } from '../../src/core/tunables';
+import { BARE, encodeShotMark, GUNS, type GunKey } from '../../src/net/gear';
 import type { CombatEvents, ShotEvent } from '../../src/sim/session';
 import { P } from '../../src/world/materials';
 
@@ -279,5 +281,119 @@ describe('the sound of a frame', () => {
     expect(planFeedback(t, [{ kind: 'ding', at: at(1.5), gain: 1.5 }], ear)[0].gain).toBe(1.5);
     expect(ding.delayS).toBeCloseTo(85 / t.speedOfSound, 9);
     expect(ding.lowpassHz).toBeCloseTo(planFeedback(t, [{ kind: 'hit', at: at(85), gain: 0.75 }], ear)[0].lowpassHz, 9);
+  });
+});
+
+// The reports (the shots spec's §6): each gun's report its own, layered (audio/voices.ts), and every
+// one sending to the one shared tail (audio/engine.ts). The plan says which gun's body it has, by the
+// shot's word (net/gear.ts ShotMark: its gun, whether suppressed), and how much it sends.
+describe('a report as planned', () => {
+  const tun = loadTunables();
+  const muzzle: [number, number, number] = [10.2, 1.8, 11.1];
+  /** The player's shot from `gun`, bare or suppressed, its word and its report's share as the session gives them. */
+  const fired = (gun: GunKey, suppressed = false, at: [number, number, number] = muzzle): ShotEvent => ({
+    ...shot(at),
+    mark: encodeShotMark({ tracer: false, kind: 0, suppressed, gun }),
+    report: armSpec(tun, gun, { ...BARE, muzzle: suppressed ? 'suppressor' : 'none' }).report,
+  });
+  /** The share of the way from reference_m to far_m a voice `d` metres off is, by which heardAfar dulls it. */
+  const farShare = (d: number) => Math.min(1, Math.max(0, (d - t.referenceM) / (t.farM - t.referenceM)));
+  /** What the front's report `d` metres straight ahead is planned as. */
+  const front = (d: number) => planVoices(t, { ...none(), frontShots: [shot([ear[0], ear[1], ear[2] + d])] }, ear)[0];
+
+  it("each gun's report has its own body, report_body_hz in its [viewkick.<gun>]: AK 140, M4 150, MP5 190, SVD 110, M249 135, M870 95, the pistols 210", () => {
+    const pinned: Record<GunKey, number> = { ak74: 140, m4: 150, mp5: 190, svd: 110, m249: 135, m870: 95, m17: 210, pm: 210 };
+    for (const gun of GUNS) {
+      expect(tun.f(`viewkick.${GUN_DEFS[gun].table}.report_body_hz`), gun).toBe(pinned[gun]);
+      expect(t.reportBodyHz[gun], gun).toBe(pinned[gun]);
+      const [v] = planVoices(t, { ...none(), shots: [fired(gun)] }, ear);
+      expect(v, gun).toMatchObject({ kind: 'report', at: muzzle, delayS: 0, gain: t.reportGain[gun], lowpassHz: t.openLowpassHz, bodyHz: pinned[gun], suppressed: false });
+    }
+  });
+
+  it("each gun's report has its own weight, report_gain in its [viewkick.<gun>]: the SVD heaviest, then the M870, the M4, the MP5, the AK and M249, the pistols lightest, the PM (0.61) a step under the M17 (0.62) (tuned on the heard renders: npm run sounds orders them as heard, the AK and the M4 over each pistol)", () => {
+    const pinned: Record<GunKey, number> = { svd: 1.43, m870: 1.35, m4: 0.76, mp5: 0.66, ak74: 0.65, m249: 0.65, m17: 0.62, pm: 0.61 };
+    for (const gun of GUNS) {
+      expect(tun.f(`viewkick.${GUN_DEFS[gun].table}.report_gain`), gun).toBe(pinned[gun]);
+      expect(t.reportGain[gun], gun).toBe(pinned[gun]);
+      // The player's own: its report's share (a suppressor's, the kit's) times its gun's weight.
+      for (const suppressed of [false, true]) {
+        const s = fired(gun, suppressed);
+        expect(planVoices(t, { ...none(), shots: [s] }, ear)[0].gain, `${gun} ${suppressed}`).toBeCloseTo(s.report! * pinned[gun], 12);
+      }
+      // Another's, as heard from afar: the same weight on the front's level.
+      const at: [number, number, number] = [ear[0], ear[1], ear[2] + 40];
+      const [remote] = planVoices(t, { ...none(), remoteShots: [{ ...fired(gun, false, at), owner: 3 }] }, ear);
+      expect(remote.gain, gun).toBeCloseTo(t.frontReportGain * pinned[gun] * Math.pow(t.referenceM / 40, t.rolloff), 12);
+    }
+    // The front's (no word, no gun known), and a shot whose word is not known: no weight but their own.
+    expect(front(40).gain).toBeCloseTo(t.frontReportGain * Math.pow(t.referenceM / 40, t.rolloff), 12);
+    expect(planVoices(t, { ...none(), shots: [shot(muzzle)] }, ear)[0].gain).toBe(1);
+    // In the order they weigh, heaviest first: on paper the SVD over the M870, as their peaks cap them
+    // (the compressor passes a third of a paper dB on them), though no gate orders the two as heard.
+    const order = [...GUNS].sort((a, b) => t.reportGain[b] - t.reportGain[a]);
+    expect(order.slice(0, 2)).toEqual(['svd', 'm870']);
+    expect(order.slice(-2).sort()).toEqual(['m17', 'pm']);
+  });
+
+  it("the front's report has the defaults' body (report_body_hz in [viewkick.defaults], the front's rifles'), and so has a shot whose word is not known", () => {
+    expect(t.frontBodyHz).toBe(tun.f('viewkick.defaults.report_body_hz'));
+    expect(t.frontBodyHz).toBe(140);
+    expect(front(40)).toMatchObject({ kind: 'report', bodyHz: 140, suppressed: false });
+    expect(planVoices(t, { ...none(), shots: [shot(muzzle)] }, ear)[0]).toMatchObject({ bodyHz: 140, suppressed: false });
+    expect(planVoices(t, { ...none(), remoteShots: [{ ...shot([10, 2, 40]), owner: 3 }] }, ear)[0]).toMatchObject({ bodyHz: 140, suppressed: false });
+  });
+
+  it("the player's own report sends report_tail_send (0.35) to the shared tail, a suppressed one half as much; both whole and undulled, so a suppressed one keeps its crack", () => {
+    expect(t.reportTailSend).toBe(tun.f('viewkick.defaults.report_tail_send'));
+    expect(t.reportTailSend).toBe(0.35);
+    const [bare] = planVoices(t, { ...none(), shots: [fired('svd')] }, ear);
+    const [quiet] = planVoices(t, { ...none(), shots: [fired('svd', true)] }, ear);
+    expect(bare).toEqual({ kind: 'report', at: muzzle, delayS: 0, gain: t.reportGain.svd, lowpassHz: t.openLowpassHz, bodyHz: 110, suppressed: false, send: 0.35 });
+    // Quieter by its report's share (a suppressor's report_gain), the voice muffling its own body (voices.ts).
+    expect(quiet).toEqual({ kind: 'report', at: muzzle, delayS: 0, gain: tun.f('attachment.suppressor.report_gain') * t.reportGain.svd, lowpassHz: t.openLowpassHz, bodyHz: 110, suppressed: true, send: 0.175 });
+  });
+
+  it("afar reports keep their delay and lowpass, and send less to the tail the farther they are, by the lowpass's share: all of it within reference_m, never under a quarter of it (a far report keeps a trace of tail)", () => {
+    for (const d of [1, 2, 20, 76, 120, 150, 400]) {
+      const v = front(d);
+      const share = farShare(d);
+      expect(v.delayS, `${d} m`).toBeCloseTo(d / t.speedOfSound, 12);
+      expect(v.lowpassHz, `${d} m`).toBeCloseTo(t.openLowpassHz * Math.pow(t.farLowpassHz / t.openLowpassHz, share), 9);
+      expect(v.gain, `${d} m`).toBeCloseTo(t.frontReportGain * Math.min(1, Math.pow(t.referenceM / Math.max(t.referenceM, d), t.rolloff)), 12);
+      expect(v.send, `${d} m`).toBeCloseTo(t.reportTailSend * Math.max(0.25, 1 - share), 12);
+    }
+    expect(front(2).send).toBe(0.35);
+    expect(front(76).send).toBeCloseTo(0.175, 12);
+    expect(front(150).send).toBeCloseTo(0.0875, 12);
+    expect(front(400).send).toBeCloseTo(0.0875, 12);
+    // Where the floor takes over: three quarters of the way to far_m.
+    expect(front(t.referenceM + 0.8 * (t.farM - t.referenceM)).send).toBeCloseTo(0.0875, 12);
+    expect(front(t.referenceM + 0.7 * (t.farM - t.referenceM)).send).toBeCloseTo(0.35 * 0.3, 12);
+    // A far suppressed report: half the floor.
+    const far: [number, number, number] = [ear[0], ear[1], ear[2] + 400];
+    expect(planVoices(t, { ...none(), remoteShots: [{ ...fired('pm', true, far), owner: 4 }] }, ear)[0].send).toBeCloseTo(0.04375, 12);
+  });
+
+  it("another player's report: their gun's body, suppressed as their word says, sending half as much then, as heard from afar, and dulled by the distance alone", () => {
+    const at: [number, number, number] = [ear[0], ear[1], ear[2] + 40];
+    const share = farShare(40);
+    const dulled = t.openLowpassHz * Math.pow(t.farLowpassHz / t.openLowpassHz, share);
+    const [bare, quiet] = planVoices(t, { ...none(), remoteShots: [{ ...fired('m4', false, at), owner: 3 }, { ...fired('pm', true, at), owner: 4 }] }, ear);
+    expect(bare).toMatchObject({ kind: 'report', at, bodyHz: 150, suppressed: false });
+    expect(quiet).toMatchObject({ kind: 'report', at, bodyHz: 210, suppressed: true });
+    expect(bare.send).toBeCloseTo(0.35 * (1 - share), 12);
+    expect(quiet.send).toBeCloseTo(0.175 * (1 - share), 12);
+    expect(bare.lowpassHz).toBeCloseTo(dulled, 9);
+    expect(quiet.lowpassHz).toBeCloseTo(dulled, 9);
+    expect(bare.gain).toBeCloseTo(t.frontReportGain * t.reportGain.m4 * Math.pow(t.referenceM / 40, t.rolloff), 12);
+    expect(quiet.gain).toBeCloseTo(t.frontReportGain * tun.f('attachment.suppressor.report_gain') * t.reportGain.pm * Math.pow(t.referenceM / 40, t.rolloff), 12);
+  });
+
+  it('no other voice has a body, a suppressor or a send', () => {
+    const events: CombatEvents = { ...none(), cracks: [{ tick: 1, missM: 1, at: [11, 2, 10] }], impacts: [impact([12, 2, 20], P.SOD)], scoops: [{ tick: 1, voxels: 24, at: [10.6, 1.4, 10.8], cells: [] }] };
+    const plans = planVoices(t, events, ear);
+    expect(plans).toHaveLength(3);
+    for (const v of plans) expect([v.bodyHz, v.suppressed, v.send], v.kind).toEqual([undefined, undefined, undefined]);
   });
 });

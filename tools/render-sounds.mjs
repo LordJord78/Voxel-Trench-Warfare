@@ -7,6 +7,7 @@
 // a band rule's own share, and an `over` rule's energy in its band (tools/lib/sound-measures.mjs).
 //
 //   npm run sounds [-- --only gush,ding]   (or --only=gush,ding)
+//   SOUNDS_PORT=5326 npm run sounds        (its page served there, not 5316: another checkout's run may hold that)
 //
 // Writes artifacts/sp7/sounds/<name>.wav (48 kHz stereo, 16-bit) and report.json (merged with what a run
 // of a few left, each entry stamped with the commit and the time it was rendered), and prints a table of
@@ -14,19 +15,33 @@
 // outside −30 to −1 dBFS, or silent; or, by its rules, under its floor, too little in its band or over
 // 400 Hz (the small speaker), its loudest 50 ms too far from another render's or its body's (the
 // kill's thud), or its energy in a band too little over another's (a headshot's kill over the same
-// without its gush); the other rendered too, if --only left it out; or if the page fails. Exits 2, with the
-// usage, if --only has no list or names no render. A render reported and not held says what fails of
-// it, and does not fail the run.
+// without its gush, a report over each lighter gun's), its loudest 50 ms too little under another's (a
+// suppressed SVD's report under the bare one's) or its share over 400 Hz too little over it, or its
+// tail's loudest 50 ms not between so many dB under its report's (missing, or outweighing it); or the
+// master compressor cut a mix that never reached its threshold (it had not settled: each render's
+// context runs SETTLE_S first, cut from its file, as the game's runs from the click that starts play);
+// each other it is held to rendered too, and theirs, if --only left them out; or if the page fails. Exits
+// 2, with the usage, if --only has no list or names no render. A render reported and not held says
+// what fails of it, and does not fail the run. A render drawn more than once (tools/sounds/renders.ts
+// DRAWS: its noise and each shot's body drawn afresh) is held on the mean of its draws, its peak's range
+// and floor on every draw, and fails if a draw of it or of another it is held to is missing or silent
+// (sound-measures.mjs checkDraws); a second table, and report.json, give each gated reading's value on
+// the named draw, on the mean and on the worst draw.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { parseOnly } from './lib/cli.mjs';
 import { readReport, stamp, writeReport } from './lib/report.mjs';
-import { checkSound, table, wav } from './lib/sound-measures.mjs';
+import { checkDraws, drawLabel, meanOf, readings, readingsTable, settledFailures, table, wav } from './lib/sound-measures.mjs';
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 
-const PORT = 5316;
+/** The page's port: SOUNDS_PORT, or 5316. */
+const PORT = Number(process.env.SOUNDS_PORT ?? 5316);
+if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) {
+  console.error(`SOUNDS_PORT must be a port number, not ${JSON.stringify(process.env.SOUNDS_PORT)}`);
+  process.exit(2);
+}
 const OUT = 'artifacts/sp7/sounds';
 const PAGE = '/tools/sounds/index.html';
 const USAGE = 'usage: npm run sounds [-- --only <names>]   (or --only=<names>; names comma-separated, of the renders in tools/sounds/renders.ts)';
@@ -43,8 +58,14 @@ const read = (m) => ({
   highShare: round3(m.highShare),
   ...(m.ruleShare !== undefined ? { ruleShare: round3(m.ruleShare) } : {}),
   ...(m.overDb !== undefined ? { overDb: round2(m.overDb) } : {}),
+  ...(m.tailDb !== undefined ? { dryDb: round2(m.dryDb), tailDb: round2(m.tailDb) } : {}),
 });
 const samplesOf = (b64) => new Float32Array(Uint8Array.from(Buffer.from(b64, 'base64')).buffer);
+/** A reading's values to 0.01 dB, or 0.001 of a share. */
+const roundReading = (r) => {
+  const round = (x) => (typeof x !== 'number' ? null : r.unit === 'share' ? (Number.isFinite(x) ? round3(x) : null) : round2(x));
+  return { ...r, named: round(r.named), mean: round(r.mean), worst: round(r.worst) };
+};
 
 let server;
 let browser;
@@ -70,14 +91,24 @@ try {
     console.error(USAGE);
     process.exitCode = 2;
   } else {
-    // A render held to another's level, or over its energy, needs the other rendered too.
-    const only = asked.only && [...new Set([...asked.only, ...known.filter((k) => asked.only.includes(k.name)).flatMap((k) => [k.near, k.over].filter((x) => x !== null))])];
+    // A render held to another's level, over its energy, under its loudness or over its tone needs the other
+    // rendered too, and whatever that one is held to in turn.
+    let only = asked.only;
+    for (let grew = only !== null; grew; ) {
+      const next = [...new Set([...only, ...known.filter((k) => only.includes(k.name)).flatMap((k) => [k.near, ...k.over, k.under, k.highOver].filter((x) => x !== null && x !== undefined))])];
+      grew = next.length > only.length;
+      only = next;
+    }
     const rendered = await page.evaluate((o) => window.sounds.render(o), only);
-    const heard = Object.fromEntries(rendered.map((r) => [r.name, r.heard]));
+    // Each render's draws, read: what its rules, and those of each render held to it, read.
+    const drawsOf = Object.fromEntries(rendered.map((r) => [r.name, r.drawn.map((d) => d.heard)]));
     const rows = [];
+    const gatedReadings = [];
     for (const r of rendered) {
       writeFileSync(`${OUT}/${r.name}.wav`, wav(r.samples.map(samplesOf), r.rate));
-      const found = checkSound(r.heard, r.rules ?? {}, heard);
+      const found = [...checkDraws(drawsOf[r.name], r.rules ?? {}, drawsOf, r.draws), ...r.drawn.flatMap((d, k) => settledFailures(d.into, d.heard).map((f) => f + drawLabel(k, r.drawn.length)))];
+      const held = readings(drawsOf[r.name], r.rules ?? {}, drawsOf).map(roundReading);
+      if (r.draws > 1 || Object.keys(r.rules ?? {}).length > 0) gatedReadings.push({ name: r.name, readings: held });
       rows.push({ name: r.name, ...r.heard, failures: found, gated: r.gated });
       if (r.gated) for (const f of found) failures.push(`${r.name}: ${f}`);
       report[r.name] = {
@@ -89,7 +120,12 @@ try {
         gated: r.gated,
         rules: r.rules,
         plans: r.plans,
+        draws: r.draws,
+        // Each gated reading on the named draw, on the mean of its draws, and on the worst.
+        readings: held,
         heard: read(r.heard),
+        // A render drawn more than once: its readings' mean over its draws (its loudest 50 ms as heard over many shots).
+        ...(r.draws > 1 ? { heardMean: read(meanOf(drawsOf[r.name])) } : {}),
         intoCompressor: read(r.into),
         // The compressor's change to the peak (dB): under 0 it took that off; over 0, its make-up gain lifted a quiet voice.
         compressorDb: Number.isFinite(r.into.peakDb) && Number.isFinite(r.heard.peakDb) ? round2(r.heard.peakDb - r.into.peakDb) : null,
@@ -98,7 +134,10 @@ try {
     }
     console.log(table(rows));
     console.log('');
-    for (const r of rendered) console.log(`${r.name}: into the compressor ${round2(r.into.peakDb)} dBFS peak, ${round2(r.into.rmsDb)} RMS; out of it, the peak ${report[r.name].compressorDb ?? '-'} dB; its loudest 50 ms from ${Math.round(r.heard.loudestAtS * 1000)} ms; its loudest 50 ms under 400 Hz alone ${round2(r.heard.lowLoudestDb)} dBFS${r.heard.ruleShare !== undefined ? `; its band rule's share ${Math.round(r.heard.ruleShare * 1000) / 10}%` : ''}${r.heard.overDb !== undefined ? `; its energy in its over rule's band ${round2(r.heard.overDb)} dB` : ''}`);
+    console.log(`Each gated reading, on the named draw, the mean of its draws and the worst (a render drawn once is its own):`);
+    console.log(readingsTable(gatedReadings));
+    console.log('');
+    for (const r of rendered) console.log(`${r.name}: into the compressor ${round2(r.into.peakDb)} dBFS peak, ${round2(r.into.rmsDb)} RMS; out of it, the peak ${report[r.name].compressorDb ?? '-'} dB; its loudest 50 ms from ${Math.round(r.heard.loudestAtS * 1000)} ms; its loudest 50 ms under 400 Hz alone ${round2(r.heard.lowLoudestDb)} dBFS${r.heard.ruleShare !== undefined ? `; its band rule's share ${Math.round(r.heard.ruleShare * 1000) / 10}%` : ''}${r.heard.overDb !== undefined ? `; its energy in its over rule's band ${round2(r.heard.overDb)} dB` : ''}${r.heard.tailDb !== undefined ? `; its tail's loudest 50 ms ${round2(r.heard.tailDb)} dBFS, ${round2(r.heard.dryDb - r.heard.tailDb)} dB under its report's ${round2(r.heard.dryDb)}` : ''}`);
   }
 } catch (e) {
   failures.push(`run: ${e.message}`);
