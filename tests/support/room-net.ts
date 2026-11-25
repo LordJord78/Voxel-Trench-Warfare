@@ -58,7 +58,7 @@ import { teamTracer } from '../../src/net/gear';
 import { RoomCore, type Conn } from '../../src/net/room-core';
 import { decodeDig, decodeShell, decodeShot, encodeState, parseRoom, PROTOCOL, SHOTS_MAX, type ClientMsg, type Dig, type MatchInfo, type RoomShell, type Seat, type ShotState, type Team } from '../../src/net/protocol';
 import type { DetonationRunner } from '../../src/sim/destruction';
-import { RoomBattle, type Held } from '../../src/sim/room-battle';
+import { RoomBattle } from '../../src/sim/room-battle';
 import { Session, type CombatEvents } from '../../src/sim/session';
 import type { BrickMap } from '../../src/world/bricks';
 import { CharQueue } from '../../src/world/char';
@@ -240,7 +240,7 @@ export class NodeClient {
   private shotsOut: number[][] = [];
   private sentAt = Number.NEGATIVE_INFINITY;
   /** The scoops the last match's battle still held at its end, for the next match's (Together.carried). */
-  private carried: Held[] = [];
+  private carried: Dig[] = [];
 
   constructor(
     private readonly net: RoomNet,
@@ -302,7 +302,7 @@ export class NodeClient {
     s.room = inMatch;
     s.seat = inMatch ? this.you : -1;
     if (inMatch && this.caughtUp) {
-      const battle = this.matchBattle();
+      const battle = this.matchBattle(nowMs);
       for (const e of this.edits.splice(0)) {
         if (e.t === 'shell') battle.hear(e.shell, nowMs);
         else {
@@ -391,11 +391,11 @@ export class NodeClient {
     this.chars.make(this.session.map, (box) => this.session.destruction.overlapsPending(box));
   }
 
-  /** The match's battle (Together.matchBattle): made if there is none, given the scoops the last one held first, in their places. */
-  private matchBattle(): RoomBattle {
+  /** The match's battle (Together.matchBattle): made if there is none, given the scoops the last one held first. */
+  private matchBattle(nowMs: number): RoomBattle {
     if (this.battle) return this.battle;
     const battle = (this.battle = new RoomBattle(this.session, fireT));
-    battle.carry(this.carried.splice(0));
+    for (const d of this.carried.splice(0)) battle.dug(d, nowMs);
     return battle;
   }
 
@@ -459,7 +459,7 @@ export class NodeClient {
     this.phase = 'lobby';
     this.match = null;
     this.director = null;
-    const battle = this.matchBattle();
+    const battle = this.matchBattle(Number.POSITIVE_INFINITY);
     this.battle = null;
     for (const e of this.edits.splice(0)) {
       if (e.t === 'shell') battle.hear(e.shell, Number.POSITIVE_INFINITY);

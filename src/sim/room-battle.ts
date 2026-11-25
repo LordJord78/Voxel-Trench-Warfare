@@ -86,12 +86,8 @@ export interface CatchUpPage {
 /** A log's entry: a shell at its landing, or a scoop at its stamp; ranked so a shell comes before a scoop of the same ms (`dug` lands the shells due by its stamp first). */
 type Entry = { at: number; rank: 0; n: number; shell: RoomShell } | { at: number; rank: 1; n: number; dig: Dig };
 
-/**
- * Another's scoop, held: its box (scoopBox), and the last crater id the session had given when it was
- * put in order, which it comes after (every later crater comes after it). The session's crater ids
- * run on across matches, so a scoop a match's end carries keeps its place in the next (`carry`).
- */
-export interface Held {
+/** Another's scoop, held: its box (scoopBox), and the last crater id the session had given when it was put in order, which it comes after (every later crater comes after it). */
+interface Held {
   dig: Dig;
   box: Box;
   after: number;
@@ -316,26 +312,16 @@ export class RoomBattle {
    * The match over: each held scoop that can be is dug, before the shells after it; then every shell
    * still in the air lands at once, quietly. They are the room's, cut on the ground as every other
    * client cuts them (`land`), though no frame of the match ran here to set the session to the room
-   * (a tab hidden throughout). The scoops still held, which it hands on, each with its place: the
-   * next match's battle is given them (`carry`) before its first tick, and digs them once the craters
-   * they wait for are in (the lobby ticks nothing), before the craters after them, those the end
-   * landed among them.
+   * (a tab hidden throughout). The scoops still held, which it hands on: the next match's battle is
+   * given them (`dug`) before its first tick, and digs them once the craters they wait for are in
+   * (the lobby ticks nothing).
    */
-  finish(): Held[] {
+  finish(): Dig[] {
     this.dig();
     const all = this.air;
     this.air = [];
     for (const s of all) this.land(s, true);
-    return this.digs.splice(0);
-  }
-
-  /**
-   * The scoops the last match's battle held when it ended (`finish`), held here in their places, before
-   * this battle's first tick: each after the craters it came after, and before those after it (a shell
-   * the end landed over it waits for it), as on the page that dug it and on one caught up on the log.
-   */
-  carry(held: readonly Held[]): void {
-    this.digs.push(...held);
+    return this.digs.splice(0).map((h) => h.dig);
   }
 
   /** Every heard shell due by `byMs` lands, in id order; quietly, one more than SILENT_STEP_S overdue at `nowMs`. */
