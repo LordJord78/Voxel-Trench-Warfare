@@ -127,8 +127,8 @@ function ownChest(s: Session): V3 {
 const intoPlayer = (s: Session, owner: number, dir: V3 = [1, 0, 0]): BodyHit & { tick: number } => ({ owner, body: LOCAL_BODY, zone: 'torso', position: ownChest(s), dir, distance: 5, tick: s.ticks });
 
 describe('hit feedback', () => {
-  it("[hits] gives the feedback's numbers", () => {
-    expect(t.gains).toEqual({ hit: 0.7, head: 0.88, gush: 4.5, kill: 0.37, ding: 1.5, hurt: 0.7 });
+  it("[hits] gives the feedback's numbers: the shooter's gush (2.8) and kill (0.3) turned under the gun", () => {
+    expect(t.gains).toEqual({ hit: 0.7, head: 0.88, gush: 2.8, kill: 0.3, ding: 1.5, hurt: 0.7 });
     // Another's headshot's gush, heard at the body: the old gain, so a kill nearby in a match is not overpowering (Task 5's ruling).
     expect(t.gushOthersGain).toBe(0.8);
     expect([t.killWindowS, t.hitHeardM, t.gushHeardM, t.flashMin, t.flashS, t.jolt]).toEqual([0.3, 30, 25, 0.25, 0.35, [1.5, 1.5]]);
@@ -157,7 +157,7 @@ describe('hit feedback', () => {
     expect(fb.state()).toMatchObject({ voices: { hit: 1 }, flashes: 0, markers: { hit: 1, head: 0, kill: 0 } });
   });
 
-  it('a headshot: the head marker, the HEADSHOT pop, and head + gush at the ear', () => {
+  it('a headshot: the head marker, the HEADSHOT pop, and head (0.88) + gush (2.8) at the ear', () => {
     const s = field();
     const them = body(200);
     s.targets = [them];
@@ -173,7 +173,7 @@ describe('hit feedback', () => {
     ]);
     expect(voices).toEqual([
       { kind: 'head', at: null, gain: 0.88 },
-      { kind: 'gush', at: null, gain: 4.5 },
+      { kind: 'gush', at: null, gain: 2.8 },
     ]);
     // The head snaps.
     expect(fb.figureOverlay(200, NOW)).toEqual({ flinch: { dir: events.hits[0].dir, age: 0, head: true } });
@@ -201,7 +201,7 @@ describe('hit feedback', () => {
     expect(again.calls.map((c) => c[0])).toEqual(['show', 'show']);
   });
 
-  it('a kill 150 ms after the last hit: the kill marker replaces the hit marker, the kill voice plays, and the burst is at that hit', () => {
+  it('a kill 150 ms after the last hit: the kill marker replaces the hit marker, the kill voice plays (at 0.3), and the burst is at that hit', () => {
     const s = field();
     const them = body(3);
     s.together = true;
@@ -223,7 +223,7 @@ describe('hit feedback', () => {
       ['pop', 'KILL', ann, NOW + 150],
     ]);
     // The kill's voice comes with the next frame's, at the ear.
-    expect(fb.frame(s, none(), NOW + 166, [drawn(them)])).toEqual([{ kind: 'kill', at: null, gain: 0.37 }]);
+    expect(fb.frame(s, none(), NOW + 166, [drawn(them)])).toEqual([{ kind: 'kill', at: null, gain: 0.3 }]);
     // Critical blood thrown from where the round went in (the hit's own, a tick on, has moved off it),
     // not from the feet, and the ground behind spattered.
     const after = bloodOf(s);
@@ -291,7 +291,7 @@ describe('hit feedback', () => {
     expect(fb.figureOverlay(3, NOW + 500)).toEqual({ fallS: 0.7 });
   });
 
-  it("another's headshot seen 10 m off: a spatial gush at the body at gush_others_gain (0.8, not the shooter's 4.5), no marker", () => {
+  it("another's headshot seen 10 m off: a spatial gush at the body at gush_others_gain (0.8, not the shooter's 2.8), no marker", () => {
     const s = field();
     // At 10, 27 and 32 m from the player's eye.
     const them = [body(3, 15), body(5, 32), body(6, 37)];
@@ -619,7 +619,7 @@ describe('hit feedback', () => {
       ['show', 'kill', NOW + 300],
       ['pop', 'KILL', { name: 'Ann', team: 'blue' }, NOW + 300],
     ]);
-    expect(fb.frame(s, none(), NOW + 316)).toEqual([{ kind: 'kill', at: null, gain: 0.37 }]);
+    expect(fb.frame(s, none(), NOW + 316)).toEqual([{ kind: 'kill', at: null, gain: 0.3 }]);
     expect(fb.figureOverlay(3, NOW + 316)).toMatchObject({ fallYaw: 0, fallS: 0.7 });
   });
 

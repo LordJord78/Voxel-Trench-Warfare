@@ -273,7 +273,7 @@ describe('playing with friends, and the hit feedback', () => {
     expect(harmed).toHaveBeenLastCalledWith(0, FRAME + 1000);
   });
 
-  it("a teamkill by this player is no kill of theirs to celebrate: no kill marker, no KILL or HEADSHOT, no thud and chime (the feed's team-killed is the word); the body still falls, and an enemy's kill is still marked", () => {
+  it("a teamkill by this player is no kill of theirs to celebrate: no kill marker, no KILL or HEADSHOT, no thud and chime (the feed's team-killed is the word); the body still falls, and an enemy's kill is still marked and heard (at 0.3)", () => {
     const s = field();
     const marker = new FakeMarker();
     const fb = new HitFeedback(t, marker);
@@ -295,6 +295,6 @@ describe('playing with friends, and the hit feedback', () => {
       ['show', 'kill', FRAME],
       ['pop', 'KILL', { name: 'Bob', team: 'blue' }, FRAME],
     ]);
-    expect(fb.frame(s, none(), FRAME + 32)).toEqual([{ kind: 'kill', at: null, gain: 0.37 }]);
+    expect(fb.frame(s, none(), FRAME + 32)).toEqual([{ kind: 'kill', at: null, gain: 0.3 }]);
   });
 });

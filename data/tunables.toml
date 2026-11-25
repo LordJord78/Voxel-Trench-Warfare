@@ -773,8 +773,8 @@ kill_window_s       = 0.3      # a kill bursts and falls from the victim's last 
                                # seen this recently; failing one, at their chest
 hit_gain            = 0.70     # the voices (audio/voices.ts): a body hit's thwack,
 head_gain           = 0.88     # a headshot's crack, its wet gush, a kill's thud and
-gush_gain           = 4.5      # chime (the shooter's, at the ear), a steel plate's
-kill_gain           = 0.37     # ring (at the plate, heard from the firing step), and
+gush_gain           = 2.8      # chime (the shooter's, at the ear), a steel plate's
+kill_gain           = 0.30     # ring (at the plate, heard from the firing step), and
 ding_gain           = 1.5      # being hit. npm run sounds holds each: its peak in
 hurt_gain           = 0.7      # -30 to -1 dBFS, a quarter of it over 400 Hz (a
                                # laptop's speakers), and the gush's loudest 50 ms
@@ -784,9 +784,10 @@ hurt_gain           = 0.7      # -30 to -1 dBFS, a quarter of it over 400 Hz (a
                                # And the shooter's under the gun: the hit, the head
                                # and the gush 2 dB or more under an AK's report, the
                                # kill at or under it (on the mean of nine draws). The
-                               # gush's gain is the lowest that keeps its band (under
-                               # it, its splat under 400 Hz outweighs the band), and
-                               # sits 0.8 dB over the AK's report: it fails that rule
+                               # gush's splat is half its peak (voices.ts), so its band
+                               # holds this far down; the kill is lowered with it, to
+                               # stay within 3 dB of the gush and leave a headshot-kill
+                               # 35% in the gush's band
 hit_heard_m         = 30.0     # another's round into a body is heard where it struck
 gush_heard_m        = 25.0     # this near; a headshot's gush this near,
 gush_others_gain    = 0.8      # at this gain, not gush_gain: that is the shooter's,

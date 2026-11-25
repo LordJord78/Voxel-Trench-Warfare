@@ -244,6 +244,8 @@ const GUSH_FALL = 1e-2;
 const GUSH_Q = 3;
 /** Its last fade to nothing (s), before its noise stops. */
 const GUSH_END_S = 0.05;
+/** Its splat's peak, a share of its own: the settled master compressor no longer hides the splat, so at 0.7 it outweighed the band once the gush sat under the gun. */
+const GUSH_SPLAT = 0.5;
 
 /**
  * A wet gush: noise through a bandpass sweeping 1.8 kHz down to 500 Hz over 0.45 s, its loudness
@@ -271,7 +273,7 @@ function gush(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: 
   source.start(when, Math.random() * Math.max(0, noise.duration - length), length);
   rate.start(when);
   rate.stop(when + length);
-  burst(ctx, noise, into, when, { type: 'lowpass', frequency: 400 }, 0.7 * peak, 0.002, 0.08);
+  burst(ctx, noise, into, when, { type: 'lowpass', frequency: 400 }, GUSH_SPLAT * peak, 0.002, 0.08);
 }
 
 /** A steel plate struck: each partial (Hz), how long it rings (s), and its share of the voice. */
