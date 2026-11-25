@@ -31,11 +31,14 @@
  *
  * A seat that leaves is remembered for REJOIN_MS by its page's rejoin token (protocol.ts isToken,
  * kept by the tab per room code): a hello with it gets its place back, its seat if free, its team,
- * its kills and deaths if the match is the same, and the host role if it held it and nobody has been
- * made host by an action since (the role passes on at once, and comes back). So a reload mid-match,
- * or the map change that reloads every page, leaves everyone where they were. A hello with the token
- * of a line still seated (the same tab back before its old line's close came) takes that seat, and
- * the old line is let go. Without a token, or with one the room does not know, a newcomer.
+ * its kills and deaths if the match is the same, and the host role if it held it as it left (by
+ * right or by succession) and nobody has been made host by an action since (the role passes on at
+ * once, and comes back). So a reload mid-match, or the map change that reloads every page, leaves
+ * everyone where they were. A hello with the token of a line still seated (the same tab back before
+ * its old line's close came) takes that seat, and the old line is let go. Without a token, or with
+ * one the room does not know, a newcomer. What must outlive the room's having nobody in it (its
+ * settings, the seats that left, the claims on the host role) is `snapshot`, for the relay to keep
+ * through its object's eviction and `restore` (server/src/keeper.ts).
  *
  * The battle (the shared-battle spec): the room runs the match's shelling (shelling.ts) over its
  * map's pinned field, telling everyone each shell SHELLING.leadS before it lands, and relays each
@@ -139,13 +142,24 @@ interface Member {
 }
 
 /** A seat that left, as its rejoin token gets it back: its id, team, the match it left (its start) and its tallies there, and when it left. */
-interface Left {
+export interface Left {
   id: number;
   team: Team;
   startAt: number | null;
   kills: number;
   deaths: number;
   at: number;
+}
+
+/**
+ * What a room keeps through having nobody in it, plain data for the relay's storage: its settings, the
+ * seats that left by their rejoin tokens (each with when it left, so it is forgotten on time), and the
+ * claims on the host role. Its match and its world's log end with its last player, as ever.
+ */
+export interface RoomMemory {
+  config: RoomConfig;
+  left: [string, Left][];
+  claims: string[];
 }
 
 export class RoomCore {
@@ -175,11 +189,13 @@ export class RoomCore {
   /** The seats that left, by their pages' rejoin tokens, for REJOIN_MS; kept when the room empties (a map change reloads every page). */
   private readonly left = new Map<string, Left>();
   /**
-   * The rejoin token the host role is kept for: the host's, until someone else is made host by an
-   * action (a setting, a start or an end), or the host is gone for good (unseated and forgotten). A
-   * hello with it is the host again.
+   * The rejoin tokens with a claim on the host role, eldest first: the host's by right (the first
+   * host's, or the last made host by an action: a setting, a start or an end), then each who held the
+   * role by succession, the one before having left. The last is the holder's while they are seated. A
+   * hello with one of them is the host again, and the claims after it, held only in its absence,
+   * lapse; an action makes the actor's the only one. A claim goes with its seat's memory (REJOIN_MS).
    */
-  private hostToken: string | null = null;
+  private claims: string[] = [];
 
   constructor(code: string) {
     this.code = code;
@@ -202,6 +218,19 @@ export class RoomCore {
   /** The scoops seat `seat` has had taken since the last match ended (LOBBY_DIGS_MAX; for the tests). */
   lobbyDigsTaken(seat: number): number {
     return this.lobbyDigs.get(seat) ?? 0;
+  }
+
+  /** What the room must keep through having nobody in it (RoomMemory), as plain data: for the relay to store as its last seat leaves. */
+  snapshot(): RoomMemory {
+    return { config: { ...this.config }, left: [...this.left].map(([token, l]) => [token, { ...l }]), claims: [...this.claims] };
+  }
+
+  /** A room's memory back, from the relay's storage, into this room as new: its settings (over the defaults, for any setting since added), the seats that left, the claims on the host role. */
+  restore(memory: RoomMemory): void {
+    this.config = { ...defaultConfig(), ...memory.config };
+    this.left.clear();
+    for (const [token, l] of memory.left) this.left.set(token, { ...l });
+    this.claims = [...memory.claims];
   }
 
   /** Whether the room has a match to tick every 50 ms: its countdown, its play, and its won seconds. */
@@ -354,21 +383,26 @@ export class RoomCore {
     m.seat = { id, name: cleanName(msg.name), team, ready: false, away: false };
     m.joinedAt = now;
     this.actedAt = now;
-    if (token !== null && token === this.hostToken) this.ownerId = id;
-    else this.chooseOwner();
+    const claim = token === null ? -1 : this.claims.indexOf(token);
+    if (claim >= 0) {
+      this.ownerId = id;
+      this.claims.length = claim + 1;
+    } else this.chooseOwner();
     this.claimHost();
     this.send(m, { t: 'welcome', you: id, room: this.code, owner: this.ownerId, seats: this.seats(), config: { ...this.config }, phase: this.phase, match: this.match, now, log: { shells: this.log.shells, digs: this.log.digs } });
     this.broadcastRoster(m);
     // Late to a match: in it, and told the score; back in the match it left, its kills and deaths its
-    // own again, and everyone told.
+    // own again, and everyone told. In its won seconds, told who won, as everyone was.
     if (this.rules) {
-      this.rules.join(id, team, Math.max(now, this.match!.startAt));
-      const f = this.rules.fighters.get(id);
+      const rules = this.rules;
+      rules.join(id, team, Math.max(now, this.match!.startAt));
+      const f = rules.fighters.get(id);
       if (back && f && back.startAt === this.match!.startAt) {
         f.kills = back.kills;
         f.deaths = back.deaths;
         this.broadcast(this.scoreMsg());
       } else this.send(m, this.scoreMsg());
+      if (rules.winner) this.send(m, { t: 'over', winner: rules.winner, red: rules.score.red, blue: rules.score.blue });
     }
   }
 
@@ -403,18 +437,18 @@ export class RoomCore {
     }
   }
 
-  /** The seats that left more than REJOIN_MS ago forgotten; and the host's claim with them, if theirs, the role's holder's then. */
+  /** The seats that left more than REJOIN_MS ago forgotten, and their claims on the host role with them. */
   private forget(now: number): void {
     for (const [token, l] of this.left) if (now - l.at > REJOIN_MS) this.left.delete(token);
-    const claim = this.hostToken;
-    if (claim !== null && !this.left.has(claim) && !this.seated().some((s) => s.token === claim)) this.hostToken = null;
+    const seated = new Set(this.seated().map((s) => s.token));
+    this.claims = this.claims.filter((t) => this.left.has(t) || seated.has(t));
     this.claimHost();
   }
 
-  /** With nobody's claim on the host role standing, it is the holder's. */
+  /** The holder's claim on the host role, the last: whoever holds it by succession may have it back on their return. */
   private claimHost(): void {
-    if (this.hostToken !== null) return;
-    this.hostToken = this.seated().find((s) => s.seat!.id === this.ownerId)?.token ?? null;
+    const token = this.seated().find((s) => s.seat!.id === this.ownerId)?.token ?? null;
+    if (token !== null && this.claims.at(-1) !== token) this.claims.push(token);
   }
 
   /** Whether seat `id`'s bucket has a scoop's token at `now`, filled at DIG_RATE to DIG_BURST since it was last drawn on: taken if so. */
@@ -499,7 +533,7 @@ export class RoomCore {
         return;
       case 'config':
         if (!owner || this.phase !== 'lobby') return;
-        this.hostToken = m.token;
+        this.claims = m.token === null ? [] : [m.token];
         // Another map is another world: its log starts afresh.
         if (msg.config.map !== undefined && msg.config.map !== this.config.map) this.log = emptyLog();
         this.config = { ...this.config, ...msg.config };
@@ -507,7 +541,7 @@ export class RoomCore {
         return;
       case 'start':
         if (!owner || this.phase !== 'lobby') return;
-        this.hostToken = m.token;
+        this.claims = m.token === null ? [] : [m.token];
         this.phase = 'playing';
         this.match = { startAt: now + COUNTDOWN_MS, seed: MAP_SEEDS[this.config.map] ?? MAP_SEEDS.ravine, config: { ...this.config } };
         this.rules = new MatchRules(this.config.killTarget, this.config.respawnS * 1000);
@@ -529,7 +563,7 @@ export class RoomCore {
         return;
       case 'end':
         if (!owner || this.phase !== 'playing') return;
-        this.hostToken = m.token;
+        this.claims = m.token === null ? [] : [m.token];
         this.toLobby();
         return;
       case 'hello':

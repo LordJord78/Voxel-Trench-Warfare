@@ -864,6 +864,25 @@ describe('joining a game from the start screen', () => {
     expect(count.play).toBe(0);
   });
 
+  it('says who won on the way in, with no Go, joining or back in the seconds after a win (the room tells it after its welcome)', async () => {
+    const { doc, count, together, session } = aPage();
+    together.join('ABCDE');
+    StubSocket.last!.open();
+    const seats = [
+      { id: 0, name: 'Jordan', team: 'red', ready: false, away: false },
+      { id: 1, name: 'Sam', team: 'blue', ready: false, away: false },
+    ];
+    StubSocket.last!.say({ t: 'welcome', you: 1, room: 'ABCDE', owner: 0, seats, config: defaultConfig(), phase: 'playing', match: MATCH, now: 9_000, log: { shells: [], digs: [] } });
+    StubSocket.last!.say({ t: 'score', red: 20, blue: 14, ps: [[0, 9, 2], [1, 3, 5]] });
+    StubSocket.last!.say({ t: 'over', winner: 'red', red: 20, blue: 14 });
+    await together.catchingUp;
+    together.frame(session(), false);
+    expect(doc.getElementById('deploy-line').textContent).toBe('Red won 20–14. The next match starts in the lobby.');
+    expect(doc.getElementById('go').hidden).toBe(true);
+    doc.getElementById('go').click();
+    expect(count.play).toBe(0);
+  });
+
   it('says the room closed for nobody playing in it, with only the way back to the start screen left', async () => {
     const { doc, notes, together } = await inMatch();
     StubSocket.last!.say({ t: 'closing', reason: 'idle' });
