@@ -13,9 +13,10 @@
  * water plips, as near as an impact is heard; a shell landing on it rushes, at any distance.
  *
  * A report (the shots spec's §6) carries its gun's body (`report_body_hz`, its [viewkick.<gun>]'s, by
- * the shot's word; the defaults' for the front's and a word not known), whether a suppressor muffled
- * it, and its send to the one shared tail (engine.ts): `report_tail_send` of the player's own, half
- * that suppressed, and of one afar less by its distance's share of far_m, the share that dulls it.
+ * the shot's word; the defaults' for the front's and a word not known) and its weight (`report_gain`,
+ * likewise; the front's, none), whether a suppressor muffled it, and its send to the one shared tail
+ * (engine.ts): `report_tail_send` of the player's own, half that suppressed, and of one afar less by
+ * its distance's share of far_m, the share that dulls it, never under a quarter.
  *
  * A hit's feedback (app/hit-feedback.ts says which; planFeedback places them): the shooter's thwack,
  * crack, gush and kill at the ear, at once and whole; another's hit on a body where it struck, and a
@@ -97,6 +98,8 @@ export interface AudioTunables {
   handsGain: number;
   /** Each gun's report's body (Hz), its [viewkick.<gun>] report_body_hz; the front's, the defaults'. */
   reportBodyHz: Record<GunKey, number>;
+  /** Each gun's report's weight, its [viewkick.<gun>] report_gain: a share of its level (the front's, 1). */
+  reportGain: Record<GunKey, number>;
   frontBodyHz: number;
   /** A report's send to the shared tail, the player's own and bare; a suppressed one sends half. */
   reportTailSend: number;
@@ -149,6 +152,7 @@ export function audioTunables(tun: Tunables): AudioTunables {
     flareGain: f('flare_gain'),
     handsGain: f('hands_gain'),
     reportBodyHz: Object.fromEntries(GUNS.map((g) => [g, tun.f(`viewkick.${GUN_DEFS[g].table}.report_body_hz`)])) as Record<GunKey, number>,
+    reportGain: Object.fromEntries(GUNS.map((g) => [g, tun.f(`viewkick.${GUN_DEFS[g].table}.report_gain`)])) as Record<GunKey, number>,
     frontBodyHz: tun.f('viewkick.defaults.report_body_hz'),
     reportTailSend: tun.f('viewkick.defaults.report_tail_send'),
     rumble: { gain: f('rumble_gain'), rangeM: tun.pair('battle.barrages.distance_m'), lowpassHz: tun.pair('audio.rumble_lowpass_hz'), lengthS: tun.pair('audio.rumble_length_s') },
@@ -213,14 +217,23 @@ export function planVoices(t: AudioTunables, events: CombatEvents, listener: rea
   const out: VoicePlan[] = [];
   const distance = (at: readonly number[]) => Math.hypot(at[0] - listener[0], at[1] - listener[1], at[2] - listener[2]);
   const afar = (at: [number, number, number], gain: number, kind: VoiceKind): VoicePlan => heardAfar(t, listener, at, gain, kind);
-  // A report: its gun's body and whether it was suppressed, by the shot's word (the front's, and a word
-  // not known, the defaults' body); quieter by its `report` share (a suppressor's, 0.3). It sends to the
-  // tail report_tail_send, half that suppressed (the voice muffles its own body and keeps its crack),
-  // and from afar less by the share of far_m that dulls it.
+  // A report: its gun's body and weight and whether it was suppressed, by the shot's word (the front's,
+  // and a word not known, the defaults' body and no weight); quieter by its `report` share (a
+  // suppressor's). It sends to the tail report_tail_send, half that suppressed (the voice muffles its
+  // own body and keeps its crack), and from afar less by the share of far_m that dulls it, but never
+  // under a quarter: a far report keeps a trace of tail. That floor does not make a far front ring
+  // aloud: the send is taken after the voice's level, so its tail already falls with the distance
+  // (at 150 m, near −70 dBFS).
   const report = (s: ShotEvent, v: VoicePlan): VoicePlan => {
     const word = s.mark === undefined ? null : decodeShotMark(s.mark);
     const suppressed = word?.suppressed ?? false;
-    return { ...v, bodyHz: word ? t.reportBodyHz[word.gun] : t.frontBodyHz, suppressed, send: t.reportTailSend * (suppressed ? 0.5 : 1) * (1 - farShare(t, distance(v.at))) };
+    return {
+      ...v,
+      gain: v.gain * (word ? t.reportGain[word.gun] : 1),
+      bodyHz: word ? t.reportBodyHz[word.gun] : t.frontBodyHz,
+      suppressed,
+      send: t.reportTailSend * (suppressed ? 0.5 : 1) * Math.max(0.25, 1 - farShare(t, distance(v.at))),
+    };
   };
   // The player's own: at their muzzle (within reference_m, so its whole send), at once and whole.
   for (const s of events.shots) out.push(report(s, { kind: 'report', at: s.muzzle, delayS: 0, gain: s.report ?? 1, lowpassHz: t.openLowpassHz }));

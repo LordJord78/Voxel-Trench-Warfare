@@ -306,8 +306,32 @@ describe('a report as planned', () => {
       expect(tun.f(`viewkick.${GUN_DEFS[gun].table}.report_body_hz`), gun).toBe(pinned[gun]);
       expect(t.reportBodyHz[gun], gun).toBe(pinned[gun]);
       const [v] = planVoices(t, { ...none(), shots: [fired(gun)] }, ear);
-      expect(v, gun).toMatchObject({ kind: 'report', at: muzzle, delayS: 0, gain: 1, lowpassHz: t.openLowpassHz, bodyHz: pinned[gun], suppressed: false });
+      expect(v, gun).toMatchObject({ kind: 'report', at: muzzle, delayS: 0, gain: t.reportGain[gun], lowpassHz: t.openLowpassHz, bodyHz: pinned[gun], suppressed: false });
     }
+  });
+
+  it("each gun's report has its own weight, report_gain in its [viewkick.<gun>]: the M870 heaviest, then the SVD, the AK and M249, the M4, the MP5, the pistols lightest", () => {
+    const pinned: Record<GunKey, number> = { m870: 1.78, svd: 1.58, ak74: 0.94, m249: 0.94, m4: 0.84, mp5: 0.66, m17: 0.63, pm: 0.63 };
+    for (const gun of GUNS) {
+      expect(tun.f(`viewkick.${GUN_DEFS[gun].table}.report_gain`), gun).toBe(pinned[gun]);
+      expect(t.reportGain[gun], gun).toBe(pinned[gun]);
+      // The player's own: its report's share (a suppressor's, the kit's) times its gun's weight.
+      for (const suppressed of [false, true]) {
+        const s = fired(gun, suppressed);
+        expect(planVoices(t, { ...none(), shots: [s] }, ear)[0].gain, `${gun} ${suppressed}`).toBeCloseTo(s.report! * pinned[gun], 12);
+      }
+      // Another's, as heard from afar: the same weight on the front's level.
+      const at: [number, number, number] = [ear[0], ear[1], ear[2] + 40];
+      const [remote] = planVoices(t, { ...none(), remoteShots: [{ ...fired(gun, false, at), owner: 3 }] }, ear);
+      expect(remote.gain, gun).toBeCloseTo(t.frontReportGain * pinned[gun] * Math.pow(t.referenceM / 40, t.rolloff), 12);
+    }
+    // The front's (no word, no gun known), and a shot whose word is not known: no weight but their own.
+    expect(front(40).gain).toBeCloseTo(t.frontReportGain * Math.pow(t.referenceM / 40, t.rolloff), 12);
+    expect(planVoices(t, { ...none(), shots: [shot(muzzle)] }, ear)[0].gain).toBe(1);
+    // In the order they weigh, heaviest first.
+    const order = [...GUNS].sort((a, b) => t.reportGain[b] - t.reportGain[a]);
+    expect(order.slice(0, 2)).toEqual(['m870', 'svd']);
+    expect(order.slice(-2).sort()).toEqual(['m17', 'pm']);
   });
 
   it("the front's report has the defaults' body (report_body_hz in [viewkick.defaults], the front's rifles'), and so has a shot whose word is not known", () => {
@@ -323,24 +347,30 @@ describe('a report as planned', () => {
     expect(t.reportTailSend).toBe(0.35);
     const [bare] = planVoices(t, { ...none(), shots: [fired('svd')] }, ear);
     const [quiet] = planVoices(t, { ...none(), shots: [fired('svd', true)] }, ear);
-    expect(bare).toEqual({ kind: 'report', at: muzzle, delayS: 0, gain: 1, lowpassHz: t.openLowpassHz, bodyHz: 110, suppressed: false, send: 0.35 });
+    expect(bare).toEqual({ kind: 'report', at: muzzle, delayS: 0, gain: t.reportGain.svd, lowpassHz: t.openLowpassHz, bodyHz: 110, suppressed: false, send: 0.35 });
     // Quieter by its report's share (a suppressor's report_gain), the voice muffling its own body (voices.ts).
-    expect(quiet).toEqual({ kind: 'report', at: muzzle, delayS: 0, gain: tun.f('attachment.suppressor.report_gain'), lowpassHz: t.openLowpassHz, bodyHz: 110, suppressed: true, send: 0.175 });
+    expect(quiet).toEqual({ kind: 'report', at: muzzle, delayS: 0, gain: tun.f('attachment.suppressor.report_gain') * t.reportGain.svd, lowpassHz: t.openLowpassHz, bodyHz: 110, suppressed: true, send: 0.175 });
   });
 
-  it("afar reports keep their delay and lowpass, and send less to the tail the farther they are, by the lowpass's share: all of it within reference_m, none from far_m on", () => {
+  it("afar reports keep their delay and lowpass, and send less to the tail the farther they are, by the lowpass's share: all of it within reference_m, never under a quarter of it (a far report keeps a trace of tail)", () => {
     for (const d of [1, 2, 20, 76, 120, 150, 400]) {
       const v = front(d);
       const share = farShare(d);
       expect(v.delayS, `${d} m`).toBeCloseTo(d / t.speedOfSound, 12);
       expect(v.lowpassHz, `${d} m`).toBeCloseTo(t.openLowpassHz * Math.pow(t.farLowpassHz / t.openLowpassHz, share), 9);
       expect(v.gain, `${d} m`).toBeCloseTo(t.frontReportGain * Math.min(1, Math.pow(t.referenceM / Math.max(t.referenceM, d), t.rolloff)), 12);
-      expect(v.send, `${d} m`).toBeCloseTo(t.reportTailSend * (1 - share), 12);
+      expect(v.send, `${d} m`).toBeCloseTo(t.reportTailSend * Math.max(0.25, 1 - share), 12);
     }
     expect(front(2).send).toBe(0.35);
     expect(front(76).send).toBeCloseTo(0.175, 12);
-    expect(front(150).send).toBe(0);
-    expect(front(400).send).toBe(0);
+    expect(front(150).send).toBeCloseTo(0.0875, 12);
+    expect(front(400).send).toBeCloseTo(0.0875, 12);
+    // Where the floor takes over: three quarters of the way to far_m.
+    expect(front(t.referenceM + 0.8 * (t.farM - t.referenceM)).send).toBeCloseTo(0.0875, 12);
+    expect(front(t.referenceM + 0.7 * (t.farM - t.referenceM)).send).toBeCloseTo(0.35 * 0.3, 12);
+    // A far suppressed report: half the floor.
+    const far: [number, number, number] = [ear[0], ear[1], ear[2] + 400];
+    expect(planVoices(t, { ...none(), remoteShots: [{ ...fired('pm', true, far), owner: 4 }] }, ear)[0].send).toBeCloseTo(0.04375, 12);
   });
 
   it("another player's report: their gun's body, suppressed as their word says, sending half as much then, as heard from afar, and dulled by the distance alone", () => {
@@ -354,8 +384,8 @@ describe('a report as planned', () => {
     expect(quiet.send).toBeCloseTo(0.175 * (1 - share), 12);
     expect(bare.lowpassHz).toBeCloseTo(dulled, 9);
     expect(quiet.lowpassHz).toBeCloseTo(dulled, 9);
-    expect(bare.gain).toBeCloseTo(t.frontReportGain * Math.pow(t.referenceM / 40, t.rolloff), 12);
-    expect(quiet.gain).toBeCloseTo(t.frontReportGain * tun.f('attachment.suppressor.report_gain') * Math.pow(t.referenceM / 40, t.rolloff), 12);
+    expect(bare.gain).toBeCloseTo(t.frontReportGain * t.reportGain.m4 * Math.pow(t.referenceM / 40, t.rolloff), 12);
+    expect(quiet.gain).toBeCloseTo(t.frontReportGain * tun.f('attachment.suppressor.report_gain') * t.reportGain.pm * Math.pow(t.referenceM / 40, t.rolloff), 12);
   });
 
   it('no other voice has a body, a suppressor or a send', () => {

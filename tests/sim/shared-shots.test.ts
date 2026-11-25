@@ -381,3 +381,18 @@ describe('what the player is shown of a shotgun', () => {
     expect(m4.coneDeg() * 60).toBeCloseTo(aimedMoa(armSpec(tun, 'm4', BARE)), 9);
   });
 });
+
+describe("another's suppressed shot heard", () => {
+  it("at the suppressor's report_gain ([attachment.suppressor]), as the player's own suppressed gun is: never a number of the session's own", () => {
+    const b = stand(arena(false), shotgun());
+    const origin: [number, number, number] = [12.8, 1.9, 0.5];
+    for (const suppressed of [false, true]) {
+      const mark = encodeShotMark({ tracer: false, kind: TRACER_KIND.none, suppressed, gun: 'svd' });
+      b.fireRemote(5, origin, [0, 0, 1], false, origin, mark, TRACER_KIND.none, 40, false);
+    }
+    const [bare, quiet] = b.drainEvents().remoteShots;
+    expect(bare.report).toBe(1);
+    expect(quiet.report).toBe(tun.f('attachment.suppressor.report_gain'));
+    expect(quiet.report).toBe(armSpec(tun, 'svd', { ...BARE, muzzle: 'suppressor' }).report);
+  });
+});

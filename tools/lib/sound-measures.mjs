@@ -5,8 +5,10 @@
 // Each file's peak is held between −30 and −1 dBFS and none may be silent; a render may be held besides
 // to a band, to the small speaker (its share over 400 Hz), to a floor under its peak, to another
 // render's loudest 50 ms, or its body's (a kill's thud, apart from its chime), over another render's
-// energy in a band (a headshot's kill over the same kill without its gush), or its peak under another's
-// (a suppressed SVD's report under a bare one's). Plain JS, so the render page
+// energy in a band (a headshot's kill over the same kill without its gush), its peak under another's
+// (a suppressed SVD's report under a bare one's), its share over 400 Hz over another's (the same, its
+// tone), or its tail's loudest 50 ms between so many dB under its report's (a report's shared tail,
+// neither missing nor outweighing it). Plain JS, so the render page
 // (tools/sounds/page.ts, which runs the FFT where it renders) and the tests read the same code.
 
 /** A file's peak must lie in this range (dBFS): over the top it may clip, under the bottom it is too quiet. */
@@ -290,13 +292,31 @@ export function ruleEnergyDb(x, rate, rule) {
   return sum > 0 ? 10 * Math.log10(sum) : -Infinity;
 }
 
+/**
+ * A `tail` rule's own reading of `x` (one channel or a list, at `rate`): from its onset, its loudest
+ * 50 ms before `rule.afterS` (`dryDb`: the report, or a burst's reports) and from `rule.afterS` on
+ * (`tailDb`: the tail alone, its layers done), in dBFS, both ears together; −Infinity for a window with
+ * nothing in it (silence, a missing tail, or nothing left past the file's end).
+ */
+export function ruleTail(x, rate, rule) {
+  const channels = channelsOf(x);
+  const at = onset(channels, rate);
+  if (at === null) return { dryDb: -Infinity, tailDb: -Infinity };
+  const from = Math.round(at * rate);
+  const split = Math.min(channels[0].length, from + Math.round(rule.afterS * rate));
+  const cut = (a, b) => channels.map((c) => (c.subarray ? c.subarray(a, b) : Array.prototype.slice.call(c, a, b)));
+  const read = (a, b) => (b > a ? loudest(cut(a, b), rate).db : -Infinity);
+  return { dryDb: read(from, split), tailDb: read(split, channels[0].length) };
+}
+
 const db1 = (x) => (x === -Infinity ? '-inf' : x.toFixed(1));
 const pct1 = (x) => `${(x * 100).toFixed(1)}%`;
 const pct = (x) => `${Math.round(x * 100)}%`;
 
 /**
- * What fails of a file read by measure() (with its rule's share, `ruleShare`, if it has a band rule, and
- * its `over` rule's reading, `overDb`, if it has one or another's names it):
+ * What fails of a file read by measure() (with its rule's share, `ruleShare`, if it has a band rule, its
+ * `over` rule's reading, `overDb`, if it has one or another's names it, and its `tail` rule's, `dryDb`
+ * and `tailDb`, if it has one):
  * its peak over −1 dBFS or under −30, or silent (under SILENT_DB, which says only that); and, by
  * `rules`, under its floor (`floorDb`), too little of its energy in its band (`band`: at least `share`
  * of it in `hz`, over its first `firstS` seconds if given; half, if it asks no share), too little over
@@ -305,8 +325,13 @@ const pct = (x) => `${Math.round(x * 100)}%`;
  * `near.low` from its body's, under SMALL_SPEAKER_HZ alone (the kill's thud, never its louder chime);
  * or its energy in `over.band` (over its first `over.firstS` seconds if given) less than `over.db` dB
  * over render `over.of`'s, read alike (`overDb`, each): a headshot's kill over the same without its
- * gush, as the kill's chime alone fills the band a share can ask of it; or its peak less than
- * `under.db` dB under render `under.of`'s (a suppressed SVD's report under a bare one's).
+ * gush, as the kill's chime alone fills the band a share can ask of it; its peak less than
+ * `under.db` dB under render `under.of`'s (a suppressed SVD's report under a bare one's); its share over
+ * 400 Hz less than `highOver.by` over render `highOver.of`'s (the same, its tone); or its tail's loudest
+ * 50 ms from `tail.afterS` on, from its onset, not between `tail.underDb` (lo to hi) dB under its
+ * loudest 50 ms before (a report's shared tail: over `hi`, or silent, it is missing; under `lo`, it
+ * outweighs the report). Another render missing or silent, a silent report, or a reading not taken,
+ * fails: never a pass.
  */
 export function checkSound(m, rules = {}, others = {}) {
   if (!(m.peakDb >= SILENT_DB)) return ['it is silent'];
@@ -353,6 +378,28 @@ export function checkSound(m, rules = {}, others = {}) {
     else {
       const gap = other.peakDb - m.peakDb;
       if (!(gap >= db)) out.push(`its peak, ${db1(m.peakDb)} dBFS, is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'over' : 'under'} ${of}'s (${db1(other.peakDb)} dBFS), not ${db} dB or more under it`);
+    }
+  }
+  if (rules.highOver) {
+    const { of, by } = rules.highOver;
+    const other = others[of];
+    if (!other) out.push(`its share over ${SMALL_SPEAKER_HZ} Hz is held over ${of}'s, which was not rendered`);
+    else if (!(other.peakDb >= SILENT_DB)) out.push(`its share over ${SMALL_SPEAKER_HZ} Hz is held over ${of}'s, which is silent`);
+    else {
+      const gap = m.highShare - other.highShare;
+      if (!(gap >= by)) out.push(`${pct1(m.highShare)} of its energy is over ${SMALL_SPEAKER_HZ} Hz, ${(Math.abs(gap) * 100).toFixed(1)} points ${gap < 0 ? 'under' : 'over'} ${of}'s (${pct1(other.highShare)}), not ${Math.round(by * 100)} or more over it`);
+    }
+  }
+  if (rules.tail) {
+    const { afterS, underDb } = rules.tail;
+    const [lo, hi] = underDb;
+    const ms = Math.round(afterS * 1000);
+    if (typeof m.dryDb !== 'number' || typeof m.tailDb !== 'number') out.push(`its tail from ${ms} ms was not measured`);
+    else if (!(m.dryDb >= SILENT_DB)) out.push(`its loudest 50 ms before ${ms} ms is silent: no report to hold its tail under`);
+    else if (!(m.tailDb >= SILENT_DB)) out.push(`its tail from ${ms} ms is silent: no tail`);
+    else {
+      const gap = m.dryDb - m.tailDb;
+      if (!(gap >= lo && gap <= hi)) out.push(`its tail's loudest 50 ms from ${ms} ms, ${db1(m.tailDb)} dBFS, is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'over' : 'under'} its loudest 50 ms before (${db1(m.dryDb)} dBFS), not ${lo} to ${hi} dB under`);
     }
   }
   return out;

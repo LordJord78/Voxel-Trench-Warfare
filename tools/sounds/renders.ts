@@ -17,9 +17,12 @@
  * (which the kill's chime alone gives it), and its energy there over the same kill without the gush
  * (rendered as well, held to its peak alone), so the gush is not lost in the mix. The hands' cues (combat/handling.ts), each at the ear as planVoices
  * places it, at hands_gain, held to the peak range and the small speaker. The reports (the shots spec's
- * §6, G5's Task 2): the front's, FRONT_M ahead, and the player's own at the muzzle from the AK, the SVD
- * bare and suppressed, the M870 and a pistol, each heard with the shared tail (its file runs the tail's
- * length past its own layers), the suppressed SVD's peak held 6 dB or more under the bare one's. And
+ * §6, G5's Task 2 and its final review): the front's, FRONT_M ahead, the player's own at the muzzle from
+ * every gun (the SVD bare and suppressed), and an AK burst, each heard with the shared tail (its file
+ * runs the tail's length past its own layers). Their weight is held in order (the M870 and the SVD over
+ * the AK, the AK over the pistol); the M870's and the SVD's tails, and the burst's after its last
+ * report, from both sides (TailRule); the M870's and the pistol's own bodies in their bands; and the
+ * suppressed SVD under the bare one's peak, brighter than it, and over its own reload's mag-out. And
  * every other voice's kind, each as planVoices plans it from its event where the game plays it whole
  * (one heard afar within reference_m; a distant gun at its range's nearest), held to the peak's range:
  * every VoiceKind has its <kind>.wav. One only reported (`gated` false)
@@ -32,13 +35,13 @@ import { audioTunables, planFeedback, planVoices, type FeedbackKind, type VoiceP
 import { armSpec } from '../../src/combat/arsenal';
 import type { Impact } from '../../src/combat/ballistics';
 import type { HandlingCue } from '../../src/combat/handling';
-import { reportShape, voiceLength } from '../../src/audio/voices';
+import { REPORT_S, reportShape, voiceLength } from '../../src/audio/voices';
 import { rangeTunables } from '../../src/combat/range';
 import type { Tunables } from '../../src/core/tunables';
 import { BARE, encodeShotMark, type GunKey } from '../../src/net/gear';
 import type { CombatEvents, ShotEvent } from '../../src/sim/session';
 import { P } from '../../src/world/materials';
-import type { SoundRules } from '../lib/sound-measures.mjs';
+import type { SoundRules, TailRule } from '../lib/sound-measures.mjs';
 
 /** Every file's rate (Hz). */
 export const RATE = 48000;
@@ -94,9 +97,42 @@ const OWN_REPORTS: readonly (readonly [string, GunKey, boolean])[] = [
   ['report-svd-suppressed', 'svd', true],
   ['report-m870', 'm870', false],
   ['report-pistol', 'm17', false],
+  ['report-m4', 'm4', false],
+  ['report-mp5', 'mp5', false],
+  ['report-m249', 'm249', false],
+  ['report-pm', 'pm', false],
 ];
-/** A suppressed SVD's report: its peak at least this far under the bare one's (dB; G5's review focus). */
-const SUPPRESSED_UNDER: SoundRules = { under: { of: 'report-svd', db: 6 } };
+/** An AK burst: this many reports, this far apart (s; 600 rpm), its last at BURST_LAST_S. */
+const BURST = 10;
+const BURST_GAP_S = 0.1;
+const BURST_LAST_S = 0.9;
+/**
+ * The reports' weight in order (G5's final review): each held over the next lighter, its first 80 ms's
+ * energy across the band. All read alike, as page.ts reads one over-reading a render.
+ */
+const ORDER = { band: [20, 20000] as const, firstS: 0.08, db: 0 };
+/** A single report's tail: its loudest 50 ms after its own layers 3 to 24 dB under its report's (over 24, it is missing). */
+const TAIL: TailRule = { afterS: REPORT_S, underDb: [3, 24] };
+/**
+ * Each gun's own body heard (G5's final review): the share of the first 80 ms in its body's band,
+ * halfway between the share with the gun's own body and with the defaults' 140 Hz in its place (the
+ * M870's under 120 Hz 0.772 and 0.516; the pistol's in 130-400 Hz 0.880 and 0.112). A voice that
+ * played every gun at 140 Hz fails both.
+ */
+const M870_BODY = 0.64;
+const PISTOL_BODY = 0.5;
+/**
+ * What each of the player's own reports is held to besides its peak's range: the order; the tails of the
+ * two the hot tail outweighed; each body in its band; and the suppressed SVD's peak 6 dB or more under
+ * the bare one's (G5's review focus), its tone brighter, and its first 50 ms 2 dB over its mag-out's.
+ */
+const OWN_RULES: Readonly<Record<string, SoundRules>> = {
+  'report-ak': { over: { of: 'report-pistol', ...ORDER } },
+  'report-svd': { over: { of: 'report-ak', ...ORDER }, tail: TAIL },
+  'report-svd-suppressed': { under: { of: 'report-svd', db: 6 }, highOver: { of: 'report-svd', by: 0.1 }, over: { of: 'mag-out', band: [20, 20000], firstS: 0.05, db: 2 } },
+  'report-m870': { over: { of: 'report-ak', ...ORDER }, tail: TAIL, band: { hz: [20, 120], share: M870_BODY, firstS: 0.08 } },
+  'report-pistol': { band: { hz: [130, 400], share: PISTOL_BODY, firstS: 0.08 } },
+};
 
 export function renders(tun: Tunables): Render[] {
   const t = audioTunables(tun);
@@ -107,7 +143,7 @@ export function renders(tun: Tunables): Render[] {
   const of = (name: string, plans: VoicePlan[], rules?: SoundRules): Render => ({
     name,
     plans,
-    lengthS: LEAD_S + Math.max(...plans.map((p) => p.delayS + voiceLength(p, report) + ((p.send ?? 0) > 0 ? report.tailS : 0))) + TAIL_S,
+    lengthS: LEAD_S + Math.max(...plans.map((p) => p.delayS + voiceLength(p) + ((p.send ?? 0) > 0 ? report.tailS : 0))) + TAIL_S,
     gated: true,
     ...(rules ? { rules } : {}),
   });
@@ -137,8 +173,11 @@ export function renders(tun: Tunables): Render[] {
   for (const [name, gun, suppressed] of OWN_REPORTS) {
     const arm = armSpec(tun, gun, { ...BARE, muzzle: suppressed ? 'suppressor' : 'none' });
     const fired: ShotEvent = { ...shot(MUZZLE), mark: encodeShotMark({ tracer: false, kind: 0, suppressed: arm.suppressed, gun }), report: arm.report };
-    out.push(of(name, heard({ shots: [fired] }), suppressed ? SUPPRESSED_UNDER : undefined));
+    out.push(of(name, heard({ shots: [fired] }), OWN_RULES[name]));
   }
+  // An AK burst: its report, BURST times BURST_GAP_S apart, the tail stacking; held after the last.
+  const [ak] = out.find((r) => r.name === 'report-ak')!.plans;
+  out.push(of('report-ak-burst', Array.from({ length: BURST }, (_, k) => ({ ...ak, delayS: k * BURST_GAP_S })), { tail: { afterS: BURST_LAST_S + REPORT_S, underDb: [6, 24] } }));
   // Every other kind where the game plays it whole, so its file is the voice itself (farther, the plan
   // only makes it quieter and duller): one heard afar, reference_m off (ahead and under, on the ground),
   // within which its gain is whole; a distant gun's at its range's nearest (a barrage's shell 1 km off,

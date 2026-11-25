@@ -24,14 +24,24 @@ const NOISE_S = 2;
 const TAIL_FALL_DB = 60;
 const TAIL_OPEN_HZ = 8000;
 const TAIL_DULL_HZ = 400;
+/**
+ * What the tail returns of a report's body, in dB of the send squared: tuned against the heard renders
+ * (npm run sounds), as the master compressor takes about 6 dB off a report and leaves its tail, so a
+ * tail returning the body at the send squared is still heard hot. Here the M870's and the SVD's tails
+ * sit 4 dB or more under their reports, and an AK burst's 12 dB under its last (the gates: 3 and 6).
+ */
+const TAIL_RETURN_DB = -2;
 
 /**
  * The reports' tail's impulse at `rate`: `lengthS` of noise in each ear (each its own draw, so the
  * tail is wide), falling TAIL_FALL_DB over it, through a lowpass of two one-pole stages (12 dB an
  * octave) whose corner falls geometrically from TAIL_OPEN_HZ to TAIL_DULL_HZ, so its highs die faster
  * than its lows (over 2 kHz, about 9 dB further over its first 0.6 s than under 500 Hz). Each ear
- * scaled to unit energy: what a voice sends comes back as its energy times the send squared. Drawn
- * from one seeded stream (core/rng, 'audio.tail'), so it is the same every start and in every render.
+ * scaled so that its noise, before the lowpass, has TAIL_RETURN_DB's energy (2 dB under unity): the
+ * lowpass passes a report's body (under 400 Hz) whole, so what a voice sends of its body comes back as
+ * its energy times the send squared, 2 dB under (engine.test holds the bodies' band there within 1 dB);
+ * its highs, which the lowpass thins, come back less. Drawn from one seeded stream (core/rng,
+ * 'audio.tail'), so it is the same every start and in every render.
  */
 export function tailImpulse(rate: number, lengthS: number): [Float32Array<ArrayBuffer>, Float32Array<ArrayBuffer>] {
   const n = Math.round(lengthS * rate);
@@ -41,17 +51,20 @@ export function tailImpulse(rate: number, lengthS: number): [Float32Array<ArrayB
     const draw = rng.derive(`ear.${k}`);
     let y1 = 0;
     let y2 = 0;
-    let sum = 0;
+    // The energy of the noise as drawn and falling, before the lowpass: what the body's band returns.
+    let drawn = 0;
     for (let i = 0; i < n; i++) {
       const along = i / n;
       const corner = TAIL_OPEN_HZ * Math.pow(TAIL_DULL_HZ / TAIL_OPEN_HZ, along);
       const a = Math.exp((-2 * Math.PI * corner) / rate);
-      y1 = (1 - a) * draw.uniform(-1, 1) + a * y1;
+      const fall = Math.pow(10, (-TAIL_FALL_DB * along) / 20);
+      const u = draw.uniform(-1, 1);
+      y1 = (1 - a) * u + a * y1;
       y2 = (1 - a) * y1 + a * y2;
-      ear[i] = y2 * Math.pow(10, (-TAIL_FALL_DB * along) / 20);
-      sum += ear[i] * ear[i];
+      ear[i] = y2 * fall;
+      drawn += (u * fall) ** 2;
     }
-    const scale = 1 / Math.sqrt(sum);
+    const scale = Math.sqrt(Math.pow(10, TAIL_RETURN_DB / 10) / drawn);
     for (let i = 0; i < n; i++) ear[i] *= scale;
   }
   return ears;
@@ -136,20 +149,26 @@ export class AudioEngine {
   start(): void {
     if (!this.ctx) {
       let ctx: AudioContext | null = null;
+      let mix: GainNode;
       try {
         ctx = new AudioContext({ latencyHint: 'interactive' });
-        const mix = mixInto(ctx, this.t.masterGain);
+        mix = mixInto(ctx, this.t.masterGain);
         const noise = whiteNoise(ctx);
-        const reverb = tailInto(ctx, mix, this.report);
-        this.convolvers++;
         this.mix = mix;
         this.noise = noise;
-        this.reverb = reverb;
         this.ctx = ctx;
       } catch (e) {
         void ctx?.close().catch(() => {});
         console.warn(`[audio] no sound: ${e instanceof Error ? e.message : String(e)}`);
         return;
+      }
+      // The reports' tail on its own: one that fails to build leaves every voice dry (playVoice sends
+      // nothing to no tail), never the game silent.
+      try {
+        this.reverb = tailInto(ctx, mix, this.report);
+        this.convolvers++;
+      } catch (e) {
+        console.warn(`[audio] no tail, the reports dry: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     this.ctx.resume().catch(() => {});
@@ -194,7 +213,7 @@ export class AudioEngine {
       // Under the cap: the farthest dropped first, a nearer voice cutting the farthest held.
       const when = now + v.delayS;
       const distance = Math.hypot(v.at[0] - this.ear[0], v.at[1] - this.ear[1], v.at[2] - this.ear[2]);
-      const r = this.cap.admit(distance, when + voiceLength(v, this.report), now, () => playVoice(ctx, mix, noise, v, when, this.report, tail));
+      const r = this.cap.admit(distance, when + voiceLength(v), now, () => playVoice(ctx, mix, noise, v, when, this.report, tail));
       r.cut?.cut(now);
       if (!r.play) {
         this.dropped++;

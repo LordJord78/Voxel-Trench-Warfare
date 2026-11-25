@@ -4,9 +4,10 @@
  * the master gain and the compressor; and its shared tail, engine.ts tailInto, which a report sends to)
  * in an OfflineAudioContext at RATE, and read there with both ears
  * together (tools/lib/sound-measures.mjs: its peak, RMS and loudest 50 ms, its shares by an FFT, a
- * band rule's own share, and an `over` rule's reading, of the render held over another and of that
- * other alike). The context has four channels: 0 and 1 are what the game puts out, left and
- * right; 2 and 3 the mix before the compressor, left and right: how hard the voice drives it.
+ * band rule's own share, an `over` rule's reading, of the render held over another and of that
+ * other alike, and a `tail` rule's, its report's loudest 50 ms and its tail's). The context has four
+ * channels: 0 and 1 are what the game puts out, left and right; 2 and 3 the mix before the compressor,
+ * left and right: how hard the voice drives it.
  *
  * Its noise and its draws (a noise's offset, the gush's flutter) come from Math.random, seeded here for
  * each render by its name, so a file renders the same every run.
@@ -16,7 +17,7 @@ import { audioTunables } from '../../src/audio/plan';
 import { mixInto, tailInto, whiteNoise } from '../../src/audio/engine';
 import { playVoice, reportShape } from '../../src/audio/voices';
 import { loadTunables } from '../../src/core/tunables';
-import { measure, ruleEnergyDb, ruleShare, type Measured, type OverRule } from '../lib/sound-measures.mjs';
+import { measure, ruleEnergyDb, ruleShare, ruleTail, type Measured, type OverRule } from '../lib/sound-measures.mjs';
 import { LEAD_S, RATE, renders, type Render } from './renders';
 
 /** A render done: its file's samples (base64 of float32, left and right), and both mixes read. */
@@ -29,7 +30,7 @@ export interface Rendered {
   plans: Render['plans'];
   /** What the game puts out: base64 of each ear's float32 samples, left then right. */
   samples: [string, string];
-  /** What the game puts out, read; with the band rule's own share if it has one, and an `over` rule's reading if it has one or another's names it. */
+  /** What the game puts out, read; with the band rule's own share if it has one, an `over` rule's reading if it has one or another's names it, and a `tail` rule's if it has one. */
   heard: Measured;
   /** The mix before the compressor, read. */
   into: Measured;
@@ -94,6 +95,7 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
       const into = [buffer.getChannelData(2), buffer.getChannelData(3)];
       const band = r.rules?.band;
       const over = r.rules?.over ?? under.get(r.name);
+      const tailRule = r.rules?.tail;
       out.push({
         name: r.name,
         rate: RATE,
@@ -106,6 +108,7 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
           ...measure(heard, RATE),
           ...(band ? { ruleShare: ruleShare(heard, RATE, band) } : {}),
           ...(over ? { overDb: ruleEnergyDb(heard, RATE, { hz: over.band, firstS: over.firstS }) } : {}),
+          ...(tailRule ? ruleTail(heard, RATE, tailRule) : {}),
         },
         into: measure(into, RATE),
       });
@@ -116,8 +119,8 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
   return out;
 }
 
-/** The renders, in order: each one's name, and the renders its level is held to, over and under, if any (for --only). */
-const list = (): { name: string; near: string | null; over: string | null; under: string | null }[] =>
-  renders(loadTunables()).map((r) => ({ name: r.name, near: r.rules?.near?.of ?? null, over: r.rules?.over?.of ?? null, under: r.rules?.under?.of ?? null }));
+/** The renders, in order: each one's name, and the renders its level is held to, over and under, and its tone over, if any (for --only). */
+const list = (): { name: string; near: string | null; over: string | null; under: string | null; highOver: string | null }[] =>
+  renders(loadTunables()).map((r) => ({ name: r.name, near: r.rules?.near?.of ?? null, over: r.rules?.over?.of ?? null, under: r.rules?.under?.of ?? null, highOver: r.rules?.highOver?.of ?? null }));
 
 (window as unknown as { sounds: { render: typeof render; list: typeof list; ready: boolean } }).sounds = { render, list, ready: true };

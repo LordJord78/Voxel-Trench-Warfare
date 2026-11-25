@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BAND, bandShare, checkSound, dbfs, LOUDEST_S, loudest, loudestUnder, measure, ONSET_DB, onset, PEAK_DB, ruleEnergyDb, ruleShare, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
+import { BAND, bandShare, checkSound, dbfs, LOUDEST_S, loudest, loudestUnder, measure, ONSET_DB, onset, PEAK_DB, ruleEnergyDb, ruleShare, ruleTail, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
 
 // The sounds' proof (tools/render-sounds.mjs, npm run sounds; the shots spec's §6, G3's Task 5): each
 // voice rendered to a stereo WAV, its peak held between −30 and −1 dBFS, nothing silent; a voice held
@@ -294,6 +294,59 @@ describe("the sounds' measures", () => {
     // The other silent, or not rendered, is a failure, not a pass.
     expect(checkSound(read({ peakDb: -9 }), { under }, { bare: read({ peakDb: -Infinity }) })).toEqual(["its peak is held under bare's, which is silent"]);
     expect(checkSound(read({ peakDb: -9 }), { under }, {})).toEqual(["its peak is held under bare's, which was not rendered"]);
+  });
+
+  it("a tail rule's reading: from the onset, the loudest 50 ms before `afterS` (the report) and from it on (its tail), both ears together; −Infinity for a window with nothing in it", () => {
+    // 10 ms of silence, a report of 70 ms (a 1 kHz sine at half scale), then 0.3 s of tail 20 dB under it.
+    const x = signal(0.38, (t) => (t < 0.01 ? 0 : t < 0.08 ? sine(1000, 0.5)(t) : sine(1000, 0.05)(t)));
+    const at = onset(x, RATE)!;
+    expect(at).toBeCloseTo(0.01, 3);
+    const read = ruleTail(x, RATE, { afterS: 0.07 });
+    expect(read.dryDb).toBeCloseTo(dbfs(0.5 / Math.SQRT2), 1);
+    expect(read.tailDb).toBeCloseTo(dbfs(0.05 / Math.SQRT2), 1);
+    expect(ruleTail([x, x], RATE, { afterS: 0.07 })).toEqual(read);
+    // From the onset, not the file's start: the same report 0.2 s later reads the same.
+    const late = signal(0.58, (t) => (t < 0.21 ? 0 : t < 0.28 ? sine(1000, 0.5)(t) : sine(1000, 0.05)(t)));
+    const lateRead = ruleTail(late, RATE, { afterS: 0.07 });
+    expect(lateRead.dryDb).toBeCloseTo(read.dryDb, 1);
+    expect(lateRead.tailDb).toBeCloseTo(read.tailDb, 1);
+    // No tail: nothing from afterS on. Nothing at all: nothing either side. Nothing left past the file's end.
+    const dry = signal(0.38, (t) => (t < 0.01 || t >= 0.08 ? 0 : sine(1000, 0.5)(t)));
+    expect(ruleTail(dry, RATE, { afterS: 0.07 }).tailDb).toBe(-Infinity);
+    expect(ruleTail(new Float32Array(4800), RATE, { afterS: 0.07 })).toEqual({ dryDb: -Infinity, tailDb: -Infinity });
+    expect(ruleTail(x, RATE, { afterS: 1 }).tailDb).toBe(-Infinity);
+  });
+
+  it("a render held to its tail (`tail`) passes with its tail's loudest 50 ms between `lo` and `hi` dB under its loudest 50 ms before `afterS`: two-sided, and failing closed on a missing tail or a silent report", () => {
+    const tail = { afterS: 0.07, underDb: [3, 24] as [number, number] };
+    expect(checkSound(read({ dryDb: -18, tailDb: -23 }), { tail })).toEqual([]);
+    expect(checkSound(read({ dryDb: -18, tailDb: -21 }), { tail })).toEqual([]);
+    expect(checkSound(read({ dryDb: -18, tailDb: -42 }), { tail })).toEqual([]);
+    // Too hot: barely under the report, or over it (the M870's tail at HEAD).
+    expect(checkSound(read({ dryDb: -20.6, tailDb: -19.1 }), { tail })).toEqual(["its tail's loudest 50 ms from 70 ms, -19.1 dBFS, is 1.5 dB over its loudest 50 ms before (-20.6 dBFS), not 3 to 24 dB under"]);
+    expect(checkSound(read({ dryDb: -18, tailDb: -19.2 }), { tail })).toEqual(["its tail's loudest 50 ms from 70 ms, -19.2 dBFS, is 1.2 dB under its loudest 50 ms before (-18.0 dBFS), not 3 to 24 dB under"]);
+    // Too cold: past the floor, a tail barely sent.
+    expect(checkSound(read({ dryDb: -18, tailDb: -44.5 }), { tail })).toEqual(["its tail's loudest 50 ms from 70 ms, -44.5 dBFS, is 26.5 dB under its loudest 50 ms before (-18.0 dBFS), not 3 to 24 dB under"]);
+    // A missing tail, a silent report, or no reading at all, is a failure, not a pass.
+    expect(checkSound(read({ dryDb: -18, tailDb: -Infinity }), { tail })).toEqual(['its tail from 70 ms is silent: no tail']);
+    expect(checkSound(read({ dryDb: -Infinity, tailDb: -30 }), { tail })).toEqual(['its loudest 50 ms before 70 ms is silent: no report to hold its tail under']);
+    expect(checkSound(read({ dryDb: -18 }), { tail })).toEqual(['its tail from 70 ms was not measured']);
+    expect(checkSound(read(), { tail })).toEqual(['its tail from 70 ms was not measured']);
+    // A burst's: from its last report's end.
+    expect(checkSound(read({ dryDb: -17, tailDb: -21 }), { tail: { afterS: 0.97, underDb: [6, 24] } })).toEqual(["its tail's loudest 50 ms from 970 ms, -21.0 dBFS, is 4.0 dB under its loudest 50 ms before (-17.0 dBFS), not 6 to 24 dB under"]);
+  });
+
+  it("a render held brighter than another (`highOver`) passes with its share over 400 Hz at least `by` over the other's: a suppressed SVD's report over a bare one's", () => {
+    const highOver = { of: 'bare', by: 0.1 };
+    const bare = read({ highShare: 0.18 });
+    expect(checkSound(read({ highShare: 0.42 }), { highOver }, { bare })).toEqual([]);
+    expect(checkSound(read({ highShare: 0.28 }), { highOver }, { bare })).toEqual([]);
+    // Too close to it, or under it.
+    expect(checkSound(read({ highShare: 0.231 }), { highOver }, { bare })).toEqual(["23.1% of its energy is over 400 Hz, 5.1 points over bare's (18.0%), not 10 or more over it"]);
+    expect(checkSound(read({ highShare: 0.15 }), { highOver }, { bare })).toEqual(["15.0% of its energy is over 400 Hz, 3.0 points under bare's (18.0%), not 10 or more over it"]);
+    // The other silent, or not rendered, is a failure, not a pass.
+    expect(checkSound(read({ highShare: 0.42 }), { highOver }, { bare: read({ peakDb: -Infinity, highShare: 0 }) })).toEqual(["its share over 400 Hz is held over bare's, which is silent"]);
+    expect(checkSound(read({ highShare: 0.42 }), { highOver }, {})).toEqual(["its share over 400 Hz is held over bare's, which was not rendered"]);
   });
 
   it('a table of each file: its name, peak, RMS, loudest 50 ms, its share in BAND and over 400 Hz, and what failed of it', () => {

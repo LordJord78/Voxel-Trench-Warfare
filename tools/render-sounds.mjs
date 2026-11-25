@@ -15,8 +15,10 @@
 // outside −30 to −1 dBFS, or silent; or, by its rules, under its floor, too little in its band or over
 // 400 Hz (the small speaker), its loudest 50 ms too far from another render's or its body's (the
 // kill's thud), or its energy in a band too little over another's (a headshot's kill over the same
-// without its gush), or its peak too little under another's (a suppressed SVD's report under the bare
-// one's); the other rendered too, if --only left it out; or if the page fails. Exits 2, with the
+// without its gush, a report over a lighter gun's), its peak too little under another's (a suppressed
+// SVD's report under the bare one's) or its share over 400 Hz too little over it, or its tail's loudest
+// 50 ms not between so many dB under its report's (missing, or outweighing it); each other it is held
+// to rendered too, and theirs, if --only left them out; or if the page fails. Exits 2, with the
 // usage, if --only has no list or names no render. A render reported and not held says what fails of
 // it, and does not fail the run.
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -50,6 +52,7 @@ const read = (m) => ({
   highShare: round3(m.highShare),
   ...(m.ruleShare !== undefined ? { ruleShare: round3(m.ruleShare) } : {}),
   ...(m.overDb !== undefined ? { overDb: round2(m.overDb) } : {}),
+  ...(m.tailDb !== undefined ? { dryDb: round2(m.dryDb), tailDb: round2(m.tailDb) } : {}),
 });
 const samplesOf = (b64) => new Float32Array(Uint8Array.from(Buffer.from(b64, 'base64')).buffer);
 
@@ -77,8 +80,14 @@ try {
     console.error(USAGE);
     process.exitCode = 2;
   } else {
-    // A render held to another's level, over its energy or under its peak, needs the other rendered too.
-    const only = asked.only && [...new Set([...asked.only, ...known.filter((k) => asked.only.includes(k.name)).flatMap((k) => [k.near, k.over, k.under].filter((x) => x !== null && x !== undefined))])];
+    // A render held to another's level, over its energy, under its peak or over its tone needs the other
+    // rendered too, and whatever that one is held to in turn.
+    let only = asked.only;
+    for (let grew = only !== null; grew; ) {
+      const next = [...new Set([...only, ...known.filter((k) => only.includes(k.name)).flatMap((k) => [k.near, k.over, k.under, k.highOver].filter((x) => x !== null && x !== undefined))])];
+      grew = next.length > only.length;
+      only = next;
+    }
     const rendered = await page.evaluate((o) => window.sounds.render(o), only);
     const heard = Object.fromEntries(rendered.map((r) => [r.name, r.heard]));
     const rows = [];
@@ -105,7 +114,7 @@ try {
     }
     console.log(table(rows));
     console.log('');
-    for (const r of rendered) console.log(`${r.name}: into the compressor ${round2(r.into.peakDb)} dBFS peak, ${round2(r.into.rmsDb)} RMS; out of it, the peak ${report[r.name].compressorDb ?? '-'} dB; its loudest 50 ms from ${Math.round(r.heard.loudestAtS * 1000)} ms; its loudest 50 ms under 400 Hz alone ${round2(r.heard.lowLoudestDb)} dBFS${r.heard.ruleShare !== undefined ? `; its band rule's share ${Math.round(r.heard.ruleShare * 1000) / 10}%` : ''}${r.heard.overDb !== undefined ? `; its energy in its over rule's band ${round2(r.heard.overDb)} dB` : ''}`);
+    for (const r of rendered) console.log(`${r.name}: into the compressor ${round2(r.into.peakDb)} dBFS peak, ${round2(r.into.rmsDb)} RMS; out of it, the peak ${report[r.name].compressorDb ?? '-'} dB; its loudest 50 ms from ${Math.round(r.heard.loudestAtS * 1000)} ms; its loudest 50 ms under 400 Hz alone ${round2(r.heard.lowLoudestDb)} dBFS${r.heard.ruleShare !== undefined ? `; its band rule's share ${Math.round(r.heard.ruleShare * 1000) / 10}%` : ''}${r.heard.overDb !== undefined ? `; its energy in its over rule's band ${round2(r.heard.overDb)} dB` : ''}${r.heard.tailDb !== undefined ? `; its tail's loudest 50 ms ${round2(r.heard.tailDb)} dBFS, ${round2(r.heard.dryDb - r.heard.tailDb)} dB under its report's ${round2(r.heard.dryDb)}` : ''}`);
   }
 } catch (e) {
   failures.push(`run: ${e.message}`);

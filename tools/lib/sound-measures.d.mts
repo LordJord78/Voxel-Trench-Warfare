@@ -19,6 +19,9 @@ export interface Measured {
   ruleShare?: number;
   /** An `over` rule's reading (ruleEnergyDb, dB): of a render held over another, and of that other, read alike. */
   overDb?: number;
+  /** A `tail` rule's reading (ruleTail, dBFS): its loudest 50 ms before the rule's `afterS` from its onset, and from it on. */
+  dryDb?: number;
+  tailDb?: number;
 }
 
 /** A band rule: at least `share` of its energy in `hz` (Hz), over its first `firstS` seconds from its onset if given. */
@@ -41,6 +44,16 @@ export interface SoundRules {
   over?: OverRule;
   /** Its peak at least `db` dB under render `of`'s (a suppressed report under the bare one's). */
   under?: { of: string; db: number };
+  /** Its share over SMALL_SPEAKER_HZ at least `by` over render `of`'s (a suppressed report brighter than the bare one). */
+  highOver?: { of: string; by: number };
+  /** Its loudest 50 ms from `afterS` after its onset (its tail) between `underDb` (lo, hi) dB under its loudest 50 ms before. */
+  tail?: TailRule;
+}
+
+/** A report's tail held from both sides: its loudest 50 ms from `afterS` after the onset, `underDb[0]` to `underDb[1]` dB under its loudest 50 ms before. */
+export interface TailRule {
+  afterS: number;
+  underDb: readonly [number, number];
 }
 
 /** A render held over another: its energy in `band`, over its first `firstS` seconds if given, at least `db` dB over render `of`'s. */
@@ -73,5 +86,6 @@ export function measure(x: Channels, rate: number): Measured;
 export function onset(x: Channels, rate: number): number | null;
 export function ruleShare(x: Channels, rate: number, rule: BandRule): number;
 export function ruleEnergyDb(x: Channels, rate: number, rule: { hz: readonly [number, number]; firstS?: number }): number;
+export function ruleTail(x: Channels, rate: number, rule: { afterS: number }): { dryDb: number; tailDb: number };
 export function checkSound(m: Measured, rules?: SoundRules, others?: Readonly<Record<string, Measured>>): string[];
 export function table(rows: readonly Row[]): string;
