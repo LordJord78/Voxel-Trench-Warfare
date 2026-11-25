@@ -20,7 +20,7 @@ import { decodeGear, encodeGear, teamTracer } from '../net/gear';
 import { encodeShot, MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type Dig, type MatchInfo, type MatchLog, type PlayerState, type RoomConfig, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
-import type { RoomBattle } from '../sim/room-battle';
+import type { Held, RoomBattle } from '../sim/room-battle';
 import type { CombatEvents, Session } from '../sim/session';
 import { Lobby } from '../ui/lobby';
 import { MatchHud, type BoardRow } from '../ui/match-hud';
@@ -257,12 +257,13 @@ export class Together {
   private onceCaughtUp: (() => void)[] = [];
   /**
    * The others' scoops the last match's battle still held when it ended (RoomBattle.finish), behind
-   * craters not yet in: the next match's battle is given them before its first tick. The world, and
+   * craters not yet in, each with its place among them: the next match's battle is given them
+   * (RoomBattle.carry) before its first tick. The world, and
    * so they, are the page's until it is reloaded for another map or left. Scoops the room relays in
    * the lobby (sent before the end reached their digger: net/room-core.ts) wait in the net's queue,
    * and are fed after these, with the next match's first edits.
    */
-  private carried: Dig[] = [];
+  private carried: Held[] = [];
 
   /** The others' scoops the last match's battle handed on and the next match's has not yet taken (`carried`): world work still to do. */
   get carriedScoops(): number {
@@ -724,8 +725,7 @@ export class Together {
   private matchBattle(): RoomBattle {
     if (this.battle) return this.battle;
     const battle = (this.battle = this.hooks.battle());
-    const nowMs = this.net!.serverNow();
-    for (const d of this.carried.splice(0)) battle.dug(d, nowMs);
+    battle.carry(this.carried.splice(0));
     return battle;
   }
 

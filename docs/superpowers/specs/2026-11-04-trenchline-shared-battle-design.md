@@ -109,7 +109,7 @@ Playing with friends needs the battle in the room, and the same world for everyo
   - a crater whose job asks for a wider region just as a neighbour goes out;
   - two players digging the same ground within a round trip: their clients apply the two scoops in opposite orders;
   - blood spatter (sub-project 7): per page and colour only. Each blood shade keeps the rules of what it marks (sod's is mud's kind, whose rules are the same), so the shared edits read the same world;
-  - (b) a scoop over a shell told in the last round trip before the end, or a dig carried across an end, can go in on the other side of the end's quiet craters (`RoomBattle.finish`);
+  - (b) a scoop over a shell told in the last round trip before the end can go in on the other side of the end's quiet craters (`RoomBattle.finish`). A dig the end carries keeps its place among them: `finish()` hands each held scoop on with the crater it came after, and the next match's battle holds it there (`RoomBattle.carry`; Task 8b, c995e22);
   - (c) after a match ends during a page's catch-up, that match's fires' chars may fall differently there: colour only;
   - (d) a digger whose clock runs ahead of the room's can stamp a scoop before a shell it has already landed: the plan's note 9 tolerates about 1.2 s, in one direction only;
   - (e) shots fired in a match's last round trip chip only the shooter's world: the room relays no shot after its end;
