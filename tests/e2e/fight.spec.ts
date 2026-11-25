@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { feedOf, type FeedLine } from './support/room';
 
 // The fight (the multiplayer spec's §4), two players in two windows against the local relay: one
 // shoots the other in the open; the room hears the hits, the other dies, the feed and the score
@@ -70,8 +71,8 @@ async function open(browser: Browser, path: string): Promise<{ page: Page; error
 }
 
 /**
- * A host and a friend in one room, the friend on `friendTeam`, the match started, both gone in,
- * respawning after `respawnS`. The room's battle quiet (`off`), so the only rounds in the air are the
+ * A host and a friend in one room, the friend on `friendTeam`, the match started, both gone in, at the
+ * room's default respawn. The room's battle quiet (`off`), so the only rounds in the air are the
  * players' own, unless the test asks for the room's default (`default`: light, left as the lobby has it).
  */
 async function match(browser: Browser, friendTeam: 'red' | 'blue', battle: 'off' | 'default' = 'off') {
@@ -345,20 +346,6 @@ test("a team kill costs the killer's team a point, and is no kill of theirs to c
   expect(after.voices.kill ?? 0, said).toBe(before.voices.kill ?? 0);
   expect(after.marker, said).not.toBe('kill');
 });
-
-/** A line of the kill feed: the killer (their team and name; none for the battle's), how, and the victim. */
-type FeedLine = { killer: { team: string; name: string } | null; how: string; victim: { team: string; name: string } | null };
-
-/** `page`'s kill feed, newest line first. */
-const feedOf = (page: Page): Promise<FeedLine[]> =>
-  page.evaluate(() =>
-    [...document.querySelectorAll('#hud .feed li')].map((li) => {
-      const spans = [...li.querySelectorAll('span')];
-      const how = spans.findIndex((s) => s.className === 'how');
-      const who = (s: Element | undefined) => (s ? { team: s.className, name: s.textContent ?? '' } : null);
-      return { killer: how > 0 ? who(spans[0]) : null, how: spans[how]?.textContent ?? '', victim: who(spans[how + 1]) };
-    }),
-  );
 
 test("under the room's default light battle, the front firing on both and its shells landing: a round kills, the shooter's in the feed and the score, and the dead come back in", async ({ browser }) => {
   test.setTimeout(300_000);

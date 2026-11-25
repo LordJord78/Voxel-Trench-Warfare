@@ -83,8 +83,12 @@ export interface CatchUpPage {
   clock?(): number;
   /** How far the catch-up has come: `done` of the log's `total` entries due, said at the start and after each. */
   progress?(done: number, total: number): void;
-  /** How many of the log's next shells to have cut ahead of their turn ([room_battle] catch_up_ahead); none if not given. */
-  ahead?: number;
+  /**
+   * How many of the log's next shells to have cut ahead of their turn ([room_battle] catch_up_ahead);
+   * none if not given. Read at each send, so a page whose workers can no longer run them beside its
+   * own (main.ts: its pool failed) says none from then on.
+   */
+  readonly ahead?: number;
 }
 
 /** A log's entry: a shell at its landing, or a scoop at its stamp; ranked so a shell comes before a scoop of the same ms (`dug` lands the shells due by its stamp first). */

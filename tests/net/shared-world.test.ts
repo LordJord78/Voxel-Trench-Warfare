@@ -256,7 +256,9 @@ interface Evening {
   A: NodeClient;
   B: NodeClient;
   J: NodeClient;
-  hash: { A: string; B: string; J: string };
+  /** A late page that joins with J and catches up the old way, cutting nothing ahead of its turn. */
+  J0: NodeClient;
+  hash: { A: string; B: string; J: string; J0: string };
   /** The log J caught up on: its shells (decoded) and how many scoops. */
   shells: RoomShell[];
   scoops: number;
@@ -311,8 +313,10 @@ let carpet: BrickMap | null = null;
  *   will land from 9 s before it lands until it is told (1.5 s before), and goes back: the ground a page
  *   catching up has cut it on ahead changes under it before its turn.
  * - J joins at 70 s and catches up on the log of both, the log's next shells' craters cut ahead of their
- *   turn (main.ts's [room_battle] catch_up_ahead), its own craters 20 ticks late. The room ticks to 85 s
- *   of the second match and stops; every page runs on until 20 s after the last strike, and settles.
+ *   turn (main.ts's [room_battle] catch_up_ahead), its own craters 20 ticks late. J0 joins with it, the
+ *   same in all but that it cuts nothing ahead (`ahead` 0: the path before Task 8c, and a page with no
+ *   pool's). The room ticks to 85 s of the second match and stops; every page runs on until 20 s after
+ *   the last strike, and settles.
  */
 async function evening(): Promise<Evening> {
   carpet ??= carpeted(cloneMap(base));
@@ -378,15 +382,16 @@ async function evening(): Promise<Evening> {
   A.session.teleport(stand, 180, 0);
   await net.runTo(second + 70_000);
   const J = net.connect(player('J', -40, 50, 1 / 50, { runner: lateRunner(20) }));
+  const J0 = net.connect(player('J0', -40, 50, 1 / 50, { runner: lateRunner(20), ahead: 0 }));
   await net.runTo(second + 85_000);
   net.stopTicking();
   await net.runTo(second + 87_000);
   const lastStrikeS = Math.max(...net.players.map((p) => p.lastStrikeS));
   if (lastStrikeS + 21 > 87) await net.runTo(second + (lastStrikeS + 21) * 1000);
   expect(await net.settle()).toBe(true);
-  const [a, b, j] = await Promise.all([fingerprint(A.map), fingerprint(B.map), fingerprint(J.map)]);
+  const [a, b, j, j0] = await Promise.all([fingerprint(A.map), fingerprint(B.map), fingerprint(J.map), fingerprint(J0.map)]);
   const log = J.welcomeLog!;
-  return { A, B, J, hash: { A: a, B: b, J: j }, shells: log.shells.map((w) => decodeShell(w)!), scoops: log.digs.filter((w) => decodeDig(w) !== null).length, over: over!, dugBefore: m, dugThere, firstChars };
+  return { A, B, J, J0, hash: { A: a, B: b, J: j, J0: j0 }, shells: log.shells.map((w) => decodeShell(w)!), scoops: log.digs.filter((w) => decodeDig(w) !== null).length, over: over!, dugBefore: m, dugThere, firstChars };
 }
 
 let played: Promise<Played> | null = null;
@@ -458,7 +463,7 @@ describe("the room's battle, in Node: a tab hidden mid-match", () => {
 
 describe("the room's battle, in Node: a late friend's catch-up", () => {
   it("a page that joins the second match of an evening, its craters cut ahead of their turn, hashes the same as pages that were there all along: a scoop carried across the first match's end, and ground dug under a shell already cut ahead", async () => {
-    const { A, B, J, hash, shells, scoops, over, dugBefore, dugThere, firstChars } = await evening();
+    const { A, B, J, J0, hash, shells, scoops, over, dugBefore, dugThere, firstChars } = await evening();
     const d = J.session.destruction;
     // The first match's chars that J's catch-up did not make (it landed that match's shells quietly,
     // without the battle: spec note 5, colour only): each a char on A and, on J, a shade of the char's kind.
@@ -472,13 +477,20 @@ describe("the room's battle, in Node: a late friend's catch-up", () => {
       `J caught up on ${J.catchUp?.entries} entries (${shells.length} shells, ${overlapping.length} of them over one of the 8 before, and ${scoops} scoops) in ${J.catchUp?.ms.toFixed(0)} ms: ` +
         `${d.aheadTaken} craters taken from the work cut ahead, ${d.aheadDropped} cut afresh (their ground changed); A dug at shell ${over.id}'s crater as the first match ended, B carrying ${B.carriedAtEnds.join(', ')}; ` +
         `A dug ${dugThere} scoops where the second match's shell at ${dugBefore.landS} s lands, before it was told; ` +
-        `the first match's chars ${firstChars.length}, ${unmade.length} of them not made on J; hashes ${hash.A.slice(0, 12)}, ${hash.B.slice(0, 12)}, ${hash.J.slice(0, 12)}, with those masked ${masked[0].slice(0, 12)} and ${masked[1].slice(0, 12)}`,
+        `the first match's chars ${firstChars.length}, ${unmade.length} of them not made on J; hashes ${hash.A.slice(0, 12)}, ${hash.B.slice(0, 12)}, ${hash.J.slice(0, 12)}, with those masked ${masked[0].slice(0, 12)} and ${masked[1].slice(0, 12)}; ` +
+        `J0, cutting none ahead, caught up on ${J0.catchUp?.entries} entries in ${J0.catchUp?.ms.toFixed(0)} ms, hash ${hash.J0.slice(0, 12)}`,
     );
+    // The old path against the new, on the whole log, unmasked: J, its craters cut ahead, is J0's world
+    // voxel for voxel, J0 having cut none ahead. First, so a crater cut ahead on changed ground fails here,
+    // by its own voxels, before the masked comparison with A below would fail on them too.
+    expect(hash.J, hash.J === hash.J0 ? '' : differences(J0.map, J.map)).toBe(hash.J0);
     // One world: B's, there all along, A's voxel for voxel; J's too, but for the first match's chars it did not make.
     expect(hash.B, hash.A === hash.B ? '' : differences(A.map, B.map)).toBe(hash.A);
     expect(masked[1], masked[0] === masked[1] ? '' : differences(A.map, J.map)).toBe(masked[0]);
+    expect([J0.catchUp!.entries, J0.session.destruction.aheadTaken, J0.session.destruction.aheadDropped]).toEqual([J.catchUp!.entries, 0, 0]);
     expect(J.battle!.landed.map((s) => s.id)).toEqual(A.battle!.landed.map((s) => s.id));
-    expect([A, B, J].map((p) => p.battle!.held)).toEqual([[], [], []]);
+    expect([A, B, J, J0].map((p) => p.battle!.held)).toEqual([[], [], [], []]);
+    expect(J0.battle!.landed.map((s) => s.id)).toEqual(A.battle!.landed.map((s) => s.id));
     // A log long enough for the cut ahead to matter: 40 shells and more, some over others' ground, scoops among them.
     expect(shells.length).toBeGreaterThanOrEqual(40);
     expect(overlapping.length).toBeGreaterThanOrEqual(3);

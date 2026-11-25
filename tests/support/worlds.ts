@@ -1,6 +1,7 @@
 /**
  * Test worlds for shelling: a trench with a parapet at its angle of repose, a copy of a world, and a
- * voxel-for-voxel comparison; and for the room's battle, a runner that hands craters back late, a client of the
+ * voxel-for-voxel comparison; a runner that hands each crater's cut and the rest of it back apart, as a
+ * live page's worker does; and for the room's battle, a runner that hands craters back late, a client of the
  * room (a session and its RoomBattle) stepped along the room's clock, and the front's view of a
  * generated world's starts.
  */
@@ -13,8 +14,9 @@ import { BrickMap, UNIFORM } from '../../src/world/bricks';
 import type { WorldPlan } from '../../src/world/generation/plan';
 import { pickSpawns } from '../../src/world/generation/spawn';
 import type { DetonateOptions } from '../../src/world/destruction';
-import { runDetonation, type DetonationResult } from '../../src/world/detonation';
+import { runDetonation, type DetonationRequest, type DetonationResult } from '../../src/world/detonation';
 import { P } from '../../src/world/materials';
+import type { Box } from '../../src/world/region';
 
 const tun = loadTunables();
 
@@ -67,6 +69,53 @@ export function sameWorld(a: BrickMap, b: BrickMap): boolean {
     for (let i = 0; i < 512; i++) if (x[i] !== y[i]) return false;
   }
   return true;
+}
+
+/**
+ * A runner that hands back each job's cut and the rest of it (its settled crater, or its ask for a wider
+ * region) apart, each when released, a job's rest only once its cut is back: a live page's destruction
+ * worker, whose cut comes back within a frame of its post and its settling about 170 ms later. A release
+ * may name the jobs it is for (by their request ids); with none, it is for all. A job's cut and rest
+ * released before the same take come back in one take. It keeps what it was posted.
+ */
+export function liveRunner(): DetonationRunner & {
+  posted: DetonationRequest[];
+  cuts(ids?: readonly number[]): void;
+  rest(ids?: readonly number[]): void;
+  lose(id: number, region: Box): void;
+} {
+  const jobs: { id: number; cut: DetonationResult | null; rest: DetonationResult; cutBack: boolean }[] = [];
+  const done: DetonationResult[] = [];
+  const posted: DetonationRequest[] = [];
+  const named = (id: number, ids?: readonly number[]) => !ids || ids.includes(id);
+  return {
+    posted,
+    post: (req) => {
+      posted.push(req);
+      const cut: DetonationResult[] = [];
+      const rest = runDetonation(req, (c) => cut.push(c));
+      jobs.push({ id: req.id, cut: cut[0] ?? null, rest, cutBack: cut.length === 0 });
+    },
+    take: () => done.splice(0),
+    cuts: (ids) => {
+      for (const j of jobs) {
+        if (j.cutBack || !named(j.id, ids)) continue;
+        done.push(j.cut!);
+        j.cutBack = true;
+      }
+    },
+    rest: (ids) => {
+      for (let k = 0; k < jobs.length; ) {
+        if (jobs[k].cutBack && named(jobs[k].id, ids)) done.push(jobs.splice(k, 1)[0].rest);
+        else k++;
+      }
+    },
+    // Its worker lost: nothing more of what is out comes back, and job `id` is handed back as `region`.
+    lose: (id, region) => {
+      jobs.length = 0;
+      done.push({ id, wider: region });
+    },
+  };
 }
 
 /**
