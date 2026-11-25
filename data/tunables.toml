@@ -861,7 +861,8 @@ report_peak_db      = 158.0    # 5.45 at the shooter's ear
 # one less by its distance's share of far_m (the share that dulls it), never under a quarter. Each
 # gun's report weighs report_gain (its table's): the player's own and another's; the front's are 1.
 # Tuned on the heard renders (npm run sounds holds the M870 and the SVD over the AK, the AK over the
-# pistol): the compressor flattens the paper dB, and an AK burst's peak holds the rifles under 1.
+# pistol): the compressor flattens the paper dB, and the bursts' peaks (an AK's ten, an M249's twenty
+# at its rate, each under -1 dBFS) hold the rifles under 1.
 report_body_hz      = 140.0
 report_tail_send    = 0.35
 report_tail_s       = 1.2
@@ -873,14 +874,14 @@ punch_pitch_deg     = 1.5625
 punch_roll_deg      = 0.55
 fov_pulse_deg       = -0.60
 report_body_hz      = 140.0
-report_gain         = 0.94
+report_gain         = 0.86
 
 [viewkick.m4]
 punch_back_m        = 0.039
 punch_pitch_deg     = 1.375
 punch_roll_deg      = 0.45
 report_body_hz      = 150.0
-report_gain         = 0.84
+report_gain         = 0.76
 
 [viewkick.mp5]
 punch_back_m        = 0.026
@@ -906,7 +907,7 @@ punch_back_m        = 0.0416
 punch_pitch_deg     = 1.25
 punch_roll_deg      = 0.70
 report_body_hz      = 135.0
-report_gain         = 0.94
+report_gain         = 0.86
 
 [viewkick.m870]
 punch_back_m        = 0.104

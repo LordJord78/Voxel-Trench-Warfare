@@ -15,12 +15,12 @@
 // outside −30 to −1 dBFS, or silent; or, by its rules, under its floor, too little in its band or over
 // 400 Hz (the small speaker), its loudest 50 ms too far from another render's or its body's (the
 // kill's thud), or its energy in a band too little over another's (a headshot's kill over the same
-// without its gush, a report over a lighter gun's), its peak too little under another's (a suppressed
-// SVD's report under the bare one's) or its share over 400 Hz too little over it, or its tail's loudest
-// 50 ms not between so many dB under its report's (missing, or outweighing it); each other it is held
-// to rendered too, and theirs, if --only left them out; or if the page fails. Exits 2, with the
-// usage, if --only has no list or names no render. A render reported and not held says what fails of
-// it, and does not fail the run.
+// without its gush, a report over a lighter gun's), its loudest 50 ms too little under another's (a
+// suppressed SVD's report under the bare one's) or its share over 400 Hz too little over it, or its
+// tail's loudest 50 ms not between so many dB under its report's (missing, or outweighing it); each
+// other it is held to rendered too, and theirs, if --only left them out; or if the page fails. Exits
+// 2, with the usage, if --only has no list or names no render. A render reported and not held says
+// what fails of it, and does not fail the run.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
@@ -80,7 +80,7 @@ try {
     console.error(USAGE);
     process.exitCode = 2;
   } else {
-    // A render held to another's level, over its energy, under its peak or over its tone needs the other
+    // A render held to another's level, over its energy, under its loudness or over its tone needs the other
     // rendered too, and whatever that one is held to in turn.
     let only = asked.only;
     for (let grew = only !== null; grew; ) {

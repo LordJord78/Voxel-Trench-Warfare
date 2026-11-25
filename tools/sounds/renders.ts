@@ -18,11 +18,13 @@
  * (rendered as well, held to its peak alone), so the gush is not lost in the mix. The hands' cues (combat/handling.ts), each at the ear as planVoices
  * places it, at hands_gain, held to the peak range and the small speaker. The reports (the shots spec's
  * §6, G5's Task 2 and its final review): the front's, FRONT_M ahead, the player's own at the muzzle from
- * every gun (the SVD bare and suppressed), and an AK burst, each heard with the shared tail (its file
- * runs the tail's length past its own layers). Their weight is held in order (the M870 and the SVD over
- * the AK, the AK over the pistol); the M870's and the SVD's tails, and the burst's after its last
- * report, from both sides (TailRule); the M870's and the pistol's own bodies in their bands; and the
- * suppressed SVD under the bare one's peak, brighter than it, and over its own reload's mag-out. And
+ * every gun (the SVD bare and suppressed), an AK burst and a long M249 burst, each heard with the shared
+ * tail (its file runs the tail's length past its own layers). Their weight is held in order (the M870
+ * and the SVD over the AK, the AK over the pistol); the M870's and the SVD's tails, and the AK burst's
+ * after its last report, from both sides (TailRule); the M870's and the pistol's own bodies in their
+ * bands; the suppressed SVD's loudest 50 ms under the bare one's, its tone brighter than it, and over
+ * its own reload's mag-out; and the M249's burst under the peak's ceiling, as a stream comes through
+ * the compressor hotter than a shot from silence. And
  * every other voice's kind, each as planVoices plans it from its event where the game plays it whole
  * (one heard afar within reference_m; a distant gun at its range's nearest), held to the peak's range:
  * every VoiceKind has its <kind>.wav. One only reported (`gated` false)
@@ -111,6 +113,12 @@ const BURST_LAST_S = 0.9;
  * energy across the band. All read alike, as page.ts reads one over-reading a render.
  */
 const ORDER = { band: [20, 20000] as const, firstS: 0.08, db: 0 };
+/**
+ * A long M249 burst (G5's fix wave): this many of its reports at the gun's own rate, held to the peak's
+ * range alone. Through the master compressor each report after the first comes hotter than one from
+ * silence, so its −1 dBFS ceiling is what holds the rifles' report_gain.
+ */
+const LONG_BURST = 20;
 /** A single report's tail: its loudest 50 ms after its own layers 3 to 24 dB under its report's (over 24, it is missing). */
 const TAIL: TailRule = { afterS: REPORT_S, underDb: [3, 24] };
 /**
@@ -123,8 +131,9 @@ const M870_BODY = 0.64;
 const PISTOL_BODY = 0.5;
 /**
  * What each of the player's own reports is held to besides its peak's range: the order; the tails of the
- * two the hot tail outweighed; each body in its band; and the suppressed SVD's peak 6 dB or more under
- * the bare one's (G5's review focus), its tone brighter, and its first 50 ms 2 dB over its mag-out's.
+ * two the hot tail outweighed; each body in its band; and the suppressed SVD's loudest 50 ms 6 dB or
+ * more under the bare one's (G5's review focus), its tone brighter, and its first 50 ms 2 dB over its
+ * mag-out's.
  */
 const OWN_RULES: Readonly<Record<string, SoundRules>> = {
   'report-ak': { over: { of: 'report-pistol', ...ORDER } },
@@ -178,6 +187,10 @@ export function renders(tun: Tunables): Render[] {
   // An AK burst: its report, BURST times BURST_GAP_S apart, the tail stacking; held after the last.
   const [ak] = out.find((r) => r.name === 'report-ak')!.plans;
   out.push(of('report-ak-burst', Array.from({ length: BURST }, (_, k) => ({ ...ak, delayS: k * BURST_GAP_S })), { tail: { afterS: BURST_LAST_S + REPORT_S, underDb: [6, 24] } }));
+  // A long M249 burst: its report LONG_BURST times at its own rate, held to the peak's range alone.
+  const [m249] = out.find((r) => r.name === 'report-m249')!.plans;
+  const m249GapS = 60 / armSpec(tun, 'm249', BARE).weapon.rpm;
+  out.push(of('report-m249-burst', Array.from({ length: LONG_BURST }, (_, k) => ({ ...m249, delayS: k * m249GapS }))));
   // Every other kind where the game plays it whole, so its file is the voice itself (farther, the plan
   // only makes it quieter and duller): one heard afar, reference_m off (ahead and under, on the ground),
   // within which its gain is whole; a distant gun's at its range's nearest (a barrage's shell 1 km off,

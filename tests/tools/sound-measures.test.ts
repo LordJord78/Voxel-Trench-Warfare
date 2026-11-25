@@ -283,17 +283,23 @@ describe("the sounds' measures", () => {
     expect(checkSound(read({ overDb: 42 }), { over }, {})).toEqual(["its energy is held over dry's, which was not rendered"]);
   });
 
-  it("a render held under another (`under`) passes with its peak at least so many dB under the other's: a suppressed SVD's report under a bare one's", () => {
+  it("a render held under another (`under`) passes with its loudest 50 ms at least so many dB under the other's, never by its sample peak: a suppressed SVD's report under a bare one's", () => {
     const under = { of: 'bare', db: 6 };
-    const bare = read({ peakDb: -3 });
-    expect(checkSound(read({ peakDb: -9 }), { under }, { bare })).toEqual([]);
-    expect(checkSound(read({ peakDb: -14.2 }), { under }, { bare })).toEqual([]);
+    const bare = read({ peakDb: -3, loudestDb: -15 });
+    expect(checkSound(read({ loudestDb: -21 }), { under }, { bare })).toEqual([]);
+    expect(checkSound(read({ loudestDb: -29.2 }), { under }, { bare })).toEqual([]);
+    // Its loudness, not one sample: a noise burst's peak swings 4 dB with its seed. The suppressed SVD
+    // (G5's fix wave) peaks 3.7 dB under the bare one and sits 8.8 dB under it over 50 ms: it passes.
+    // A peak far under it with its loudness near the other's fails.
+    expect(checkSound(read({ peakDb: -6.7, loudestDb: -23.8 }), { under }, { bare })).toEqual([]);
+    expect(checkSound(read({ peakDb: -20, loudestDb: -17 }), { under }, { bare })).toEqual(["its loudest 50 ms, -17.0 dBFS, is 2.0 dB under bare's (-15.0 dBFS), not 6 dB or more under it"]);
     // Too near it, or over it.
-    expect(checkSound(read({ peakDb: -7.24 }), { under }, { bare })).toEqual(["its peak, -7.2 dBFS, is 4.2 dB under bare's (-3.0 dBFS), not 6 dB or more under it"]);
-    expect(checkSound(read({ peakDb: -2 }), { under }, { bare })).toEqual(["its peak, -2.0 dBFS, is 1.0 dB over bare's (-3.0 dBFS), not 6 dB or more under it"]);
-    // The other silent, or not rendered, is a failure, not a pass.
-    expect(checkSound(read({ peakDb: -9 }), { under }, { bare: read({ peakDb: -Infinity }) })).toEqual(["its peak is held under bare's, which is silent"]);
-    expect(checkSound(read({ peakDb: -9 }), { under }, {})).toEqual(["its peak is held under bare's, which was not rendered"]);
+    expect(checkSound(read({ loudestDb: -19.24 }), { under }, { bare })).toEqual(["its loudest 50 ms, -19.2 dBFS, is 4.2 dB under bare's (-15.0 dBFS), not 6 dB or more under it"]);
+    expect(checkSound(read({ loudestDb: -14 }), { under }, { bare })).toEqual(["its loudest 50 ms, -14.0 dBFS, is 1.0 dB over bare's (-15.0 dBFS), not 6 dB or more under it"]);
+    // The other silent, not measured, or not rendered, is a failure, not a pass.
+    expect(checkSound(read({ loudestDb: -21 }), { under }, { bare: read({ peakDb: -Infinity, loudestDb: -Infinity }) })).toEqual(["its loudest 50 ms is held under bare's, which is silent"]);
+    expect(checkSound(read({ loudestDb: -21 }), { under }, { bare: { ...bare, loudestDb: undefined } as never })).toEqual(["its loudest 50 ms is held under bare's, which was not measured"]);
+    expect(checkSound(read({ loudestDb: -21 }), { under }, {})).toEqual(["its loudest 50 ms is held under bare's, which was not rendered"]);
   });
 
   it("a tail rule's reading: from the onset, the loudest 50 ms before `afterS` (the report) and from it on (its tail), both ears together; −Infinity for a window with nothing in it", () => {

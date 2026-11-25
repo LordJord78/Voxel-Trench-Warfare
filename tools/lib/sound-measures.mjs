@@ -5,10 +5,11 @@
 // Each file's peak is held between −30 and −1 dBFS and none may be silent; a render may be held besides
 // to a band, to the small speaker (its share over 400 Hz), to a floor under its peak, to another
 // render's loudest 50 ms, or its body's (a kill's thud, apart from its chime), over another render's
-// energy in a band (a headshot's kill over the same kill without its gush), its peak under another's
-// (a suppressed SVD's report under a bare one's), its share over 400 Hz over another's (the same, its
-// tone), or its tail's loudest 50 ms between so many dB under its report's (a report's shared tail,
-// neither missing nor outweighing it). Plain JS, so the render page
+// energy in a band (a headshot's kill over the same kill without its gush), its loudest 50 ms under
+// another's (a suppressed SVD's report under a bare one's: its loudness, as `near` and `tail` read it,
+// never its sample peak, which a noise burst's seed swings by 4 dB), its share over 400 Hz over
+// another's (the same, its tone), or its tail's loudest 50 ms between so many dB under its report's (a
+// report's shared tail, neither missing nor outweighing it). Plain JS, so the render page
 // (tools/sounds/page.ts, which runs the FFT where it renders) and the tests read the same code.
 
 /** A file's peak must lie in this range (dBFS): over the top it may clip, under the bottom it is too quiet. */
@@ -325,8 +326,9 @@ const pct = (x) => `${Math.round(x * 100)}%`;
  * `near.low` from its body's, under SMALL_SPEAKER_HZ alone (the kill's thud, never its louder chime);
  * or its energy in `over.band` (over its first `over.firstS` seconds if given) less than `over.db` dB
  * over render `over.of`'s, read alike (`overDb`, each): a headshot's kill over the same without its
- * gush, as the kill's chime alone fills the band a share can ask of it; its peak less than
- * `under.db` dB under render `under.of`'s (a suppressed SVD's report under a bare one's); its share over
+ * gush, as the kill's chime alone fills the band a share can ask of it; its loudest 50 ms less than
+ * `under.db` dB under render `under.of`'s (a suppressed SVD's report under a bare one's: read on its
+ * loudness, never its sample peak, which a noise burst's seed swings by 4 dB); its share over
  * 400 Hz less than `highOver.by` over render `highOver.of`'s (the same, its tone); or its tail's loudest
  * 50 ms from `tail.afterS` on, from its onset, not between `tail.underDb` (lo to hi) dB under its
  * loudest 50 ms before (a report's shared tail: over `hi`, or silent, it is missing; under `lo`, it
@@ -373,11 +375,12 @@ export function checkSound(m, rules = {}, others = {}) {
   if (rules.under) {
     const { of, db } = rules.under;
     const other = others[of];
-    if (!other) out.push(`its peak is held under ${of}'s, which was not rendered`);
-    else if (!(other.peakDb >= SILENT_DB)) out.push(`its peak is held under ${of}'s, which is silent`);
+    if (!other) out.push(`its loudest 50 ms is held under ${of}'s, which was not rendered`);
+    else if (!(other.peakDb >= SILENT_DB)) out.push(`its loudest 50 ms is held under ${of}'s, which is silent`);
+    else if (typeof other.loudestDb !== 'number') out.push(`its loudest 50 ms is held under ${of}'s, which was not measured`);
     else {
-      const gap = other.peakDb - m.peakDb;
-      if (!(gap >= db)) out.push(`its peak, ${db1(m.peakDb)} dBFS, is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'over' : 'under'} ${of}'s (${db1(other.peakDb)} dBFS), not ${db} dB or more under it`);
+      const gap = other.loudestDb - m.loudestDb;
+      if (!(gap >= db)) out.push(`its loudest 50 ms, ${db1(m.loudestDb)} dBFS, is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'over' : 'under'} ${of}'s (${db1(other.loudestDb)} dBFS), not ${db} dB or more under it`);
     }
   }
   if (rules.highOver) {

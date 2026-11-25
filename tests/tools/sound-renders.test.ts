@@ -7,6 +7,7 @@ import { armSpec } from '../../src/combat/arsenal';
 import { rangeTunables } from '../../src/combat/range';
 import { loadTunables } from '../../src/core/tunables';
 import { BARE } from '../../src/net/gear';
+import { PEAK_DB } from '../../tools/lib/sound-measures.mjs';
 import { FRAME_S, FRONT_M, LEAD_S, MUZZLE, RATE, renders, TAIL_S } from '../../tools/sounds/renders';
 
 // The sounds' proof (npm run sounds; the shots spec's §6, G3's Task 5): what is rendered, and what each
@@ -25,8 +26,8 @@ const byName = (name: string) => list.find((r) => r.name === name)!;
 const EARS = ['hit', 'head', 'gush', 'kill', 'ding', 'hurt'] as const;
 /** The hands' cues (combat/handling.ts), each heard at the ear (audio/plan.ts). */
 const CUES = ['mag-out', 'mag-in', 'bolt', 'cover', 'shell', 'pump', 'dry'] as const;
-/** The reports (the shots spec's §6): the front's, the player's own from every gun (the SVD bare and suppressed), and an AK burst. */
-const REPORTS = ['report', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870', 'report-pistol', 'report-m4', 'report-mp5', 'report-m249', 'report-pm', 'report-ak-burst'] as const;
+/** The reports (the shots spec's §6): the front's, the player's own from every gun (the SVD bare and suppressed), an AK burst and a long M249 burst. */
+const REPORTS = ['report', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870', 'report-pistol', 'report-m4', 'report-mp5', 'report-m249', 'report-pm', 'report-ak-burst', 'report-m249-burst'] as const;
 /** Every voice's kind: a missing one is a type error here, so a kind added to audio/plan.ts is rendered too. */
 const EVERY_KIND: Record<VoiceKind, true> = {
   report: true, crack: true, 'impact-soil': true, 'impact-timber': true, 'impact-metal': true, whistle: true, blast: true, scrape: true, flare: true, rumble: true, thump: true, chatter: true, crackle: true, splash: true,
@@ -208,7 +209,7 @@ describe("the sounds' proof: the reports, and every kind", () => {
     expect(r.lengthS).toBeCloseTo(LEAD_S + p.delayS + voiceLength(p) + report.tailS + TAIL_S, 9);
   });
 
-  it("the suppressed SVD's report: its peak 6 dB or more under the bare SVD's, more of it over 400 Hz than the bare one's, and its first 50 ms 2 dB or more over its own reload's mag-out", () => {
+  it("the suppressed SVD's report: its loudest 50 ms 6 dB or more under the bare SVD's, more of it over 400 Hz than the bare one's, and its first 50 ms 2 dB or more over its own reload's mag-out", () => {
     expect(byName('report-svd-suppressed').rules).toEqual({ under: { of: 'report-svd', db: 6 }, highOver: { of: 'report-svd', by: 0.1 }, over: { of: 'mag-out', band: [20, 20000], firstS: 0.05, db: 2 } });
     for (const r of list) if (r.name !== 'report-svd-suppressed') expect([r.rules?.under, r.rules?.highOver], r.name).toEqual([undefined, undefined]);
   });
@@ -231,7 +232,7 @@ describe("the sounds' proof: the reports, and every kind", () => {
     expect(byName('report-m870').rules?.band).toEqual({ hz: [20, 120], share: M870_BODY, firstS: 0.08 });
     expect(byName('report-pistol').rules).toEqual({ band: { hz: [130, 400], share: PISTOL_BODY, firstS: 0.08 } });
     // Only these reports hold more than their peak's range; the rest, nothing else.
-    for (const name of ['report', 'report-mp5', 'report-m249', 'report-m4', 'report-pm'] as const) expect(byName(name).rules, name).toBeUndefined();
+    for (const name of ['report', 'report-mp5', 'report-m249', 'report-m4', 'report-pm', 'report-m249-burst'] as const) expect(byName(name).rules, name).toBeUndefined();
   });
 
   it('an AK burst: ten of its reports at the muzzle 0.1 s apart (600 rpm), each as report-ak plans it, its file the tail past the last', () => {
@@ -239,6 +240,17 @@ describe("the sounds' proof: the reports, and every kind", () => {
     const [one] = byName('report-ak').plans;
     expect(r.plans).toEqual(Array.from({ length: 10 }, (_, k) => ({ ...one, delayS: k * 0.1 })));
     expect(r.lengthS).toBeCloseTo(LEAD_S + 0.9 + REPORT_S + report.tailS + TAIL_S, 9);
+  });
+
+  it("a long M249 burst: twenty of its reports at the muzzle at its own rate (750 rpm, 0.08 s apart), each as report-m249 plans it, held to its peak's range alone: through the compressor a stream comes hotter than a shot from silence, and it must keep under -1 dBFS", () => {
+    const r = byName('report-m249-burst');
+    const [one] = byName('report-m249').plans;
+    const gap = 60 / armSpec(tun, 'm249', BARE).weapon.rpm;
+    expect(gap).toBeCloseTo(0.08, 12);
+    expect(r.plans).toEqual(Array.from({ length: 20 }, (_, k) => ({ ...one, delayS: k * gap })));
+    expect([r.gated, r.rules]).toEqual([true, undefined]);
+    expect(PEAK_DB[1]).toBe(-1);
+    expect(r.lengthS).toBeCloseTo(LEAD_S + 19 * gap + REPORT_S + report.tailS + TAIL_S, 9);
   });
 
   it("every other kind as planVoices plans it from its event where the game plays it whole, held to its peak's range alone, its file as long as it sounds", () => {

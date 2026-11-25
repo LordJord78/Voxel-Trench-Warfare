@@ -42,7 +42,7 @@ export interface SoundRules {
   near?: { of: string; withinDb: number; low?: boolean };
   /** Its energy in `band` (Hz), over its first `firstS` seconds from its onset if given, at least `db` dB over render `of`'s, read alike. */
   over?: OverRule;
-  /** Its peak at least `db` dB under render `of`'s (a suppressed report under the bare one's). */
+  /** Its loudest 50 ms at least `db` dB under render `of`'s (a suppressed report under the bare one's): its loudness, never its sample peak. */
   under?: { of: string; db: number };
   /** Its share over SMALL_SPEAKER_HZ at least `by` over render `of`'s (a suppressed report brighter than the bare one). */
   highOver?: { of: string; by: number };
