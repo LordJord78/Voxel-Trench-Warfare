@@ -20,6 +20,33 @@ describe('FixedClock', () => {
     const c = new FixedClock(60, 100);
     expect(c.advance(10)).toBe(15);
   });
+  it("settle() puts the leftover at a share of a tick (half, unless given): a tick's frames then run one tick each, never 0 and 2", () => {
+    // A frozen test page's frames (main.ts freeze()) are a tick apart: from whatever leftover the clock
+    // had, the sum's rounding could split them 0 and 2 ticks. Settled at half, each runs one, at alpha 0.5.
+    for (const leftover of [0, 1e-12, 0.5 / 60 - 1e-15, 1 / 60 - 1e-15]) {
+      const c = new FixedClock();
+      c.advance(1 / 60 + leftover);
+      c.settle();
+      expect(c.alpha).toBe(0.5);
+      const ticks = c.tick;
+      for (let f = 1; f <= 600; f++) {
+        expect(c.advance(1 / 60), `frame ${f}`).toBe(1);
+        expect(c.alpha, `frame ${f}`).toBeCloseTo(0.5, 9);
+      }
+      expect(c.tick).toBe(ticks + 600);
+    }
+    // At a 240 Hz display's quarter tick a frame: a tick every fourth frame, the alphas 0.75, 0, 0.25, 0.5.
+    const fast = new FixedClock();
+    fast.advance(0.3 / 60);
+    fast.settle();
+    const steps = Array.from({ length: 8 }, () => [fast.advance(1 / 240), +fast.alpha.toFixed(9)]);
+    expect(steps).toEqual([[0, 0.75], [1, 0], [0, 0.25], [0, 0.5], [0, 0.75], [1, 0], [0, 0.25], [0, 0.5]]);
+    // Another share, as asked.
+    const quarter = new FixedClock();
+    quarter.settle(0.25);
+    expect(quarter.alpha).toBe(0.25);
+    expect([quarter.advance(0.75 / 60), quarter.alpha]).toEqual([1, 0]);
+  });
   it('runs nothing for negative or NaN deltas', () => {
     const c = new FixedClock();
     expect(c.advance(-1)).toBe(0);

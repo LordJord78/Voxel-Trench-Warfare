@@ -278,12 +278,16 @@ type Kicked = Hooks & {
   session: Hooks['session'] & { weapon: { shotsFired: number } };
   tracerPixels(): { tracers: { tailM: [number, number, number]; flown: number }[] };
   particleBillboards(): { kind: number; at: [number, number, number]; half: number }[];
+  lastShots(): { tick: number; muzzle: [number, number, number] }[];
 };
 
 test("the SVD's shot frame: its flash, smoke and tracer leave the drawn muzzle, kicked up with it", async ({ page }) => {
   // The SVD's kick takes its drawn muzzle some 17 cm from where the shot left in the shot's own frame:
   // the flash, smoke and tracer were drawn there, a white half-disc and a tracer under the gun. Each now
-  // leaves the drawn muzzle (its own flight on from it: the flash 2 m/s, a tick's 3 cm).
+  // leaves the drawn muzzle (its own flight on from it: the flash 2 m/s, a tick's 3 cm). Frozen, the
+  // frame is drawn half-way to its tick (freeze() settles the clock's leftover at half a tick): half
+  // the kick is in it, so the drawn muzzle is well off where the shot left, and a flash left there
+  // would show.
   const errors = await openGame(page);
   await hooks(page, (h) => h.play());
   await hooks(page, (h) => {
@@ -299,7 +303,7 @@ test("the SVD's shot frame: its flash, smoke and tracer leave the drawn muzzle, 
     h.trigger(true);
     for (let k = 0; k < 10 && h.session.weapon.shotsFired === before; k++) await h.stepFrames(1);
     h.trigger(false);
-    const out = { shots: h.session.weapon.shotsFired - before, muzzle: h.rifleMuzzle(), tracers: h.tracerPixels().tracers.map((t) => t.tailM), particles: h.particleBillboards() };
+    const out = { shots: h.session.weapon.shotsFired - before, muzzle: h.rifleMuzzle(), left: h.lastShots().map((s) => s.muzzle), tracers: h.tracerPixels().tracers.map((t) => t.tailM), particles: h.particleBillboards() };
     h.thaw();
     return out;
   });
@@ -308,9 +312,13 @@ test("the SVD's shot frame: its flash, smoke and tracer leave the drawn muzzle, 
   const smoke = seen.particles.filter((p) => p.kind === 7).map((p) => off(p.at));
   const brass = seen.particles.filter((p) => p.kind === 6).map((p) => off(p.at));
   const tracer = seen.tracers.map(off);
-  const trace = JSON.stringify({ flash, smoke, brass, tracer });
+  // The kick in the frame: the drawn muzzle 6 cm or more off the muzzle the shot's event left from.
+  const kicked = seen.left.map(off);
+  const trace = JSON.stringify({ kicked, flash, smoke, brass, tracer });
   console.log(`the SVD's shot frame, each from the drawn muzzle (m): ${trace}`);
   expect(seen.shots).toBe(1);
+  expect(kicked, trace).toHaveLength(1);
+  expect(kicked[0], trace).toBeGreaterThanOrEqual(0.06);
   expect([flash.length, smoke.length, brass.length, tracer.length], trace).toEqual([1, 1, 1, 1]);
   // Its streak reaches back to the muzzle in its first frame: drawn from the drawn muzzle.
   expect(tracer[0], trace).toBeLessThan(0.01);

@@ -340,6 +340,8 @@ async function start(): Promise<void> {
   let builtDrawn: BuiltEffects['drawn'] = [];
   let builtFlashes: BuiltEffects['flashes'] = [];
   let builtFrame: BuiltEffects['frame'] | null = null;
+  /** For tests: the player's shots the last frame's ticks fired, each its tick and the muzzle its event says it left (as drawn before its kick). */
+  let lastShots: { tick: number; muzzle: [number, number, number] }[] = [];
   let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, cores: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0, ricochets: 0, embers: 0, ricochetsByKind: [0, 0, 0, 0], embersByKind: [0, 0, 0, 0] };
   /** Whether the rifle is in hand (tests put it down to read the world behind it). */
   let rifleHeld = true;
@@ -1292,6 +1294,7 @@ async function start(): Promise<void> {
     builtDrawn = frameEffects.drawn;
     builtFlashes = frameEffects.flashes;
     builtFrame = frameEffects.frame;
+    lastShots = events.shots.map((e) => ({ tick: e.tick, muzzle: e.muzzle }));
     // In a match the battle's strikes are the room's shells' (sim/room-battle.ts): each on what its crater
     // struck as it went out, its fire standing from the match's second its shell landed.
     const strikes = together.inMatch ? (together.battle?.strikes(events, together.net!.match!.startAt) ?? []) : strikesFrom(events);
@@ -1835,6 +1838,8 @@ async function start(): Promise<void> {
         flashes: builtFlashes.map((f) => ({ remote: f.remote, at: projectToPixel(lastPose, res, f.at), tips: f.tips.map((p) => projectToPixel(lastPose, res, p)), atM: f.at, tipsM: f.tips, up: f.up })),
       };
     },
+    /** The player's shots the last frame's ticks fired: each its tick and its event's muzzle (where the shot left, before its kick moved the drawn gun). */
+    lastShots: () => lastShots,
     /** The session's particles as the last frame drew them (the shot's flash and brass held to the drawn gun): each billboard's kind, centre and half its size (metres). */
     particleBillboards: () => {
       const f = builtFrame;
@@ -1995,11 +2000,18 @@ async function start(): Promise<void> {
     sunElevation: () => skyNow().sunElevationDeg,
     frames: () => frames,
     waitFrames,
-    /** Frozen: frames drawn only when stepped, `hz` of them a second of the world's time (60 unless given: a faster display's, as a test asks). */
+    /**
+     * Frozen: frames drawn only when stepped, `hz` of them a second of the world's time (60 unless given:
+     * a faster display's, as a test asks). The clock's leftover is set to half a tick (FixedClock.settle):
+     * left as it was, a frame a tick apart could run 0 or 2 ticks on its rounding, and a pose read in a
+     * frozen frame would be drawn at whatever share of the next tick was left (a shot's kick all but
+     * none of it at a small one). Settled, each 60 Hz frame runs one tick and is drawn half-way to it.
+     */
     freeze(hz = 60) {
       frozen = true;
       steps = 0;
       frozenMs = 1000 / hz;
+      session.clock.settle();
     },
     thaw() {
       frozen = false;
