@@ -7,7 +7,7 @@ import { Rng } from '../../src/core/rng';
 import { project } from '../../tools/lib/camera.mjs';
 import { at, brightest, colourOf, composite, decode, encode, hsv, hueOff, lit, luminance, median, p95, percentile, ringMean, topChannel, type Composite, type Image } from '../../tools/lib/image.mjs';
 import { failedEntry, removePictures, stamp } from '../../tools/lib/report.mjs';
-import { aimedCover, byDay, CAPTURES, FAR_LIT_MIN, gateCapture, headRing, kindOf, LIT, MIN_GPU_SAMPLES, nearLike, nearWidth, pathCover, SMOKE_KIND, streamCover, TARGET, TEAM, teamChannel, tinted, trackRound, WALL, type Burst, type Capture, type Frame, type Measures, type Track } from '../../tools/lib/tracer-measures.mjs';
+import { AIMED_MIN_SAMPLES, aimedCover, byDay, CAPTURES, FAR_LIT_MIN, FLASH_NEAR_PX, flashMasks, gateCapture, headRing, kindOf, LIT, measureCapture, MIN_GPU_SAMPLES, nearLike, nearWidth, pathCover, SMOKE_KIND, streamCover, TARGET, TEAM, teamChannel, tinted, trackRound, WALL, type Burst, type Capture, type Frame, type Measures, type Track } from '../../tools/lib/tracer-measures.mjs';
 import { P } from '../../src/world/materials';
 import { SMOKE_BILLBOARD } from '../../src/combat/particles';
 
@@ -78,6 +78,24 @@ describe("the capture tools' image measures", () => {
     // Every frame with a tracer near it: the least over them all.
     const all = composite(frames, [new Uint8Array([1, 1]), new Uint8Array([1, 1]), new Uint8Array([1, 1])]);
     expect(all.least[1]).toBeCloseTo(luminance(250, 80, 55), 4);
+  });
+
+  it("a frame skipped at a pixel (`skip`: light there that is no tracer's, the shooter's own flash) is neither its background nor what it shows; a pixel every frame skips is not open", () => {
+    const dusk = [70, 66, 110];
+    // The flash glows at pixel 1 in the second frame; a tracer's light is at pixel 0 in the third.
+    const frames = [image(2, 1, dusk), image(2, 1, dusk, (set) => set(1, 0, [255, 250, 235])), image(2, 1, dusk, (set) => set(0, 0, [255, 120, 110]))];
+    const skip = [new Uint8Array([0, 0]), new Uint8Array([0, 1]), new Uint8Array([0, 0])];
+    const c = composite(frames, null, skip);
+    expect(Array.from(c.data.subarray(4, 7))).toEqual(dusk);
+    expect(c.least[1]).toBeCloseTo(luminance(dusk[0], dusk[1], dusk[2]), 4);
+    expect(Array.from(c.data.subarray(0, 3))).toEqual([255, 120, 110]);
+    expect(Array.from(c.open!)).toEqual([1, 1]);
+    // Unskipped, the flash shows as a tracer's light would; and a pixel every frame skips is shown as before, not open.
+    expect(Array.from(composite(frames).data.subarray(4, 7))).toEqual([255, 250, 235]);
+    expect(composite(frames).open ?? null).toBeNull();
+    const shut = composite(frames, null, [new Uint8Array([0, 1]), new Uint8Array([0, 1]), new Uint8Array([0, 1])]);
+    expect(Array.from(shut.open!)).toEqual([1, 0]);
+    expect(Array.from(shut.data.subarray(4, 7))).toEqual([255, 250, 235]);
   });
 
   it("a pixel tinted by a tracer: its team's hue within reach, saturated, and more coloured than its background", () => {
@@ -376,7 +394,6 @@ function gated(c: Capture): string[] {
   if (far && !day) paths.push('farColour', 'farColour.measured', 'farColour.saturation', 'farColour.hueDeg');
   if (far && c.hours === 12) paths.push('noonContrast', 'noonContrast.ratio');
   if (c.side) paths.push('pathCover', 'pathCover.share');
-  if (c.aimed && c.burst === 'far') paths.push('aimedCover', 'aimedCover.share');
   if (c.battle) paths.push('battleColour', 'battleColour.measured', 'battleColour.saturation');
   if (c.front) paths.push('frontColour', 'frontColour.drawn', 'frontColour.n');
   return paths;
@@ -429,15 +446,15 @@ describe("G1's proof: its gates", () => {
     }
   });
 
-  it("aimed, the 90 m burst is gated on (f), its path shown beside the post, at TARGET.aimedCover (0.6); the 30 m one, its round behind the post, is a picture", () => {
+  it("aimed, both bursts are pictures until the sight picture is ruled on: (f), the 90 m path beside the post, is reported against TARGET.aimedCover (0.6), not gated (G4 Task 4: from the eye its 20-80 m path is end on, behind the post's tip)", () => {
     expect(TARGET.aimedCover).toBe(0.6);
-    const far = CAPTURES.find((x) => x.name === 'far-dusk-aimed')!;
-    const m = passing(far);
-    expect(gateCapture(far, { ...m, aimedCover: { share: 0.6 } }, burstOf())).toEqual([]);
-    expect(gateCapture(far, { ...m, aimedCover: { share: 0.59 } }, burstOf())).toHaveLength(1);
-    expect(gateCapture(far, { ...m, aimedCover: { share: null, why: 'every sample is behind the gun' } }, burstOf())).toHaveLength(1);
-    const near = CAPTURES.find((x) => x.name === 'dusk-aimed')!;
-    expect(gateCapture(near, without(passing(near), 'aimedCover'), burstOf())).toEqual([]);
+    for (const name of ['far-dusk-aimed', 'dusk-aimed']) {
+      const c = CAPTURES.find((x) => x.name === name)!;
+      const m = passing(c);
+      expect(gateCapture(c, without(m, 'aimedCover'), burstOf()), name).toEqual([]);
+      expect(gateCapture(c, { ...m, aimedCover: { share: 0.1 } }, burstOf()), name).toEqual([]);
+      expect(gateCapture(c, { ...m, aimedCover: { share: null, why: 'the path is end on (1.1 px, under 10)' } }, burstOf()), name).toEqual([]);
+    }
   });
 
   it("17:35 side on is gated on its path's cover as side-1735 is, as Blue and with the front heavy too; the wall at night on its stream and near width as a near burst is, its head reported", () => {
@@ -799,5 +816,125 @@ describe("G4's aimed gate, (f): the 90 m path beside the post", () => {
     const faint = [150, 40, 40];
     expect(aimedCover(rows(() => dusk, line(100, faint)), [frameWith(null)], side, null, TEAM.red, true).share).toBe(1);
     expect(aimedCover(rows(() => dusk, line(100, faint)), [frameWith(null)], side, null, TEAM.red, false).share).toBe(0);
+  });
+
+  it("across the line, a pixel the gun covers in any frame is not read: the gun beside the path, lit by the shot's flash, is no tracer", () => {
+    // Row 101, just under the path, is the gun's in every frame, and the composite shows it lit (its flash frame).
+    const lit = aimedCover(rows(() => dusk, line(101, [200, 170, 140])), [frameWith([45, 101, 155, 101])], side, null, TEAM.red, false);
+    expect(lit.behindGun).toBe(0);
+    expect(lit.counted).toBeGreaterThan(90);
+    expect(lit.share).toBe(0);
+  });
+
+  it('a pixel the composite cannot read (the shooter\'s flash near it in every frame: not open) is not read, and a sample with none read across the line is left out (`unread`)', () => {
+    const comp = rows(() => dusk, line(100));
+    const open = new Uint8Array(comp.w * comp.h).fill(1);
+    // Across the line, rows 98 to 101, shut from x 60 to 79: those samples read nothing.
+    for (let y = 97; y <= 102; y++) for (let x = 60; x <= 79; x++) open[y * comp.w + x] = 0;
+    const f = aimedCover({ ...comp, open }, [frameWith(null)], side, null, TEAM.red, false);
+    expect(f.unread).toBe(20);
+    expect(f.counted).toBe(f.samples - 20);
+    expect(f.share).toBe(1);
+  });
+
+  it(`fewer than AIMED_MIN_SAMPLES (${AIMED_MIN_SAMPLES}) samples counted is no measure: one glow beside the post is not a path shown`, () => {
+    expect(AIMED_MIN_SAMPLES).toBe(10);
+    // The gun over the whole path but x 95 to 98 (4 samples), and those lit.
+    const gunBut = (x0: number, x1: number): Frame => {
+      const metres = new Float32Array(200 * 200).fill(500);
+      for (let y = 90; y <= 110; y++) for (let x = 0; x < 200; x++) if (x < x0 || x > x1) metres[y * 200 + x] = 0.5;
+      return { ...frameOf(0, []), depth: { x0: 0, y0: 0, n: 200, scale: 1, metres } };
+    };
+    const few = aimedCover(rows(() => dusk, line(100)), [gunBut(95, 98)], side, null, TEAM.red, false);
+    expect(few.counted).toBe(4);
+    expect(few.share).toBeNull();
+    expect(few.litShare).toBeNull();
+    expect(few.why).toMatch(/4 samples counted/);
+    const enough = aimedCover(rows(() => dusk, line(100)), [gunBut(95, 104)], side, null, TEAM.red, false);
+    expect(enough.counted).toBe(10);
+    expect(enough.share).toBe(1);
+  });
+
+  it('a path seen end on (under 10 px on the image) is no measure, lit or not', () => {
+    // From the eye straight out: the whole path projects to the middle.
+    const ahead: Track = { seen: [], path: { fit: 'drawn', origin: [0, 0, 0], dir: [0, 0, 1], lastFlownM: 80, point: (s) => [0, 0, s] } };
+    const f = aimedCover(rows(() => dusk, (set) => { for (let y = 98; y <= 102; y++) for (let x = 98; x <= 102; x++) set(x, y, [255, 120, 110]); }), [frameWith(null)], ahead, null, TEAM.red, false);
+    expect(f.endOn).toBe(true);
+    expect(f.share).toBeNull();
+    expect(f.why).toMatch(/end on/);
+  });
+
+  it("no tracer drawn, the shooter's flash glowing in the notch's gap beside the post in one frame: (f) shows nothing, the flash's frame not read there (measureCapture)", () => {
+    // Frames 0-2 of an aimed 90 m burst at dusk (200 x 200, the eye at the origin looking along +z): the
+    // followed round 30, 44.7 and 59.4 m out along `side`'s path (row 100, x 50 to 148.5), none of it
+    // drawn on the images. The gun covers rows 90-110 but x 95-105, the notch's gap beside the post; the
+    // flash's frame (1) lights the gun and glows white in the gap, under and over the path's row.
+    const far = CAPTURES.find((x) => x.name === 'far-dusk-aimed')!;
+    const muzzle: [number, number, number] = [0, -0.07, 0.8];
+    const metres = new Float32Array(200 * 200).fill(500);
+    for (let y = 90; y <= 110; y++) for (let x = 0; x < 200; x++) if (x < 95 || x > 105) metres[y * 200 + x] = 0.5;
+    const frames: Frame[] = [0, 1, 2].map((i) => {
+      const flown = 30 + 14.7 * i;
+      const headM: [number, number, number] = [-40 + flown, 0, 40];
+      const tailM: [number, number, number] = [-50 + flown, 0, 40];
+      const base = frameOf(i, [{ kind: 2, flown, headDrawn: true, head: project({ position: [0, 0, 0], yaw: 0, pitch: 0 }, [200, 200], headM) as [number, number], tail: project({ position: [0, 0, 0], yaw: 0, pitch: 0 }, [200, 200], tailM) as [number, number], headM, tailM, joinsM: 10 }]);
+      const img = image(200, 200, dusk, (set) => {
+        for (let y = 90; y <= 110; y++) for (let x = 0; x < 200; x++) if (x < 95 || x > 105) set(x, y, i === 1 ? [120, 110, 90] : [15, 15, 15]);
+        if (i === 1) for (let y = 96; y <= 104; y++) for (let x = 95; x <= 105; x++) set(x, y, [255, 250, 235]);
+      });
+      return {
+        ...base, png: encode(img.data, 200, 200), muzzle, fx: { ricochets: 0, embers: 0, heads: 1, battleTracers: 0 }, battle: [], smoke: [], glow: [],
+        depth: { x0: 0, y0: 0, n: 200, scale: 1, metres },
+        flash: i === 1 ? [{ atM: muzzle, tipsM: [[0.08, -0.17, 1.0] as [number, number, number]] }] : [],
+      };
+    });
+    const f = measureCapture(far, { frames, pathDepth: null }).m.aimedCover;
+    expect(f.endOn).toBe(false);
+    expect(f.counted).toBe(11);
+    expect([0, null]).toContain(f.share);
+  });
+});
+
+describe("G4's aimed gate, (f): the shooter's own flash is not read", () => {
+  // The eye at the origin looking along +z (frameOf's camera, 200 x 200, the middle (100, 100)); the
+  // muzzle 0.8 m out and 7 cm under the line.
+  const muzzle: [number, number, number] = [0, -0.07, 0.8];
+  const pose = { position: [0, 0, 0] as [number, number, number], yaw: 0, pitch: 0 };
+  const px = (p: readonly number[]) => project(pose, [200, 200], p)!;
+  const marked = (mask: Uint8Array, q: readonly number[]) => mask[Math.floor(q[1]) * 200 + Math.floor(q[0])] === 1;
+  const depthOf = (m: (x: number, y: number) => number): Frame['depth'] => {
+    const metres = new Float32Array(200 * 200);
+    for (let y = 0; y < 200; y++) for (let x = 0; x < 200; x++) metres[y * 200 + x] = m(x, y);
+    return { x0: 0, y0: 0, n: 200, scale: 1, metres };
+  };
+
+  it("a frame with no flash drawn marks nothing, its smoke and the near world as they are; the muzzle's flash particle near the eye is marked in any frame", () => {
+    const quiet: Frame = { ...frameOf(0, []), smoke: [{ at: [0, 0.05, 1], half: 0.1 }], glow: [], flash: [], depth: depthOf(() => 2) };
+    expect(flashMasks([quiet], 200, 200)[0].every((v) => v === 0)).toBe(true);
+    const glow: Frame = { ...quiet, glow: [{ at: [0, -0.07, 0.85], half: 0.04 }, { at: [0, 10, 50], half: 0.04 }] };
+    const m = flashMasks([glow], 200, 200)[0];
+    expect(marked(m, px([0, -0.07, 0.85]))).toBe(true);
+    // A spark 50 m out is no muzzle flash.
+    expect(marked(m, px([0, 10, 50]))).toBe(false);
+  });
+
+  it(`with the flash drawn: its core and star, grown FLASH_NEAR_PX (${FLASH_NEAR_PX}) for their glow; the smoke it lights; and what its light reaches of the world (flash_light_radius_m past the muzzle), by the G-buffer's depth`, () => {
+    const tip: [number, number, number] = [0.25, -0.12, 1.05];
+    const f: Frame = { ...frameOf(0, []), flash: [{ atM: muzzle, tipsM: [tip] }], glow: [], smoke: [{ at: [-0.3, 0.3, 1.2], half: 0.08 }], depth: depthOf((x) => (x < 20 ? 5 : x < 30 ? 9 : 500)) };
+    const m = flashMasks([f], 200, 200)[0];
+    const at = px(muzzle);
+    // The core (0.16 m across at most, drawn a quarter of its size out along the bore): marked round the muzzle, past its rim by FLASH_NEAR_PX.
+    expect(marked(m, at)).toBe(true);
+    expect(marked(m, [at[0], at[1] - 30])).toBe(true);
+    expect(marked(m, [at[0] + 75, at[1]])).toBe(false);
+    // The prong to its tip, and the tip's glow.
+    expect(marked(m, px(tip))).toBe(true);
+    expect(marked(m, [px(tip)[0] + FLASH_NEAR_PX - 2, px(tip)[1]])).toBe(true);
+    // The smoke the flash lights.
+    expect(marked(m, px([-0.3, 0.3, 1.2]))).toBe(true);
+    // The world within the light's reach (6 m past the muzzle's 0.8), not past it.
+    expect(marked(m, [10, 190])).toBe(true);
+    expect(marked(m, [25, 190])).toBe(false);
+    expect(marked(m, [100, 5])).toBe(false);
   });
 });

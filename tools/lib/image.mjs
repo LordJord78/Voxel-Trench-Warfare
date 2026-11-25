@@ -31,20 +31,31 @@ export function encode(data, w, h) {
  * farthest in RGB): a tracer's light added shows as its brightest frame, as each channel's most over the
  * frames did, and one that covers a bright haze behind it (by day: effects.wgsl tracerLight) shows as it
  * is drawn, darker and redder, where each channel's most gave its red over the haze's green and blue.
+ * A frame `skip[i]` marks at a pixel (a byte a pixel, if given: light there that is no tracer's, the
+ * shooter's own flash) is neither that pixel's background nor what it shows. A pixel every frame skips
+ * is shown and backed as if none did, and is not `open` (0): nothing there can be read. Without `skip`,
+ * `open` is null.
  */
-export function composite(imgs, near = null) {
+export function composite(imgs, near = null, skip = null) {
   const { w, h } = imgs[0];
   for (const img of imgs.slice(1)) if (img.w !== w || img.h !== h) throw new Error(`a frame is ${img.w}x${img.h}, the first ${w}x${h}`);
   if (near && near.length !== imgs.length) throw new Error(`${near.length} masks for ${imgs.length} frames`);
+  if (skip && skip.length !== imgs.length) throw new Error(`${skip.length} skip masks for ${imgs.length} frames`);
   const n = w * h;
   const data = Buffer.alloc(n * 4);
   const least = new Float32Array(n);
   const back = new Uint8Array(n * 3);
+  const open = skip ? new Uint8Array(n) : null;
   for (let p = 0; p < n; p++) {
+    // The frames read at this pixel: those not skipped there, or every one when all are.
+    let kept = skip ? 0 : imgs.length;
+    if (skip) for (let i = 0; i < imgs.length; i++) if (!skip[i][p]) kept++;
+    if (open) open[p] = kept > 0 ? 1 : 0;
+    const sk = kept > 0 ? skip : null;
     let bi = -1;
     let bl = Infinity;
     for (let i = 0; i < imgs.length; i++) {
-      if (near && near[i][p]) continue;
+      if ((sk && sk[i][p]) || (near && near[i][p])) continue;
       if (imgs[i].lum[p] < bl) {
         bl = imgs[i].lum[p];
         bi = i;
@@ -52,6 +63,7 @@ export function composite(imgs, near = null) {
     }
     if (bi < 0) {
       for (let i = 0; i < imgs.length; i++) {
+        if (sk && sk[i][p]) continue;
         if (imgs[i].lum[p] < bl) {
           bl = imgs[i].lum[p];
           bi = i;
@@ -68,6 +80,7 @@ export function composite(imgs, near = null) {
     let mi = bi;
     let md = -1;
     for (let i = 0; i < imgs.length; i++) {
+      if (sk && sk[i][p]) continue;
       const D = imgs[i].data;
       const d = (D[o] - r0) ** 2 + (D[o + 1] - g0) ** 2 + (D[o + 2] - b0) ** 2;
       if (d > md) {
@@ -83,7 +96,7 @@ export function composite(imgs, near = null) {
   }
   const lum = new Float32Array(n);
   for (let i = 0; i < n; i++) lum[i] = luminance(data[i * 4], data[i * 4 + 1], data[i * 4 + 2]);
-  return { data, lum, least, back, w, h };
+  return { data, lum, least, back, w, h, open };
 }
 
 /** The index of the pixel under a point (continuous pixels), or -1 off the image. */

@@ -26,9 +26,13 @@
 //     G-buffer's depth); aimed, over those the gun does not cover either. From the shooter's eye a
 //     line that has joined its round's path projects to a point: reported, not gated.
 //   - (f) aimed (G4 Task 4, G1's aimed gate moved there): on the aimed 90 m burst, the share of the
-//     round's projected path (PATH_M of flight) shown in the composite, over the samples the gun covers
-//     in no frame and the world does not hide, each sample read across the line, each pixel over its own
-//     background ((e)'s rule). The aimed 30 m burst is a picture: its round lands behind the post.
+//     round's projected path (PATH_M of flight) shown in a composite of its own (the frames the shooter's
+//     own flash reaches a pixel in left out there: its star, core, light and the smoke it lights), over
+//     the samples the gun covers in no frame and the world does not hide, each sample read across the
+//     line, each pixel over its own background ((e)'s rule), the gun's pixels across it not read. End on
+//     (under DEGENERATE_PX) or under AIMED_MIN_SAMPLES counted, no measure. Reported, not gated: from the
+//     eye, with the post's tip on the point of aim, the path is end on behind the post (its gate waits
+//     on a ruling). The aimed 30 m burst is a picture: its round lands behind the post.
 //   - (d) noon contrast: the brightest pixel of the player's tracer at NOON_AT_M of flight over its
 //     NOON_RING_PX ring, gated at noon and reported at 17:35.
 //   - (e) the stream from the hip: the followed round's drawn ribbons from STREAM_FROM_M past the muzzle
@@ -130,6 +134,12 @@ const DEGENERATE_PX = 10;
 const GUN_DEPTH_M = 0.9;
 /** A path sample whose G-buffer depth is under this share of the path's own distance is behind the world (a tree, the parapet): left out, as the gun is. */
 const HIDDEN_SHARE = 0.97;
+/** (f): at least this many samples counted, else no measure (one glow beside the post read 1 of 1): as many as a path is pixels long before it is seen end on. */
+export const AIMED_MIN_SAMPLES = DEGENERATE_PX;
+/** (f): the shooter's own flash's glow and bloom past what it draws: in a frame it shows in, the pixels within this many of its core, its star, the muzzle's flash particle and the smoke it lights are not read. */
+export const FLASH_NEAR_PX = 16;
+/** The muzzle's flash particle ([particles.muzzle_flash], emissive: Frame.glow) is drawn this near the eye; an emissive particle farther out (a strike's spark) is not the shooter's flash. */
+const FLASH_GLOW_NEAR_M = 2;
 /** (d): the point at this much flight, its ring, ring pixels within NOON_CLEAR_PX of a drawn tracer left out, and the least ring left. */
 const NOON_AT_M = 40;
 export const NOON_RING_PX = [16, 20];
@@ -273,6 +283,71 @@ export function tracerMasks(frames, w, h) {
       const A = project(pose, res, [0, 1, 2].map((j) => b.p[j] - (b.v[j] * len) / speed));
       const B = project(pose, res, b.p);
       if (A && B) put(A, B);
+    }
+    return mask;
+  });
+}
+
+/**
+ * Each frame's own flash on its image, grown FLASH_NEAR_PX for its glow: the pixels whose light in that
+ * frame is the shooter's flash's, not a tracer's, for (f) to leave that frame out of there (image.mjs
+ * composite's `skip`). In a frame its star shows (Frame.flash: the star's root and its prongs' tips,
+ * metres): the core about the muzzle (flash_core_m across at most, drawn flash_core_ahead of its size out
+ * along the bore) and each prong; the player's smoke (Frame.smoke), which takes the flash's light; and
+ * the world its light reaches (flash_light_radius_m past the muzzle), the gun among it, by the
+ * G-buffer's depth round the middle (Frame.depth). In any frame, the muzzle's flash particle (Frame.glow:
+ * an emissive particle within FLASH_GLOW_NEAR_M of the eye), which outlives the star by a frame. Unlit,
+ * the player's smoke (0.18 alpha at most) is read as the rest is.
+ */
+export function flashMasks(frames, w, h) {
+  const coreM = FX.flash_core_m[1] * (0.5 + FX.flash_core_ahead);
+  return frames.map((f) => {
+    const mask = new Uint8Array(w * h);
+    const { pose, res } = f.info;
+    const k = w / res[0];
+    const eye = pose.position;
+    const { forward, right } = basis(pose);
+    /** How wide `r` m about `p` (m) is seen (pixels, CSS), its near side's: null behind the eye; Infinity if it reaches the eye. */
+    const across = (p, r) => {
+      const depth = dot(sub(p, eye), forward);
+      if (depth <= -r) return null;
+      if (depth <= r) return Infinity;
+      const q = project(pose, res, p);
+      const rim = project(pose, res, [0, 1, 2].map((j) => p[j] + right[j] * r));
+      return Math.hypot(rim[0] - q[0], rim[1] - q[1]) * (depth / (depth - r));
+    };
+    /** The segment a to b (m) on the image, `r` m about it, grown FLASH_NEAR_PX. */
+    const put = (a, b, r) => {
+      const ra = across(a, r);
+      const rb = across(b, r);
+      if (ra === Infinity || rb === Infinity) return mask.fill(1);
+      const A = project(pose, res, a);
+      const B = project(pose, res, b);
+      if (!A || !B) return;
+      markSegment(mask, w, h, [A[0] * k, A[1] * k], [B[0] * k, B[1] * k], Math.max(ra, rb) * k + FLASH_NEAR_PX);
+    };
+    const own = f.flash ?? [];
+    for (const fl of own) {
+      put(fl.atM, fl.atM, coreM);
+      for (const tip of fl.tipsM) put(fl.atM, tip, FX.flash_star_width_m / 2);
+    }
+    for (const g of f.glow ?? []) if (dist(g.at, eye) <= FLASH_GLOW_NEAR_M) put(g.at, g.at, g.half);
+    if (own.length) {
+      for (const puff of f.smoke ?? []) put(puff.at, puff.at, puff.half);
+      const reach = FX.flash_light_radius_m + Math.max(...own.map((fl) => dist(fl.atM, eye)));
+      const d = f.depth;
+      if (d) {
+        const x0 = Math.max(0, Math.floor((d.x0 / d.scale) * k));
+        const x1 = Math.min(w - 1, Math.ceil(((d.x0 + d.n) / d.scale) * k));
+        const y0 = Math.max(0, Math.floor((d.y0 / d.scale) * k));
+        const y1 = Math.min(h - 1, Math.ceil(((d.y0 + d.n) / d.scale) * k));
+        for (let y = y0; y <= y1; y++) {
+          for (let x = x0; x <= x1; x++) {
+            const m = depthAt(f, [(x + 0.5) / k, (y + 0.5) / k]);
+            if (m !== null && m < reach) mask[y * w + x] = 1;
+          }
+        }
+      }
     }
     return mask;
   });
@@ -760,32 +835,40 @@ export function pathCover(comp, frames, track, aimed, pathDepth, team, day = fal
  * no frame (its G-buffer depth there nearer than GUN_DEPTH_M) and the world does not hide (`pathDepth`).
  * Each sample is read across the line, PATH_ACROSS_PX either side, each pixel over its own background
  * ((e)'s rule, not the band's brightest over its median, which reads a bare bright-over-dark edge as a
- * line: Task 3b's F8): lit if any is, and by day (`day`) tinted by `team`'s colour if any is. Beside it,
- * the share lit alone, and how many samples the gun covered (`behindGun`). With every sample behind the
- * gun or hidden, no measure.
+ * line: Task 3b's F8): lit if any is, and by day (`day`) tinted by `team`'s colour if any is. A pixel
+ * across the line the gun covers in any frame (the shot's flash lights it) is not read, nor one the
+ * composite has no frame for (`open`: measureCapture leaves out of it the frames the shooter's own flash
+ * reaches a pixel in, flashMasks); a sample with none read is left out, counted (`unread`). Beside it,
+ * the share lit alone, and how many samples the gun covered (`behindGun`). A path seen end on (under
+ * DEGENERATE_PX on the image) is no measure, nor one with under AIMED_MIN_SAMPLES samples counted.
  */
 export function aimedCover(comp, frames, track, pathDepth, team = null, day = false) {
   if (!track?.path) return { share: null, why: `no round followed ${PATH_M[0]} m out` };
   const ps = pathSamples(frames, track);
   if (!ps) return { share: null, why: 'the path is behind the camera or off the image' };
   const { n, lengthPx, end } = ps;
+  const gunAt = (p) =>
+    frames.some((f) => {
+      const m = depthAt(f, p);
+      return m !== null && m < GUN_DEPTH_M;
+    });
   const samples = [];
   for (let j = 0; j < ps.points.length; j++) {
     const q = ps.points[j];
     if (at(comp, q) < 0) continue;
-    const gun = frames.some((f) => {
-      const m = depthAt(f, q);
-      return m !== null && m < GUN_DEPTH_M;
-    });
+    const gun = gunAt(q);
     const hidden = !gun && pathDepth && pathDepth.length === ps.points.length ? pathDepth[j] < HIDDEN_SHARE * ps.metres[j] : false;
     let covered = false;
     let tint = false;
+    let read = 0;
     // Reported: the pixel most over its own background.
     let lum = 0;
     let bg = null;
     for (let o = -PATH_ACROSS_PX; o <= PATH_ACROSS_PX + 1e-9; o += 0.5) {
-      const k = at(comp, [q[0] + n[0] * o, q[1] + n[1] * o]);
-      if (k < 0) continue;
+      const p = [q[0] + n[0] * o, q[1] + n[1] * o];
+      const k = at(comp, p);
+      if (k < 0 || (comp.open && !comp.open[k]) || gunAt(p)) continue;
+      read++;
       const v = comp.lum[k];
       const b = comp.least[k];
       if (lit(v, b)) covered = true;
@@ -795,17 +878,26 @@ export function aimedCover(comp, frames, track, pathDepth, team = null, day = fa
         bg = b;
       }
     }
-    samples.push({ at: q, gun, hidden, covered, tint, shown: covered || (day && tint), lum, bg });
+    const unread = !gun && !hidden && read === 0;
+    samples.push({ at: q, gun, hidden, unread, covered, tint, shown: covered || (day && tint), lum, bg });
   }
-  const counted = samples.filter((s) => !s.gun && !s.hidden);
-  const shareOf = (keep) => (counted.length ? counted.filter(keep).length / counted.length : null);
+  const counted = samples.filter((s) => !s.gun && !s.hidden && !s.unread);
   const behindGun = samples.filter((s) => s.gun).length;
+  const endOn = lengthPx < DEGENERATE_PX;
+  const length = Math.round(lengthPx * 10) / 10;
+  const none = behindGun === samples.length ? 'every sample is behind the gun' : behindGun + samples.filter((s) => s.hidden).length === samples.length ? 'every sample is behind the gun or hidden' : 'none read';
+  const why = endOn
+    ? `the path is end on (${length} px, under ${DEGENERATE_PX})${counted.length ? '' : `: ${none}`}`
+    : counted.length < AIMED_MIN_SAMPLES
+      ? `${counted.length} samples counted, under ${AIMED_MIN_SAMPLES}${counted.length ? '' : `: ${none}`}`
+      : undefined;
+  const shareOf = (keep) => (why ? null : counted.filter(keep).length / counted.length);
   return {
     share: shareOf((s) => s.shown),
     counts: day ? 'lit or tinted' : 'lit',
     litShare: shareOf((s) => s.covered),
-    spanM: [PATH_M[0], Math.round(end * 10) / 10], lengthPx: Math.round(lengthPx * 10) / 10, endOn: lengthPx < DEGENERATE_PX, samples: samples.length, behindGun, hiddenByWorld: samples.filter((s) => s.hidden).length, depthRead: !!pathDepth, counted: counted.length,
-    why: counted.length ? undefined : behindGun ? 'every sample is behind the gun' : 'every sample is hidden',
+    spanM: [PATH_M[0], Math.round(end * 10) / 10], lengthPx: length, endOn, samples: samples.length, behindGun, hiddenByWorld: samples.filter((s) => s.hidden).length, unread: samples.filter((s) => s.unread).length, depthRead: !!pathDepth, counted: counted.length,
+    why,
     marks: samples,
   };
 }
@@ -866,7 +958,7 @@ export function marked(img, m) {
   return encode(data, img.w, img.h);
 }
 
-/** The composite marked: (c)'s path a few pixels under it and (f)'s a few over it (green lit, blue tinted by its team's colour and not lit, red neither, grey behind the gun or hidden), (a)'s run (cyan), (b)'s pixels (yellow), (e)'s stream (cyan lit, blue tinted and not lit, grey unread: brighter than a background no reading can be lit over, orange neither), (d)'s point and ring (magenta). By day (c) and (e) count the blue as shown; after dark they do not. */
+/** The composite marked: (c)'s path a few pixels under it and (f)'s a few over it (green lit, blue tinted by its team's colour and not lit, red neither, grey behind the gun or hidden, and (f)'s unread), (a)'s run (cyan), (b)'s pixels (yellow), (e)'s stream (cyan lit, blue tinted and not lit, grey unread: brighter than a background no reading can be lit over, orange neither), (d)'s point and ring (magenta). By day (c) and (e) count the blue as shown; after dark they do not. */
 export function markedComposite(comp, m) {
   const data = Buffer.from(comp.data);
   const put = (x, y, c) => {
@@ -888,7 +980,7 @@ export function markedComposite(comp, m) {
       put(p.at[0] + 3, p.at[1], [255, 255, 0]);
     }
   }
-  if (m.aimedCover?.marks) for (const x of m.aimedCover.marks) for (const o of [-6, -5]) put(x.at[0], x.at[1] + o, x.gun || x.hidden ? [128, 128, 128] : x.covered ? [0, 255, 0] : x.tint ? [0, 96, 255] : [255, 0, 0]);
+  if (m.aimedCover?.marks) for (const x of m.aimedCover.marks) for (const o of [-6, -5]) put(x.at[0], x.at[1] + o, x.gun || x.hidden || x.unread ? [128, 128, 128] : x.covered ? [0, 255, 0] : x.tint ? [0, 96, 255] : [255, 0, 0]);
   if (m.stream?.marks) for (const x of m.stream.marks) for (const o of [5, 6]) put(x.at[0], x.at[1] + o, x.covered ? [0, 255, 255] : x.tint ? [0, 96, 255] : x.unread ? [160, 160, 160] : [255, 128, 0]);
   const d = m.noonContrast;
   if (d?.at) for (let t = 0; t < 360; t += 2) for (const r of NOON_RING_PX) put(d.at[0] + r * Math.cos(t * RAD), d.at[1] + r * Math.sin(t * RAD), [255, 0, 255]);
@@ -900,7 +992,8 @@ export function measureCapture(c, cap) {
   const kind = kindOf(c);
   const team = c.team === 'blue' ? TEAM.blue : TEAM.red;
   const imgs = cap.frames.map((f) => decode(f.png));
-  const comp = composite(imgs, tracerMasks(cap.frames, imgs[0].w, imgs[0].h));
+  const near = tracerMasks(cap.frames, imgs[0].w, imgs[0].h);
+  const comp = composite(imgs, near);
   // The shot: the first frame of the window clear of the flash with the player's head drawn (else the first with it).
   const headed = (f, i) => i >= FLASH_FRAMES && own(f, kind).some((t) => t.headDrawn);
   const clear = cap.frames.findIndex(headed);
@@ -923,7 +1016,8 @@ export function measureCapture(c, cap) {
     frontColour: frontColour(imgs, comp, cap.frames),
     stream: hip && nearLike(c) ? streamCover(comp, cap.frames, track, team, day) : null,
     pathCover: c.burst === 'far' ? pathCover(comp, cap.frames, track, !!c.aimed, cap.pathDepth, team, day) : null,
-    aimedCover: c.burst === 'far' && c.aimed ? aimedCover(comp, cap.frames, track, cap.pathDepth, team, day) : null,
+    // (f) reads its own composite: the frames the shooter's own flash reaches a pixel in left out there.
+    aimedCover: c.burst === 'far' && c.aimed ? aimedCover(composite(imgs, near, flashMasks(cap.frames, imgs[0].w, imgs[0].h)), cap.frames, track, cap.pathDepth, team, day) : null,
     noonContrast: c.burst === 'far' && day ? noonContrast(imgs, cap.frames, track, kind) : null,
     followed: track ? track.seen.map((s) => Math.round(s.t.flown * 10) / 10) : null,
     // Each frame's exposure, effects and the shooter's suppression (the front fires on in the far captures; a suppressed frame greys the world, not the tracers).
@@ -945,7 +1039,9 @@ const num = (x) => typeof x === 'number' && Number.isFinite(x);
  *     wall: (e) (the wall's head, beside its own shot's flash in every frame it is drawn, reported).
  *   - Far (from the eye or the side, not aimed): (b) after dark, against the shooter's team's hue and
  *     its kind's saturation (by day reported); (d) at noon (at 17:35 reported). Side on: (c).
- *   - Aimed, the 90 m burst: (f), at TARGET.aimedCover (G4 Task 4). The 30 m one is a picture.
+ *   - Aimed: both bursts are pictures. (f), on the 90 m one, is reported against TARGET.aimedCover, its
+ *     gate waiting on a ruling (G4 Task 4): the post's tip on the point of aim, from the eye the round's
+ *     20-80 m path is end on and under the post (the aim kicks up after each round leaves).
  *   - (c), (e) and (f) read the share shown: by day lit or tinted, after dark lit (the measures', `counts`).
  *   - `battle`: the battle's amber. The graze: a ricochet of the player's kind. `front` (heavy): the
  *     enemy line's amber in the frame (the window is chosen at a frame it is drawn in), tinted amber.
@@ -987,10 +1083,6 @@ export function gateCapture(c, m, burst) {
   if (c.side) {
     const p = m.pathCover;
     if (!(num(p?.share) && p.share >= TARGET.pathCover)) failures.push(`(c) path cover, ${p?.counts ?? 'shown'}, ${round3(p?.share)} < ${TARGET.pathCover} (lit alone ${round3(p?.litShare)})${p?.why ? ` (${p.why})` : ''}`);
-  }
-  if (c.aimed && c.burst === 'far') {
-    const f = m.aimedCover;
-    if (!(num(f?.share) && f.share >= TARGET.aimedCover)) failures.push(`(f) aimed, the path beside the post, ${f?.counts ?? 'shown'}, ${round3(f?.share)} < ${TARGET.aimedCover} (lit alone ${round3(f?.litShare)}; ${f?.counted ?? 0} of ${f?.samples ?? 0} samples counted, ${f?.behindGun ?? 0} behind the gun, ${f?.hiddenByWorld ?? 0} hidden)${f?.why ? ` (${f.why})` : ''}`);
   }
   if (c.battle) {
     const bc = m.battleColour;

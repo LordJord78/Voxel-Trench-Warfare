@@ -547,6 +547,74 @@ describe('a frame of effects', () => {
     expect(shots).toBe(12);
   });
 
+  /**
+   * Aimed, `gun` on its irons fires 24 shots, a magazine's worth then a fresh one: of every frame its
+   * shot's flash is drawn in (flash_s: two at 60 Hz), on a 1600 × 1000 screen as the camera draws it,
+   * the highest a prong's tip shows over the screen's middle (px; under it is negative) and the nearest
+   * a prong's drawn segment passes it.
+   */
+  const aimedFlashesOnScreen = (tunables: typeof t, gun: (typeof GUNS)[number] = 'ak74') => {
+    const res: [number, number] = [1600, 1000];
+    const s = stand();
+    // A pistol is the loadout's second gun: in the hands once the long gun is put away.
+    const pistol = GUN_DEFS[gun].slot === 'secondary';
+    if (gun !== 'ak74') s.equip({ primary: pistol ? 'ak74' : gun, secondary: pistol ? gun : 'm17', fits: {} });
+    const rig = new CameraRig(rigTunables(tun));
+    const b = new EffectsFrameBuilder(tunables);
+    s.advance(0.5 / 60);
+    const frame = () => {
+      s.advance(1 / 60);
+      const pose = rig.pose(s, 1 / 60);
+      const events = s.drainEvents();
+      return { pose, events, built: b.build(s, events, rig.rifle(s, pose)) };
+    };
+    if (pistol) {
+      s.intent = { ...s.intent, swap: 1 };
+      for (let f = 0; f < 120; f++) frame();
+    }
+    expect(s.arm.spec.gun.key).toBe(gun);
+    s.intent = { ...s.intent, aim: true };
+    for (let f = 0; f < 90; f++) frame();
+    expect(s.aimed).toBe(1);
+    let nearest = Infinity;
+    let highest = -Infinity;
+    let frames = 0;
+    for (let n = 0; n < 24; n++) {
+      // A pumped or slow gun's next round ready before the press (a semi-automatic's press is one shot).
+      for (let k = 0; k < 120 && s.weapon.sinceShot < 60 / s.weapon.spec.rpm - 1e-9; k++) frame();
+      s.intent = { ...s.intent, fire: true };
+      let f = frame();
+      for (let k = 0; k < 10 && f.events.shots.length === 0; k++) f = frame();
+      s.intent = { ...s.intent, fire: false };
+      expect(f.events.shots, `${gun}, shot ${n} (${s.weapon.rounds} rounds, reloading ${s.weapon.reloading})`).toHaveLength(1);
+      // Each frame the shot's flash is drawn in (flash_s: two at 60 Hz).
+      for (let own = f.built.flashes.find((x) => !x.remote); own; own = (f = frame()).built.flashes.find((x) => !x.remote)) {
+        frames++;
+        const a = projectToPixel(f.pose, res, own.at)!;
+        const c = [res[0] / 2, res[1] / 2];
+        for (const tip of own.tips) {
+          const q = projectToPixel(f.pose, res, tip)!;
+          highest = Math.max(highest, c[1] - q[1]);
+          // The prong's drawn segment's nearest to the screen's middle.
+          const d = [q[0] - a[0], q[1] - a[1]];
+          const u = Math.max(0, Math.min(1, ((c[0] - a[0]) * d[0] + (c[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1])));
+          nearest = Math.min(nearest, Math.hypot(a[0] + d[0] * u - c[0], a[1] + d[1] * u - c[1]));
+        }
+      }
+      for (let k = 0; k < 20; k++) frame();
+      // A magazine's worth, then a fresh one: its reload asked for and run out aimed down, the sights
+      // back up before the next shot (the AK's 24 shots are inside its 30).
+      if (s.weapon.rounds === 0) {
+        s.intent = { ...s.intent, reload: true };
+        frame();
+        s.intent = { ...s.intent, reload: false };
+        for (let k = 0; k < 600 && (s.weapon.rounds === 0 || s.weapon.reloading); k++) frame();
+        for (let k = 0; k < 60 && s.aimed < 1; k++) frame();
+      }
+    }
+    return { sight: s.arm.spec.sight.y, nearest, highest, frames };
+  };
+
   it("aimed, on the screen as the camera draws the flash's frames, no prong comes near the reticle: the shot's kick keeps the drawn gun's sight on the eye's line, so no tip shows over the screen's middle, and every prong passes 3% of the screen's height or more from it, where the hash's own rolls rise over it and come within 2% of it", () => {
     // The hands' capture's aimed AK at 1600 × 1000 once showed a tip 9.6 px over the middle: the kick
     // lifted and pitched the drawn gun aimed (kick.up × 0.6, kick.pitch × 0.5). Since G4 Task 4 the
@@ -555,49 +623,7 @@ describe('a frame of effects', () => {
     // Measured then: every tip under the middle (the highest 2.2 px under it), the nearest prong 48.6 px
     // from it; the hash's whole rolls 24.6 px over it and 13.0 px from it.
     const res: [number, number] = [1600, 1000];
-    const run = (tunables: typeof t) => {
-      const s = stand();
-      const rig = new CameraRig(rigTunables(tun));
-      const b = new EffectsFrameBuilder(tunables);
-      s.advance(0.5 / 60);
-      const frame = () => {
-        s.advance(1 / 60);
-        const pose = rig.pose(s, 1 / 60);
-        const events = s.drainEvents();
-        return { pose, events, built: b.build(s, events, rig.rifle(s, pose)) };
-      };
-      s.intent = { ...s.intent, aim: true };
-      for (let f = 0; f < 90; f++) frame();
-      expect(s.aimed).toBe(1);
-      let nearest = Infinity;
-      let highest = -Infinity;
-      let frames = 0;
-      for (let n = 0; n < 24; n++) {
-        s.intent = { ...s.intent, fire: true };
-        let f = frame();
-        for (let k = 0; k < 10 && f.events.shots.length === 0; k++) f = frame();
-        s.intent = { ...s.intent, fire: false };
-        expect(f.events.shots, `shot ${n}`).toHaveLength(1);
-        // Each frame the shot's flash is drawn in (flash_s: two at 60 Hz).
-        for (let own = f.built.flashes.find((x) => !x.remote); own; own = (f = frame()).built.flashes.find((x) => !x.remote)) {
-          frames++;
-          const a = projectToPixel(f.pose, res, own.at)!;
-          const c = [res[0] / 2, res[1] / 2];
-          for (const tip of own.tips) {
-            const q = projectToPixel(f.pose, res, tip)!;
-            highest = Math.max(highest, c[1] - q[1]);
-            // The prong's drawn segment's nearest to the screen's middle.
-            const d = [q[0] - a[0], q[1] - a[1]];
-            const u = Math.max(0, Math.min(1, ((c[0] - a[0]) * d[0] + (c[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1])));
-            nearest = Math.min(nearest, Math.hypot(a[0] + d[0] * u - c[0], a[1] + d[1] * u - c[1]));
-          }
-        }
-        for (let k = 0; k < 20; k++) frame();
-        // A magazine's worth, then a fresh one (its reload run out aimed down).
-        if (s.weapon.rounds === 0) for (let k = 0; k < 300 && s.weapon.rounds === 0; k++) frame();
-      }
-      return { nearest, highest, frames };
-    };
+    const run = (tunables: typeof t) => aimedFlashesOnScreen(tunables);
     const aimed = run(t);
     expect(aimed.frames).toBeGreaterThanOrEqual(48);
     expect(aimed.nearest, JSON.stringify(aimed)).toBeGreaterThanOrEqual(0.03 * res[1]);
@@ -607,6 +633,24 @@ describe('a frame of effects', () => {
     const whole = run({ ...t, flashAimedBlend: 2 });
     expect(whole.nearest, JSON.stringify(whole)).toBeLessThan(0.02 * res[1]);
     expect(whole.highest, JSON.stringify(whole)).toBeGreaterThan(0.02 * res[1]);
+  });
+
+  it("on every gun's irons too, the lowest sights among them, aimed, every prong passes 3% of the screen's height or more from its middle", () => {
+    // A sight dropped toward the bore narrows the arc the rolls skip (max(45°, acos(sight / reach))):
+    // G4 Task 4 set the MP5's 0.06 m to 0.0525 (its post's tip), the M870's 0.0375 to 0.0525; the PM's
+    // 0.0375 is the lowest of all. A tip at the sight's height out to the side of the bore rises over
+    // the line as the kick rolls the gun about it (kick.roll × 0.3), so one can show just over the
+    // middle row, but far to its side. Measured (1600 × 1000, 24 shots each, the nearest prong and the
+    // highest tip over the middle row, px): AK 48.6 / -2.2, M4 68.3 / -27.2, MP5 62.0 / -12.4, SVD
+    // 39.7 / -4.4, M249 66.2 / -39.3, M870 48.5 / -8.1, M17 64.4 / +1.5, PM 59.3 / -0.6.
+    const res: [number, number] = [1600, 1000];
+    expect(Math.min(...GUNS.map((g) => sightOf(g, BARE).y))).toBe(0.0375);
+    for (const gun of GUNS) {
+      const r = aimedFlashesOnScreen(t, gun);
+      expect(r.sight, gun).toBe(sightOf(gun, BARE).y);
+      expect(r.frames, gun).toBeGreaterThanOrEqual(48);
+      expect(r.nearest, `${gun} ${JSON.stringify(r)}`).toBeGreaterThanOrEqual(0.03 * res[1]);
+    }
   });
 
   it("the flash's look numbers are [effects]'s: a prong's roll strays flash_prong_jitter (0.2) of a spread from its place, and the core is drawn flash_core_ahead (0.25) of its size out along the bore", () => {

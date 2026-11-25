@@ -40,6 +40,10 @@ export interface Frame {
   suppression?: number;
   /** The muzzle's smoke drawn in the frame (particles.ts SMOKE_BILLBOARD): each puff's centre and half its size (m). */
   smoke?: { at: [number, number, number]; half: number }[];
+  /** The session's emissive particles drawn in the frame (the muzzle's flash particle among them): each one's centre and half its size (m). */
+  glow?: { at: [number, number, number]; half: number }[];
+  /** The shooter's own flashes drawn in the frame (flashPixels(), not another's): each star's root at the muzzle and its prongs' tips (m). */
+  flash?: { atM: [number, number, number]; tipsM: [number, number, number][] }[];
 }
 
 export interface Track {
@@ -72,6 +76,8 @@ export const STREAM_AIM_PX: number;
 export const STREAM_READ_MIN: number;
 export const SMOKE_KIND: number;
 export const PATH_M: readonly number[];
+export const AIMED_MIN_SAMPLES: number;
+export const FLASH_NEAR_PX: number;
 export const NOON_RING_PX: readonly number[];
 /** (b)'s saturation is its kind's: red's, and Blue's derived from it (tracer-measures.mjs). */
 export const TARGET: { nearWidthPx: number; farSaturation: { red: number; blue: number }; farHueDeg: number; battleSaturation: number; pathCover: number; noonContrast: number; streamCover: number; streamSpan: number; aimedCover: number };
@@ -83,6 +89,8 @@ export function kindOf(c: Capture): number;
 export function nearLike(c: Capture): boolean;
 export function tinted(rgb: readonly number[], bg: readonly number[], team: Hsv): boolean;
 export function tracerMasks(frames: readonly Frame[], w: number, h: number): Uint8Array[];
+/** Each frame's own flash on its image (its star and core, the muzzle's flash particle, and while it shows the smoke and the near world its light reaches), grown FLASH_NEAR_PX: the pixels (f) does not read in that frame. */
+export function flashMasks(frames: readonly Frame[], w: number, h: number): Uint8Array[];
 export function teamChannel(kind: number): number;
 export function byDay(c: Capture): boolean;
 export function headRing(img: Image, info: Frame['info'], kind: number, anyKind?: boolean): Measures;
@@ -97,7 +105,7 @@ export function trackRound(frames: readonly Frame[], kind: number): Track | null
 export function pathSamples(frames: readonly Frame[], track: Track | null): { points: [number, number][]; metres: number[]; n: number[]; lengthPx: number; end: number } | null;
 /** (c): by day (`day`) a sample lit or tinted by `team`'s colour is shown, after dark a lit one; `litShare` beside it. */
 export function pathCover(comp: Composite, frames: readonly Frame[], track: Track | null, aimed: boolean, pathDepth: ArrayLike<number> | null, team?: Hsv, day?: boolean): Measures;
-/** (f): aimed, the share of the round's path (PATH_M) shown over the samples the gun covers in no frame and the world does not hide; each pixel across the line over its own background. */
+/** (f): aimed, the share of the round's path (PATH_M) shown over the samples the gun covers in no frame and the world does not hide; each pixel across the line over its own background, the gun's and those the composite cannot read (`open`) not read, a sample with none read left out (`unread`); end on, or under AIMED_MIN_SAMPLES counted, no measure. */
 export function aimedCover(comp: Composite, frames: readonly Frame[], track: Track | null, pathDepth: ArrayLike<number> | null, team?: Hsv | null, day?: boolean): Measures;
 export function noonContrast(imgs: readonly Image[], frames: readonly Frame[], track: Track | null, kind: number): Measures;
 export function marked(img: Image, m: Measures): Buffer;

@@ -5,7 +5,8 @@
 //   - near (30 m): at a man's chest 30 m out, from the hip at the four hours, and aimed at dusk (a
 //     picture: aimed at 30 m the round is behind the front post);
 //   - far (rounds that fly past 90 m: level, over the enemy parapet 52 m out): from the hip at the four
-//     hours, aimed at dusk (gated on (f): the round's path shown beside the front post, G4 Task 4), and
+//     hours, aimed at dusk ((f) reported: the round's path shown beside the front post, G4 Task 4; from
+//     the eye that path is end on behind the post's tip, and its gate waits on a ruling), and
 //     seen from the side (a witness 8 m aside, as a man along the trench sees
 //     the stream; from the shooter's eye a round is seen end on once its tracer has joined its path,
 //     where the shot was aimed: Session.aimRange); and at night far and side on as Blue (Session.team);
@@ -45,6 +46,9 @@ import { createServer } from 'vite';
 import { encode, p95, round3 } from './lib/image.mjs';
 import { failedEntry, readReport, removePictures, stamp, writeReport } from './lib/report.mjs';
 import { CAPTURES, gateCapture, kindOf, LIT, marked, markedComposite, measureCapture, MIN_GPU_SAMPLES, MIN_RATIO, NOON_HEAD_MIN, pathSamples, RING_MIN_PIXELS, SMOKE_KIND, STREAM_AIM_PX, STREAM_FROM_M, TARGET, TEAM, TINT, trackRound, WALL } from './lib/tracer-measures.mjs';
+
+/** An emissive particle's billboard kind (particles.ts: the muzzle's flash, a strike's sparks). */
+const EMISSIVE_KIND = 1;
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 
@@ -181,11 +185,11 @@ async function captureAt(page, c) {
       }, { kind, hold: !!c.front }),
       `${c.name}: a frame`,
     );
-  /** The frame just stepped, read whole: the tracers drawn, the drawn muzzle, the internal image's size, the shooter's suppression, the muzzle's smoke drawn ((a) reports what it covers); aimed, the G-buffer's depth round the middle. */
+  /** The frame just stepped, read whole: the tracers drawn, the drawn muzzle, the internal image's size, the shooter's suppression, the muzzle's smoke drawn ((a) reports what it covers), the emissive particles and the shooter's own flash stars ((f) does not read their light); aimed, the G-buffer's depth round the middle. */
   const readFrame = () =>
     withTimeout(
       page.evaluate(
-        async ({ aimed, half, smokeKind }) => {
+        async ({ aimed, half, smokeKind, emissiveKind }) => {
           const h = window.__trenchline;
           const info = h.tracerPixels();
           const internal = h.stats().res;
@@ -201,10 +205,14 @@ async function captureAt(page, c) {
             depth = { x0: cx - r, y0: cy - r, n: 2 * r + 1, scale: k, metres: await h.depthAt(points) };
           }
           const battle = h.battle().tracers.map((b) => ({ p: b.position, v: b.velocity, flown: b.flown }));
-          const smoke = h.particleBillboards().filter((b) => b.kind === smokeKind).map((b) => ({ at: b.at, half: b.half }));
-          return { info, internal, muzzle: h.rifleMuzzle(), exposure: await h.exposure(), suppression: h.session.suppression.level, fx: { ricochets: fx.ricochets, embers: fx.embers, heads: fx.heads, battleTracers: fx.battleTracers }, depth, battle, smoke };
+          const boards = h.particleBillboards();
+          const smoke = boards.filter((b) => b.kind === smokeKind).map((b) => ({ at: b.at, half: b.half }));
+          // The emissive particles (the muzzle's flash particle among them) and the shooter's own flash stars: light (f) does not read as a tracer's.
+          const glow = boards.filter((b) => b.kind === emissiveKind).map((b) => ({ at: b.at, half: b.half }));
+          const flash = h.flashPixels().flashes.filter((f) => !f.remote).map((f) => ({ atM: f.atM, tipsM: f.tipsM }));
+          return { info, internal, muzzle: h.rifleMuzzle(), exposure: await h.exposure(), suppression: h.session.suppression.level, fx: { ricochets: fx.ricochets, embers: fx.embers, heads: fx.heads, battleTracers: fx.battleTracers }, depth, battle, smoke, glow, flash };
         },
-        { aimed: !!c.aimed, half: CENTRE_BOX_PX, smokeKind: SMOKE_KIND },
+        { aimed: !!c.aimed, half: CENTRE_BOX_PX, smokeKind: SMOKE_KIND, emissiveKind: EMISSIVE_KIND },
       ),
       `${c.name}: reading a frame`,
     );
@@ -403,7 +411,7 @@ try {
         m.battleColour ? `battle sat ${round3(m.battleColour.saturation)} hue ${m.battleColour.hueDeg?.toFixed(1)} (n ${m.battleColour.n})` : null,
         m.stream ? `(e) ${m.stream.counts} ${round3(m.stream.share)} of ${m.stream.samples ?? 0}${m.stream.unread ? ` (${m.stream.unread} unread)` : ''}, reach ${m.stream.reachPx}/${m.stream.muzzlePx} = ${round3(m.stream.span)} [lit alone ${round3(m.stream.lit?.share)}, reach ${m.stream.lit?.reachPx ?? '-'} = ${round3(m.stream.lit?.span)}] (shown ${m.stream.innerPx}-${m.stream.reachPx} px: ${round3(m.stream.extent)}; ${STREAM_FROM_M} m at ${m.stream.atFromPx} px, 1 m ${m.stream.at1mPx}, 3 m ${m.stream.at3mPx})` : null,
         m.pathCover ? `(c) ${m.pathCover.counts} ${round3(m.pathCover.share)} [lit alone ${round3(m.pathCover.litShare)}] over ${m.pathCover.lengthPx} px of the ${m.pathCover.fit ?? '-'} line${m.pathCover.endOn ? ' (end on)' : ''}${m.pathCover.behindGun ? `, ${m.pathCover.behindGun} behind the gun` : ''}${m.pathCover.hiddenByWorld ? `, ${m.pathCover.hiddenByWorld} hidden` : ''} (tinted ${round3(m.pathCover.tint?.share)}, hue ${m.pathCover.tint?.hueDeg?.toFixed(1)} sat ${round3(m.pathCover.tint?.saturation)})` : null,
-        m.aimedCover ? `(f) aimed ${m.aimedCover.counts} ${round3(m.aimedCover.share)} [lit alone ${round3(m.aimedCover.litShare)}] of ${m.aimedCover.counted ?? 0} of ${m.aimedCover.samples ?? 0} samples over ${m.aimedCover.lengthPx} px (${m.aimedCover.behindGun ?? 0} behind the gun, ${m.aimedCover.hiddenByWorld ?? 0} hidden)${m.aimedCover.why ? ` (${m.aimedCover.why})` : ''}` : null,
+        m.aimedCover ? `(f) aimed ${m.aimedCover.counts} ${round3(m.aimedCover.share)} (reported; target ${TARGET.aimedCover}) [lit alone ${round3(m.aimedCover.litShare)}] of ${m.aimedCover.counted ?? 0} of ${m.aimedCover.samples ?? 0} samples over ${m.aimedCover.lengthPx} px (${m.aimedCover.behindGun ?? 0} behind the gun, ${m.aimedCover.hiddenByWorld ?? 0} hidden, ${m.aimedCover.unread ?? 0} unread)${m.aimedCover.why ? ` (${m.aimedCover.why})` : ''}` : null,
         m.frontColour?.drawn ? `the front's amber: ${m.frontColour.drawn} drawn, tinted n ${m.frontColour.n} hue ${m.frontColour.hueDeg?.toFixed(1)} sat ${round3(m.frontColour.saturation)}` : null,
         m.noonContrast ? `(d) ${round3(m.noonContrast.ratio)}` : null,
         `ricochets ${cap.most.ricochetsByKind[kind]} the player's of ${cap.most.ricochets}, embers ${cap.most.embersByKind[kind]} of ${cap.most.embers}`,
