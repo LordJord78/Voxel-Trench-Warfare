@@ -150,11 +150,6 @@ export function internalSize(width: number, height: number, megapixels: number):
 const KNEE_MIN_WIDTH = 1e-3;
 
 /**
- * Where suppression's grey spares light ([suppression] desaturate_knee): a pixel's brightest channel as
- * presented, greyed all the way under the first, not at all from the second; the second held at least
- * KNEE_MIN_WIDTH over the first, so an equal-ended knee greys as a step would rather than undefined.
- */
-/**
  * A frame's transient lights as it is lit by them: the shots' flashes first, then the rest (the guns'
  * lights' pools, a test's lights), each by intensity, the strongest MAX_FLASHES in all; and how many of
  * those are shots' flashes, the first so many. The player's own kept smoke takes its share of those
@@ -167,6 +162,11 @@ export function transientOrder(lights: readonly TransientLight[]): { flashes: Tr
   return { flashes: [...shots, ...rest].slice(0, MAX_FLASHES), shots: Math.min(shots.length, MAX_FLASHES) };
 }
 
+/**
+ * Where suppression's grey spares light ([suppression] desaturate_knee): a pixel's brightest channel as
+ * presented, greyed all the way under the first, not at all from the second; the second held at least
+ * KNEE_MIN_WIDTH over the first, so an equal-ended knee greys as a step would rather than undefined.
+ */
 export function desaturateKneeOf(tun: Tunables): [number, number] {
   const [lo, hi] = tun.pair('suppression.desaturate_knee');
   return [lo, Math.max(hi, lo + KNEE_MIN_WIDTH)];
