@@ -69,7 +69,8 @@ describe('the rifle', () => {
     expect(m.dims[2]).toBeLessThanOrEqual(70);
     expect(within(P.RIFLE_STEEL, [-0.02, -0.025, 0.02], [0.02, 0.025, 0.32]).n).toBeGreaterThan(50); // receiver
     expect(within(P.RIFLE_STEEL, [-0.016, 0.031, 0.05], [0.016, 0.046, 0.29]).n).toBeGreaterThan(10); // dust cover
-    expect(within(P.RIFLE_STEEL, [-0.005, 0.046, 0.3], [0.005, 0.06, 0.34]).n).toBeGreaterThan(0); // rear sight
+    expect(within(P.RIFLE_STEEL, [-0.016, 0.046, 0.3], [0.016, 0.06, 0.34]).n).toBeGreaterThan(0); // rear sight's shoulders
+    expect(within(P.RIFLE_STEEL, [-0.005, 0.046, 0.3], [0.005, 0.06, 0.34]).n).toBe(0); // its notch, open down the bore's column
     expect(within(P.RIFLE_STEEL, [-0.005, -0.005, 0.53], [0.005, 0.005, 0.59]).n).toBeGreaterThan(2); // the bare barrel
     expect(within(P.RIFLE_STEEL_WORN, [-0.016, -0.016, 0.665], [0.016, 0.016, 0.72]).n).toBeGreaterThan(5); // brake
     expect(within(P.RIFLE_STEEL_WORN, [-0.005, 0.02, 0.6], [0.005, 0.06, 0.63]).n).toBeGreaterThan(1); // front post

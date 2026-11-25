@@ -74,7 +74,7 @@ export const SMOKE_KIND: number;
 export const PATH_M: readonly number[];
 export const NOON_RING_PX: readonly number[];
 /** (b)'s saturation is its kind's: red's, and Blue's derived from it (tracer-measures.mjs). */
-export const TARGET: { nearWidthPx: number; farSaturation: { red: number; blue: number }; farHueDeg: number; battleSaturation: number; pathCover: number; noonContrast: number; streamCover: number; streamSpan: number };
+export const TARGET: { nearWidthPx: number; farSaturation: { red: number; blue: number }; farHueDeg: number; battleSaturation: number; pathCover: number; noonContrast: number; streamCover: number; streamSpan: number; aimedCover: number };
 export const TEAM: { red: Hsv; blue: Hsv; amber: Hsv };
 export const TINT: { saturation: number; chroma: number; apart: number };
 export const WALL: { outM: number; halfWidthM: number; belowM: number; aboveM: number; thickM: number; material: number };
@@ -97,6 +97,8 @@ export function trackRound(frames: readonly Frame[], kind: number): Track | null
 export function pathSamples(frames: readonly Frame[], track: Track | null): { points: [number, number][]; metres: number[]; n: number[]; lengthPx: number; end: number } | null;
 /** (c): by day (`day`) a sample lit or tinted by `team`'s colour is shown, after dark a lit one; `litShare` beside it. */
 export function pathCover(comp: Composite, frames: readonly Frame[], track: Track | null, aimed: boolean, pathDepth: ArrayLike<number> | null, team?: Hsv, day?: boolean): Measures;
+/** (f): aimed, the share of the round's path (PATH_M) shown over the samples the gun covers in no frame and the world does not hide; each pixel across the line over its own background. */
+export function aimedCover(comp: Composite, frames: readonly Frame[], track: Track | null, pathDepth: ArrayLike<number> | null, team?: Hsv | null, day?: boolean): Measures;
 export function noonContrast(imgs: readonly Image[], frames: readonly Frame[], track: Track | null, kind: number): Measures;
 export function marked(img: Image, m: Measures): Buffer;
 export function markedComposite(comp: Composite, m: Measures): Buffer;

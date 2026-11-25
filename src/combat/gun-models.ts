@@ -21,14 +21,24 @@ const V = 0.015;
 /** No model is larger than this, in voxels: the renderers size their buffers by it. */
 export const MODEL_VOXELS_MAX = 32768;
 
+/**
+ * What a part is to the sights (sightMarks): the front post (or bead) whose tip is aimed with; a rear
+ * sight's opening, cut as a notch (its line the shoulders' top, the cut's top) or as an aperture (its
+ * line the opening's middle); or an optic's window (a dot's open hood, the scope's eyepiece glass).
+ */
+type Mark = 'post' | 'notch' | 'aperture' | 'window';
+
 interface Part {
   lo: V3;
   hi: V3;
   /** Palette id; 0 cuts. */
   pal: number;
   test?: (x: number, y: number, z: number) => boolean;
+  mark?: Mark;
 }
 
+/** `p`, marked as what it is to the sights. */
+const marked = (mark: Mark, p: Part): Part => ({ ...p, mark });
 const box = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, pal: number, test?: Part['test']): Part => ({ lo: [x0, y0, z0], hi: [x1, y1, z1], pal, test });
 /** Symmetric about the bore: |x| up to `hx`. */
 const sym = (hx: number, y0: number, y1: number, z0: number, z1: number, pal: number, test?: Part['test']): Part => box(-hx, hx, y0, y1, z0, z1, pal, test);
@@ -75,7 +85,10 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
     sym(0.0225, -0.1, 0.015, -0.26, -0.245, STEEL),
     sym(0.0225, -0.03, 0.03, 0, 0.34, STEEL),
     sym(0.015, 0.0375, 0.045, 0.02, 0.32, STEEL),
-    sym(0.0075, 0.0375, 0.06, 0.3, 0.34, STEEL),
+    // The rear sight's leaf, its notch down the bore's column: its shoulders' top level with the post's
+    // tip, so aimed the post is seen in it (a blade there hid it).
+    sym(0.0225, 0.0375, 0.06, 0.3, 0.34, STEEL),
+    marked('notch', sym(0.0075, 0.0525, 0.06, 0.3, 0.34, 0)),
     sym(0.0225, -0.13, -0.0375, -0.015, 0.06, P.RIFLE_GRIP, (_x, y, z) => z >= 0.02 - 0.35 * (-0.03 - y) && z < 0.06 - 0.35 * (-0.03 - y)),
     sym(0.0075, -0.06, -0.0375, 0.06, 0.1, STEEL, (_x, y, z) => (y < -0.045 && z >= 0.06 && z < 0.1) || (y < -0.03 && z >= 0.09 && z < 0.1)),
     sym(0.0225, -0.21, -0.0375, 0.1, 0.26, P.RIFLE_MAG, (_x, y, z) => {
@@ -88,7 +101,7 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
     sym(0.0225, -0.03, 0.0075, 0.34, 0.52, P.RIFLE_FURNITURE),
     sym(0.0225, 0.0075, 0.0375, 0.36, 0.5, P.RIFLE_FURNITURE),
     sym(0.015, -0.015, 0.015, 0.6, 0.63, WORN),
-    sym(0.0075, 0.0225, 0.06, 0.6, 0.63, WORN),
+    marked('post', sym(0.0075, 0.0225, 0.06, 0.6, 0.63, WORN)),
     ...(fit.muzzle === 'none' ? [sym(0.015, -0.015, 0.015, 0.66, 0.72, WORN)] : []),
     ...(fit.optic !== 'iron' ? [sym(0.0225, 0.0375, 0.0525, 0.135, 0.255, BLACK), box(-0.0375, -0.0225, -0.015, 0.0525, 0.165, 0.225, BLACK)] : []),
   ],
@@ -116,11 +129,11 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
       ? [
           // A ghost ring at the rail's rear; the front post between its wings.
           sym(0.0375, 0.0525, 0.1125, 0, 0.03, BLACK),
-          sym(0.0225, 0.0675, 0.0975, 0, 0.03, 0),
+          marked('aperture', sym(0.0225, 0.0675, 0.0975, 0, 0.03, 0)),
           sym(0.0375, 0.0525, 0.0675, 0.42, 0.45, BLACK),
           box(-0.0375, -0.0225, 0.0675, 0.0975, 0.42, 0.45, BLACK),
           box(0.0225, 0.0375, 0.0675, 0.0975, 0.42, 0.45, BLACK),
-          sym(0.0075, 0.0675, 0.0825, 0.42, 0.45, WORN),
+          marked('post', sym(0.0075, 0.0675, 0.0825, 0.42, 0.45, WORN)),
         ]
       : []),
   ],
@@ -134,7 +147,8 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
     sym(0.0225, -0.0225, 0.0375, 0, 0.3, BLACK),
     sym(0.0075, 0.0225, 0.0375, 0.3, 0.39, BLACK),
     sym(0.015, 0.0375, 0.0825, 0.015, 0.045, BLACK),
-    sym(0.0075, 0.0525, 0.0675, 0.015, 0.045, 0),
+    // The drum's aperture two voxels tall, its middle level with the hooded post's tip.
+    marked('aperture', sym(0.0075, 0.0375, 0.0675, 0.015, 0.045, 0)),
     sym(0.0225, -0.0375, -0.0225, 0.06, 0.165, POLY),
     grip(-0.0375, 0.09, 0.12, 0.045, 0.3, POLY),
     ...guard(-0.0375, 0.03, 0.12, 0.165),
@@ -142,7 +156,7 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
     sym(0.0225, -0.0525, 0.0225, 0.21, 0.36, POLY),
     rod(0, 0, 0.0075, 0.36, 0.405, STEEL),
     rod(0, 0, fit.muzzle === 'none' ? 0.016 : 0.0075, 0.405, 0.45, WORN),
-    sym(0.015, 0.0375, 0.0825, 0.36, 0.39, BLACK),
+    marked('post', sym(0.015, 0.0375, 0.0825, 0.36, 0.39, BLACK)),
     sym(0.0075, 0.0525, 0.0825, 0.36, 0.39, 0),
     ...(fit.optic !== 'iron' ? [sym(0.0225, 0.0375, 0.0525, 0.075, 0.195, BLACK)] : []),
   ],
@@ -167,8 +181,10 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
     sym(0.0225, -0.0075, 0.0075, 0.27, 0.54, P.RIFLE_GRIP, (x, _y, z) => Math.abs(x) > 0.0075 && every(z, 3)),
     rod(0, 0, 0.0075, 0.555, 0.84, STEEL),
     sym(0.0075, 0.0075, 0.0375, 0.555, 0.585, STEEL),
-    sym(0.0075, 0.0075, 0.0675, 0.78, 0.81, WORN),
-    sym(0.0075, 0.0375, 0.0675, 0.225, 0.255, STEEL),
+    marked('post', sym(0.0075, 0.0075, 0.0675, 0.78, 0.81, WORN)),
+    // The rear sight's leaf and its notch, its shoulders' top level with the post's tip.
+    sym(0.0225, 0.0375, 0.0675, 0.225, 0.255, STEEL),
+    marked('notch', sym(0.0075, 0.0525, 0.0675, 0.225, 0.255, 0)),
     ...(fit.muzzle === 'none' ? [rod(0, 0, 0.016, 0.84, 0.915, WORN)] : []),
     ...(fit.optic !== 'iron' ? [sym(0.0225, 0.0525, 0.0675, 0.06, 0.21, BLACK), box(-0.0375, -0.0225, -0.0225, 0.0675, 0.09, 0.18, BLACK)] : []),
   ],
@@ -180,7 +196,7 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
     sym(0.0225, -0.1125, 0.0225, -0.36, -0.345, BLACK),
     sym(0.0375, -0.0525, 0.0375, 0, 0.3, BLACK),
     sym(0.0375, 0.0375, 0.0675, 0.045, 0.255, BLACK),
-    ...(fit.optic === 'iron' ? [sym(0.0225, 0.0675, 0.0975, 0.045, 0.075, BLACK), sym(0.0075, 0.0825, 0.0975, 0.045, 0.075, 0)] : []),
+    ...(fit.optic === 'iron' ? [sym(0.0225, 0.0675, 0.0975, 0.045, 0.075, BLACK), marked('notch', sym(0.0075, 0.0825, 0.0975, 0.045, 0.075, 0))] : []),
     grip(-0.0525, 0.105, 0.105, 0.045, 0.3, POLY),
     ...guard(-0.0525, 0.03, 0.105, 0.15),
     box(-0.0525, 0.0225, -0.1875, -0.0525, 0.15, 0.27, P.GUN_OD),
@@ -194,7 +210,8 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
     sym(0.015, -0.0375, 0.0075, 0.6, 0.645, STEEL),
     rod(-0.015, -0.03, 0.0075, 0.48, 0.63, STEEL),
     rod(0.015, -0.03, 0.0075, 0.48, 0.63, STEEL),
-    sym(0.0075, 0.0075, 0.0825, 0.765, 0.795, WORN),
+    // The front post up to the rear notch's shoulders, over the carry handle's top.
+    marked('post', sym(0.0075, 0.0075, 0.0975, 0.765, 0.795, WORN)),
     ...(fit.muzzle === 'none' ? [rod(0, 0, 0.016, 0.81, 0.855, WORN)] : []),
   ],
 
@@ -208,7 +225,8 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
     ...(fit.optic !== 'iron' ? [sym(0.0225, 0.0375, 0.0525, 0.015, 0.165, BLACK)] : []),
     rod(0, 0, 0.016, 0.18, 0.69, STEEL),
     rod(0, -0.045, 0.016, 0.18, 0.555, BLACK),
-    sym(0.0075, 0.0225, 0.0375, 0.645, 0.675, WORN),
+    // The bead, a voxel over the receiver's top: aimed, it is seen over it.
+    marked('post', sym(0.0075, 0.0225, 0.0525, 0.645, 0.675, WORN)),
     sym(0.0375, -0.0825, -0.0075, 0.24, 0.42, POLY),
     sym(0.0375, -0.0825, -0.0075, 0.24, 0.42, 0, (x, _y, z) => Math.abs(x) > 0.0225 && every(z, 3, 1)),
   ],
@@ -219,8 +237,8 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
     sym(0.0225, -0.0375, -0.0075, 0, 0.18, P.GUN_TAN),
     grip(-0.0375, 0.0975, 0.06, 0.06, 0.32, P.GUN_TAN),
     ...guard(-0.0375, 0.03, 0.06, 0.12),
-    ...(fit.optic === 'iron' ? [sym(0.0225, 0.0375, 0.0525, 0, 0.015, BLACK), sym(0.0075, 0.0375, 0.0525, 0, 0.015, 0)] : []),
-    sym(0.0075, 0.0375, 0.0525, 0.165, 0.18, BLACK),
+    ...(fit.optic === 'iron' ? [sym(0.0225, 0.0375, 0.0525, 0, 0.015, BLACK), marked('notch', sym(0.0075, 0.0375, 0.0525, 0, 0.015, 0))] : []),
+    marked('post', sym(0.0075, 0.0375, 0.0525, 0.165, 0.18, BLACK)),
   ],
 
   // The Makarov: small and blued, its grip in brown.
@@ -230,8 +248,8 @@ const BODIES: Record<GunKey, (fit: Fit) => Part[]> = {
     grip(-0.0375, 0.075, 0.0525, 0.0525, 0.25, P.RIFLE_FURNITURE),
     ...guard(-0.0375, 0.03, 0.045, 0.105),
     sym(0.0225, 0.0225, 0.0375, 0, 0.015, STEEL),
-    sym(0.0075, 0.0225, 0.0375, 0, 0.015, 0),
-    sym(0.0075, 0.0225, 0.0375, 0.135, 0.15, STEEL),
+    marked('notch', sym(0.0075, 0.0225, 0.0375, 0, 0.015, 0)),
+    marked('post', sym(0.0075, 0.0225, 0.0375, 0.135, 0.15, STEEL)),
   ],
 };
 
@@ -246,7 +264,7 @@ function optic(m: Mounts, kind: Optic, pistol: boolean): Part[] {
       return [
         sym(0.0225, y0, y0 + 0.015, zc - 0.03, zc + 0.03, BLACK),
         sym(0.0375, y0 + 0.015, y0 + 0.09, z0, z1, BLACK),
-        sym(0.0225, y0 + 0.03, y0 + 0.075, z0, z1, 0),
+        marked('window', sym(0.0225, y0 + 0.03, y0 + 0.075, z0, z1, 0)),
         ...(pistol ? [] : [sym(0.0075, y0 + 0.09, y0 + 0.105, zc - 0.015, zc + 0.015, BLACK), box(0.0375, 0.0525, y0 + 0.045, y0 + 0.06, zc - 0.015, zc + 0.015, BLACK)]),
       ];
     }
@@ -256,7 +274,7 @@ function optic(m: Mounts, kind: Optic, pistol: boolean): Part[] {
         sym(0.0375, y0, y0 + 0.015, zc - 0.06, zc + 0.045, BLACK),
         sym(0.0375, y0 + 0.015, y0 + 0.0375, zc - 0.06, zc - 0.015, BLACK),
         sym(0.0375, y0 + 0.015, y0 + 0.09, zc - 0.015, zc + 0.045, BLACK),
-        sym(0.0225, y0 + 0.03, y0 + 0.075, zc - 0.015, zc + 0.045, 0),
+        marked('window', sym(0.0225, y0 + 0.03, y0 + 0.075, zc - 0.015, zc + 0.045, 0)),
       ];
     case 'scope': {
       // Two rings, the tube, the objective's bell and the eyepiece, each lens dark glass; turrets.
@@ -268,7 +286,7 @@ function optic(m: Mounts, kind: Optic, pistol: boolean): Part[] {
         rod(0, cy, 0.034, zc + 0.105, zc + 0.18, BLACK),
         rod(0, cy, 0.024, zc + 0.165, zc + 0.18, P.OPTIC_GLASS),
         rod(0, cy, 0.031, zc - 0.18, zc - 0.12, BLACK),
-        rod(0, cy, 0.024, zc - 0.18, zc - 0.165, P.OPTIC_GLASS),
+        marked('window', rod(0, cy, 0.024, zc - 0.18, zc - 0.165, P.OPTIC_GLASS)),
         sym(0.0075, cy + 0.0075, cy + 0.0525, zc - 0.015, zc + 0.015, BLACK),
         box(0.0225, 0.0525, cy - 0.0075, cy + 0.0075, zc - 0.015, zc + 0.015, BLACK),
       ];
@@ -313,8 +331,17 @@ function sideDevice(m: Mounts, kind: Side): Part[] {
   return [box(cx - 0.0225, cx + 0.0225, s.y - 0.0225, s.y + 0.0225, s.z, s.z + 0.075, P.GUN_TAN), box(cx - 0.0075, cx + 0.0075, s.y - 0.0075, s.y + 0.0075, s.z + 0.06, s.z + 0.075, P.OPTIC_DOT)];
 }
 
-/** The parts as a grid on the lattice, over their bounds (cuts aside). */
-function build(parts: readonly Part[], muzzle: V3, port: V3): RifleModel {
+/** The grid over parts' bounds (cuts aside): the columns either side of the bore's, the lowest row and slice, and its size. */
+interface Lattice {
+  m: number;
+  jmin: number;
+  kmin: number;
+  dims: V3;
+}
+
+const EPS = 1e-6;
+
+function latticeOf(parts: readonly Part[]): Lattice {
   let hx = 0;
   let y0 = Infinity;
   let y1 = -Infinity;
@@ -328,51 +355,132 @@ function build(parts: readonly Part[], muzzle: V3, port: V3): RifleModel {
     z0 = Math.min(z0, p.lo[2]);
     z1 = Math.max(z1, p.hi[2]);
   }
-  const eps = 1e-6;
   // Columns either side of the bore's; rows from the lowest to the highest middle inside the bounds.
-  const m = Math.max(0, Math.ceil(hx / V - 0.5 - eps));
-  const jmin = Math.ceil(y0 / V - eps);
-  const jmax = Math.floor(y1 / V + eps);
-  const kmin = Math.ceil(z0 / V - 0.5 - eps);
-  const kmax = Math.floor(z1 / V - 0.5 + eps);
-  const dims: V3 = [2 * m + 1, jmax - jmin + 1, kmax - kmin + 1];
-  const voxels = new Uint8Array(dims[0] * dims[1] * dims[2]);
-  if (voxels.length > MODEL_VOXELS_MAX) throw new RangeError(`a gun of ${dims.join(' x ')} voxels is over the ${MODEL_VOXELS_MAX} the renderers hold`);
-  for (const p of parts) {
-    const i0 = Math.max(0, Math.ceil(p.lo[0] / V - eps) + m);
-    const i1 = Math.min(dims[0] - 1, Math.floor(p.hi[0] / V + eps) + m);
-    const j0 = Math.max(0, Math.ceil(p.lo[1] / V - eps) - jmin);
-    const j1 = Math.min(dims[1] - 1, Math.floor(p.hi[1] / V + eps) - jmin);
-    const k0 = Math.max(0, Math.ceil(p.lo[2] / V - 0.5 - eps) - kmin);
-    const k1 = Math.min(dims[2] - 1, Math.floor(p.hi[2] / V - 0.5 + eps) - kmin);
-    for (let k = k0; k <= k1; k++) {
-      const z = (k + kmin + 0.5) * V;
-      for (let j = j0; j <= j1; j++) {
-        const y = (j + jmin) * V;
-        for (let i = i0; i <= i1; i++) {
-          const x = (i - m) * V;
-          if (!p.test || p.test(x, y, z)) voxels[i + dims[0] * (j + dims[1] * k)] = p.pal;
-        }
+  const m = Math.max(0, Math.ceil(hx / V - 0.5 - EPS));
+  const jmin = Math.ceil(y0 / V - EPS);
+  const jmax = Math.floor(y1 / V + EPS);
+  const kmin = Math.ceil(z0 / V - 0.5 - EPS);
+  const kmax = Math.floor(z1 / V - 0.5 + EPS);
+  return { m, jmin, kmin, dims: [2 * m + 1, jmax - jmin + 1, kmax - kmin + 1] };
+}
+
+/** Each voxel of the lattice inside `p` (its middle within its bounds, and its test's): its index, its column, row and slice. */
+function cellsOf(p: Part, l: Lattice, visit: (index: number, i: number, j: number, k: number) => void): void {
+  const { m, jmin, kmin, dims } = l;
+  const i0 = Math.max(0, Math.ceil(p.lo[0] / V - EPS) + m);
+  const i1 = Math.min(dims[0] - 1, Math.floor(p.hi[0] / V + EPS) + m);
+  const j0 = Math.max(0, Math.ceil(p.lo[1] / V - EPS) - jmin);
+  const j1 = Math.min(dims[1] - 1, Math.floor(p.hi[1] / V + EPS) - jmin);
+  const k0 = Math.max(0, Math.ceil(p.lo[2] / V - 0.5 - EPS) - kmin);
+  const k1 = Math.min(dims[2] - 1, Math.floor(p.hi[2] / V - 0.5 + EPS) - kmin);
+  for (let k = k0; k <= k1; k++) {
+    const z = (k + kmin + 0.5) * V;
+    for (let j = j0; j <= j1; j++) {
+      const y = (j + jmin) * V;
+      for (let i = i0; i <= i1; i++) {
+        const x = (i - m) * V;
+        if (!p.test || p.test(x, y, z)) visit(i + dims[0] * (j + dims[1] * k), i, j, k);
       }
     }
   }
+}
+
+/** The parts as a grid on the lattice, over their bounds (cuts aside). */
+function build(parts: readonly Part[], muzzle: V3, port: V3): RifleModel {
+  const l = latticeOf(parts);
+  const { m, jmin, kmin, dims } = l;
+  const voxels = new Uint8Array(dims[0] * dims[1] * dims[2]);
+  if (voxels.length > MODEL_VOXELS_MAX) throw new RangeError(`a gun of ${dims.join(' x ')} voxels is over the ${MODEL_VOXELS_MAX} the renderers hold`);
+  for (const p of parts) cellsOf(p, l, (index) => (voxels[index] = p.pal));
   return { dims, voxelM: V, origin: [m + 0.5, 0.5 - jmin, -kmin], voxels, muzzle, port };
 }
 
+/** A gun's parts with its fit: its own, then the optic on the rail, the muzzle's device, the grip under it, the light or laser. */
+function partsOf(gun: GunKey, fit: Fit): Part[] {
+  const def = GUN_DEFS[gun];
+  const pistol = def.slot === 'secondary';
+  const m = def.mounts;
+  return [...BODIES[gun](fit), ...optic(m, fit.optic, pistol), ...muzzleDevice(m, fit.muzzle, pistol), ...underDevice(m, fit.under), ...sideDevice(m, fit.side)];
+}
+
+const fitKey = (gun: GunKey, fit: Fit) => `${gun}:${fit.optic}:${fit.muzzle}:${fit.under}:${fit.side}`;
 const made = new Map<string, RifleModel>();
 
 /** The model of `gun` with `fit`: made once, then kept. */
 export function gunModel(gun: GunKey, fit: Fit): RifleModel {
-  const key = `${gun}:${fit.optic}:${fit.muzzle}:${fit.under}:${fit.side}`;
+  const key = fitKey(gun, fit);
   const kept = made.get(key);
   if (kept) return kept;
-  const def = GUN_DEFS[gun];
-  const pistol = def.slot === 'secondary';
-  const m = def.mounts;
-  const parts = [...BODIES[gun](fit), ...optic(m, fit.optic, pistol), ...muzzleDevice(m, fit.muzzle, pistol), ...underDevice(m, fit.under), ...sideDevice(m, fit.side)];
-  const model = build(parts, muzzleOf(gun, fit), m.port);
+  const model = build(partsOf(gun, fit), muzzleOf(gun, fit), GUN_DEFS[gun].mounts.port);
   made.set(key, model);
   return model;
+}
+
+/** A point on the bore's plane (x 0), model metres: its height over the bore and how far along it. */
+export interface SightPoint {
+  y: number;
+  z: number;
+}
+
+/**
+ * Where a gun is aimed with, as its own voxels have it (model metres, on the bore's column): `aim`, the
+ * front post's tip (its top face, its middle along the gun), or an optic's window centre (a dot's
+ * open hood, the scope's eyepiece: the reticle's middle); and `rear`, the iron sights' rear (a notch's
+ * line, its shoulders' top; an aperture's middle), null for a bead or an optic. arsenal.ts `sightOf`
+ * aims by `aim`; the sights line up when `rear` lies on the line through it.
+ */
+export interface SightMarks {
+  aim: SightPoint;
+  rear: SightPoint | null;
+}
+
+const sighted = new Map<string, SightMarks>();
+
+export function sightMarks(gun: GunKey, fit: Fit): SightMarks {
+  const key = fitKey(gun, fit);
+  const kept = sighted.get(key);
+  if (kept) return kept;
+  const parts = partsOf(gun, fit);
+  const model = gunModel(gun, fit);
+  const l = latticeOf(parts);
+  /** A marked part's voxels on the bore's column as the model kept them (its own palette there: a post not painted over, a cut still open), as their middles. */
+  const onBore = (mark: Mark): { top: number; bottom: number; z: number } | null => {
+    const ys: number[] = [];
+    const zs: number[] = [];
+    for (const p of parts) {
+      if (p.mark !== mark) continue;
+      cellsOf(p, l, (index, i, j, k) => {
+        if (i !== l.m || model.voxels[index] !== p.pal) return;
+        ys.push((j + l.jmin) * V);
+        zs.push((k + l.kmin + 0.5) * V);
+      });
+    }
+    if (ys.length === 0) return null;
+    const top = Math.max(...ys);
+    // Along the gun: the middle of its top row's.
+    const atTop = zs.filter((_, n) => ys[n] === top);
+    return { top, bottom: Math.min(...ys), z: (Math.min(...atTop) + Math.max(...atTop)) / 2 };
+  };
+  let aim: SightPoint;
+  if (fit.optic === 'iron') {
+    const post = onBore('post');
+    if (!post) throw new Error(`${gun}: no front post on its bore's column`);
+    aim = { y: post.top + V / 2, z: post.z };
+  } else {
+    const w = onBore('window');
+    if (!w) throw new Error(`${gun}: no window in its ${fit.optic}`);
+    aim = { y: (w.top + w.bottom) / 2, z: w.z };
+  }
+  let rear: SightPoint | null = null;
+  if (fit.optic === 'iron') {
+    const notch = onBore('notch');
+    const ring = onBore('aperture');
+    if (notch) rear = { y: notch.top + V / 2, z: notch.z };
+    else if (ring) rear = { y: (ring.top + ring.bottom) / 2, z: ring.z };
+  }
+  const marks = { aim, rear };
+  sighted.set(key, marks);
+  return marks;
 }
 
 /** Where the blade is wide, along it: square to 0.51 m, then to its point at 0.6 m. */

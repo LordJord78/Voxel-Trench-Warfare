@@ -1,9 +1,33 @@
 import { expect, test, type Page } from '@playwright/test';
-import { hooks, openGame } from './support/app';
+import { projectToPixel } from '../../src/render/camera';
+import { hooks, openGame, type Hooks } from './support/app';
 
 // The rifle, traced and shaded in its own pass: where the CPU's trace of the model meets it, the
 // G-buffer's depth is the rifle's; a wall nearer than it hides it; it is not drawn in fly mode or
-// through the periscope; and it is lit by the world's light and its own flash.
+// through the periscope; and it is lit by the world's light and its own flash. Aimed, its front
+// post's tip meets the crosshair; from the hip it leaves most of the view clear.
+
+/** The hooks the sight picture's tests use past what Hooks types: the loadout, the sights, the hands, and the hands held still. */
+type Held = Hooks & {
+  setLoadout(l: unknown): void;
+  aim(held: boolean): void;
+  hands(): { held: number; ready: number; aimed: number; gun: string };
+  session: { handsStill: boolean };
+};
+
+const held = <T>(page: Page, fn: (h: Held, arg: unknown) => T | Promise<T>, arg?: unknown): Promise<T> => hooks(page, fn as unknown as (h: Hooks, arg: unknown) => T | Promise<T>, arg);
+
+/** Until the hands are as `want` says (the session's ticks are the clock: frames come faster headless). */
+async function handsBecome(page: Page, want: Partial<{ held: number; ready: number; aimed: number; gun: string }>) {
+  await page.waitForFunction(
+    (w) => {
+      const h = (window as unknown as { __trenchline: { hands(): Record<string, number | string> } }).__trenchline.hands();
+      return Object.entries(w).every(([k, v]) => h[k] === v);
+    },
+    want,
+    { timeout: 10_000 },
+  );
+}
 
 /** Playing at a view's foot, still, jitter off (so the pixels' rays are the CPU's). */
 async function holding(page: Page, view: 'bay' | 'step', yaw = 0) {
@@ -129,5 +153,132 @@ test('the rifle is lit by the world, and by its own flash', async ({ page }) => 
   });
   // The flash is in front of the rifle, and most of its faces look aside or up: a fifth more, about.
   expect(flashed / night, JSON.stringify({ night, flashed })).toBeGreaterThan(1.1);
+  expect(errors).toEqual([]);
+});
+
+test("aimed, the front post's tip meets the crosshair: the post's top edge is within 2 px of the centre row", async ({ page }) => {
+  // At 1600 x 1000, the AK on its irons aimed from the firing step over the field, its hands held still
+  // (no breathing, no aim-in overshoot: the pose's own picture) and no shot. Down the canvas's middle
+  // column, by the CPU's trace of the drawn model where the G-buffer's depth is the model's (the frame
+  // stepped and held, so none is drawing as it is read): the front post (0.60-0.63 m along the gun,
+  // whose origin is 0.1 m before the eye: 0.70-0.73 m out, seen in the rear sight's notch) from the
+  // centre row or the one under it down, and nothing of the gun 3 px over it.
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const errors = await openGame(page);
+  await held(page, (h) => {
+    h.setQuality({ dynres: false });
+    h.setLoadout({ primary: 'ak74', secondary: 'm17', fits: {} });
+  });
+  await holding(page, 'step');
+  await held(page, (h) => {
+    h.session.handsStill = true;
+    h.aim(true);
+  });
+  await handsBecome(page, { gun: 'ak74', aimed: 1 });
+  const seen = await held(page, async (h) => {
+    await h.waitFrames(20);
+    h.freeze();
+    await h.stepFrames(2);
+    const [w, ht] = h.stats().res;
+    const cx = Math.floor(w / 2);
+    const cy = Math.floor(ht / 2);
+    const column = Array.from({ length: 41 }, (_, k) => [cx, cy - 20 + k] as [number, number]);
+    const r = await h.riflePixels(column);
+    h.thaw();
+    return { res: r.res, cx, cy, visible: r.visible, samples: r.samples, aimed: h.hands().aimed };
+  });
+  const said = JSON.stringify({ ...seen, samples: seen.samples.map((s) => ({ y: s.px[1], gpu: +s.gpu.toFixed(4), cpu: s.cpu === null ? null : +s.cpu.toFixed(4) })) });
+  expect(seen.visible, said).toBe(true);
+  expect(seen.aimed).toBe(1);
+  // A pixel of the internal image is this many of the 1600 x 1000 canvas's.
+  const k = seen.res[1] / 1000;
+  const drawn = (s: (typeof seen.samples)[number]) => s.cpu !== null && Math.abs(s.gpu - s.cpu) < 1e-3;
+  const post = (s: (typeof seen.samples)[number]) => drawn(s) && s.cpu! > 0.69 && s.cpu! < 0.74;
+  const at = (y: number) => seen.samples.find((s) => s.px[1] === y)!;
+  const top = seen.samples.find((s) => s.cpu !== null);
+  console.log(`aimed AK, down the middle column (internal ${seen.res.join(' x ')}, centre row ${seen.cy}): the gun's first pixel at row ${top?.px[1]} (${top ? ((top.px[1] - seen.cy) / k).toFixed(2) : '-'} px of 1600 x 1000 from the centre row), ${top?.cpu?.toFixed(4)} m out`);
+  // The gun's top edge down the middle is the post's, within 2 px of the centre row.
+  expect(top, said).toBeDefined();
+  expect(post(top!), said).toBe(true);
+  expect(Math.abs(top!.px[1] - seen.cy), said).toBeLessThanOrEqual(2 * k);
+  // 3 px over the centre, nothing of the gun; the centre pixel, or the one under it, the post.
+  expect(at(seen.cy - Math.ceil(3 * k)).cpu, said).toBeNull();
+  expect(post(at(seen.cy)) || post(at(seen.cy + Math.max(1, Math.round(k)))), said).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+/** Each gun in the hands (bare), the long guns as the primary, the pistols as the secondary on its number. */
+const EVERY_GUN = [
+  ['ak74', 0], ['m4', 0], ['mp5', 0], ['svd', 0], ['m249', 0], ['m870', 0], ['m17', 1], ['pm', 1],
+] as const;
+
+test('from the hip the gun covers at most 30% of the view', async ({ page }) => {
+  // Standing in the spawn bay, off the firing step, at 1600 x 1000, each gun bare in the hands and held
+  // still: the share of the view where the renderer drew it (the CPU's trace of the model meets the
+  // pixel and the G-buffer's depth there is the model's), over every other pixel each way, the frame
+  // stepped and held as it is read. The trace alone (drawn or hidden by something nearer) is reported
+  // beside it. Then, reported and not gated (the firing step's raised pose keeps its look on the
+  // parapet: the G4 ledger), the AK raised on the Ravine's firing step with the range up: its share,
+  // and whether it covers the range's 30 m torso plate (right of the middle, just under the horizon).
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const errors = await openGame(page);
+  await held(page, (h) => h.setQuality({ dynres: false }));
+  await holding(page, 'bay');
+  await held(page, (h) => {
+    h.session.handsStill = true;
+  });
+  expect((await held(page, (h) => h.player())).onFiringStep).toBe(false);
+  const shareNow = () =>
+    held(page, async (h) => {
+      await h.waitFrames(6);
+      h.freeze();
+      await h.stepFrames(2);
+      const r = await h.rifleShare(2);
+      h.thaw();
+      return r;
+    });
+  const shares: Record<string, { share: number; traced: number }> = {};
+  for (const [gun, slot] of EVERY_GUN) {
+    await held(page, (h, l) => h.setLoadout(l), slot === 0 ? { primary: gun, secondary: 'm17', fits: {} } : { primary: 'ak74', secondary: gun, fits: {} });
+    if (slot === 1) await page.keyboard.press('Digit2');
+    await handsBecome(page, { gun, held: slot, ready: 1 });
+    const r = await shareNow();
+    shares[gun] = { share: r.share, traced: r.traced };
+    expect(r.drawn, gun).toBeGreaterThan(0);
+  }
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  console.log(`from the hip off the step, each gun's share of the view (drawn; traced): ${Object.entries(shares).map(([g, s]) => `${g} ${pct(s.share)} (${pct(s.traced)})`).join(', ')}`);
+  for (const [gun, s] of Object.entries(shares)) expect(s.share, gun).toBeLessThanOrEqual(0.3);
+
+  // Reported: on the Ravine's firing step with the range up, the AK raised, not aimed.
+  const step = await held(page, async (h) => {
+    h.setLoadout({ primary: 'ak74', secondary: 'm17', fits: {} });
+    h.range(true);
+    h.standAt('step');
+    h.jitter(false);
+    await h.waitFrames(40);
+    h.freeze();
+    await h.stepFrames(2);
+    const r = await h.rifleShare(2);
+    const out = { map: (h as unknown as { map: string }).map, share: r.share, traced: r.traced, box: r.box, plates: h.rangeState().plates, camera: h.camera(), res: h.stats().res, onStep: h.player().onFiringStep, hands: h.hands() };
+    return out;
+  });
+  const plate = step.plates.find((p) => p.index === 0);
+  let cover = 'no plate';
+  if (plate && step.onStep) {
+    const at = projectToPixel({ ...step.camera, fov: step.camera.fov! }, step.res, plate.at);
+    const k = step.res[1] / 1000;
+    if (at) {
+      // Its middle, and a box 8 px of the canvas's each way round it.
+      const r = Math.ceil(8 * k);
+      const points: [number, number][] = [];
+      for (let dy = -r; dy <= r; dy += 2) for (let dx = -r; dx <= r; dx += 2) points.push([Math.floor(at[0]) + dx, Math.floor(at[1]) + dy]);
+      const read = await held(page, (h, p) => h.riflePixels(p as [number, number][]), points);
+      const gun = read.samples.filter((s) => s.cpu !== null && Math.abs(s.gpu - s.cpu) < 1e-3).length;
+      cover = `the 30 m plate at (${(at[0] / k).toFixed(0)}, ${(at[1] / k).toFixed(0)}) of 1600 x 1000: ${gun} of ${points.length} pixels round it the gun's`;
+    }
+  }
+  await held(page, (h) => h.thaw());
+  console.log(`on the ${step.map}'s firing step (${step.onStep ? 'on it' : 'off it'}), the AK raised (aimed ${step.hands.aimed}): its share ${pct(step.share)} (traced ${pct(step.traced)}), its box ${JSON.stringify(step.box)} of ${step.res.join(' x ')}; ${cover}`);
   expect(errors).toEqual([]);
 });

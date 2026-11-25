@@ -5,7 +5,8 @@
 //   - near (30 m): at a man's chest 30 m out, from the hip at the four hours, and aimed at dusk (a
 //     picture: aimed at 30 m the round is behind the front post);
 //   - far (rounds that fly past 90 m: level, over the enemy parapet 52 m out): from the hip at the four
-//     hours, aimed at dusk, and seen from the side (a witness 8 m aside, as a man along the trench sees
+//     hours, aimed at dusk (gated on (f): the round's path shown beside the front post, G4 Task 4), and
+//     seen from the side (a witness 8 m aside, as a man along the trench sees
 //     the stream; from the shooter's eye a round is seen end on once its tracer has joined its path,
 //     where the shot was aimed: Session.aimRange); and at night far and side on as Blue (Session.team);
 //   - graze: at the parapet's crest just in front, at night, for the rounds that glance off;
@@ -377,6 +378,7 @@ try {
       const effectsP95 = p95(cap.effectsGpu);
       const effectsMean = cap.effectsGpu.length ? cap.effectsGpu.reduce((a, b) => a + b, 0) / cap.effectsGpu.length : null;
       const { marks, ...cover } = m.pathCover ?? {};
+      const { marks: aimedMarks, ...aimed } = m.aimedCover ?? {};
       const { marks: streamMarks, ...stream } = m.stream ?? {};
       const kind = kindOf(c);
       report[c.name] = {
@@ -387,6 +389,7 @@ try {
         front: c.front ?? 'light',
         ...m,
         pathCover: m.pathCover ? cover : null,
+        aimedCover: m.aimedCover ? aimed : null,
         stream: m.stream ? stream : null,
         farColour: m.farColour ? { ...m.farColour, pixels: undefined } : null,
       };
@@ -400,6 +403,7 @@ try {
         m.battleColour ? `battle sat ${round3(m.battleColour.saturation)} hue ${m.battleColour.hueDeg?.toFixed(1)} (n ${m.battleColour.n})` : null,
         m.stream ? `(e) ${m.stream.counts} ${round3(m.stream.share)} of ${m.stream.samples ?? 0}${m.stream.unread ? ` (${m.stream.unread} unread)` : ''}, reach ${m.stream.reachPx}/${m.stream.muzzlePx} = ${round3(m.stream.span)} [lit alone ${round3(m.stream.lit?.share)}, reach ${m.stream.lit?.reachPx ?? '-'} = ${round3(m.stream.lit?.span)}] (shown ${m.stream.innerPx}-${m.stream.reachPx} px: ${round3(m.stream.extent)}; ${STREAM_FROM_M} m at ${m.stream.atFromPx} px, 1 m ${m.stream.at1mPx}, 3 m ${m.stream.at3mPx})` : null,
         m.pathCover ? `(c) ${m.pathCover.counts} ${round3(m.pathCover.share)} [lit alone ${round3(m.pathCover.litShare)}] over ${m.pathCover.lengthPx} px of the ${m.pathCover.fit ?? '-'} line${m.pathCover.endOn ? ' (end on)' : ''}${m.pathCover.behindGun ? `, ${m.pathCover.behindGun} behind the gun` : ''}${m.pathCover.hiddenByWorld ? `, ${m.pathCover.hiddenByWorld} hidden` : ''} (tinted ${round3(m.pathCover.tint?.share)}, hue ${m.pathCover.tint?.hueDeg?.toFixed(1)} sat ${round3(m.pathCover.tint?.saturation)})` : null,
+        m.aimedCover ? `(f) aimed ${m.aimedCover.counts} ${round3(m.aimedCover.share)} [lit alone ${round3(m.aimedCover.litShare)}] of ${m.aimedCover.counted ?? 0} of ${m.aimedCover.samples ?? 0} samples over ${m.aimedCover.lengthPx} px (${m.aimedCover.behindGun ?? 0} behind the gun, ${m.aimedCover.hiddenByWorld ?? 0} hidden)${m.aimedCover.why ? ` (${m.aimedCover.why})` : ''}` : null,
         m.frontColour?.drawn ? `the front's amber: ${m.frontColour.drawn} drawn, tinted n ${m.frontColour.n} hue ${m.frontColour.hueDeg?.toFixed(1)} sat ${round3(m.frontColour.saturation)}` : null,
         m.noonContrast ? `(d) ${round3(m.noonContrast.ratio)}` : null,
         `ricochets ${cap.most.ricochetsByKind[kind]} the player's of ${cap.most.ricochets}, embers ${cap.most.embersByKind[kind]} of ${cap.most.embers}`,

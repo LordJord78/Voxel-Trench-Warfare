@@ -1463,6 +1463,40 @@ async function start(): Promise<void> {
     }
     return { visible: true, samples };
   };
+  /** Pixels of the internal image (x, y): the G-buffer's depth there and the CPU's trace of the drawn model through each (metres; null, a miss), and whether the model was drawn this frame. */
+  const riflePixels = async (points: readonly [number, number][]) => {
+    const s = renderer.rifleState();
+    const gpu = await renderer.readDepth(points);
+    if (!s.visible || !s.toWorld || !s.camera) return { visible: false, res: s.res, samples: points.map((px, k) => ({ px, gpu: gpu[k], cpu: null })) };
+    return { visible: true, res: s.res, samples: points.map((px, k) => ({ px, gpu: gpu[k], cpu: traceRiflePixel(s, px[0], px[1]) })) };
+  };
+  /**
+   * How much of the view the model in the hands covers, as the renderer drew it: over every `stride`-th
+   * pixel each way of the internal image, the share where the CPU's trace meets the model and the
+   * G-buffer's depth is the model's (it was drawn, nearer than the world); and (`traced`) where the
+   * trace meets it, drawn or hidden by something nearer.
+   */
+  const rifleShare = async (stride: number) => {
+    const s = renderer.rifleState();
+    const [w, h] = s.res;
+    const sampled = Math.ceil(w / stride) * Math.ceil(h / stride);
+    if (!s.visible || !s.toWorld || !s.camera) return { share: 0, traced: 0, drawn: 0, sampled, box: s.box, res: s.res };
+    const [x0, y0, bw, bh] = s.box;
+    const depth = await renderer.readDepthBox(s.box);
+    let drawn = 0;
+    let traced = 0;
+    for (let y = 0; y < h; y += stride) {
+      if (y < y0 || y >= y0 + bh) continue;
+      for (let x = 0; x < w; x += stride) {
+        if (x < x0 || x >= x0 + bw) continue;
+        const t = traceRiflePixel(s, x, y);
+        if (t === null) continue;
+        traced++;
+        if (Math.abs(depth[(y - y0) * bw + (x - x0)] - t) < 1e-3) drawn++;
+      }
+    }
+    return { share: drawn / sampled, traced: traced / sampled, drawn, sampled, box: s.box, res: s.res };
+  };
   const lastMainMs = () => {
     const n = Math.min(mainFrames, MAIN_FRAMES);
     return Array.from({ length: n }, (_, k) => mainMs[(mainFrames - n + k) % MAIN_FRAMES]);
@@ -1849,6 +1883,8 @@ async function start(): Promise<void> {
     loadout: () => loadout,
     setLoadout: (l: unknown) => takeLoadout(cleanLoadout(l), true),
     rifleCheck: (n: number) => rifleCheck(n),
+    riflePixels: (points: [number, number][]) => riflePixels(points),
+    rifleShare: (stride: number) => rifleShare(stride),
     // Over every other pixel of the box where the rifle was drawn: the CPU's trace meets it, and
     // the G-buffer's depth there is the rifle's.
     rifleLuminance: async () => {

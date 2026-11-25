@@ -199,6 +199,10 @@ export interface Hooks {
    * where it misses), in metres.
    */
   rifleCheck(n: number): Promise<{ visible: boolean; samples: { px: [number, number]; gpu: number; cpu: number | null }[] }>;
+  /** Pixels of the internal image: the G-buffer's depth and the CPU's trace of the drawn model through each (null, a miss). */
+  riflePixels(points: [number, number][]): Promise<{ visible: boolean; res: [number, number]; samples: { px: [number, number]; gpu: number; cpu: number | null }[] }>;
+  /** The share of the view (every `stride`-th internal pixel each way) where the model in the hands is drawn; `traced`, where it is, drawn or hidden by something nearer. */
+  rifleShare(stride: number): Promise<{ share: number; traced: number; drawn: number; sampled: number; box: [number, number, number, number]; res: [number, number] }>;
   /** The mean luminance (linear) of the rifle's pixels in the last frame's shaded image. */
   rifleLuminance(): Promise<number>;
   /**

@@ -132,7 +132,12 @@ export function heldPose(t: ViewmodelTunables, holding: Holding, kick: Viewmodel
     if (aimed > 0) {
       const a = smooth(Math.min(1, aimed));
       const sight = holding.sight;
-      const to: ViewmodelPose = { offset: [kick.side * 0.5, -sight.y + kick.up * 0.6, sight.z - kick.back * 0.8], pitch: kick.pitch * 0.5, yaw: kick.yaw * 0.5, roll: kick.roll * 0.3 };
+      // Aimed, the sight's aiming point stays on the eye's line, where the rounds go: the kick shoves the
+      // gun back along that line and rolls it about it (the turn's offset puts the sight back on it), and
+      // neither lifts, pitches nor turns it (from the hip all six do). The aim's own kick moves the view.
+      const roll = kick.roll * 0.3;
+      const r = radians(roll);
+      const to: ViewmodelPose = { offset: [sight.y * sin(r), -sight.y * cos(r), sight.z - kick.back * 0.8], pitch: 0, yaw: 0, roll };
       pose = {
         offset: [0, 1, 2].map((k) => pose.offset[k] + (to.offset[k] - pose.offset[k]) * a) as [number, number, number],
         pitch: pose.pitch + (to.pitch - pose.pitch) * a,

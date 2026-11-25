@@ -547,11 +547,13 @@ describe('a frame of effects', () => {
     expect(shots).toBe(12);
   });
 
-  it("aimed, on the screen as the camera draws the flash's frames, no prong comes near the reticle: the shot's kick lifts the drawn gun over the eye's line (a tip at the line of sight in the gun's frame shows a few pixels over the screen's middle), but every prong passes 3% of the screen's height or more from its middle, where the hash's own rolls lay one across it", () => {
-    // The hands' capture's aimed AK at 1600 × 1000: of 12 shots one tip showed 9.6 px over the middle.
-    // That is the kick, not a prong up the tracer: aimed, it still lifts and pitches the drawn gun
-    // (viewmodel.ts heldPose: kick.up × 0.6, kick.pitch × 0.5), so a tip held at the sight's height over
-    // the bore in the gun's frame rises over the eye's line for the flash's frames, well aside of it.
+  it("aimed, on the screen as the camera draws the flash's frames, no prong comes near the reticle: the shot's kick keeps the drawn gun's sight on the eye's line, so no tip shows over the screen's middle, and every prong passes 3% of the screen's height or more from it, where the hash's own rolls rise over it and come within 2% of it", () => {
+    // The hands' capture's aimed AK at 1600 × 1000 once showed a tip 9.6 px over the middle: the kick
+    // lifted and pitched the drawn gun aimed (kick.up × 0.6, kick.pitch × 0.5). Since G4 Task 4 the
+    // kick aimed only shoves the gun back along the line of sight and rolls it about it (viewmodel.ts
+    // heldPose): a tip held at the sight's height over the bore in the gun's frame stays under the line.
+    // Measured then: every tip under the middle (the highest 2.2 px under it), the nearest prong 48.6 px
+    // from it; the hash's whole rolls 24.6 px over it and 13.0 px from it.
     const res: [number, number] = [1600, 1000];
     const run = (tunables: typeof t) => {
       const s = stand();
@@ -599,12 +601,12 @@ describe('a frame of effects', () => {
     const aimed = run(t);
     expect(aimed.frames).toBeGreaterThanOrEqual(48);
     expect(aimed.nearest, JSON.stringify(aimed)).toBeGreaterThanOrEqual(0.03 * res[1]);
-    // The kick's lift over the line: a little, for the flash's two frames.
-    expect(aimed.highest, JSON.stringify(aimed)).toBeLessThan(0.03 * res[1]);
-    // The hash's rolls whole (as from the hip), aimed: a prong lies across the reticle, far over the line.
+    // No lift over the line: no tip shows over the middle, even in the flash's two frames.
+    expect(aimed.highest, JSON.stringify(aimed)).toBeLessThanOrEqual(0);
+    // The hash's rolls whole (as from the hip), aimed: a prong rises over the middle, and passes within 2% of it.
     const whole = run({ ...t, flashAimedBlend: 2 });
-    expect(whole.nearest, JSON.stringify(whole)).toBeLessThan(0.01 * res[1]);
-    expect(whole.highest, JSON.stringify(whole)).toBeGreaterThan(0.03 * res[1]);
+    expect(whole.nearest, JSON.stringify(whole)).toBeLessThan(0.02 * res[1]);
+    expect(whole.highest, JSON.stringify(whole)).toBeGreaterThan(0.02 * res[1]);
   });
 
   it("the flash's look numbers are [effects]'s: a prong's roll strays flash_prong_jitter (0.2) of a spread from its place, and the core is drawn flash_core_ahead (0.25) of its size out along the bore", () => {

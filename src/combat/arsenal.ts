@@ -11,6 +11,7 @@
  */
 
 import type { Tunables } from '../core/tunables';
+import { sightMarks } from './gun-models';
 import { BARE, GUNS, MUZZLES, OPTICS, SIDES, stepShare, UNDERS, type Fit, type Gear, type GunKey, type Muzzle, type Optic, type Side, type Under } from '../net/gear';
 import { recoilProfile, type RecoilProfile } from './recoil';
 import type { Hold } from './soldier-rig';
@@ -23,8 +24,6 @@ export interface Mounts {
   /** The top of the rail an optic stands on, and the optic's middle along it. */
   railY: number;
   opticZ: number;
-  /** The iron sights' line, over the bore. */
-  ironY: number;
   /** Where the barrel ends (a muzzle device starts), and where the gun's own device ends. */
   muzzleZ: number;
   bareMuzzleZ: number;
@@ -58,14 +57,14 @@ export const GUN_DEFS: Record<GunKey, GunDef> = {
   ak74: {
     key: 'ak74', table: 'assault_rifle', name: 'AK-74', role: 'Assault rifle', slot: 'primary', fits: ALL,
     mounts: {
-      railY: 0.0525, opticZ: 0.195, ironY: 0.0675, muzzleZ: 0.66, bareMuzzleZ: 0.72, underY: -0.0375, underZ: 0.435,
+      railY: 0.0525, opticZ: 0.195, muzzleZ: 0.66, bareMuzzleZ: 0.72, underY: -0.0375, underZ: 0.435,
       side: { x: -0.0225, y: 0, z: 0.39 }, port: [0.0225, 0.012, 0.17], grip: [0, -0.07, 0.04], fore: [0, -0.03, 0.42], adsZ: 0.1,
     },
   },
   m4: {
     key: 'm4', table: 'm4', name: 'M4A1', role: 'Carbine', slot: 'primary', fits: ALL,
     mounts: {
-      railY: 0.0525, opticZ: 0.105, ironY: 0.0825, muzzleZ: 0.615, bareMuzzleZ: 0.66, underY: -0.0375, underZ: 0.36,
+      railY: 0.0525, opticZ: 0.105, muzzleZ: 0.615, bareMuzzleZ: 0.66, underY: -0.0375, underZ: 0.36,
       side: { x: -0.0225, y: 0, z: 0.375 }, port: [0.0225, 0.015, 0.12], grip: [0, -0.08, 0.05], fore: [0, -0.045, 0.36], adsZ: 0.07,
     },
   },
@@ -73,7 +72,7 @@ export const GUN_DEFS: Record<GunKey, GunDef> = {
     key: 'mp5', table: 'mp5', name: 'MP5', role: 'Submachine gun', slot: 'primary',
     fits: { optic: ['iron', 'reddot', 'holo'], muzzle: ['none', 'suppressor'], under: UNDERS, side: SIDES },
     mounts: {
-      railY: 0.0525, opticZ: 0.135, ironY: 0.06, muzzleZ: 0.45, bareMuzzleZ: 0.45, underY: -0.0525, underZ: 0.3,
+      railY: 0.0525, opticZ: 0.135, muzzleZ: 0.45, bareMuzzleZ: 0.45, underY: -0.0525, underZ: 0.3,
       side: { x: -0.0225, y: -0.015, z: 0.24 }, port: [0.0225, 0.015, 0.18], grip: [0, -0.075, 0.09], fore: [0, -0.05, 0.29], adsZ: 0.08,
     },
   },
@@ -81,14 +80,14 @@ export const GUN_DEFS: Record<GunKey, GunDef> = {
     key: 'svd', table: 'svd', name: 'SVD', role: 'Marksman rifle', slot: 'primary',
     fits: { optic: ['scope', 'iron', 'reddot'], muzzle: ['none', 'suppressor'], under: ['none'], side: SIDES },
     mounts: {
-      railY: 0.0675, opticZ: 0.135, ironY: 0.0675, muzzleZ: 0.84, bareMuzzleZ: 0.915, underY: -0.0375, underZ: 0.45,
+      railY: 0.0675, opticZ: 0.135, muzzleZ: 0.84, bareMuzzleZ: 0.915, underY: -0.0375, underZ: 0.45,
       side: { x: -0.0225, y: 0, z: 0.42 }, port: [0.0225, 0.015, 0.12], grip: [0, -0.085, -0.04], fore: [0, -0.04, 0.39], adsZ: 0.15,
     },
   },
   m249: {
     key: 'm249', table: 'm249', name: 'M249', role: 'Light machine gun', slot: 'primary', fits: ALL,
     mounts: {
-      railY: 0.0675, opticZ: 0.15, ironY: 0.0825, muzzleZ: 0.81, bareMuzzleZ: 0.855, underY: -0.0525, underZ: 0.405,
+      railY: 0.0675, opticZ: 0.15, muzzleZ: 0.81, bareMuzzleZ: 0.855, underY: -0.0525, underZ: 0.405,
       side: { x: -0.0225, y: -0.015, z: 0.345 }, port: [0.0375, 0, 0.15], grip: [0, -0.095, 0.09], fore: [0, -0.06, 0.4], adsZ: 0.07,
     },
   },
@@ -96,7 +95,7 @@ export const GUN_DEFS: Record<GunKey, GunDef> = {
     key: 'm870', table: 'm870', name: 'M870', role: 'Shotgun', slot: 'primary',
     fits: { optic: ['iron', 'reddot', 'holo'], muzzle: ['none'], under: ['none'], side: SIDES },
     mounts: {
-      railY: 0.0525, opticZ: 0.09, ironY: 0.0375, muzzleZ: 0.69, bareMuzzleZ: 0.69, underY: -0.0825, underZ: 0.33,
+      railY: 0.0525, opticZ: 0.09, muzzleZ: 0.69, bareMuzzleZ: 0.69, underY: -0.0825, underZ: 0.33,
       side: { x: -0.0225, y: -0.03, z: 0.45 }, port: [0.0225, 0, 0.1], grip: [0, -0.045, -0.03], fore: [0, -0.06, 0.33], adsZ: 0.1,
     },
   },
@@ -104,7 +103,7 @@ export const GUN_DEFS: Record<GunKey, GunDef> = {
     key: 'm17', table: 'm17', name: 'M17', role: 'Pistol', slot: 'secondary',
     fits: { optic: ['iron', 'reddot'], muzzle: ['none', 'suppressor'], under: ['none'], side: SIDES },
     mounts: {
-      railY: 0.0375, opticZ: 0.06, ironY: 0.0525, muzzleZ: 0.18, bareMuzzleZ: 0.18, underY: -0.0375, underZ: 0.12,
+      railY: 0.0375, opticZ: 0.06, muzzleZ: 0.18, bareMuzzleZ: 0.18, underY: -0.0375, underZ: 0.12,
       side: { x: 0, y: -0.0375, z: 0.105, below: true }, port: [0.0225, 0.0225, 0.09], grip: [0, -0.08, 0], fore: [-0.012, -0.09, 0.006], adsZ: 0.36,
     },
   },
@@ -112,7 +111,7 @@ export const GUN_DEFS: Record<GunKey, GunDef> = {
     key: 'pm', table: 'pm', name: 'PM', role: 'Pistol', slot: 'secondary',
     fits: { optic: ['iron'], muzzle: ['none', 'suppressor'], under: ['none'], side: ['none'] },
     mounts: {
-      railY: 0.0225, opticZ: 0.06, ironY: 0.0375, muzzleZ: 0.15, bareMuzzleZ: 0.15, underY: -0.0375, underZ: 0.1,
+      railY: 0.0225, opticZ: 0.06, muzzleZ: 0.15, bareMuzzleZ: 0.15, underY: -0.0375, underZ: 0.1,
       side: { x: 0, y: -0.0375, z: 0.09, below: true }, port: [0.0225, 0.0075, 0.06], grip: [0, -0.07, 0], fore: [-0.012, -0.08, 0.006], adsZ: 0.36,
     },
   },
@@ -167,12 +166,15 @@ export function fitOf(l: Loadout, gun: GunKey): Fit {
   return cleanFit(gun, l.fits[gun] ?? BARE);
 }
 
-/** Where the eye is aimed through: the sight's line over the bore, and how far before the eye the model's origin is. */
+/**
+ * Where the eye is aimed through: the sight's line over the bore, and how far before the eye the model's
+ * origin is. The line is the model's own (gun-models.ts `sightMarks`): the front post's tip with the
+ * irons, the optic's window centre with one.
+ */
 export function sightOf(gun: GunKey, fit: Fit): { y: number; z: number } {
   const m = GUN_DEFS[gun].mounts;
-  if (fit.optic === 'iron') return { y: m.ironY, z: m.adsZ };
-  const y = m.railY + 0.0525;
-  if (GUN_DEFS[gun].slot === 'secondary') return { y, z: m.adsZ };
+  const y = sightMarks(gun, fit).aim.y;
+  if (fit.optic === 'iron' || GUN_DEFS[gun].slot === 'secondary') return { y, z: m.adsZ };
   // A dot's window some 12 cm from the eye; a scope's eyepiece 7.5 cm.
   return fit.optic === 'scope' ? { y, z: 0.075 - (m.opticZ - 0.18) } : { y, z: 0.12 - (m.opticZ - 0.045) };
 }

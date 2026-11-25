@@ -7,7 +7,7 @@ import { Rng } from '../../src/core/rng';
 import { project } from '../../tools/lib/camera.mjs';
 import { at, brightest, colourOf, composite, decode, encode, hsv, hueOff, lit, luminance, median, p95, percentile, ringMean, topChannel, type Composite, type Image } from '../../tools/lib/image.mjs';
 import { failedEntry, removePictures, stamp } from '../../tools/lib/report.mjs';
-import { byDay, CAPTURES, FAR_LIT_MIN, gateCapture, headRing, kindOf, LIT, MIN_GPU_SAMPLES, nearLike, nearWidth, pathCover, SMOKE_KIND, streamCover, TARGET, TEAM, teamChannel, tinted, trackRound, WALL, type Burst, type Capture, type Frame, type Measures, type Track } from '../../tools/lib/tracer-measures.mjs';
+import { aimedCover, byDay, CAPTURES, FAR_LIT_MIN, gateCapture, headRing, kindOf, LIT, MIN_GPU_SAMPLES, nearLike, nearWidth, pathCover, SMOKE_KIND, streamCover, TARGET, TEAM, teamChannel, tinted, trackRound, WALL, type Burst, type Capture, type Frame, type Measures, type Track } from '../../tools/lib/tracer-measures.mjs';
 import { P } from '../../src/world/materials';
 import { SMOKE_BILLBOARD } from '../../src/combat/particles';
 
@@ -347,6 +347,7 @@ function passing(c: Capture): Measures {
     battleColour: { saturation: 0.5, hueDeg: 38, n: 300, measured: true },
     stream: { share: 0.95, span: 0.75, samples: 80, reachPx: 300, muzzlePx: 400 },
     pathCover: { share: 0.95 },
+    aimedCover: { share: 0.95 },
     noonContrast: { ratio: 1.9 },
     frontColour: { drawn: 2, n: 300, saturation: 0.7, hueDeg: TEAM.amber.hue },
   };
@@ -375,6 +376,7 @@ function gated(c: Capture): string[] {
   if (far && !day) paths.push('farColour', 'farColour.measured', 'farColour.saturation', 'farColour.hueDeg');
   if (far && c.hours === 12) paths.push('noonContrast', 'noonContrast.ratio');
   if (c.side) paths.push('pathCover', 'pathCover.share');
+  if (c.aimed && c.burst === 'far') paths.push('aimedCover', 'aimedCover.share');
   if (c.battle) paths.push('battleColour', 'battleColour.measured', 'battleColour.saturation');
   if (c.front) paths.push('frontColour', 'frontColour.drawn', 'frontColour.n');
   return paths;
@@ -425,6 +427,17 @@ describe("G1's proof: its gates", () => {
       const c = CAPTURES.find((x) => x.name === name)!;
       expect(gateCapture(c, without(passing(c), 'pathCover'), burstOf()), name).toEqual([]);
     }
+  });
+
+  it("aimed, the 90 m burst is gated on (f), its path shown beside the post, at TARGET.aimedCover (0.6); the 30 m one, its round behind the post, is a picture", () => {
+    expect(TARGET.aimedCover).toBe(0.6);
+    const far = CAPTURES.find((x) => x.name === 'far-dusk-aimed')!;
+    const m = passing(far);
+    expect(gateCapture(far, { ...m, aimedCover: { share: 0.6 } }, burstOf())).toEqual([]);
+    expect(gateCapture(far, { ...m, aimedCover: { share: 0.59 } }, burstOf())).toHaveLength(1);
+    expect(gateCapture(far, { ...m, aimedCover: { share: null, why: 'every sample is behind the gun' } }, burstOf())).toHaveLength(1);
+    const near = CAPTURES.find((x) => x.name === 'dusk-aimed')!;
+    expect(gateCapture(near, without(passing(near), 'aimedCover'), burstOf())).toEqual([]);
   });
 
   it("17:35 side on is gated on its path's cover as side-1735 is, as Blue and with the front heavy too; the wall at night on its stream and near width as a near burst is, its head reported", () => {
@@ -709,5 +722,82 @@ describe("G1's proof: by day (c) and (e) count a sample shown lit or tinted, aft
       expect(streamCover(compositeOf(violet, alongStream(bright)), hip, stream, TEAM.red, day).share).toBe(1);
     }
     expect(gateCapture(sideNight, { ...passing(sideNight), pathCover: cover(compositeOf(violet, alongPath(bright)), TEAM.red, false) }, burstOf())).toEqual([]);
+  });
+});
+
+describe("G4's aimed gate, (f): the 90 m path beside the post", () => {
+  // The followed round's path on the image as (c) samples it (frameOf's camera, 20 to 60 m of its
+  // flight along +x, 40 m out: row 100 from x 50 to 150), read 1.5 px either side of it, each pixel over
+  // its own background ((e)'s rule, never the band's brightest over its median: Task 3b's F8), and the
+  // samples the gun covers in any frame (its G-buffer depth nearer than 0.9 m) left out.
+  const origin = [-40, 0, 40];
+  const side: Track = { seen: [], path: { fit: 'drawn', origin, dir: [1, 0, 0], lastFlownM: 60, point: (s) => [origin[0] + s, origin[1], origin[2]] } };
+  const parapet = [40, 40, 40];
+  const dusk = [70, 66, 110];
+
+  /** A composite whose background is `backAt(y)` row by row (its colour, and its luminance as the least), shown as it but where `paint` sets another colour. */
+  function rows(backAt: (y: number) => readonly number[], paint: (set: (x: number, y: number, c: readonly number[]) => void) => void = () => {}): Composite {
+    const shown = image(200, 200, [0, 0, 0], (set) => {
+      for (let y = 0; y < 200; y++) for (let x = 0; x < 200; x++) set(x, y, backAt(y));
+      paint(set);
+    });
+    const n = shown.w * shown.h;
+    const back = new Uint8Array(n * 3);
+    const least = new Float32Array(n);
+    for (let p = 0; p < n; p++) {
+      const b = backAt(Math.floor(p / shown.w));
+      back.set(b, p * 3);
+      least[p] = luminance(b[0], b[1], b[2]);
+    }
+    return { ...shown, least, back };
+  }
+  /** A frame whose G-buffer depth over the whole image is far, but `gun` ([x0, y0, x1, y1], inclusive) where the gun is drawn half a metre out. */
+  const frameWith = (gun: readonly number[] | null): Frame => {
+    const metres = new Float32Array(200 * 200).fill(500);
+    if (gun) for (let y = gun[1]; y <= gun[3]; y++) for (let x = gun[0]; x <= gun[2]; x++) metres[y * 200 + x] = 0.5;
+    return { ...frameOf(0, []), depth: { x0: 0, y0: 0, n: 200, scale: 1, metres } };
+  };
+  const line = (row: number, c: readonly number[] = [255, 120, 110]) => (set: (x: number, y: number, c: readonly number[]) => void) => {
+    for (let x = 45; x <= 155; x++) set(x, row, c);
+  };
+
+  it('a lit line along the path is shown, and a core a pixel off the sample is read by its core', () => {
+    const f = aimedCover(rows(() => dusk, line(100)), [frameWith(null)], side, null, TEAM.red, false);
+    expect(f.samples).toBeGreaterThan(90);
+    expect([f.share, f.litShare, f.behindGun]).toEqual([1, 1, 0]);
+    expect(aimedCover(rows(() => dusk, line(101)), [frameWith(null)], side, null, TEAM.red, false).share).toBe(1);
+  });
+
+  it('nothing drawn is shown nowhere: over a plain background, and along a bright-over-dark edge whichever row it crosses the band on, by day or at night', () => {
+    for (const day of [true, false]) {
+      expect(aimedCover(rows(() => dusk), [frameWith(null)], side, null, TEAM.red, day).share).toBe(0);
+      for (const bright of [[200, 200, 200], [120, 120, 120]]) {
+        for (let edge = 96; edge <= 103; edge++) {
+          for (const above of [true, false]) {
+            const f = aimedCover(rows((y) => ((above ? y <= edge : y >= edge) ? bright : parapet)), [frameWith(null)], side, null, TEAM.red, day);
+            expect(f.share, `${bright[0]} ${above ? 'over' : 'under'} row ${edge}, ${day ? 'by day' : 'at night'}`).toBe(0);
+          }
+        }
+      }
+    }
+  });
+
+  it('a sample the gun covers in any frame is left out and counted; a path the gun covers whole is no measure', () => {
+    const part = aimedCover(rows(() => dusk, line(100)), [frameWith(null), frameWith([90, 95, 110, 105])], side, null, TEAM.red, false);
+    expect(part.behindGun).toBeGreaterThan(15);
+    expect(part.counted).toBe(part.samples - part.behindGun);
+    expect(part.share).toBe(1);
+    // The gun over the path's middle, the path drawn only there: what is left shows nothing.
+    const hidden = aimedCover(rows(() => dusk, (set) => { for (let x = 90; x <= 110; x++) set(x, 100, [255, 120, 110]); }), [frameWith([90, 95, 110, 105])], side, null, TEAM.red, false);
+    expect(hidden.share).toBe(0);
+    const whole = aimedCover(rows(() => dusk, line(100)), [frameWith([0, 0, 199, 199])], side, null, TEAM.red, false);
+    expect(whole.share).toBeNull();
+    expect(whole.why).toMatch(/behind the gun/);
+  });
+
+  it('by day a sample tinted by its team over its own background is shown, after dark only a lit one', () => {
+    const faint = [150, 40, 40];
+    expect(aimedCover(rows(() => dusk, line(100, faint)), [frameWith(null)], side, null, TEAM.red, true).share).toBe(1);
+    expect(aimedCover(rows(() => dusk, line(100, faint)), [frameWith(null)], side, null, TEAM.red, false).share).toBe(0);
   });
 });

@@ -42,10 +42,11 @@ const PARTS: Part[] = [
   // The stock, deepening toward the butt, and its butt plate.
   [(x, y, z) => z >= -0.26 && z < 0 && Math.abs(x) <= 0.0225 && y <= 0.015 && y >= -0.03 - 0.07 * (-z / 0.26), P.RIFLE_FURNITURE],
   [(x, y, z) => z >= -0.26 && z < -0.245 && Math.abs(x) <= 0.0225 && y <= 0.015 && y >= -0.1, P.RIFLE_STEEL],
-  // The receiver, its dust cover, and the rear sight at its front.
+  // The receiver, its dust cover, and the rear sight at its front: a leaf with its notch down the
+  // bore's column, its shoulders' top level with the front post's tip, the post seen in it aimed.
   [(x, y, z) => z >= 0 && z < 0.34 && Math.abs(x) <= 0.0225 && Math.abs(y) <= 0.03, P.RIFLE_STEEL],
   [(x, y, z) => z >= 0.02 && z < 0.32 && Math.abs(x) <= 0.015 && y > 0.03 && y <= 0.045, P.RIFLE_STEEL],
-  [(x, y, z) => z >= 0.3 && z < 0.34 && Math.abs(x) <= 0.0075 && y > 0.03 && y <= 0.06, P.RIFLE_STEEL],
+  [(x, y, z) => z >= 0.3 && z < 0.34 && Math.abs(x) <= 0.0225 && y > 0.03 && y <= 0.06 && (Math.abs(x) > 0.0075 || y <= 0.0525), P.RIFLE_STEEL],
   // The pistol grip, raked back, and the trigger guard.
   [(x, y, z) => y < -0.03 && y >= -0.13 && Math.abs(x) <= 0.0225 && z >= 0.02 - 0.35 * (-0.03 - y) && z < 0.06 - 0.35 * (-0.03 - y), P.RIFLE_GRIP],
   [(x, y, z) => Math.abs(x) <= 0.0075 && y >= -0.06 && ((y < -0.045 && z >= 0.06 && z < 0.1) || (y < -0.03 && z >= 0.09 && z < 0.1)), P.RIFLE_STEEL],

@@ -83,18 +83,21 @@ describe('the viewmodel', () => {
     // Today's poses, taken from heldPose before the hands were added to it, to the last bit: rifle.spec's
     // and loadout.spec's model traces stand on them. At the hip; raised on the firing step; aimed;
     // kicked, walking, half raised and part aimed; a pistol kicked and mostly aimed; the shovel
-    // mid-stroke as it comes up; and a kicked rifle dipped as it is put away.
+    // mid-stroke as it comes up; and a kicked rifle dipped as it is put away. The two kicked and part
+    // aimed were re-taken by G4 Task 4 (the sight picture), which changed the aimed kick on purpose:
+    // aimed, it shoves the gun back along the line of sight and rolls it about it, and no longer lifts,
+    // pitches or turns it. The rest, aimed at rest among them, are as they were.
     const cases: [Parameters<typeof heldPose>, ViewmodelPose][] = [
       [[t, RIFLE_HOLDING, still, 0, 0, 0], { offset: [0.175, -0.205, 0.44], pitch: 0, yaw: 0, roll: 0 }],
       [[t, RIFLE_HOLDING, still, 0, 0, 1], { offset: [0.175, -0.06499999999999997, 0.44], pitch: 0, yaw: 0, roll: 0 }],
       [[t, RIFLE_HOLDING, still, 0, 0, 1, 1], { offset: [0, -0.0675, 0.10000000000000003], pitch: 0, yaw: 0, roll: 0 }],
       [
         [t, RIFLE_HOLDING, kicked, 0.004, 0.6, 0.5, 0.4],
-        { offset: [0.11345999999999998, -0.1098912, 0.2915024], pitch: 1.0712, yaw: -0.1648, roll: 0.33912 },
+        { offset: [0.11377998312928711, -0.11136953404639909, 0.2915024], pitch: 0.8423999999999999, yaw: -0.1296, roll: 0.33912 },
       ],
       [
         [t, PISTOL, kicked, 0, 0, 0, 0.7],
-        { offset: [0.02716800000000001, -0.0773952, 0.3425008], pitch: 0.7904000000000001, yaw: -0.12160000000000001, roll: 0.20304000000000003 },
+        { offset: [0.027852980875482256, -0.08068788574704493, 0.3425008], pitch: 0.28080000000000016, yaw: -0.043200000000000016, roll: 0.20304000000000003 },
       ],
       [
         [t, SHOVEL, still, -0.003, 0.5, 0, 0, 0.6, 0.4],
