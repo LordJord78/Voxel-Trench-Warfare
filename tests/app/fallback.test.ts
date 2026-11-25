@@ -27,9 +27,11 @@ describe('the fallback', () => {
   const CHROME = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';
   const EDGE = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0';
   const SAFARI = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
+  // Headless Chrome (the e2e suite's) names itself HeadlessChrome: still Chrome.
+  const HEADLESS = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/142.0.0.0 Safari/537.36';
 
   it("tells Chrome or Edge without an adapter to turn on hardware acceleration, or update the graphics driver; other browsers what would run it", () => {
-    for (const ua of [CHROME, EDGE]) expect(fallbackLine('no-adapter', ua)).toBe("Here it is in motion. Turn on hardware acceleration in your browser's settings, or update your graphics driver.");
+    for (const ua of [CHROME, EDGE, HEADLESS]) expect(fallbackLine('no-adapter', ua)).toBe("Here it is in motion. Turn on hardware acceleration in your browser's settings, or update your graphics driver.");
     expect(fallbackLine('no-adapter', SAFARI)).toMatch(/Chrome or Edge, or Safari 26/);
     // Without WebGPU, today's line, in any browser.
     expect(fallbackLine('no-webgpu', CHROME)).toBe('Here it is in motion.');

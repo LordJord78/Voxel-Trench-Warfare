@@ -42,9 +42,9 @@ export function placeHere(win: Window): Place {
   return { gpu: Boolean((win.navigator as Navigator & { gpu?: unknown }).gpu), coarse: win.matchMedia('(pointer: coarse)').matches, fine: win.matchMedia('(any-pointer: fine)').matches };
 }
 
-/** Whether `userAgent` is Chrome or Edge (or another Chromium): a browser with WebGPU, whose missing adapter is its settings' or the driver's. */
+/** Whether `userAgent` is Chrome or Edge (or another Chromium, headless Chrome too): a browser with WebGPU, whose missing adapter is its settings' or the driver's. */
 function chromium(userAgent: string): boolean {
-  return /\b(Chrome|Chromium|Edg)\//.test(userAgent);
+  return /(Chrome|Chromium|Edg)\//.test(userAgent);
 }
 
 /**
