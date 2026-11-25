@@ -1,5 +1,4 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
@@ -968,13 +967,13 @@ test('the note after a first visit moves to low', async ({ page }) => {
   await page.screenshot({ path: 'artifacts/s4/note-low.png' });
 });
 
-// The showcase's portfolio card (artifacts/s5): the user's portfolio site opened from disk read-only, the
-// card in place of its first placeholder project in the browser's copy of the page, as the card's note
-// says (the site lays three across). No file of the site is written: its files' sizes and times are the
-// same after. Skipped where the site is not on the machine.
+// The showcase's portfolio card (artifacts/s5): the owner's portfolio site opened from disk read-only
+// (its folder in PORTFOLIO_SITE), the card in place of its first placeholder project in the browser's
+// copy of the page, as the card's note says. No file of the site is written: its files' sizes and times
+// are the same after. Skipped where no site is given, or it is not on the machine.
 test("the card among the portfolio's projects", async ({ page }) => {
-  const site = join(homedir(), 'repos/portfolio-website');
-  test.skip(!existsSync(join(site, 'index.html')), 'the portfolio site is not on this machine');
+  const site = process.env.PORTFOLIO_SITE ?? '';
+  test.skip(!site || !existsSync(join(site, 'index.html')), 'the portfolio site is not on this machine (PORTFOLIO_SITE)');
   const stamp = () =>
     readdirSync(site, { recursive: true })
       .map((f) => {
@@ -988,7 +987,7 @@ test("the card among the portfolio's projects", async ({ page }) => {
   const card = readFileSync('showcase/portfolio/card.html', 'utf8')
     .replace(/<!--[\s\S]*?-->/, '')
     .replace('./assets/trenchline.webp', pathToFileURL(resolve('showcase/portfolio/trenchline.webp')).href);
-  await page.evaluate((html) => document.querySelector('#projects .about-containers > .details-container')!.outerHTML = html, card);
+  await page.evaluate((html) => document.querySelector('#projects .details-container')!.outerHTML = html, card);
   const projects = page.locator('#projects');
   await projects.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => [...document.querySelectorAll('#projects img')].every((i) => (i as HTMLImageElement).complete));

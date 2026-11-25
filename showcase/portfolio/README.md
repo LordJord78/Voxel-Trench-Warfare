@@ -1,9 +1,9 @@
 # TRENCHLINE's card for the portfolio site
 
-The card for the Projects section of the portfolio site (`~/repos/portfolio-website`), in the site's own markup and classes.
+The card for the Projects section of the owner's portfolio site, in the site's own markup and classes.
 
 1. Copy `trenchline.webp` into the site's `assets/`.
-2. Paste `card.html` in place of the first placeholder project ("Project One") inside `<section id="projects">`'s `<div class="about-containers">`. The site lays its projects three across: a fourth card beside the three placeholders overflows the row at desktop widths.
+2. Paste `card.html` as the first of the site's projects (in its `id="projects"` section), in place of its first placeholder.
 
 Its buttons go to the code (https://github.com/LordJord78/Voxel-Trench-Warfare) and to the game (https://lordjord78.github.io/Voxel-Trench-Warfare/). The game's address works once the site is published: the Pages workflow (`.github/workflows/pages.yml`) deploys it on a push to `main`, with Pages turned on for the repository and "GitHub Actions" as its source.
 
