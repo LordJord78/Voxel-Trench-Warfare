@@ -17,15 +17,15 @@
  *   low splat; a kill's thud and its low chime; a steel plate's ring of four partials, each dying
  *   at its own rate; and being hit, a low thump and a high ring in the ears.
  * - The hands' cues (combat/handling.ts), each a few tens of milliseconds of filtered noise and a
- *   clipped tone, mostly over 400 Hz so a laptop plays them, each made as its shape in [audio.cues]
- *   says (cueShapes): the magazine out, a dull click and a scrape (60 ms); in, a sharp clack (40 ms);
- *   the bolt, a two-part rack (120 ms); the machine gun's feed cover, a clap (50 ms); a shotgun's
- *   shell, a click (30 ms); its pump, chk-chk, two clacks 90 ms apart; and an empty trigger, a thin
- *   click (15 ms).
+ *   clipped tone, mostly over 400 Hz so a laptop plays them, each made as the shape its plan carries
+ *   says ([audio.cues], cues.ts): the magazine out, a dull click and a scrape (60 ms); in, a sharp
+ *   clack (40 ms); the bolt, a two-part rack (120 ms); the machine gun's feed cover, a clap (50 ms); a
+ *   shotgun's shell, a click (30 ms); its pump, chk-chk, two clacks 90 ms apart; and an empty
+ *   trigger, a thin click (15 ms).
  */
 
-import type { HandlingCue } from '../combat/handling';
 import type { Tunables } from '../core/tunables';
+import type { CueShape } from './cues';
 import type { VoicePlan } from './plan';
 
 /** The report's body, from the reference's WeaponReport. */
@@ -37,81 +37,6 @@ export interface ReportShape {
 /** The report's body the engine is given (app/main.ts), and the sounds' proof renders with (tools/sounds). */
 export function reportShape(tun: Tunables): ReportShape {
   return { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') };
-}
-
-/**
- * A part of a hands' cue, `atS` into it and `peak` loud (of the voice's gain): a clack, metal on metal
- * (noise in a band about `hz` and a clipped square tone falling from `toneHz`, dying over `decayS`); a
- * burst of noise through a filter (a band's `q`), up to its peak in `attackS` and down over `decayS`; or
- * a tone gliding `fromHz` to `toHz` as it dies over `decayS`.
- */
-export type CuePart =
-  | { part: 'clack'; atS: number; hz: number; toneHz: number; peak: number; decayS: number }
-  | { part: 'burst'; atS: number; filter: 'lowpass' | 'highpass' | 'bandpass'; hz: number; q?: number; peak: number; attackS: number; decayS: number }
-  | { part: 'tone'; atS: number; wave: 'sine' | 'square' | 'triangle' | 'sawtooth'; fromHz: number; toHz: number; peak: number; decayS: number };
-
-/** A hands' cue's sound: its parts, and how long it sounds (s: when it frees its place under the cap). */
-export interface CueShape {
-  lengthS: number;
-  parts: CuePart[];
-}
-
-/**
- * The hands' cues' sounds ([audio.cues]), the engine is given (app/main.ts) and the sounds' proof renders
- * with: each part's fall (a share of its peak, then away over FALL_FADE_S); a clack's shape (its noise's
- * band Q, peak and attack; its tone's peak, where it glides to and its decay, each of the clack's); and
- * each cue's.
- */
-export interface CueShapes {
-  fall: number;
-  clack: { q: number; noise: number; attackS: number; tone: number; glide: number; toneDecay: number };
-  cues: Record<HandlingCue, CueShape>;
-}
-
-const CUE_NAMES: readonly HandlingCue[] = ['mag-out', 'mag-in', 'bolt', 'cover', 'shell', 'pump', 'dry'];
-const FILTERS = ['lowpass', 'highpass', 'bandpass'] as const;
-const WAVES = ['sine', 'square', 'triangle', 'sawtooth'] as const;
-
-/** [audio.cues]: every cue's parts and length, refusing (by its key) a part it cannot play. */
-export function cueShapes(tun: Tunables): CueShapes {
-  const f = (k: string) => tun.f(`audio.cues.${k}`);
-  const cues = {} as Record<HandlingCue, CueShape>;
-  for (const cue of CUE_NAMES) {
-    const key = `audio.cues.${cue}`;
-    const lengthS = tun.f(`${key}.length_s`);
-    const raw = tun.get(`${key}.parts`);
-    if (!Array.isArray(raw) || raw.length === 0) throw new TypeError(`tunable '${key}.parts' is not a list of parts`);
-    const parts = raw.map((r: unknown, i): CuePart => {
-      const where = `${key}.parts[${i}]`;
-      const o = (typeof r === 'object' && r !== null ? r : {}) as Record<string, unknown>;
-      const n = (name: string): number => {
-        const v = o[name];
-        if (typeof v !== 'number' || !Number.isFinite(v)) throw new TypeError(`tunable '${where}.${name}' is not a finite number: ${String(v)}`);
-        return v;
-      };
-      const one = <T extends string>(name: string, of: readonly T[]): T => {
-        const v = o[name];
-        if (!of.includes(v as T)) throw new TypeError(`tunable '${where}.${name}' is not one of ${of.join(', ')}: ${String(v)}`);
-        return v as T;
-      };
-      switch (o.part) {
-        case 'clack':
-          return { part: 'clack', atS: n('at_s'), hz: n('hz'), toneHz: n('tone_hz'), peak: n('peak'), decayS: n('decay_s') };
-        case 'burst':
-          return { part: 'burst', atS: n('at_s'), filter: one('filter', FILTERS), hz: n('hz'), ...(o.q === undefined ? {} : { q: n('q') }), peak: n('peak'), attackS: n('attack_s'), decayS: n('decay_s') };
-        case 'tone':
-          return { part: 'tone', atS: n('at_s'), wave: one('wave', WAVES), fromHz: n('from_hz'), toHz: n('to_hz'), peak: n('peak'), decayS: n('decay_s') };
-        default:
-          throw new TypeError(`tunable '${where}.part' is not a clack, a burst or a tone: ${String(o.part)}`);
-      }
-    });
-    cues[cue] = { lengthS, parts };
-  }
-  return {
-    fall: f('fall'),
-    clack: { q: f('clack_q'), noise: f('clack_noise'), attackS: f('clack_attack_s'), tone: f('clack_tone'), glide: f('clack_glide'), toneDecay: f('clack_tone_decay') },
-    cues,
-  };
 }
 
 /** A voice that falls to a share of its peak (`fall`) fades from there to nothing over this (s). */
@@ -269,9 +194,15 @@ const DING: readonly (readonly [number, number, number])[] = [
   [4100, 0.25, 0.08],
 ];
 
-/** A hands' cue played into `into` from `when`, `gain` loud, as its shape says (cueShapes). */
-function cue(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, gain: number, shape: CueShape, shapes: CueShapes): void {
-  const { fall, clack } = shapes;
+/** A hands' cue's shape, as its plan carries it (planVoices gives every cue's plan its own). */
+function cueShape(v: VoicePlan): CueShape {
+  if (!v.cue) throw new TypeError(`the cue '${v.kind}' was planned without its shape ([audio.cues]; planVoices gives it)`);
+  return v.cue;
+}
+
+/** A hands' cue played into `into` from `when`, `gain` loud, as its shape says ([audio.cues], cues.ts). */
+function cue(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, gain: number, shape: CueShape): void {
+  const { fall, clack } = shape;
   for (const p of shape.parts) {
     const at = when + p.atS;
     const peak = p.peak * gain;
@@ -297,7 +228,7 @@ export interface VoiceHandle {
 }
 
 /** How long a voice sounds from its start, in seconds: when it frees its place under the cap (cap.ts). */
-export function voiceLength(v: VoicePlan, report: ReportShape, cues: CueShapes): number {
+export function voiceLength(v: VoicePlan, report: ReportShape): number {
   switch (v.kind) {
     case 'report':
       return Math.max(report.lengthS, 0.47);
@@ -345,11 +276,11 @@ export function voiceLength(v: VoicePlan, report: ReportShape, cues: CueShapes):
     case 'shell':
     case 'pump':
     case 'dry':
-      return cues.cues[v.kind].lengthS;
+      return cueShape(v).lengthS;
   }
 }
 
-export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuffer, v: VoicePlan, when: number, report: ReportShape, cues: CueShapes): VoiceHandle {
+export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuffer, v: VoicePlan, when: number, report: ReportShape): VoiceHandle {
   const panner = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'linear', rolloffFactor: 0, positionX: v.at[0], positionY: v.at[1], positionZ: v.at[2] });
   const dull = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: v.lowpassHz });
   // Its own level, so the cap can cut it.
@@ -468,8 +399,8 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
     case 'shell':
     case 'pump':
     case 'dry':
-      // The hands' cues, each as its shape in [audio.cues] says.
-      cue(ctx, noise, dull, when, g, cues.cues[v.kind], cues);
+      // The hands' cues, each as the shape its plan carries says ([audio.cues]).
+      cue(ctx, noise, dull, when, g, cueShape(v));
       break;
   }
   return {

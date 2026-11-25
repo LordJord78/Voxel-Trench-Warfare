@@ -20,7 +20,7 @@ import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import { AudioEngine } from '../audio/engine';
 import { audioTunables, planFeedback, planVoices } from '../audio/plan';
-import { cueShapes, reportShape } from '../audio/voices';
+import { reportShape } from '../audio/voices';
 import { cleanLoadout, type Loadout } from '../combat/arsenal';
 import { gunModel, shovelModel } from '../combat/gun-models';
 import { harmTunables } from '../combat/harm';
@@ -317,7 +317,7 @@ async function start(): Promise<void> {
   const rig = new CameraRig(rigTunables(tun));
   const effects = new EffectsFrameBuilder(effectsTunables(tun));
   const hearing = audioTunables(tun);
-  const audio = new AudioEngine(hearing, reportShape(tun), cueShapes(tun));
+  const audio = new AudioEngine(hearing, reportShape(tun));
   let builtDrawn: BuiltEffects['drawn'] = [];
   let builtFlashes: BuiltEffects['flashes'] = [];
   let builtFrame: BuiltEffects['frame'] | null = null;

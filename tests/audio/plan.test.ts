@@ -233,7 +233,8 @@ describe('the sound of a frame', () => {
     const plans = planVoices(t, { ...none(), handling: cues.map((cue, k) => ({ tick: 3 + k, cue, at: muzzle })) }, ear);
     expect(plans.map((v) => v.kind)).toEqual([...cues]);
     for (const v of plans) {
-      expect(v).toEqual({ kind: v.kind, at: ear, delayS: 0, gain: 0.5, lowpassHz: t.openLowpassHz });
+      // Its sound's shape with it, [audio.cues]'s (voices.ts plays it).
+      expect(v).toEqual({ kind: v.kind, at: ear, delayS: 0, gain: 0.5, lowpassHz: t.openLowpassHz, cue: t.cues[v.kind as (typeof cues)[number]] });
       expect(v.at).not.toBe(ear);
     }
     // None without a cue.
