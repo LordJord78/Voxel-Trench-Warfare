@@ -20,10 +20,11 @@ import { loadTunables } from '../core/tunables';
 import { Stance } from '../physics/character';
 import { AudioEngine } from '../audio/engine';
 import { audioTunables, planFeedback, planVoices } from '../audio/plan';
-import { reportShape } from '../audio/voices';
+import { cueShapes, reportShape } from '../audio/voices';
 import { cleanLoadout, type Loadout } from '../combat/arsenal';
 import { gunModel, shovelModel } from '../combat/gun-models';
 import { harmTunables } from '../combat/harm';
+import { BILLBOARD_FLOATS } from '../combat/particles';
 import { traceRifle } from '../combat/rifle-model';
 import { cameraBasis, projectToPixel, rayDir, type CameraPose } from '../render/camera';
 import { LIT_FLOATS, type SmokePuff, type TransientLight } from '../render/effects';
@@ -316,8 +317,10 @@ async function start(): Promise<void> {
   const rig = new CameraRig(rigTunables(tun));
   const effects = new EffectsFrameBuilder(effectsTunables(tun));
   const hearing = audioTunables(tun);
-  const audio = new AudioEngine(hearing, reportShape(tun));
+  const audio = new AudioEngine(hearing, reportShape(tun), cueShapes(tun));
   let builtDrawn: BuiltEffects['drawn'] = [];
+  let builtFlashes: BuiltEffects['flashes'] = [];
+  let builtFrame: BuiltEffects['frame'] | null = null;
   let built: BuiltEffects['counts'] = { billboards: 0, tracers: 0, stars: 0, cores: 0, lights: 0, battleTracers: 0, flames: 0, heads: 0, ricochets: 0, embers: 0, ricochetsByKind: [0, 0, 0, 0], embersByKind: [0, 0, 0, 0] };
   /** Whether the rifle is in hand (tests put it down to read the world behind it). */
   let rifleHeld = true;
@@ -1171,6 +1174,8 @@ async function start(): Promise<void> {
     renderer.setSmoke(frameEffects.smoke);
     built = frameEffects.counts;
     builtDrawn = frameEffects.drawn;
+    builtFlashes = frameEffects.flashes;
+    builtFrame = frameEffects.frame;
     // In a match the battle's strikes are the room's shells' (sim/room-battle.ts): each on what its crater
     // struck as it went out, its fire standing from the match's second its shell landed.
     const strikes = together.inMatch ? (together.battle?.strikes(events, together.net!.match!.startAt) ?? []) : strikesFrom(events);
@@ -1627,6 +1632,29 @@ async function start(): Promise<void> {
         weapon: { automatic: session.weapon.spec.automatic, semi: session.weapon.semi, rounds: session.weapon.rounds, magazine: session.weapon.spec.magazine, id: session.arm.spec.gun.name },
         tracers: builtDrawn.map((d) => ({ kind: d.kind, flown: d.flown, headDrawn: d.headDrawn, head: projectToPixel(lastPose, res, d.head), tail: projectToPixel(lastPose, res, d.tail), headM: d.head, tailM: d.tail, joinsM: d.joinsM, struck: d.struck })),
       };
+    },
+    /**
+     * For the hands' captures and tests: each shot's flash of the last frame on the canvas (CSS pixels, by
+     * the frame's camera; `atM`, `tipsM`: metres), its prongs' tips and the up they roll toward (the
+     * drawn gun's), and the canvas (its middle the reticle, the line of sight).
+     */
+    flashPixels: () => {
+      const res: [number, number] = [Math.max(1, canvas.clientWidth), Math.max(1, canvas.clientHeight)];
+      return {
+        res,
+        frame: frames,
+        pose: lastPose,
+        flashes: builtFlashes.map((f) => ({ remote: f.remote, at: projectToPixel(lastPose, res, f.at), tips: f.tips.map((p) => projectToPixel(lastPose, res, p)), atM: f.at, tipsM: f.tips, up: f.up })),
+      };
+    },
+    /** The session's particles as the last frame drew them (the shot's flash and brass held to the drawn gun): each billboard's kind and centre (metres). */
+    particleBillboards: () => {
+      const f = builtFrame;
+      if (!f) return [];
+      return Array.from({ length: effects.debugAt }, (_, i) => {
+        const o = i * BILLBOARD_FLOATS;
+        return { kind: f.billboards[o + 8], at: [f.billboards[o], f.billboards[o + 1], f.billboards[o + 2]] as [number, number, number] };
+      });
     },
     debugQuads(quads: DebugQuad[]) {
       effects.debug = quads;

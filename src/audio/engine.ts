@@ -10,7 +10,7 @@
 import { cameraBasis, type CameraPose } from '../render/camera';
 import { VoiceCap } from './cap';
 import type { AudioTunables, VoiceKind, VoicePlan } from './plan';
-import { playVoice, voiceLength, type ReportShape, type VoiceHandle } from './voices';
+import { playVoice, voiceLength, type CueShapes, type ReportShape, type VoiceHandle } from './voices';
 
 const NOISE_S = 2;
 
@@ -49,6 +49,7 @@ export class AudioEngine {
   constructor(
     private readonly t: AudioTunables,
     private readonly report: ReportShape,
+    private readonly cues: CueShapes,
   ) {
     this.cap = new VoiceCap(t.maxVoices);
   }
@@ -129,7 +130,7 @@ export class AudioEngine {
       // Under the cap: the farthest dropped first, a nearer voice cutting the farthest held.
       const when = now + v.delayS;
       const distance = Math.hypot(v.at[0] - this.ear[0], v.at[1] - this.ear[1], v.at[2] - this.ear[2]);
-      const r = this.cap.admit(distance, when + voiceLength(v, this.report), now, () => playVoice(ctx, mix, noise, v, when, this.report));
+      const r = this.cap.admit(distance, when + voiceLength(v, this.report, this.cues), now, () => playVoice(ctx, mix, noise, v, when, this.report, this.cues));
       r.cut?.cut(now);
       if (!r.play) {
         this.dropped++;

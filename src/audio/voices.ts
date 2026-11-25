@@ -17,12 +17,14 @@
  *   low splat; a kill's thud and its low chime; a steel plate's ring of four partials, each dying
  *   at its own rate; and being hit, a low thump and a high ring in the ears.
  * - The hands' cues (combat/handling.ts), each a few tens of milliseconds of filtered noise and a
- *   clipped tone, mostly over 400 Hz so a laptop plays them: the magazine out, a dull click and a
- *   scrape (60 ms); in, a sharp clack (40 ms); the bolt, a two-part rack (120 ms); the machine gun's
- *   feed cover, a clap (50 ms); a shotgun's shell, a click (30 ms); its pump, chk-chk, two clacks
- *   90 ms apart; and an empty trigger, a thin click (15 ms).
+ *   clipped tone, mostly over 400 Hz so a laptop plays them, each made as its shape in [audio.cues]
+ *   says (cueShapes): the magazine out, a dull click and a scrape (60 ms); in, a sharp clack (40 ms);
+ *   the bolt, a two-part rack (120 ms); the machine gun's feed cover, a clap (50 ms); a shotgun's
+ *   shell, a click (30 ms); its pump, chk-chk, two clacks 90 ms apart; and an empty trigger, a thin
+ *   click (15 ms).
  */
 
+import type { HandlingCue } from '../combat/handling';
 import type { Tunables } from '../core/tunables';
 import type { VoicePlan } from './plan';
 
@@ -35,6 +37,81 @@ export interface ReportShape {
 /** The report's body the engine is given (app/main.ts), and the sounds' proof renders with (tools/sounds). */
 export function reportShape(tun: Tunables): ReportShape {
   return { lowHz: tun.f('viewkick.defaults.report_low_hz'), lengthS: tun.f('viewkick.defaults.report_length_s') };
+}
+
+/**
+ * A part of a hands' cue, `atS` into it and `peak` loud (of the voice's gain): a clack, metal on metal
+ * (noise in a band about `hz` and a clipped square tone falling from `toneHz`, dying over `decayS`); a
+ * burst of noise through a filter (a band's `q`), up to its peak in `attackS` and down over `decayS`; or
+ * a tone gliding `fromHz` to `toHz` as it dies over `decayS`.
+ */
+export type CuePart =
+  | { part: 'clack'; atS: number; hz: number; toneHz: number; peak: number; decayS: number }
+  | { part: 'burst'; atS: number; filter: 'lowpass' | 'highpass' | 'bandpass'; hz: number; q?: number; peak: number; attackS: number; decayS: number }
+  | { part: 'tone'; atS: number; wave: 'sine' | 'square' | 'triangle' | 'sawtooth'; fromHz: number; toHz: number; peak: number; decayS: number };
+
+/** A hands' cue's sound: its parts, and how long it sounds (s: when it frees its place under the cap). */
+export interface CueShape {
+  lengthS: number;
+  parts: CuePart[];
+}
+
+/**
+ * The hands' cues' sounds ([audio.cues]), the engine is given (app/main.ts) and the sounds' proof renders
+ * with: each part's fall (a share of its peak, then away over FALL_FADE_S); a clack's shape (its noise's
+ * band Q, peak and attack; its tone's peak, where it glides to and its decay, each of the clack's); and
+ * each cue's.
+ */
+export interface CueShapes {
+  fall: number;
+  clack: { q: number; noise: number; attackS: number; tone: number; glide: number; toneDecay: number };
+  cues: Record<HandlingCue, CueShape>;
+}
+
+const CUE_NAMES: readonly HandlingCue[] = ['mag-out', 'mag-in', 'bolt', 'cover', 'shell', 'pump', 'dry'];
+const FILTERS = ['lowpass', 'highpass', 'bandpass'] as const;
+const WAVES = ['sine', 'square', 'triangle', 'sawtooth'] as const;
+
+/** [audio.cues]: every cue's parts and length, refusing (by its key) a part it cannot play. */
+export function cueShapes(tun: Tunables): CueShapes {
+  const f = (k: string) => tun.f(`audio.cues.${k}`);
+  const cues = {} as Record<HandlingCue, CueShape>;
+  for (const cue of CUE_NAMES) {
+    const key = `audio.cues.${cue}`;
+    const lengthS = tun.f(`${key}.length_s`);
+    const raw = tun.get(`${key}.parts`);
+    if (!Array.isArray(raw) || raw.length === 0) throw new TypeError(`tunable '${key}.parts' is not a list of parts`);
+    const parts = raw.map((r: unknown, i): CuePart => {
+      const where = `${key}.parts[${i}]`;
+      const o = (typeof r === 'object' && r !== null ? r : {}) as Record<string, unknown>;
+      const n = (name: string): number => {
+        const v = o[name];
+        if (typeof v !== 'number' || !Number.isFinite(v)) throw new TypeError(`tunable '${where}.${name}' is not a finite number: ${String(v)}`);
+        return v;
+      };
+      const one = <T extends string>(name: string, of: readonly T[]): T => {
+        const v = o[name];
+        if (!of.includes(v as T)) throw new TypeError(`tunable '${where}.${name}' is not one of ${of.join(', ')}: ${String(v)}`);
+        return v as T;
+      };
+      switch (o.part) {
+        case 'clack':
+          return { part: 'clack', atS: n('at_s'), hz: n('hz'), toneHz: n('tone_hz'), peak: n('peak'), decayS: n('decay_s') };
+        case 'burst':
+          return { part: 'burst', atS: n('at_s'), filter: one('filter', FILTERS), hz: n('hz'), ...(o.q === undefined ? {} : { q: n('q') }), peak: n('peak'), attackS: n('attack_s'), decayS: n('decay_s') };
+        case 'tone':
+          return { part: 'tone', atS: n('at_s'), wave: one('wave', WAVES), fromHz: n('from_hz'), toHz: n('to_hz'), peak: n('peak'), decayS: n('decay_s') };
+        default:
+          throw new TypeError(`tunable '${where}.part' is not a clack, a burst or a tone: ${String(o.part)}`);
+      }
+    });
+    cues[cue] = { lengthS, parts };
+  }
+  return {
+    fall: f('fall'),
+    clack: { q: f('clack_q'), noise: f('clack_noise'), attackS: f('clack_attack_s'), tone: f('clack_tone'), glide: f('clack_glide'), toneDecay: f('clack_tone_decay') },
+    cues,
+  };
 }
 
 /** A voice that falls to a share of its peak (`fall`) fades from there to nothing over this (s). */
@@ -192,14 +269,26 @@ const DING: readonly (readonly [number, number, number])[] = [
   [4100, 0.25, 0.08],
 ];
 
-/** The pump's two clacks, this far apart (s); the bolt's two parts. */
-const PUMP_GAP_S = 0.09;
-const BOLT_GAP_S = 0.075;
-
-/** A clack of metal on metal: a burst of noise about `hz` and a clipped square tone falling from `toneHz`, `peak` loud, dying over `decay` seconds. */
-function clack(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, hz: number, toneHz: number, peak: number, decay: number): void {
-  burst(ctx, noise, into, when, { type: 'bandpass', frequency: hz, Q: 1.2 }, 2.2 * peak, 0.0005, decay, 0.05);
-  tone(ctx, into, when, 'square', toneHz, toneHz * 0.7, 0.18 * peak, decay * 0.8, 0.05);
+/** A hands' cue played into `into` from `when`, `gain` loud, as its shape says (cueShapes). */
+function cue(ctx: BaseAudioContext, noise: AudioBuffer, into: AudioNode, when: number, gain: number, shape: CueShape, shapes: CueShapes): void {
+  const { fall, clack } = shapes;
+  for (const p of shape.parts) {
+    const at = when + p.atS;
+    const peak = p.peak * gain;
+    switch (p.part) {
+      case 'clack':
+        // Metal on metal: a band of noise about its pitch, and a clipped square tone falling from its own.
+        burst(ctx, noise, into, at, { type: 'bandpass', frequency: p.hz, Q: clack.q }, clack.noise * peak, clack.attackS, p.decayS, fall);
+        tone(ctx, into, at, 'square', p.toneHz, p.toneHz * clack.glide, clack.tone * peak, p.decayS * clack.toneDecay, fall);
+        break;
+      case 'burst':
+        burst(ctx, noise, into, at, { type: p.filter, frequency: p.hz, ...(p.q === undefined ? {} : { Q: p.q }) }, peak, p.attackS, p.decayS, fall);
+        break;
+      case 'tone':
+        tone(ctx, into, at, p.wave, p.fromHz, p.toHz, peak, p.decayS, fall);
+        break;
+    }
+  }
 }
 
 /** A voice played: cut, it falls silent over 20 ms from `at` (seconds on its context's clock), whether sounding yet or not. */
@@ -208,7 +297,7 @@ export interface VoiceHandle {
 }
 
 /** How long a voice sounds from its start, in seconds: when it frees its place under the cap (cap.ts). */
-export function voiceLength(v: VoicePlan, report: ReportShape): number {
+export function voiceLength(v: VoicePlan, report: ReportShape, cues: CueShapes): number {
   switch (v.kind) {
     case 'report':
       return Math.max(report.lengthS, 0.47);
@@ -250,23 +339,17 @@ export function voiceLength(v: VoicePlan, report: ReportShape): number {
     case 'hurt':
       return 0.6 + 0.05;
     case 'mag-out':
-      return 0.06 + 0.01;
     case 'mag-in':
-      return 0.04 + 0.01;
     case 'bolt':
-      return BOLT_GAP_S + 0.045 + 0.01;
     case 'cover':
-      return 0.05 + 0.01;
     case 'shell':
-      return 0.03 + 0.01;
     case 'pump':
-      return PUMP_GAP_S + 0.03 + 0.01;
     case 'dry':
-      return 0.015 + 0.005;
+      return cues.cues[v.kind].lengthS;
   }
 }
 
-export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuffer, v: VoicePlan, when: number, report: ReportShape): VoiceHandle {
+export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuffer, v: VoicePlan, when: number, report: ReportShape, cues: CueShapes): VoiceHandle {
   const panner = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'linear', rolloffFactor: 0, positionX: v.at[0], positionY: v.at[1], positionZ: v.at[2] });
   const dull = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: v.lowpassHz });
   // Its own level, so the cap can cut it.
@@ -379,39 +462,14 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       tone(ctx, dull, when, 'sine', 3000, 2990, 0.25 * g, 0.6, 1e-2);
       break;
     case 'mag-out':
-      // A dull click as the catch lets go, and the magazine scraping out over 60 ms.
-      clack(ctx, noise, dull, when, 1100, 520, 0.8 * g, 0.018);
-      burst(ctx, noise, dull, when + 0.012, { type: 'bandpass', frequency: 2600, Q: 2 }, 1.1 * g, 0.012, 0.036, 0.05);
-      break;
     case 'mag-in':
-      // A sharp clack, seated: bright, over 40 ms, a knock of the body under it.
-      clack(ctx, noise, dull, when, 2200, 1150, g, 0.035);
-      tone(ctx, dull, when, 'sine', 260, 180, 0.35 * g, 0.03, 0.05);
-      break;
     case 'bolt':
-      // A two-part rack: the bolt back with a scrape, and home.
-      clack(ctx, noise, dull, when, 1600, 820, 0.85 * g, 0.03);
-      burst(ctx, noise, dull, when + 0.01, { type: 'bandpass', frequency: 3200, Q: 2.5 }, 0.9 * g, 0.015, 0.045, 0.05);
-      clack(ctx, noise, dull, when + BOLT_GAP_S, 2000, 1000, g, 0.045);
-      break;
     case 'cover':
-      // The feed cover slapped shut: a broad clap over 50 ms.
-      burst(ctx, noise, dull, when, { type: 'bandpass', frequency: 1300, Q: 0.7 }, 2.4 * g, 0.001, 0.049, 0.05);
-      tone(ctx, dull, when, 'triangle', 420, 300, 0.3 * g, 0.04, 0.05);
-      break;
     case 'shell':
-      // A shell thumbed into the tube: a click over 30 ms.
-      clack(ctx, noise, dull, when, 2600, 1400, 0.8 * g, 0.03);
-      break;
     case 'pump':
-      // Chk-chk: the fore-end back and forward, two clacks PUMP_GAP_S apart.
-      clack(ctx, noise, dull, when, 1500, 640, g, 0.03);
-      clack(ctx, noise, dull, when + PUMP_GAP_S, 1900, 760, g, 0.03);
-      break;
     case 'dry':
-      // An empty trigger: a thin click over 15 ms.
-      burst(ctx, noise, dull, when, { type: 'highpass', frequency: 3000 }, 1.4 * g, 0.0005, 0.0145, 0.05);
-      tone(ctx, dull, when, 'square', 2600, 2100, 0.12 * g, 0.012, 0.05);
+      // The hands' cues, each as its shape in [audio.cues] says.
+      cue(ctx, noise, dull, when, g, cues.cues[v.kind], cues);
       break;
   }
   return {

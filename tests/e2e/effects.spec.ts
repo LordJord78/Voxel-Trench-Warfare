@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { PNG } from 'pngjs';
 import { projectToPixel } from '../../src/render/camera';
 import { paletteData } from '../../src/world/materials';
-import { hooks, openGame } from './support/app';
+import { hooks, openGame, type Hooks } from './support/app';
 
 const DUSK = 17 + 35 / 60;
 
@@ -269,6 +269,55 @@ test("a shot's flash and light last two frames", async ({ page }) => {
   expect(prongs).toBeGreaterThanOrEqual(3);
   expect(prongs).toBeLessThanOrEqual(5);
   expect(seen).toEqual([[prongs, 1, 1], [prongs, 1, 1], [0, 0, 0], [0, 0, 0]]);
+  expect(errors).toEqual([]);
+});
+
+/** What the SVD's shot frame reads of the page: the loadout, the shots fired, the drawn tracers and the particles as drawn. */
+type Kicked = Hooks & {
+  setLoadout(l: unknown): void;
+  session: Hooks['session'] & { weapon: { shotsFired: number } };
+  tracerPixels(): { tracers: { tailM: [number, number, number]; flown: number }[] };
+  particleBillboards(): { kind: number; at: [number, number, number] }[];
+};
+
+test("the SVD's shot frame: its flash, smoke and tracer leave the drawn muzzle, kicked up with it", async ({ page }) => {
+  // The SVD's kick takes its drawn muzzle some 17 cm from where the shot left in the shot's own frame:
+  // the flash, smoke and tracer were drawn there, a white half-disc and a tracer under the gun. Each now
+  // leaves the drawn muzzle (its own flight on from it: the flash 2 m/s, a tick's 3 cm).
+  const errors = await openGame(page);
+  await hooks(page, (h) => h.play());
+  await hooks(page, (h) => {
+    const v = h.views.step;
+    h.teleport({ position: [v.position[0], v.position[1] - 1.62, v.position[2]], yaw: v.yaw, pitch: -2 });
+    (h as Kicked).setLoadout({ primary: 'svd', secondary: 'm17', fits: {} });
+  });
+  const seen = await hooks(page, async (hk) => {
+    const h = hk as Kicked;
+    await h.waitFrames(90);
+    h.freeze();
+    const before = h.session.weapon.shotsFired;
+    h.trigger(true);
+    for (let k = 0; k < 10 && h.session.weapon.shotsFired === before; k++) await h.stepFrames(1);
+    h.trigger(false);
+    const out = { shots: h.session.weapon.shotsFired - before, muzzle: h.rifleMuzzle(), tracers: h.tracerPixels().tracers.map((t) => t.tailM), particles: h.particleBillboards() };
+    h.thaw();
+    return out;
+  });
+  const off = (p: readonly number[]) => Math.hypot(p[0] - seen.muzzle[0], p[1] - seen.muzzle[1], p[2] - seen.muzzle[2]);
+  const flash = seen.particles.filter((p) => p.kind === 1).map((p) => off(p.at));
+  const smoke = seen.particles.filter((p) => p.kind === 7).map((p) => off(p.at));
+  const brass = seen.particles.filter((p) => p.kind === 6).map((p) => off(p.at));
+  const tracer = seen.tracers.map(off);
+  const trace = JSON.stringify({ flash, smoke, brass, tracer });
+  console.log(`the SVD's shot frame, each from the drawn muzzle (m): ${trace}`);
+  expect(seen.shots).toBe(1);
+  expect([flash.length, smoke.length, brass.length, tracer.length], trace).toEqual([1, 1, 1, 1]);
+  // Its streak reaches back to the muzzle in its first frame: drawn from the drawn muzzle.
+  expect(tracer[0], trace).toBeLessThan(0.01);
+  // The flash and the smoke a tick's flight on from it (the casing leaves the port, the unit tests' to
+  // measure: it is logged here).
+  expect(flash[0], trace).toBeLessThan(0.05);
+  expect(smoke[0], trace).toBeLessThan(0.05);
   expect(errors).toEqual([]);
 });
 

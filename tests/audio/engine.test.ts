@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AudioEngine } from '../../src/audio/engine';
 import { audioTunables } from '../../src/audio/plan';
+import { cueShapes } from '../../src/audio/voices';
 import { loadTunables } from '../../src/core/tunables';
 
 // Without sound the game still plays: here there is no AudioContext at all, as in a browser that
@@ -8,7 +9,7 @@ import { loadTunables } from '../../src/core/tunables';
 describe('the sound engine without sound', () => {
   it('starts, hears and plays nothing, and never throws', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const engine = new AudioEngine(audioTunables(loadTunables()), { lowHz: 120, lengthS: 0.2 });
+    const engine = new AudioEngine(audioTunables(loadTunables()), { lowHz: 120, lengthS: 0.2 }, cueShapes(loadTunables()));
     expect(() => engine.start()).not.toThrow();
     expect(() => engine.start()).not.toThrow();
     expect(engine.state).toBe('none');

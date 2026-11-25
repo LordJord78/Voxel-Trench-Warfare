@@ -5,9 +5,10 @@ import { audioRenders, hooks, openGame, type Hooks } from './support/app';
 // and across, and no round leaves while it is low; a reload tilts it through its curve to the
 // magazine's and the bolt's cues; the shotgun pumps after each shot and loads its shells one by one;
 // an empty magazine clicks and reloads; and turning moves the drawn gun every frame, smoothly, at the
-// display's own rate (run with E2E_FPS unset: handling is ticked at 60 Hz and drawn between ticks).
-// The tests that count what is heard skip (and say so) where the page's audio does not render
-// (audioRenders), as the audio specs' do.
+// display's own rate (run with E2E_FPS unset: handling is ticked at 60 Hz and drawn between ticks);
+// and aimed down the sights, no prong of a shot's flash rises over the line of sight. What is heard is
+// counted only where the page's audio renders (audioRenders), as the audio specs' do: the tests that
+// only count it skip (and say so) elsewhere, and the reload's curve is checked either way.
 
 type Frame = { ms: number; ticks: number; alpha: number; m: number[] | null };
 type Handy = Omit<Hooks, 'freeze'> & {
@@ -17,7 +18,9 @@ type Handy = Omit<Hooks, 'freeze'> & {
   hands(): { held: number; ready: number; aimed: number; gun: string; sprint: number; reload: number | null; rounds: number; drawn: boolean; box: [number, number, number, number]; res: [number, number] };
   turn(degPerS: number, periodS?: number): void;
   gunFrames(n: number): Promise<Frame[]>;
-  session: Hooks['session'] & { weapon: { rounds: number; shotsFired: number }; player: { yaw: number; pitch: number } };
+  aim(held: boolean): void;
+  flashPixels(): { res: [number, number]; flashes: { remote: boolean; at: [number, number] | null; tips: ([number, number] | null)[]; atM: [number, number, number]; tipsM: [number, number, number][]; up: [number, number, number] }[] };
+  session: Hooks['session'] & { ticks: number; weapon: { rounds: number; shotsFired: number }; player: { yaw: number; pitch: number }; arm: { spec: { sight: { y: number } } } };
 };
 
 const handy = <T>(page: Page, fn: (h: Handy, arg: unknown) => T | Promise<T>, arg?: unknown): Promise<T> => hooks(page, fn as unknown as (h: Hooks, arg: unknown) => T | Promise<T>, arg);
@@ -76,35 +79,49 @@ test('sprinting swings the gun low and across: its drawn box moves right and dow
   expect(sx - rx, JSON.stringify({ rest: rest.box, sprinting: sprinting.hands.box })).toBeGreaterThan(0.03);
   expect(sy - ry, JSON.stringify({ rest: rest.box, sprinting: sprinting.hands.box })).toBeGreaterThan(0.03);
   // The trigger pressed at a full sprint drops it; no round leaves while the gun is still low (its
-  // blend at sprint_blocks_fire, 0.3, or over), and the first leaves within 0.12 s of the press.
+  // blend at sprint_blocks_fire, 0.3, or over), and the first leaves within 0.12 s of the press. Read
+  // a tick at a time in the world's own time: the loop frozen and stepped a sixtieth of a second a
+  // frame, so each frame runs one tick and its blend is the one the tick's trigger saw.
   const fired = await handy(page, async (h) => {
+    h.freeze(60);
     const before = h.session.weapon.shotsFired;
-    const t0 = performance.now();
+    const pressed = h.session.ticks;
     h.trigger(true);
-    const seen: { s: number; sprint: number; shots: number }[] = [];
-    while (performance.now() - t0 < 400) {
-      await h.waitFrames(1);
-      seen.push({ s: (performance.now() - t0) / 1000, sprint: h.hands().sprint, shots: h.session.weapon.shotsFired - before });
+    const seen: { tick: number; sprint: number; shots: number }[] = [];
+    for (let k = 0; k < 24; k++) {
+      await h.stepFrames(1);
+      seen.push({ tick: h.session.ticks - pressed, sprint: h.hands().sprint, shots: h.session.weapon.shotsFired - before });
     }
     h.trigger(false);
+    h.thaw();
     return seen;
   });
   await page.keyboard.up('KeyW');
   await page.keyboard.up('ShiftLeft');
+  const trace = JSON.stringify(fired);
+  // A tick a frame (none skipped or doubled, so each blend read is its tick's).
+  fired.forEach((f, k) => expect(f.tick, trace).toBe(k + 1));
   const first = fired.findIndex((f) => f.shots > 0);
-  expect(first, JSON.stringify(fired)).toBeGreaterThan(0);
-  // Each frame before it shows the gun still coming up; the shot's own frame, under 0.3.
-  for (const f of fired.slice(0, first)) expect(f.shots).toBe(0);
-  expect(fired[first].sprint, JSON.stringify(fired)).toBeLessThan(0.3);
-  expect(fired[first].s, JSON.stringify(fired)).toBeLessThan(0.12 + 0.1);
+  expect(first, trace).toBeGreaterThan(0);
+  // Still low at the press: the ticks before the shot held fire at the blend's 0.3 or over.
+  expect(fired[0].sprint, trace).toBeGreaterThanOrEqual(0.3);
+  // No shot in a tick whose blend is 0.3 or more; the shot's tick under it, the tick before at or over it.
+  for (let k = 0; k < fired.length; k++) {
+    const shot = fired[k].shots > (k > 0 ? fired[k - 1].shots : 0);
+    if (fired[k].sprint >= 0.3) expect(shot, `tick ${fired[k].tick}: ${trace}`).toBe(false);
+  }
+  expect(fired[first].sprint, trace).toBeLessThan(0.3);
+  expect(fired[first - 1].sprint, trace).toBeGreaterThanOrEqual(0.3);
+  // Within 0.12 s of the press, in the world's time.
+  expect(fired[first].tick / 60, trace).toBeLessThanOrEqual(0.12);
   // Nothing fired at a sprint before the press.
   expect(sprinting.shots).toBe(rest.shots);
   expect(errors).toEqual([]);
 });
 
 test('a reload tilts the gun through its curve and plays its cues: mag-out, mag-in, bolt heard', async ({ page }) => {
+  // The curve is checked whether or not the page's audio renders; only what is heard needs it to.
   const { errors, renders } = await holding(page, 'ak74', { sound: true });
-  test.skip(!renders, SILENT);
   const before = await handy(page, (h) => ({ kinds: { ...h.audio().kinds } }));
   const rest = await handy(page, (h) => h.gunFrames(5));
   const record = await handy(page, async (h) => {
@@ -137,9 +154,14 @@ test('a reload tilts the gun through its curve and plays its cues: mag-out, mag-
   expect(most).toBeLessThan(45);
   const end = await handy(page, (h) => h.gunFrames(3));
   expect(Math.abs(rollOf(end[end.length - 1].m!) - restRoll)).toBeLessThan(3);
-  // Heard: each of its cues once.
-  const heard = (kind: string) => (after[kind] ?? 0) - (before.kinds[kind] ?? 0);
-  expect({ 'mag-out': heard('mag-out'), 'mag-in': heard('mag-in'), bolt: heard('bolt'), cover: heard('cover') }).toEqual({ 'mag-out': 1, 'mag-in': 1, bolt: 1, cover: 0 });
+  // Heard: each of its cues once, where the page's audio renders.
+  if (renders) {
+    const heard = (kind: string) => (after[kind] ?? 0) - (before.kinds[kind] ?? 0);
+    expect({ 'mag-out': heard('mag-out'), 'mag-in': heard('mag-in'), bolt: heard('bolt'), cover: heard('cover') }).toEqual({ 'mag-out': 1, 'mag-in': 1, bolt: 1, cover: 0 });
+  } else {
+    console.log(`the reload's cues not counted: ${SILENT}`);
+    test.info().annotations.push({ type: 'heard not checked', description: SILENT });
+  }
   expect(errors).toEqual([]);
 });
 
@@ -228,6 +250,63 @@ test('an empty magazine clicks and reloads', async ({ page }) => {
   expect((after.dry ?? 0) - (before.dry ?? 0)).toBe(1);
   expect((after['mag-out'] ?? 0) - (before['mag-out'] ?? 0)).toBe(1);
   expect((after.bolt ?? 0) - (before.bolt ?? 0)).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test("aimed down the AK's sights, no prong of a shot's flash rises over the line of sight or comes near the reticle", async ({ page }) => {
+  // The line of sight runs the sight's height over the bore (the AK's irons, 0.0675 m): a prong rolled
+  // up toward it lay along the tracer across the reticle. Measured in the drawn gun's frame, as the
+  // flash is drawn: each prong's tip over the bore, along the gun's up. On the screen (the canvas's
+  // middle is the line of sight and the reticle) the kick lifts the gun a little toward it for the
+  // flash's frames, so a tip at the line in the gun's frame may show a few pixels over the middle, well
+  // aside of it: no prong's drawn segment comes within 2% of the canvas's height of the middle (the
+  // unit test's least, at 1600 x 1000, is 3.9%; the hash's whole rolls lay one across it).
+  const { errors } = await holding(page, 'ak74');
+  const shots = await handy(page, async (h) => {
+    h.aim(true);
+    await h.waitFrames(60);
+    const aimed = h.hands().aimed;
+    const sight = h.session.arm.spec.sight.y;
+    h.freeze(60);
+    const out: { aimed: number; sight: number; rises: number[]; overPx: number[]; nearPx: number; height: number }[] = [];
+    for (let n = 0; n < 12; n++) {
+      const before = h.session.weapon.shotsFired;
+      h.trigger(true);
+      for (let k = 0; k < 10 && h.session.weapon.shotsFired === before; k++) await h.stepFrames(1);
+      h.trigger(false);
+      const f = h.flashPixels();
+      const own = f.flashes.find((x) => !x.remote);
+      const rises = own ? own.tipsM.map((tip) => (tip[0] - own.atM[0]) * own.up[0] + (tip[1] - own.atM[1]) * own.up[1] + (tip[2] - own.atM[2]) * own.up[2]) : [];
+      const overPx = own ? own.tips.filter((p) => p !== null).map((p) => f.res[1] / 2 - p![1]) : [];
+      // Each prong's drawn segment, muzzle to tip on the canvas: its nearest to the canvas's middle.
+      const c = [f.res[0] / 2, f.res[1] / 2];
+      let nearPx = Infinity;
+      for (const q of own?.tips ?? []) {
+        const a = own!.at;
+        if (!a || !q) continue;
+        const d = [q[0] - a[0], q[1] - a[1]];
+        const u = Math.max(0, Math.min(1, ((c[0] - a[0]) * d[0] + (c[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1] || 1)));
+        nearPx = Math.min(nearPx, Math.hypot(a[0] + d[0] * u - c[0], a[1] + d[1] * u - c[1]));
+      }
+      out.push({ aimed, sight, rises, overPx, nearPx, height: f.res[1] });
+      await h.stepFrames(20);
+    }
+    h.thaw();
+    h.aim(false);
+    return out;
+  });
+  const trace = JSON.stringify(shots.map((s) => ({ rises: s.rises.map((r) => +r.toFixed(4)), overPx: s.overPx.map((p) => +p.toFixed(1)), nearPx: +s.nearPx.toFixed(1) })));
+  console.log(`aimed shots' prongs over the bore (m; the sight ${shots[0].sight}), over the screen's middle (px), and the nearest any comes to it (px, of ${shots[0].height}): ${trace}`);
+  expect(shots[0].aimed).toBe(1);
+  expect(shots[0].sight).toBeCloseTo(0.0675, 6);
+  for (const s of shots) {
+    // Its star drawn: 3 to 5 prongs, every tip under the line of sight in the gun's frame.
+    expect(s.rises.length, trace).toBeGreaterThanOrEqual(3);
+    expect(s.rises.length, trace).toBeLessThanOrEqual(5);
+    for (const r of s.rises) expect(r, trace).toBeLessThanOrEqual(s.sight + 1e-4);
+    // On the canvas, none near the reticle.
+    expect(s.nearPx, trace).toBeGreaterThanOrEqual(0.02 * s.height);
+  }
   expect(errors).toEqual([]);
 });
 

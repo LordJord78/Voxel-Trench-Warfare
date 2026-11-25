@@ -24,9 +24,10 @@
 import { hitFeedbackTunables } from '../../src/app/hit-feedback';
 import { audioTunables, planFeedback, planVoices, type FeedbackKind, type VoicePlan } from '../../src/audio/plan';
 import type { HandlingCue } from '../../src/combat/handling';
-import { reportShape, voiceLength } from '../../src/audio/voices';
+import { cueShapes, reportShape, voiceLength } from '../../src/audio/voices';
 import { rangeTunables } from '../../src/combat/range';
 import type { Tunables } from '../../src/core/tunables';
+import type { CombatEvents } from '../../src/sim/session';
 import type { SoundRules } from '../lib/sound-measures.mjs';
 
 /** Every file's rate (Hz). */
@@ -73,16 +74,26 @@ const HEADSHOT_KILL: SoundRules = { band: { hz: [400, 2000], share: 0.35, firstS
 /** The farthest plate's ring heard from the spawn: its peak at least this (dBFS). */
 const FAR_DING_DB = -24;
 
+/**
+ * A frame's events with nothing in them but one of the hands' `cue`s, by the gun's muzzle (planVoices
+ * places it at the ear wherever it came from): the one CombatEvents this tool builds by hand, which its
+ * test shares.
+ */
+export function cueEvents(cue: HandlingCue): CombatEvents {
+  return { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [{ tick: 1, cue, at: [0.2, -0.1, -0.5] }], harms: [] };
+}
+
 export function renders(tun: Tunables): Render[] {
   const t = audioTunables(tun);
   const gains = hitFeedbackTunables(tun).gains;
   const report = reportShape(tun);
+  const cues = cueShapes(tun);
   const ear: [number, number, number] = [0, 0, 0];
   /** A render of `plans`, held: as long as the last of them sounds, from its delay, and the tail. */
   const of = (name: string, plans: VoicePlan[], rules?: SoundRules): Render => ({
     name,
     plans,
-    lengthS: LEAD_S + Math.max(...plans.map((p) => p.delayS + voiceLength(p, report))) + TAIL_S,
+    lengthS: LEAD_S + Math.max(...plans.map((p) => p.delayS + voiceLength(p, report, cues))) + TAIL_S,
     gated: true,
     ...(rules ? { rules } : {}),
   });
@@ -99,9 +110,6 @@ export function renders(tun: Tunables): Render[] {
   // The same without the gush: what headshot-kill is held over.
   out.push(of('headshot-kill-dry', [...atEar(['head']), { ...kill, delayS: FRAME_S }]));
   // The hands' cues, each as planVoices places it (at the ear, whatever the muzzle it came from).
-  for (const cue of CUES) {
-    const events = { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [{ tick: 1, cue, at: [0.2, -0.1, -0.5] as [number, number, number] }], harms: [] };
-    out.push(of(cue, planVoices(t, events, ear), { high: SMALL_SPEAKER }));
-  }
+  for (const cue of CUES) out.push(of(cue, planVoices(t, cueEvents(cue), ear), { high: SMALL_SPEAKER }));
   return out;
 }

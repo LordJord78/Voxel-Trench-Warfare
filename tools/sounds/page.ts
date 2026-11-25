@@ -13,7 +13,7 @@
 
 import { audioTunables } from '../../src/audio/plan';
 import { mixInto, whiteNoise } from '../../src/audio/engine';
-import { playVoice, reportShape } from '../../src/audio/voices';
+import { cueShapes, playVoice, reportShape } from '../../src/audio/voices';
 import { loadTunables } from '../../src/core/tunables';
 import { measure, ruleEnergyDb, ruleShare, type Measured, type OverRule } from '../lib/sound-measures.mjs';
 import { LEAD_S, RATE, renders, type Render } from './renders';
@@ -65,6 +65,7 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
   const tun = loadTunables();
   const t = audioTunables(tun);
   const report = reportShape(tun);
+  const cues = cueShapes(tun);
   const out: Rendered[] = [];
   const random = Math.random;
   const all = renders(tun);
@@ -86,7 +87,7 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
       const mix = mixInto(ctx, t.masterGain, heardEars);
       mix.connect(intoEars);
       const noise = whiteNoise(ctx);
-      for (const v of r.plans) playVoice(ctx, mix, noise, v, LEAD_S + v.delayS, report);
+      for (const v of r.plans) playVoice(ctx, mix, noise, v, LEAD_S + v.delayS, report, cues);
       const buffer = await ctx.startRendering();
       const heard = [buffer.getChannelData(0), buffer.getChannelData(1)];
       const into = [buffer.getChannelData(2), buffer.getChannelData(3)];

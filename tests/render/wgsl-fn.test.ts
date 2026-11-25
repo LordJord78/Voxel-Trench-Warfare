@@ -33,6 +33,23 @@ describe('a WGSL function run on the CPU', () => {
     expect(wgslFn(SOURCE, 'other')(7)).toBe(7);
   });
 
+  it("reads past comments before it matches braces or finds the function: a brace alone in a comment, a block comment, and a commented-out copy of its head", () => {
+    const tricky = `
+// fn sized(a: f32) -> f32 { return 99.0; }
+/* fn sized(a: f32) -> f32 {
+   return 98.0; } /* nested } */ { */
+fn sized(a: f32, b: f32) -> f32 {
+  // the far side }
+  var x = a; /* { */
+  if (x > b) { x = b; } // }}
+  return x * 2.0;
+}
+`;
+    const f = wgslFn(tricky, 'sized');
+    expect(f(1, 5)).toBe(2);
+    expect(f(7, 3)).toBe(6);
+  });
+
   it('throws for a function it lacks, and where one reads what it is not handed (a uniform)', () => {
     expect(() => wgslFn(SOURCE, 'missing')).toThrow(/no fn missing/);
     expect(() => wgslFn(SOURCE, 'reads')(1)).toThrow(/draw is not defined/);

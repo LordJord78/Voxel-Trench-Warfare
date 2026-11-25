@@ -50,7 +50,11 @@ const P_KHAKI = P.SOLDIER_KHAKI;
 const METAL = new Set<number>([K.PICKET, K.HULL, K.CORRUGATE, K.WIRE]);
 /** Voxels a body buried by the world's edits is lifted, at most, to stand on what came down (4 m at 10 cm). */
 const LIFT_VOXELS = 40;
-/** The shot's particles are anchored to the rifle's muzzle and port, which the renderer draws elsewhere (Particles.billboards). */
+/**
+ * The player's shot's particles are anchored to the rifle's muzzle and port, which the renderer draws
+ * elsewhere (Particles.billboards): drawn off by where those are drawn less where each was thrown (the
+ * muzzle and port before the shot's kick), so they leave the gun as it is drawn.
+ */
 export const MUZZLE_ANCHOR = 1;
 export const PORT_ANCHOR = 2;
 
@@ -1162,7 +1166,11 @@ export class Session {
     this.particles.emit(at, up(debris), debris, debris.count, this.particleRng, this.tints[material]);
   }
 
-  /** A shot's flash out along the bore from the muzzle (`share` of it: a suppressor's wisp), its brass out of the port, to the right and up (the reference's view kick), and its smoke at the muzzle. */
+  /**
+   * A shot's flash out along the bore from the muzzle (`share` of it: a suppressor's wisp), its brass out
+   * of the port, to the right and up (the reference's view kick), and its smoke at the muzzle: all held
+   * to the drawn gun, the flash and brass joining their own paths, the smoke kept where it left it.
+   */
   private throwShot(muzzle: readonly number[], share = 1, suppressed = false): void {
     const p = this.player;
     const view = this.view();
@@ -1171,18 +1179,20 @@ export class Session {
     const { flash, brass } = this.kinds;
     this.particles.emit(muzzle, along(flash, forward), flash, Math.round(flash.count * share), this.particleRng, undefined, MUZZLE_ANCHOR);
     this.particles.emit(this.port(), along(brass, right), brass, brass.count, this.particleRng, undefined, PORT_ANCHOR);
-    this.throwSmoke(muzzle, forward, suppressed);
+    this.throwSmoke(muzzle, forward, suppressed, MUZZLE_ANCHOR);
   }
 
   /**
    * A shot's smoke ([particles.muzzle_smoke]) at `muzzle` along the unit `bore`: its count of puffs, a
-   * suppressed gun's twice that; left where it is thrown (not held to the drawn gun), to rise and drift
-   * on the wind.
+   * suppressed gun's twice that, to rise and drift on the wind. The player's is held to the drawn
+   * muzzle (`anchor`) as it is first drawn, and kept there (Particles.emit `kept`): it stays where the
+   * drawn gun left it, not where the shot's kick has since taken the gun. Another's is left where it is
+   * thrown.
    */
-  private throwSmoke(muzzle: readonly number[], bore: readonly number[], suppressed: boolean): void {
+  private throwSmoke(muzzle: readonly number[], bore: readonly number[], suppressed: boolean, anchor = 0): void {
     const { smoke } = this.kinds;
     const v = [bore[0] * smoke.speed, bore[1] * smoke.speed + smoke.lift, bore[2] * smoke.speed];
-    this.particles.emit(muzzle, v, smoke, smoke.count * (suppressed ? 2 : 1), this.smokeRng);
+    this.particles.emit(muzzle, v, smoke, smoke.count * (suppressed ? 2 : 1), this.smokeRng, undefined, anchor, anchor > 0);
   }
 
   /** What a round throws where it strikes: dust of the struck material off its face, and sparks off metal. */

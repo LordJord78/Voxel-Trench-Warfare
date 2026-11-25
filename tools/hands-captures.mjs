@@ -1,6 +1,6 @@
 // The gun in the hands, photographed (npm run hands-captures; the shots spec's §2, G4's Task 3): the
 // drawn gun at rest, walking and sprinting; through a reload's curve (the long gun's and the pistol's);
-// the shotgun's pump; each flash (the AK's bare, the M4's with a compensator, the SVD's); a casing in
+// the shotgun's pump; each flash (the AK's bare, the M4's with a compensator, the SVD's, the AK's aimed); a casing in
 // flight; the muzzle's smoke on the wind; and the deepest point of a landing's dip. Each from the
 // game's own frames in headless Chrome, the loop frozen and stepped a sixtieth of a second a frame (so
 // a phase is caught on its frame), the range down (h.range(false)), the front's fire and shells off.
@@ -17,6 +17,8 @@
 //   pump.png      the M870 0.24 s after a shot: the pump at its deepest;
 //   flash-ak.png, flash-m4comp.png, flash-svd.png  the frame of a shot at night (22:30): the core and
 //                 prongs, the compensator's side prongs, the casing lit by the flash;
+//   flash-ak-aimed.png  the AK aimed down its iron sights at night: of 12 shots, the frame of the one
+//                 whose prongs reach highest on the screen (the reticle's line of sight is its middle);
 //   casing.png    the AK at 14:00, a twelfth of a second after a shot: its casing in flight;
 //   smoke.png     the AK at 14:00, half a second after five shots, the lights' clock running so the
 //                 battle's wind blows;
@@ -225,6 +227,64 @@ async function shot(page, { name, primary, fit = {}, hours, after = 0 }) {
   return { pictures: { [name]: await shoot(page) }, info: { hours, sun: at.sun, gun: placeOf(s.gun), afterFrames: after, effects: s.fx } };
 }
 
+/** Shots taken aimed down the AK's iron sights, a press each, for flash-ak-aimed. */
+const AIMED_SHOTS = 12;
+
+/**
+ * The AK aimed down its sights at night: AIMED_SHOTS shots, a press each, and the frame of the one whose
+ * prongs reach highest on the screen photographed (the worst for the reticle: a prong over the line of
+ * sight, the canvas's middle, crosses it along the tracer). Each shot's highest tip is kept, in pixels
+ * over that line (over it: positive), how far aside of the middle that tip is (px), the nearest any
+ * prong's drawn segment comes to the middle, the reticle (px), and the highest tip over the bore in
+ * the drawn gun's frame (m; under the sight's height, 0.0675 m). The shot's kick lifts the drawn gun
+ * over the eye's line for the flash's frames, so a tip at the line in the gun's frame shows a few
+ * pixels over the middle, well aside of the reticle.
+ */
+async function aimedFlash(page) {
+  const at = await stand(page, { where: 'step', primary: 'ak74', hours: NIGHT });
+  const aimed = await page.evaluate(async () => {
+    const h = window.__trenchline;
+    h.aim(true);
+    await h.waitFrames(60);
+    return h.hands().aimed;
+  });
+  if (aimed < 1) throw new Error(`the sights never came up: ${aimed}`);
+  await freeze(page);
+  let last = await step(page, 2);
+  const shots = [];
+  let best = null;
+  for (let k = 0; k < AIMED_SHOTS; k++) {
+    await page.evaluate(() => window.__trenchline.trigger(true));
+    let s = await step(page);
+    for (let j = 0; j < 10 && s.shots === last.shots; j++) s = await step(page);
+    await page.evaluate(() => window.__trenchline.trigger(false));
+    if (s.shots === last.shots) throw new Error(`shot ${k} did not leave`);
+    const f = await page.evaluate(() => window.__trenchline.flashPixels());
+    const own = f.flashes.find((x) => !x.remote);
+    if (!own) throw new Error(`shot ${k}: no flash drawn`);
+    const c = [f.res[0] / 2, f.res[1] / 2];
+    const tips = own.tips.filter((p) => p !== null);
+    const top = tips.reduce((a, b) => (b[1] < a[1] ? b : a));
+    const over = c[1] - top[1];
+    // Each prong's drawn segment's nearest to the middle (the reticle).
+    let near = Infinity;
+    for (const q of tips) {
+      const a = own.at;
+      const d = [q[0] - a[0], q[1] - a[1]];
+      const u = Math.max(0, Math.min(1, ((c[0] - a[0]) * d[0] + (c[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1] || 1)));
+      near = Math.min(near, Math.hypot(a[0] + d[0] * u - c[0], a[1] + d[1] * u - c[1]));
+    }
+    const riseM = Math.max(...own.tipsM.map((tip) => (tip[0] - own.atM[0]) * own.up[0] + (tip[1] - own.atM[1]) * own.up[1] + (tip[2] - own.atM[2]) * own.up[2]));
+    shots.push({ overPx: round4(over), asidePx: round4(Math.abs(top[0] - c[0])), nearPx: round4(near), riseM: round4(riseM), prongs: own.tips.length, aimed: round4(s.hands.aimed) });
+    if (!best || over > best.over) best = { over, k, png: await shoot(page), s };
+    // The kick settled before the next.
+    last = await step(page, 20);
+  }
+  await page.evaluate(() => window.__trenchline.aim(false));
+  const nearPx = round4(Math.min(...shots.map((x) => x.nearPx)));
+  return { pictures: { 'flash-ak-aimed': best.png }, info: { hours: NIGHT, sun: at.sun, shot: best.k, overPx: round4(best.over), asidePx: shots[best.k].asidePx, nearPx, gun: placeOf(best.s.gun), shots } };
+}
+
 /** Half a second after five shots, the battle's wind blowing (the lights' clock run). */
 async function smoke(page) {
   const at = await stand(page, { where: 'step', primary: 'ak74', hours: DAY });
@@ -281,6 +341,7 @@ const CAPTURES = [
   { name: 'flash-ak', take: (page) => shot(page, { name: 'flash-ak', primary: 'ak74', hours: NIGHT }) },
   { name: 'flash-m4comp', take: (page) => shot(page, { name: 'flash-m4comp', primary: 'm4', fit: { optic: 'iron', muzzle: 'compensator', under: 'none', side: 'none' }, hours: NIGHT }) },
   { name: 'flash-svd', take: (page) => shot(page, { name: 'flash-svd', primary: 'svd', hours: NIGHT }) },
+  { name: 'flash-ak-aimed', take: aimedFlash },
   { name: 'casing', take: (page) => shot(page, { name: 'casing', primary: 'ak74', hours: DAY, after: 5 }) },
   { name: 'smoke', take: smoke },
   { name: 'land', take: land },
