@@ -132,6 +132,8 @@ export interface EffectsTunables {
   flashS: number;
   /** The shot's flash, brass and smoke, and the player's tracer's start, leave the drawn gun, held to it over this (s; particles.ts heldShare). */
   particleAttachS: number;
+  /** The share of the shots' flash light the player's own smoke takes, kept at the drawn muzzle a hand from the eye (particles.ts SMOKE_BILLBOARD); another's whole. */
+  ownSmokeFlashShare: number;
   /**
    * A shot's flash (flashDraw): its core's size across (m), colour and brightness over the prongs', and
    * how far out along the bore it is drawn (a share of its size); its prongs, how many, how long (m),
@@ -218,6 +220,7 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     ricochet: ricochetTunables(tun),
     flashS: f('flash_s'),
     particleAttachS: f('particle_attach_s'),
+    ownSmokeFlashShare: f('own_smoke_flash_share'),
     flashCoreM: tun.pair('effects.flash_core_m'),
     flashCoreColour: rgb(tun, 'effects.flash_core_colour'),
     flashCoreGain: f('flash_core_gain'),
@@ -509,8 +512,10 @@ export class EffectsFrameBuilder {
       anchors[PORT_ANCHOR - 1] = throughPose(rifle.toWorld, arm.port);
     }
 
+    // The player's smoke, kept there, takes own_smoke_flash_share of the shots' flash light: lit whole by
+    // each next shot's, its puffs on the next round's line read as a bright ball round the tracer.
     session.particles.hold(anchors);
-    let billboards = session.particles.billboards(this.billboards, anchors, t.particleAttachS);
+    let billboards = session.particles.billboards(this.billboards, anchors, t.particleAttachS, t.ownSmokeFlashShare);
     if (this.hideBurst) {
       let kept = 0;
       for (let i = 0; i < billboards; i++) {

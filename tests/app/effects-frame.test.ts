@@ -637,6 +637,26 @@ describe('a frame of effects', () => {
     expect(built.lights[0].intensity).toBeCloseTo(t.flashLightIntensity * 0.12, 9);
   });
 
+  it("the player's smoke, kept at the drawn muzzle a hand from the eye, takes own_smoke_flash_share (0.15, [effects]) of the shots' flash light: the frame gives its billboard that share for the light pass, and another's smoke takes it whole", () => {
+    expect(t.ownSmokeFlashShare).toBe(0.15);
+    const { s, events, rifle } = walkAndShoot();
+    // Another's smoke, thrown where it is and not kept (Session.throwSmoke's, for a remote shot).
+    s.particles.emit([12.8, 1.5, 8], [0, 0, 0], particleSpec(tun, 'muzzle_smoke'), 1);
+    const smokes = (look: typeof t) => {
+      const f = new EffectsFrameBuilder(look).build(s, events, rifle).frame;
+      const out: number[] = [];
+      for (let i = 0; i < f.billboardCount; i++) if (f.billboards[i * BILLBOARD_FLOATS + 8] === SMOKE_BILLBOARD) out.push(f.billboards[i * BILLBOARD_FLOATS + 9]);
+      return out;
+    };
+    // The shot's own (thrown kept) first, then the other.
+    const [own, other] = smokes(t);
+    expect(own).toBeCloseTo(0.15, 6);
+    expect(other).toBe(1);
+    // The share is the tunable's.
+    expect(smokes({ ...t, ownSmokeFlashShare: 0.6 })[0]).toBeCloseTo(0.6, 6);
+    expect(smokes({ ...t, ownSmokeFlashShare: 1 })).toEqual([1, 1]);
+  });
+
   it("a shot's flash under flash_star_min_share (0.5, [effects]) of a whole one draws no core and no star: the suppressor's 0.12 is under it, and the line moves with the tunable", () => {
     expect(t.flashStarMinShare).toBe(0.5);
     const s = stand();

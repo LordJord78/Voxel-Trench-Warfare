@@ -156,8 +156,8 @@ describe('particles', () => {
     // shot's own light showed as a bright ball near the eye.
     expect(SMOKE_BILLBOARD).toBe(7);
     expect(billboards(p)[0][8]).toBe(SMOKE_BILLBOARD);
-    // No way to be drawn along: that is a casing's.
-    expect(Array.from(billboards(p)[0].slice(9, 12))).toEqual([0, 0, 0]);
+    // No way to be drawn along (that is a casing's): its tenth float the share of the shots' flash light it takes, whole.
+    expect(Array.from(billboards(p)[0].slice(9, 12))).toEqual([1, 0, 0]);
     for (let k = 0; k < 30; k++) p.step(DT);
     expect(billboards(p)[0][1]).toBeGreaterThan(1);
     // Only the muzzle's smoke is a puff: the rest are as they were.
@@ -282,19 +282,53 @@ describe('particles', () => {
     expect(look.casingMaxPx).toBeLessThanOrEqual(24);
   });
 
-  it("the muzzle's smoke is lit (the spec's: not emissive) as a mote is, by a shot's light whole: effects-light.wgsl gives no kind a share of it", () => {
+  it("the muzzle's smoke is lit (the spec's: not emissive) as a mote is, by the shots' light whole, but for the share its billboard carries (the player's own, kept a hand from the eye: app/effects-frame.ts): effects-light.wgsl takes the shots' flashes on smoke by that share, the shells' blasts whole, and every other kind takes all of it", () => {
     const light = readFileSync('src/render/shaders/effects-light.wgsl', 'utf8').replace(/\/\/[^\n]*/g, '');
     const main = light.slice(light.indexOf('fn main(')).replace(/\s+/g, ' ');
-    // The light every lit billboard takes (dust, brass, blood, smoke): the key's, the shots' and the rest.
-    expect(main).toContain('var light = frame.keyColour * keyLit(p) * look.dustKey + flashesAt(p) + mix(around, near.rgb, near.a);');
-    // Read once, and smoke has no light of its own: no share, no tunable.
+    // The light every lit billboard takes (dust, brass, blood, smoke): the key's, the shots' and the rest,
+    // the shots' flashes by `shots`: a smoke billboard's share (its tenth float, unread for it before), 1 for the rest.
+    expect(main).toContain('let shots = select(1.0, billboards[o + 9u], kind == SMOKE);');
+    expect(main).toContain('var light = frame.keyColour * keyLit(p) * look.dustKey + flashesAt(p, shots) + mix(around, near.rgb, near.a);');
     expect(main.match(/flashesAt\(/g)).toHaveLength(1);
+    // The share is the shots' flashes' alone: a shell's blast lights the smoke whole.
+    const flashes = light.slice(light.indexOf('fn flashesAt('), light.indexOf('fn cellLightsAt(')).replace(/\s+/g, ' ');
+    expect(flashes).toContain('fn flashesAt(p: vec3f, shots: f32) -> vec3f {');
+    expect(flashes).toContain('sum += facing(Light(f.pos, f.radius, f.colour, f.intensity), p) * shots;');
+    expect(flashes).toContain('sum += facing(Light(b.pos, b.radius, b.colour, b.intensity), p);');
+    expect(flashes.match(/\bshots\b/g)).toHaveLength(2);
+    // No share of the light pass's own: no uniform, no look number; the billboard carries it.
     expect(light).not.toContain('smokeFlash');
     expect(() => tun.f('effects.smoke_flash_share')).toThrow();
     expect('smokeFlashShare' in effectsLook(tun)).toBe(false);
     // Its kind is still its own, for the draw's soft puff (effects.wgsl), and it is not emissive.
     expect(particleSpec(tun, 'muzzle_smoke').emissive).toBe(false);
     expect(light.replace(/\s+/g, ' ')).toContain('if (kind != 1.0 && !core && !head && !ember) {');
+  });
+
+  it("a kept particle's billboard (the player's own smoke) carries the share of the shots' flash light the frame gives it (billboards' keptFlash, 1 unless given); another's smoke carries 1, whole; a mote's and a casing's tenth float are as they were (none, and a casing's way)", () => {
+    const smoke = particleSpec(tun, 'muzzle_smoke');
+    const p = new Particles(8);
+    p.emit([0, 1, 0], [0, 0, 0], smoke, 1);
+    p.emit([0, 1, 0], [0, 0, 0], smoke, 1, undefined, undefined, 1, true);
+    p.emit([0, 1, 0], [0, 0, 0], particleSpec(tun, 'dust'), 1);
+    p.emit([0, 1, 0], [3, 4, 0], { ...particleSpec(tun, 'brass'), spread: 0, speedJitter: 0, lift: 0 }, 1, undefined, undefined, 2);
+    const anchors = [[0.1, 1.1, 0], [0.2, 1, 0]];
+    p.hold(anchors);
+    const out = new Float32Array(8 * BILLBOARD_FLOATS);
+    const tenth = (keptFlash?: number) => {
+      out.fill(-1);
+      expect(keptFlash === undefined ? p.billboards(out, anchors, 0.15) : p.billboards(out, anchors, 0.15, keptFlash)).toBe(4);
+      return [0, 1, 2, 3].map((i) => ({ kind: out[i * BILLBOARD_FLOATS + 8], way: Array.from(out.slice(i * BILLBOARD_FLOATS + 9, i * BILLBOARD_FLOATS + 12)) }));
+    };
+    const given = tenth(0.15);
+    expect(given.map((b) => b.kind)).toEqual([SMOKE_BILLBOARD, SMOKE_BILLBOARD, 0, CASING_BILLBOARD]);
+    expect(given[0].way).toEqual([1, 0, 0]);
+    expect(given[1].way[0]).toBeCloseTo(0.15, 6);
+    expect(given[1].way.slice(1)).toEqual([0, 0]);
+    expect(given[2].way).toEqual([0, 0, 0]);
+    expect(given[3].way.map((v) => Math.round(v * 1e6) / 1e6)).toEqual([0.6, 0.8, 0]);
+    // Unless the frame gives one, the kept smoke is lit whole too.
+    expect(tenth()[1].way).toEqual([1, 0, 0]);
   });
 
   it('the same seed throws the same brass', () => {

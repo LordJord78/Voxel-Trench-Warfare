@@ -1344,6 +1344,12 @@ particle_attach_s   = 0.15     # the shot's flash and brass, and the player's tr
                                # rifle as drawn (wherever the shot's kick has taken it since they left),
                                # joining their own paths over this (eased: particles.ts heldShare); its
                                # smoke stays where the drawn gun left it
+own_smoke_flash_share = 0.15   # of the shots' flash light, what the player's own smoke takes (another's,
+                               # and the shells' blasts' light, whole): kept at the drawn muzzle a hand
+                               # from the eye, on the next round's line, its puffs lit whole by each
+                               # shot's flash read as a cream ball round the tracer leaving through them.
+                               # G1's (a), its limit 14 px: at night 35.5 px at 1, 30.5 at 0.5, 26.5 at
+                               # 0.35, 3.5 at 0.25; at dusk 25.5 at 0.3; under 8 at 0.2 and 0.15
 # A shot's flash (the shots spec §2), all of it drawn from a hash of the shot (its tick and its muzzle):
 # a white-hot core, an emissive disc this wide, a little out along the bore; and its star, this many
 # forward prongs, each this long and this far off the bore, each at its own roll about it, anywhere

@@ -295,7 +295,7 @@ describe("G1's proof: its measures", () => {
     expect(trackRound(frames, 3)).toBeNull();
   });
 
-  it("(a) reads the line's own band where no puff of muzzle smoke nearer the eye, shown lit, covers its walk: a sample under one (the shooter's own, lit by the shot's flash) is left out and counted with its width (`underSmoke`), as (c) leaves out what the gun and the world hide; a puff behind the line, or one that does not show, is not", () => {
+  it("(a) reads every sample of the line, under a puff of muzzle smoke or not: one whose walk a puff nearer the eye, shown lit, covers (the shooter's own, lit by the shot's flash) is measured as any other, so a lit puff over the line fails the gate, and is reported with its widest run (`underSmoke`); a puff behind the line, aside of it, or one that does not show, is not reported", () => {
     // The game's smoke billboards are what the tool reads as smoke.
     expect(SMOKE_KIND).toBe(SMOKE_BILLBOARD);
     // A night's dark (30) and the player's red line 5 m out, the image's row 100 from x 60 to 140, its
@@ -306,27 +306,28 @@ describe("G1's proof: its measures", () => {
       for (let y = 99; y <= 101; y++) for (let x = 60; x <= 140; x++) set(x, y, [255, 80, 80]);
     });
     const at = (smoke: Frame['smoke']): Frame => ({ ...frameOf(0, [line]), muzzle: [0, 0, 0], smoke });
-    // Read without the puff: its 40 px are the run.
+    // Read without the puffs given: its 40 px are the run.
     const blind = nearWidth([img], [at([])], 2);
     expect(blind.px).toBeGreaterThan(30);
     expect(blind.underSmoke.samples).toBe(0);
     // The puff 1.25 m from the eye, half 0.25 m: 20 px round the image's middle, in front of the line.
+    // Its run is the line's width all the same (the gate sees it), and reported as under smoke.
     const front = nearWidth([img], [at([{ at: [0, 0, 1.25], half: 0.25 }])], 2);
-    expect(front.px).toBeLessThan(6);
+    expect(front.px).toBe(blind.px);
+    expect(front.samples).toBe(blind.samples);
     expect(front.underSmoke.samples).toBeGreaterThan(20);
-    expect(front.underSmoke.px).toBeGreaterThan(30);
-    expect(front.samples + front.underSmoke.samples).toBe(blind.samples);
-    expect(front.samples).toBeGreaterThan(front.underSmoke.samples);
-    // The same disc on the image from a puff behind the line (12.5 m out, half 2.5 m): read as before.
+    expect(front.underSmoke.samples).toBeLessThan(front.samples);
+    expect(front.underSmoke.px).toBe(blind.px);
+    // The same disc on the image from a puff behind the line (12.5 m out, half 2.5 m): not reported.
     const behind = nearWidth([img], [at([{ at: [0, 0, 12.5], half: 2.5 }])], 2);
     expect(behind.px).toBe(blind.px);
     expect(behind.underSmoke.samples).toBe(0);
-    // Far aside of the line's walk (60 px under it): read as before.
+    // Far aside of the line's walk (60 px under it): not reported.
     const aside = nearWidth([img], [at([{ at: [0, -0.75, 1.25], half: 0.25 }])], 2);
     expect(aside.px).toBe(blind.px);
     expect(aside.underSmoke.samples).toBe(0);
     // A puff in front over the line's own left end (x 70, 10 px round), where the image shows none (by
-    // day a sunlit wisp; at night one no flash lights): read through, the line there read as it is.
+    // day a sunlit wisp; at night one no flash lights): not reported, the line there read as it is.
     const unseen = nearWidth([img], [at([{ at: [-0.375, 0, 1.25], half: 0.125 }])], 2);
     expect(unseen.px).toBe(blind.px);
     expect(unseen.samples).toBe(blind.samples);

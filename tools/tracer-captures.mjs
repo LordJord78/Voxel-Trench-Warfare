@@ -180,7 +180,7 @@ async function captureAt(page, c) {
       }, { kind, hold: !!c.front }),
       `${c.name}: a frame`,
     );
-  /** The frame just stepped, read whole: the tracers drawn, the drawn muzzle, the internal image's size, the shooter's suppression, the muzzle's smoke drawn ((a) reads round it); aimed, the G-buffer's depth round the middle. */
+  /** The frame just stepped, read whole: the tracers drawn, the drawn muzzle, the internal image's size, the shooter's suppression, the muzzle's smoke drawn ((a) reports what it covers); aimed, the G-buffer's depth round the middle. */
   const readFrame = () =>
     withTimeout(
       page.evaluate(
@@ -395,7 +395,7 @@ try {
       const levels = m.window.map((w) => w.suppression);
       const bits = [
         hl ? `head ${hl.headTop} ${hl.headChannel} / ring ${hl.headTop} ${hl.ringMeanTop.toFixed(1)} = ${hl.ratioTop.toFixed(2)} (V ${hl.ratioV.toFixed(2)}, luminance ${hl.headLum.toFixed(1)} / ${hl.ringMean.toFixed(1)} = ${hl.ratio.toFixed(2)})` : `no head (${m.headsDrawn} drawn)`,
-        m.nearWidth ? `(a) ${m.nearWidth.px} px (lit ${m.nearWidth.litPx}; ${m.nearWidth.samples} samples${m.nearWidth.underSmoke?.samples ? `, ${m.nearWidth.underSmoke.samples} under smoke left out, widest ${m.nearWidth.underSmoke.px} px` : ''})` : null,
+        m.nearWidth ? `(a) ${m.nearWidth.px} px (lit ${m.nearWidth.litPx}; ${m.nearWidth.samples} samples${m.nearWidth.underSmoke?.samples ? `, ${m.nearWidth.underSmoke.samples} of them under lit smoke, widest there ${m.nearWidth.underSmoke.px} px` : ''})` : null,
         m.farColour ? `(b) sat ${round3(m.farColour.saturation)} hue ${m.farColour.hueDeg?.toFixed(1)} (n ${m.farColour.n}; tinted sat ${round3(m.farColour.tint.saturation)} hue ${m.farColour.tint.hueDeg?.toFixed(1)} n ${m.farColour.tint.n})` : null,
         m.battleColour ? `battle sat ${round3(m.battleColour.saturation)} hue ${m.battleColour.hueDeg?.toFixed(1)} (n ${m.battleColour.n})` : null,
         m.stream ? `(e) ${m.stream.counts} ${round3(m.stream.share)} of ${m.stream.samples ?? 0}${m.stream.unread ? ` (${m.stream.unread} unread)` : ''}, reach ${m.stream.reachPx}/${m.stream.muzzlePx} = ${round3(m.stream.span)} [lit alone ${round3(m.stream.lit?.share)}, reach ${m.stream.lit?.reachPx ?? '-'} = ${round3(m.stream.lit?.span)}] (shown ${m.stream.innerPx}-${m.stream.reachPx} px: ${round3(m.stream.extent)}; ${STREAM_FROM_M} m at ${m.stream.atFromPx} px, 1 m ${m.stream.at1mPx}, 3 m ${m.stream.at3mPx})` : null,

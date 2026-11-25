@@ -15,7 +15,7 @@
 //     line's own band, not the bloom's halo nor the parapet its shot's flash lights (the looser width,
 //     every pixel LIT over them, is reported beside it); where a puff of the muzzle's smoke nearer the
 //     eye, shown lit over what is round it (by the shot's flash a metre from the eye), covers the walk,
-//     left out and reported.
+//     read as any other (a lit puff round the line is what the gate is for) and reported beside it.
 //   - (b) far colour: the mean HSV saturation and hue of the player's tracers' lit pixels past FAR_M
 //     of flight, against their team colour's own hue as shown (TEAM) and their kind's saturation
 //     (TARGET.farSaturation), gated after dark and reported by day; and the battle's streams', gated at
@@ -91,13 +91,14 @@ const WALK_PX = 32;
 const BG_PX = [34, 48];
 /**
  * The muzzle's smoke's billboard kind (particles.ts SMOKE_BILLBOARD), as the page's particleBillboards
- * gives it: the tool reads each frame's puffs (`smoke`, centre and half size, metres). (a) leaves out a
- * sample whose walk a puff nearer the eye covers, where the puff shows lit over what is round it (LIT:
- * the median of PUFF_IN points across its middle over the median of PUFF_RING points round its rim): the
- * run read there is the puff's (the shooter's own, lit by the shot's flash a metre from the eye), not the
- * line's, as (c) leaves out what the gun and the world hide. A puff that does not show (by day, a sunlit
- * wisp of 0.18 alpha; at night, one no flash lights) is read through. Counted, with the widest run so
- * read, beside it (`underSmoke`).
+ * gives it: the tool reads each frame's puffs (`smoke`, centre and half size, metres). (a) reports, beside
+ * its width (`underSmoke`), the samples whose walk a puff nearer the eye covers where the puff shows lit
+ * over what is round it (LIT: the median of PUFF_IN points across its middle over the median of PUFF_RING
+ * points round its rim), with the widest run among them. They are read as any other: a run there that is
+ * the puff's (the shooter's own, lit by the shot's flash a metre from the eye) is a bright ball round the
+ * line leaving the gun, which the gate is for (G4 Task 3b: the player's smoke takes [effects]
+ * own_smoke_flash_share of the shots' flash light, so it is not). A puff that does not show (by day, a
+ * sunlit wisp of 0.18 alpha; at night, one no flash lights) is not reported.
  */
 export const SMOKE_KIND = 7;
 /** A puff's middle, as shares of its half size across the image: its centre and eight points at 0.4 of it. */
@@ -374,8 +375,8 @@ function smokeOver(pose, puffs, p, a, b) {
 
 /**
  * (a): the widest run across the player's tracers, at half its height, within NEAR_M of the drawn muzzle
- * (from NEAR_FROM_M), over the window's frames; a sample whose walk a puff of smoke nearer the eye, shown
- * lit, covers left out, and counted with its widest run (`underSmoke`).
+ * (from NEAR_FROM_M), over the window's frames, every sample read; those whose walk a puff of smoke nearer
+ * the eye, shown lit, covers counted, with their widest run, beside it (`underSmoke`).
  */
 export function nearWidth(imgs, frames, kind) {
   let best = null;
@@ -415,8 +416,7 @@ export function nearWidth(imgs, frames, kind) {
         const centre = img.lum[at(img, q)];
         if (!(centre >= Math.max(bgs[0], bgs[1]) + NEAR_CONTRAST)) continue;
         const under = smokeOver(pose, puffs, lerp(t.tailM, t.headM, u), [q[0] - n[0] * WALK_PX, q[1] - n[1] * WALK_PX], [q[0] + n[0] * WALK_PX, q[1] + n[1] * WALK_PX]);
-        if (under) underSmoke++;
-        else samples++;
+        samples++;
         // The first step either side short of `within(v, bg)`, less half a step: the run's extent that way.
         const reach = (sign, bg, within) => {
           for (let o = 0.5; o <= WALK_PX; o += 0.5) {
@@ -430,8 +430,8 @@ export function nearWidth(imgs, frames, kind) {
         const half = (v, bg) => v - bg >= 0.5 * (centre - bg);
         const width = reach(-1, bgs[0], half) + reach(1, bgs[1], half);
         if (under) {
+          underSmoke++;
           if (!smoked || width > smoked.px) smoked = { px: width, frame: i, at: [Math.round(q[0]), Math.round(q[1])], fromMuzzleM: Math.round(m * 10) / 10 };
-          continue;
         }
         const loose = reach(-1, bgs[0], lit) + reach(1, bgs[1], lit);
         if (!best || width > best.px) best = { px: width, litPx: loose, frame: i, at: [Math.round(q[0]), Math.round(q[1])], normal: n, fromMuzzleM: Math.round(m * 10) / 10, background: bgs.map(Math.round), centre: Math.round(centre), flownM: Math.round(t.flown * 10) / 10 };

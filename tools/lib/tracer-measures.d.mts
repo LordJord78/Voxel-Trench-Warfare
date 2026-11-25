@@ -86,7 +86,7 @@ export function tracerMasks(frames: readonly Frame[], w: number, h: number): Uin
 export function teamChannel(kind: number): number;
 export function byDay(c: Capture): boolean;
 export function headRing(img: Image, info: Frame['info'], kind: number, anyKind?: boolean): Measures;
-/** (a): the widest run at half height (`px`) over the samples read (`samples`); those a puff of smoke nearer the eye covers left out, counted with their widest run (`underSmoke`). */
+/** (a): the widest run at half height (`px`) over every sample read (`samples`); of them, those a lit puff of smoke nearer the eye covers, counted with their widest run (`underSmoke`), read as the rest are. */
 export function nearWidth(imgs: readonly Image[], frames: readonly Frame[], kind: number): Measures;
 export function farColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[], kind: number, team: Hsv): Measures;
 export function frontColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[]): Measures;

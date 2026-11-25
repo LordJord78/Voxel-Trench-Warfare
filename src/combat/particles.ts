@@ -120,8 +120,8 @@ export function heldShare(ageS: number, driftS: number): number {
 /**
  * A billboard's floats: centre (3), half its size (1), colour premultiplied by its alpha (4), its kind
  * (0 a lit disc, 1 emissive, 2 a lit square, BLOOD_BILLBOARD blood, CASING_BILLBOARD a casing,
- * SMOKE_BILLBOARD smoke), and a casing's way, the unit direction it is drawn along (3; zero for the
- * rest, and unread).
+ * SMOKE_BILLBOARD smoke), and a casing's way, the unit direction it is drawn along (3); smoke's, the
+ * share of the shots' flash light it takes, and two zeros (SMOKE_BILLBOARD); zero for the rest, and unread.
  */
 export const BILLBOARD_FLOATS = 12;
 /**
@@ -139,7 +139,11 @@ export const CASING_BILLBOARD = 6;
 /**
  * Smoke's kind of billboard (the muzzle's): lit as a mote is, and drawn as a soft puff (effects.wgsl), its
  * light falling away from its middle to nothing at its rim. A mote's firm disc, lit by the shot's own light a
- * hand from the eye, read as a bright ball over the view and widened the tracer it hung about.
+ * hand from the eye, read as a bright ball over the view and widened the tracer it hung about. Its tenth
+ * float is the share of the shots' flash light it takes (effects-light.wgsl): 1, whole, but a kept one's
+ * (the player's own, at the drawn muzzle on the next round's line), which takes what the frame gives
+ * (`billboards`' keptFlash: [effects] own_smoke_flash_share), its earlier puffs lit by each shot's flash
+ * having read again as a bright ball round the tracer leaving through them.
  */
 export const SMOKE_BILLBOARD = 7;
 
@@ -281,9 +285,10 @@ export class Particles {
    * Each live particle's billboard into `out` (BILLBOARD_FLOATS each): how many. A particle anchored
    * to `a` is drawn off by where that anchor is drawn now, `anchors[a - 1]` (metres), less where it was
    * thrown: all of it when thrown and none by `driftS` (heldShare); a kept one by its drift as it was
-   * held (`hold`), whatever its age, and where it is if not yet held. It changes nothing.
+   * held (`hold`), whatever its age, and where it is if not yet held. Smoke carries the share of the
+   * shots' flash light it takes (SMOKE_BILLBOARD): a kept one's `keptFlash`, another's 1. It changes nothing.
    */
-  billboards(out: Float32Array, anchors?: readonly (readonly number[] | undefined)[], driftS = 0): number {
+  billboards(out: Float32Array, anchors?: readonly (readonly number[] | undefined)[], driftS = 0, keptFlash = 1): number {
     const n = Math.min(this.count, Math.floor(out.length / BILLBOARD_FLOATS));
     for (let i = 0; i < n; i++) {
       const t = Math.min(1, Math.max(0, this.age[i] / this.life[i]));
@@ -301,11 +306,12 @@ export class Particles {
       for (let c = 0; c < 3; c++) out[o + 4 + c] = (this.colourStart[i * 4 + c] + (this.colourEnd[i * 4 + c] - this.colourStart[i * 4 + c]) * t) * alpha;
       out[o + 7] = alpha;
       out[o + 8] = this.kind[i];
-      // A casing's way: its velocity's direction (none while it is still).
+      // A casing's way: its velocity's direction (none while it is still). Smoke's share of the shots' flash light.
       let ax = 0;
       let ay = 0;
       let az = 0;
-      if (this.kind[i] === CASING_BILLBOARD) {
+      if (this.kind[i] === SMOKE_BILLBOARD) ax = this.keep[i] === 0 ? 1 : keptFlash;
+      else if (this.kind[i] === CASING_BILLBOARD) {
         const vx = this.vel[i * 3];
         const vy = this.vel[i * 3 + 1];
         const vz = this.vel[i * 3 + 2];
