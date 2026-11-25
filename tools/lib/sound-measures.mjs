@@ -5,7 +5,8 @@
 // Each file's peak is held between −30 and −1 dBFS and none may be silent; a render may be held besides
 // to a band, to the small speaker (its share over 400 Hz), to a floor under its peak, to another
 // render's loudest 50 ms, or its body's (a kill's thud, apart from its chime), over another render's
-// energy in a band (a headshot's kill over the same kill without its gush), its loudest 50 ms under
+// energy in a band, or over several others' read alike (a headshot's kill over the same kill without
+// its gush; a report over both pistols'), its loudest 50 ms under
 // another's (a suppressed SVD's report under a bare one's: its loudness, as `near` and `tail` read it,
 // never its sample peak, which a noise burst's seed swings by 4 dB), its share over 400 Hz over
 // another's (the same, its tone), or its tail's loudest 50 ms between so many dB under its report's (a
@@ -317,6 +318,16 @@ export function ruleTail(x, rate, rule) {
   return { dryDb: read(from, split), tailDb: read(split, channels[0].length) };
 }
 
+/**
+ * A render's `over` rules as a list: none, its one, or each of its list (a report held over both
+ * pistols). Its one reading (`overDb`, tools/sounds/page.ts) holds them only read alike: one band and
+ * one first span.
+ */
+export function overRules(rules = {}) {
+  const over = rules.over;
+  return over === undefined ? [] : Array.isArray(over) ? over : [over];
+}
+
 const db1 = (x) => (x === -Infinity ? '-inf' : x.toFixed(1));
 const pct1 = (x) => `${(x * 100).toFixed(1)}%`;
 const pct = (x) => `${Math.round(x * 100)}%`;
@@ -333,7 +344,9 @@ const pct = (x) => `${Math.round(x * 100)}%`;
  * `near.low` from its body's, under SMALL_SPEAKER_HZ alone (the kill's thud, never its louder chime);
  * or its energy in `over.band` (over its first `over.firstS` seconds if given) less than `over.db` dB
  * over render `over.of`'s, read alike (`overDb`, each): a headshot's kill over the same without its
- * gush, as the kill's chime alone fills the band a share can ask of it; its loudest 50 ms less than
+ * gush, as the kill's chime alone fills the band a share can ask of it; `over` a list, each so (a
+ * report over both pistols), and its rules reading it unalike fail, as its one reading can't stand for
+ * them all; its loudest 50 ms less than
  * `under.db` dB under render `under.of`'s (a suppressed SVD's report under a bare one's: read on its
  * loudness, never its sample peak, which a noise burst's seed swings by 4 dB); its share over
  * 400 Hz less than `highOver.by` over render `highOver.of`'s (the same, its tone); or its tail's loudest
@@ -380,16 +393,20 @@ function ruleFailures(m, rules, others) {
       if (!(Math.abs(gap) <= withinDb)) out.push(`its loudest 50 ms, ${db1(m.loudestDb)} dBFS, is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'under' : 'over'} ${whose} (${db1(level)} dBFS), not within ${withinDb} dB`);
     }
   }
-  if (rules.over) {
-    const { of, band, firstS, db } = rules.over;
-    const other = others[of];
-    const whose = `${firstS === undefined ? 'its energy' : `its first ${Math.round(firstS * 1000)} ms's energy`} in ${band[0]}-${band[1]} Hz`;
-    if (!other) out.push(`its energy is held over ${of}'s, which was not rendered`);
-    else if (!(other.peakDb >= SILENT_DB)) out.push(`its energy is held over ${of}'s, which is silent`);
-    else if (typeof m.overDb !== 'number' || typeof other.overDb !== 'number') out.push(`${whose} over ${of}'s was not measured`);
-    else {
-      const gap = m.overDb - other.overDb;
-      if (!(gap >= db)) out.push(`${whose} is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'under' : 'over'} ${of}'s, not ${db} dB or more over it`);
+  const overs = overRules(rules);
+  const reads = (o) => `${o.band[0]}-${o.band[1]} Hz over ${o.firstS === undefined ? 'the whole file' : `its first ${Math.round(o.firstS * 1000)} ms`}`;
+  if (new Set(overs.map(reads)).size > 1) out.push(`its over rules read it unalike (${overs.map(reads).join('; ')}): its one reading holds them only read alike`);
+  else {
+    for (const { of, band, firstS, db } of overs) {
+      const other = others[of];
+      const whose = `${firstS === undefined ? 'its energy' : `its first ${Math.round(firstS * 1000)} ms's energy`} in ${band[0]}-${band[1]} Hz`;
+      if (!other) out.push(`its energy is held over ${of}'s, which was not rendered`);
+      else if (!(other.peakDb >= SILENT_DB)) out.push(`its energy is held over ${of}'s, which is silent`);
+      else if (typeof m.overDb !== 'number' || typeof other.overDb !== 'number') out.push(`${whose} over ${of}'s was not measured`);
+      else {
+        const gap = m.overDb - other.overDb;
+        if (!(gap >= db)) out.push(`${whose} is ${Math.abs(gap).toFixed(1)} dB ${gap < 0 ? 'under' : 'over'} ${of}'s, not ${db} dB or more over it`);
+      }
     }
   }
   if (rules.under) {
@@ -428,7 +445,7 @@ function ruleFailures(m, rules, others) {
   return out;
 }
 
-/** The rules another render's reading is held to: each names it (`of`). */
+/** The rules another render's reading is held to: each names it (`of`); `over` may name several. */
 const RELATIONS = ['near', 'over', 'under', 'highOver'];
 
 /**
@@ -470,14 +487,22 @@ export function checkDraws(draws, rules = {}, others = {}, asked = draws.length)
   const onMean = { ...rules };
   delete onMean.floorDb;
   const theirs = {};
-  for (const key of RELATIONS) {
-    const of = rules[key]?.of;
+  const unequal = new Set();
+  const named = RELATIONS.flatMap((key) => (key === 'over' ? overRules(rules) : rules[key] === undefined ? [] : [rules[key]]).map((rule) => rule.of));
+  for (const of of new Set(named)) {
     if (of === undefined || others[of] === undefined) continue;
     if (others[of].length === n) theirs[of] = meanOf(others[of]);
     else {
-      if (!out.some((f) => f.startsWith(`${of} was read on`))) out.push(`${of} was read on ${others[of].length} draws, not ${n}: its mean is not of as many`);
-      delete onMean[key];
+      out.push(`${of} was read on ${others[of].length} draws, not ${n}: its mean is not of as many`);
+      unequal.add(of);
     }
+  }
+  // A rule against another read on a different count of draws is not held (said above); an `over` list keeps the rest.
+  for (const key of RELATIONS) if (key !== 'over' && unequal.has(rules[key]?.of)) delete onMean[key];
+  if (rules.over !== undefined) {
+    const kept = overRules(rules).filter((o) => !unequal.has(o.of));
+    if (kept.length === 0) delete onMean.over;
+    else onMean.over = kept;
   }
   const mean = n === 1 ? '' : ` (the mean of ${n} draws)`;
   return [...out, ...ruleFailures(meanOf(draws), onMean, theirs).map((f) => f + mean)];
@@ -517,7 +542,7 @@ export function readings(draws, rules = {}, others = {}) {
     const { of, withinDb, low } = rules.near;
     add('near', of, `within ${withinDb}`, 'dB', 'mean', (m, o) => num(m.loudestDb) - num(low ? o.lowLoudestDb : o.loudestDb), (v) => withinDb - Math.abs(v));
   }
-  if (rules.over) add('over', rules.over.of, `>= ${rules.over.db}`, 'dB', 'mean', (m, o) => num(m.overDb) - num(o.overDb), (v) => v - rules.over.db);
+  for (const over of overRules(rules)) add('over', over.of, `>= ${over.db}`, 'dB', 'mean', (m, o) => num(m.overDb) - num(o.overDb), (v) => v - over.db);
   if (rules.under) add('under', rules.under.of, `>= ${rules.under.db}`, 'dB', 'mean', (m, o) => num(o.loudestDb) - num(m.loudestDb), (v) => v - rules.under.db);
   if (rules.highOver) add('highOver', rules.highOver.of, `>= ${pc(rules.highOver.by)}`, 'share', 'mean', (m, o) => num(m.highShare) - num(o.highShare), (v) => v - rules.highOver.by);
   if (rules.tail) {

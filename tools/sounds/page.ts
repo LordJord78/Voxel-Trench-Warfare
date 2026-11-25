@@ -20,7 +20,7 @@ import { audioTunables, type AudioTunables } from '../../src/audio/plan';
 import { mixInto, tailInto, whiteNoise } from '../../src/audio/engine';
 import { playVoice, reportShape, type ReportShape } from '../../src/audio/voices';
 import { loadTunables } from '../../src/core/tunables';
-import { measure, ruleEnergyDb, ruleShare, ruleTail, type Measured, type OverRule } from '../lib/sound-measures.mjs';
+import { measure, overRules, ruleEnergyDb, ruleShare, ruleTail, type Measured, type OverRule } from '../lib/sound-measures.mjs';
 import { LEAD_S, RATE, renders, SETTLE_S, type Render } from './renders';
 
 /** A render done: its file's samples (base64 of float32, left and right), and both mixes read. */
@@ -35,7 +35,7 @@ export interface Rendered {
   draws: number;
   /** What the game puts out on its named seed: base64 of each ear's float32 samples, left then right. */
   samples: [string, string];
-  /** What the game puts out on its named seed, read; with the band rule's own share if it has one, an `over` rule's reading if it has one or another's names it, and a `tail` rule's if it has one. */
+  /** What the game puts out on its named seed, read; with the band rule's own share if it has one, an `over` reading if it has `over` rules (all read alike) or another's names it, and a `tail` rule's if it has one. */
   heard: Measured;
   /** The mix before the compressor on its named seed, read. */
   into: Measured;
@@ -120,13 +120,13 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
   const out: Rendered[] = [];
   const random = Math.random;
   const all = renders(tun);
-  // A render another is held over is read as that rule reads it.
+  // A render another is held over is read as that rule reads it (a report over both pistols: each pistol so).
   const under = new Map<string, OverRule>();
-  for (const r of all) if (r.rules?.over) under.set(r.rules.over.of, r.rules.over);
+  for (const r of all) for (const o of overRules(r.rules)) under.set(o.of, o);
   try {
     for (const r of all) {
       if (only && !only.includes(r.name)) continue;
-      const over = r.rules?.over ?? under.get(r.name);
+      const over = overRules(r.rules)[0] ?? under.get(r.name);
       const drawn: Rendered['drawn'] = [];
       let ears: [Float32Array, Float32Array] | null = null;
       for (let k = 0; k < r.draws; k++) {
@@ -154,8 +154,8 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
   return out;
 }
 
-/** The renders, in order: each one's name, and the renders its level is held to, over and under, and its tone over, if any (for --only). */
-const list = (): { name: string; near: string | null; over: string | null; under: string | null; highOver: string | null }[] =>
-  renders(loadTunables()).map((r) => ({ name: r.name, near: r.rules?.near?.of ?? null, over: r.rules?.over?.of ?? null, under: r.rules?.under?.of ?? null, highOver: r.rules?.highOver?.of ?? null }));
+/** The renders, in order: each one's name, and the renders its level is held to, over (each) and under, and its tone over, if any (for --only). */
+const list = (): { name: string; near: string | null; over: string[]; under: string | null; highOver: string | null }[] =>
+  renders(loadTunables()).map((r) => ({ name: r.name, near: r.rules?.near?.of ?? null, over: overRules(r.rules).map((o) => o.of), under: r.rules?.under?.of ?? null, highOver: r.rules?.highOver?.of ?? null }));
 
 (window as unknown as { sounds: { render: typeof render; list: typeof list; ready: boolean } }).sounds = { render, list, ready: true };

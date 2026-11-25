@@ -310,8 +310,8 @@ describe('a report as planned', () => {
     }
   });
 
-  it("each gun's report has its own weight, report_gain in its [viewkick.<gun>]: the SVD heaviest, then the M870, the M4, the MP5, the AK and M249, the pistols lightest (tuned on the heard renders: npm run sounds orders them as heard)", () => {
-    const pinned: Record<GunKey, number> = { svd: 1.43, m870: 1.35, m4: 0.76, mp5: 0.66, ak74: 0.65, m249: 0.65, m17: 0.62, pm: 0.62 };
+  it("each gun's report has its own weight, report_gain in its [viewkick.<gun>]: the SVD heaviest, then the M870, the M4, the MP5, the AK and M249, the pistols lightest, the PM (0.61) a step under the M17 (0.62) (tuned on the heard renders: npm run sounds orders them as heard, the AK and the M4 over each pistol)", () => {
+    const pinned: Record<GunKey, number> = { svd: 1.43, m870: 1.35, m4: 0.76, mp5: 0.66, ak74: 0.65, m249: 0.65, m17: 0.62, pm: 0.61 };
     for (const gun of GUNS) {
       expect(tun.f(`viewkick.${GUN_DEFS[gun].table}.report_gain`), gun).toBe(pinned[gun]);
       expect(t.reportGain[gun], gun).toBe(pinned[gun]);

@@ -8,7 +8,7 @@ import { armSpec } from '../../src/combat/arsenal';
 import { rangeTunables } from '../../src/combat/range';
 import { loadTunables } from '../../src/core/tunables';
 import { BARE } from '../../src/net/gear';
-import { COMPRESSOR_THRESHOLD_DB, PEAK_DB } from '../../tools/lib/sound-measures.mjs';
+import { COMPRESSOR_THRESHOLD_DB, overRules, PEAK_DB } from '../../tools/lib/sound-measures.mjs';
 import { DRAWS, FRAME_S, FRONT_M, LEAD_S, MUZZLE, RATE, renders, SETTLE_S, TAIL_S } from '../../tools/sounds/renders';
 import { FakeContext, install, madeOf } from '../support/fake-web-audio';
 
@@ -46,7 +46,7 @@ const OTHERS_S: Record<(typeof OTHERS)[number], number> = {
 /** The order the reports weigh in (G5's final review), each by 0.5 dB on the mean of its draws (the controller's ruling, resumed a second time): all read alike, so one reading serves each render (tools/sounds/page.ts). */
 const ORDER = { band: [20, 20000], firstS: 0.08, db: 0.5 } as const;
 /** The renders drawn DRAWS times, each its named seed and eight more: those a rule read on the mean reads (the reports' order, the suppressed SVD's, the gush's, the hit voices under the AK), and the bursts, whose peaks hold on every draw. */
-const DRAWN = ['hit', 'head', 'gush', 'kill', 'mag-out', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870', 'report-pistol', 'report-m4', 'report-ak-burst', 'report-m249-burst'] as const;
+const DRAWN = ['hit', 'head', 'gush', 'kill', 'mag-out', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870', 'report-pistol', 'report-m4', 'report-pm', 'report-ak-burst', 'report-m249-burst'] as const;
 /** The hit voices under the gun (the controller's ruling, resumed a second time): each one's loudest 50 ms so many dB or more under the AK report's, on the mean of their draws. */
 const UNDER_AK = { hit: 2, head: 2, gush: 2, kill: 0 } as const;
 /** Each gun's own body heard (G5's final review): the share of the first 80 ms in its body's band, halfway between the share with the gun's own body and with the defaults' 140 Hz in its place (measured with the compressor settled: 0.726 and 0.458 for the M870, 0.835 and 0.159 for the pistol). */
@@ -157,14 +157,14 @@ describe("the sounds' proof: what it renders", () => {
     for (const r of list) expect(r.draws, r.name).toBe((DRAWN as readonly string[]).includes(r.name) ? DRAWS : 1);
     // A render held to another, each read on the mean of as many draws: the other is drawn as often.
     for (const r of list) {
-      for (const of of [r.rules?.near?.of, r.rules?.over?.of, r.rules?.under?.of, r.rules?.highOver?.of]) if (of !== undefined) expect(byName(of).draws, `${r.name} against ${of}`).toBe(r.draws);
+      for (const of of [r.rules?.near?.of, ...overRules(r.rules).map((o) => o.of), r.rules?.under?.of, r.rules?.highOver?.of]) if (of !== undefined) expect(byName(of).draws, `${r.name} against ${of}`).toBe(r.draws);
     }
   });
 
   it('every name is its own (a file each), and a render held to another names one rendered', () => {
     expect(new Set(list.map((r) => r.name)).size).toBe(list.length);
     for (const r of list) if (r.rules?.near) expect(list.map((x) => x.name), r.name).toContain(r.rules.near.of);
-    for (const r of list) if (r.rules?.over) expect(list.map((x) => x.name), r.name).toContain(r.rules.over.of);
+    for (const r of list) for (const o of overRules(r.rules)) expect(list.map((x) => x.name), r.name).toContain(o.of);
     for (const r of list) if (r.rules?.under) expect(list.map((x) => x.name), r.name).toContain(r.rules.under.of);
     for (const r of list) if (r.rules?.highOver) expect(list.map((x) => x.name), r.name).toContain(r.rules.highOver.of);
   });
@@ -173,7 +173,7 @@ describe("the sounds' proof: what it renders", () => {
     const key = (o: { band: readonly number[]; firstS?: number }) => `${o.band.join('-')} Hz over ${o.firstS} s`;
     for (const r of list) {
       // How each rule that reads this render reads it: its own, and every one held over it.
-      const reads = list.flatMap((x) => (x.rules?.over && (x === r || x.rules.over.of === r.name) ? [key(x.rules.over)] : []));
+      const reads = list.flatMap((x) => overRules(x.rules).filter((o) => x === r || o.of === r.name).map(key));
       expect(new Set(reads).size, r.name).toBeLessThanOrEqual(1);
     }
   });
@@ -244,16 +244,14 @@ describe("the sounds' proof: the reports, and every kind", () => {
     expect(list.filter((r) => r.rules?.under).map((r) => r.name)).toEqual(['hit', 'head', 'gush', 'kill', 'report-svd-suppressed']);
   });
 
-  it("the reports' weight, in order, each by 0.5 dB on the mean of their draws: the M870 and the SVD over the AK, the AK and the M4 over the pistols, each its first 80 ms's energy across the band (20 Hz-20 kHz)", () => {
+  it("the reports' weight, in order, each by 0.5 dB on the mean of their draws: the M870 and the SVD over the AK, the AK and the M4 over both pistols (the M17 and the PM, each held), each its first 80 ms's energy across the band (20 Hz-20 kHz)", () => {
     expect(byName('report-m870').rules?.over).toEqual({ of: 'report-ak', ...ORDER });
     expect(byName('report-svd').rules?.over).toEqual({ of: 'report-ak', ...ORDER });
-    expect(byName('report-ak').rules?.over).toEqual({ of: 'report-pistol', ...ORDER });
-    expect(byName('report-m4').rules).toEqual({ over: { of: 'report-pistol', ...ORDER } });
-    // The M17 stands for both pistols: the PM's report is its body, and no heavier.
-    const [m17] = byName('report-pistol').plans;
-    const [pm] = byName('report-pm').plans;
-    expect(pm.bodyHz).toBe(m17.bodyHz);
-    expect(pm.gain).toBeLessThanOrEqual(m17.gain);
+    const pistols = [{ of: 'report-pistol', ...ORDER }, { of: 'report-pm', ...ORDER }];
+    expect(byName('report-ak').rules?.over).toEqual(pistols);
+    expect(byName('report-m4').rules).toEqual({ over: pistols });
+    // Each pistol drawn as often as the guns held over it, so each is held on its own mean.
+    for (const name of ['report-pistol', 'report-pm']) expect(byName(name).draws, name).toBe(DRAWS);
   });
 
   it("the hit voices sit under the gun: the kill's loudest 50 ms at or under the AK report's, the hit's, the head's and the gush's 2 dB or more under it, on the mean of their draws", () => {

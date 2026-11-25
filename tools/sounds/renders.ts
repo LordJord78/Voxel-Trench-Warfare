@@ -22,7 +22,7 @@
  * §6, G5's Task 2 and its final review): the front's, FRONT_M ahead, the player's own at the muzzle from
  * every gun (the SVD bare and suppressed), an AK burst and a long M249 burst, each heard with the shared
  * tail (its file runs the tail's length past its own layers). Their weight is held in order, by 0.5 dB
- * on the mean of their draws (the M870 and the SVD over the AK, the AK and the M4 over the pistol); the
+ * on the mean of their draws (the M870 and the SVD over the AK, the AK and the M4 over both pistols); the
  * M870's and the SVD's tails, and the AK burst's
  * after its last report, from both sides (TailRule); the M870's and the pistol's own bodies in their
  * bands; the suppressed SVD's loudest 50 ms under the bare one's, its tone brighter than it, and over
@@ -120,7 +120,7 @@ const MIX: Partial<Record<FeedbackKind, SoundRules>> = {
  * SVD's against the bare one and its mag-out, the gush's band and its kill, the hits' voices under the AK
  * report), and the bursts, whose peaks hold on every draw. Every other render is drawn once.
  */
-const DRAWN: readonly string[] = ['hit', 'head', 'gush', 'kill', 'mag-out', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870', 'report-pistol', 'report-m4', 'report-ak-burst', 'report-m249-burst'];
+const DRAWN: readonly string[] = ['hit', 'head', 'gush', 'kill', 'mag-out', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870', 'report-pistol', 'report-m4', 'report-pm', 'report-ak-burst', 'report-m249-burst'];
 /** The gush gushes: at least this share of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill thud's (the kill's part under 400 Hz, apart from its chime). */
 const GUSH: SoundRules = { band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3, low: true } };
 /**
@@ -159,6 +159,8 @@ const BURST_LAST_S = 0.9;
  * band. All read alike, as page.ts reads one over-reading a render.
  */
 const ORDER = { band: [20, 20000] as const, firstS: 0.08, db: 0.5 };
+/** Over both pistols, each held on its own draws (the ruling asks the AK and the M4 over the pistols): the M17's report and the PM's. */
+const OVER_PISTOLS = [{ of: 'report-pistol', ...ORDER }, { of: 'report-pm', ...ORDER }];
 /**
  * A long M249 burst (G5's fix wave): this many of its reports at the gun's own rate, held to the peak's
  * range alone. Each report peaks about as a single one does (the compressor settled: 1.6 to 3.5 dB
@@ -177,14 +179,14 @@ const TAIL: TailRule = { afterS: REPORT_S, underDb: [3, 24] };
 const M870_BODY = 0.59;
 const PISTOL_BODY = 0.5;
 /**
- * What each of the player's own reports is held to besides its peak's range: the order (the M17 stands
- * for both pistols: the PM's report is its body and weight); the tails of the two the hot tail
- * outweighed; each body in its band; and the suppressed SVD's loudest 50 ms 6 dB or more under the bare
- * one's (G5's review focus), its tone brighter, and its first 50 ms 2 dB over its mag-out's.
+ * What each of the player's own reports is held to besides its peak's range: the order (the AK and the
+ * M4 over each pistol); the tails of the two the hot tail outweighed; each body in its band; and the
+ * suppressed SVD's loudest 50 ms 6 dB or more under the bare one's (G5's review focus), its tone
+ * brighter, and its first 50 ms 2 dB over its mag-out's.
  */
 const OWN_RULES: Readonly<Record<string, SoundRules>> = {
-  'report-ak': { over: { of: 'report-pistol', ...ORDER } },
-  'report-m4': { over: { of: 'report-pistol', ...ORDER } },
+  'report-ak': { over: OVER_PISTOLS },
+  'report-m4': { over: OVER_PISTOLS },
   'report-svd': { over: { of: 'report-ak', ...ORDER }, tail: TAIL },
   'report-svd-suppressed': { under: { of: 'report-svd', db: 6 }, highOver: { of: 'report-svd', by: 0.1 }, over: { of: 'mag-out', band: [20, 20000], firstS: 0.05, db: 2 } },
   'report-m870': { over: { of: 'report-ak', ...ORDER }, tail: TAIL, band: { hz: [20, 120], share: M870_BODY, firstS: 0.08 } },

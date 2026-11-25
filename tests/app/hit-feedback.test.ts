@@ -587,7 +587,7 @@ describe('hit feedback', () => {
     expect(bloodied(s, head)).toBe(before.spatter);
   });
 
-  it("torso, torso, then a head round that does not kill on its own, then the room's death by a torso round: one critical burst, the headshot's", () => {
+  it("torso, torso, then a head round that does not kill on its own, then the room's death by a torso round: one critical burst, the headshot's; still the kill, marked, popped and heard (at 0.3)", () => {
     const s = field();
     const them = body(3);
     s.together = true;

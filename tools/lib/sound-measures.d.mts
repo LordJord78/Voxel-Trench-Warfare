@@ -40,8 +40,8 @@ export interface SoundRules {
   floorDb?: number;
   /** Its loudest 50 ms within `withinDb` of render `of`'s; with `low`, of `of`'s body's, under SMALL_SPEAKER_HZ alone (the kill's thud, never its chime). */
   near?: { of: string; withinDb: number; low?: boolean };
-  /** Its energy in `band` (Hz), over its first `firstS` seconds from its onset if given, at least `db` dB over render `of`'s, read alike. */
-  over?: OverRule;
+  /** Its energy in `band` (Hz), over its first `firstS` seconds from its onset if given, at least `db` dB over render `of`'s, read alike; or a list, each so, all read alike (a report over both pistols). */
+  over?: OverRule | readonly OverRule[];
   /** Its loudest 50 ms at least `db` dB under render `of`'s (a suppressed report under the bare one's): its loudness, never its sample peak. */
   under?: { of: string; db: number };
   /** Its share over SMALL_SPEAKER_HZ at least `by` over render `of`'s (a suppressed report brighter than the bare one). */
@@ -87,6 +87,8 @@ export function onset(x: Channels, rate: number): number | null;
 export function ruleShare(x: Channels, rate: number, rule: BandRule): number;
 export function ruleEnergyDb(x: Channels, rate: number, rule: { hz: readonly [number, number]; firstS?: number }): number;
 export function ruleTail(x: Channels, rate: number, rule: { afterS: number }): { dryDb: number; tailDb: number };
+/** A render's `over` rules as a list: none, its one, or each of its list. */
+export function overRules(rules?: SoundRules): readonly OverRule[];
 export function checkSound(m: Measured, rules?: SoundRules, others?: Readonly<Record<string, Measured>>): string[];
 export const COMPRESSOR_THRESHOLD_DB: number;
 export function settledFailures(into: Measured, heard: Measured): string[];

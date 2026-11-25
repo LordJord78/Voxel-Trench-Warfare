@@ -871,10 +871,11 @@ report_peak_db      = 158.0    # 5.45 at the shooter's ear
 # gun's report weighs report_gain (its table's): the player's own and another's; the front's are 1.
 # Tuned on the settled renders (the master compressor settled, as the game's is by its first shot),
 # over nine draws of each shot's body and noise: npm run sounds holds the M870 and the SVD over the
-# AK, and the AK and the M4 over the pistols, each by 0.5 dB on the mean of the draws, and every draw's
+# AK, and the AK and the M4 over each pistol, each by 0.5 dB on the mean of the draws, and every draw's
 # peak under -1 dBFS. The compressor passes about a third of a paper dB on the heavy two, so their
 # peaks cap them (the M870 1.35, the SVD 1.43); the M870 caps the AK (and the M249 with it) at 0.65,
-# and the M4 (0.76, as before) the pistols at 0.62.
+# and the M4 (0.76, as before) the M17 at 0.62 and the PM at 0.61 (its own nine draws read 0.09 dB
+# hotter than the M17's on one body and weight).
 report_body_hz      = 140.0
 report_tail_send    = 0.35
 report_tail_s       = 1.2
@@ -950,7 +951,7 @@ punch_roll_deg      = 1.10
 settle_time_s       = 0.20
 cam_roll_deg        = 0.90
 report_body_hz      = 210.0
-report_gain         = 0.62
+report_gain         = 0.61
 
 # ---------------------------------------------------------------------------
 # PARTICLES

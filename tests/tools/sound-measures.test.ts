@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BAND, bandShare, checkDraws, checkSound, COMPRESSOR_THRESHOLD_DB, dbfs, LOUDEST_S, loudest, loudestUnder, meanOf, measure, ONSET_DB, onset, PEAK_DB, readings, readingsTable, ruleEnergyDb, ruleShare, ruleTail, settledFailures, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
+import { BAND, bandShare, checkDraws, checkSound, COMPRESSOR_THRESHOLD_DB, dbfs, LOUDEST_S, loudest, loudestUnder, meanOf, measure, ONSET_DB, onset, overRules, PEAK_DB, readings, readingsTable, ruleEnergyDb, ruleShare, ruleTail, settledFailures, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
 
 // The sounds' proof (tools/render-sounds.mjs, npm run sounds; the shots spec's §6, G3's Task 5): each
 // voice rendered to a stereo WAV, its peak held between −30 and −1 dBFS, nothing silent; a voice held
@@ -425,6 +425,46 @@ describe("the sounds' measures", () => {
     expect(checkDraws(held, { under }, { bare: gap })).toEqual(["its loudest 50 ms is held under bare's, which is silent (the mean of 3 draws)"]);
     expect(checkDraws(held, { under, highOver: { of: 'bare', by: 0.1 } }, { bare: bare.slice(0, 2) })).toEqual(['bare was read on 2 draws, not 3: its mean is not of as many']);
     expect(checkDraws(held, { under }, {})).toEqual(["its loudest 50 ms is held under bare's, which was not rendered (the mean of 3 draws)"]);
+  });
+
+  it("a render held over several others (`over`, a list: a report over both pistols): each on its one reading, read alike; any one short fails, said by whose; one missing or silent fails; rules reading it unalike fail closed", () => {
+    const order = { band: [20, 20000] as [number, number], firstS: 0.08, db: 0.5 };
+    const over = [{ of: 'm17', ...order }, { of: 'pm', ...order }];
+    const m17 = read({ overDb: 40 });
+    const pm = read({ overDb: 40.3 });
+    expect(overRules({})).toEqual([]);
+    expect(overRules({ over: over[0] })).toEqual([over[0]]);
+    expect(overRules({ over })).toEqual(over);
+    expect(checkSound(read({ overDb: 41 }), { over }, { m17, pm })).toEqual([]);
+    // 0.7 dB over the M17 but 0.4 over the PM: the PM's fails, said so.
+    expect(checkSound(read({ overDb: 40.7 }), { over }, { m17, pm })).toEqual(["its first 80 ms's energy in 20-20000 Hz is 0.4 dB over pm's, not 0.5 dB or more over it"]);
+    // Under both: each says so.
+    expect(checkSound(read({ overDb: 39.9 }), { over }, { m17, pm })).toEqual([
+      "its first 80 ms's energy in 20-20000 Hz is 0.1 dB under m17's, not 0.5 dB or more over it",
+      "its first 80 ms's energy in 20-20000 Hz is 0.4 dB under pm's, not 0.5 dB or more over it",
+    ]);
+    // One of them not rendered, or silent: never a pass.
+    expect(checkSound(read({ overDb: 41 }), { over }, { m17 })).toEqual(["its energy is held over pm's, which was not rendered"]);
+    expect(checkSound(read({ overDb: 41 }), { over }, { m17, pm: read({ peakDb: -Infinity, overDb: -Infinity }) })).toEqual(["its energy is held over pm's, which is silent"]);
+    // A list of one is its one rule.
+    expect(checkSound(read({ overDb: 40.4 }), { over: [over[0]] }, { m17 })).toEqual(checkSound(read({ overDb: 40.4 }), { over: over[0] }, { m17 }));
+    // Read unalike, its one reading (overDb, tools/sounds/page.ts) stands for one of them only: it fails closed.
+    expect(checkSound(read({ overDb: 45 }), { over: [over[0], { of: 'pm', band: [400, 2000], firstS: 0.08, db: 0.5 }] }, { m17, pm })).toEqual(["its over rules read it unalike (20-20000 Hz over its first 80 ms; 400-2000 Hz over its first 80 ms): its one reading holds them only read alike"]);
+    expect(checkSound(read({ overDb: 45 }), { over: [over[0], { of: 'pm', band: [20, 20000], db: 0.5 }] }, { m17, pm })).toEqual(["its over rules read it unalike (20-20000 Hz over its first 80 ms; 20-20000 Hz over the whole file): its one reading holds them only read alike"]);
+    // On its draws: each on the mean against the other's (the PM's 40.3, its own 40.73); one other read on
+    // fewer draws drops that one alone, said so; and a reading each, paired draw by draw.
+    const m17s = draws(3, () => ({ overDb: 40 }));
+    const pms = draws(3, (k) => ({ overDb: [40, 40.6, 40.3][k] }));
+    const ak = draws(3, (k) => ({ overDb: [41.2, 40.2, 40.8][k] }));
+    expect(checkDraws(ak, { over }, { m17: m17s, pm: pms })).toEqual(["its first 80 ms's energy in 20-20000 Hz is 0.4 dB over pm's, not 0.5 dB or more over it (the mean of 3 draws)"]);
+    expect(checkDraws(ak, { over }, { m17: m17s.slice(0, 2), pm: pms })).toEqual(['m17 was read on 2 draws, not 3: its mean is not of as many', "its first 80 ms's energy in 20-20000 Hz is 0.4 dB over pm's, not 0.5 dB or more over it (the mean of 3 draws)"]);
+    expect(checkDraws(ak, { over }, { m17: m17s })).toEqual(["its energy is held over pm's, which was not rendered (the mean of 3 draws)"]);
+    const rows = readings(ak, { over }, { m17: m17s, pm: pms });
+    expect(rows.map((r) => [r.rule, r.of ?? null])).toEqual([['peak', null], ['over', 'm17'], ['over', 'pm']]);
+    expect(rows[1].mean).toBeCloseTo(0.7333, 3);
+    expect(rows[1].worst).toBeCloseTo(0.2, 9);
+    expect(rows[2].mean).toBeCloseTo(0.4333, 3);
+    expect(rows[2].worst).toBeCloseTo(-0.4, 9);
   });
 
   it("each reading a render's gates read over its draws, for the table and report.json: on the named draw, on their mean, and on the worst draw (the nearest its bound, or furthest past it)", () => {

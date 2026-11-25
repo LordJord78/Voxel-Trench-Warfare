@@ -15,7 +15,7 @@
 // outside −30 to −1 dBFS, or silent; or, by its rules, under its floor, too little in its band or over
 // 400 Hz (the small speaker), its loudest 50 ms too far from another render's or its body's (the
 // kill's thud), or its energy in a band too little over another's (a headshot's kill over the same
-// without its gush, a report over a lighter gun's), its loudest 50 ms too little under another's (a
+// without its gush, a report over each lighter gun's), its loudest 50 ms too little under another's (a
 // suppressed SVD's report under the bare one's) or its share over 400 Hz too little over it, or its
 // tail's loudest 50 ms not between so many dB under its report's (missing, or outweighing it); or the
 // master compressor cut a mix that never reached its threshold (it had not settled: each render's
@@ -95,7 +95,7 @@ try {
     // rendered too, and whatever that one is held to in turn.
     let only = asked.only;
     for (let grew = only !== null; grew; ) {
-      const next = [...new Set([...only, ...known.filter((k) => only.includes(k.name)).flatMap((k) => [k.near, k.over, k.under, k.highOver].filter((x) => x !== null && x !== undefined))])];
+      const next = [...new Set([...only, ...known.filter((k) => only.includes(k.name)).flatMap((k) => [k.near, ...k.over, k.under, k.highOver].filter((x) => x !== null && x !== undefined))])];
       grew = next.length > only.length;
       only = next;
     }
