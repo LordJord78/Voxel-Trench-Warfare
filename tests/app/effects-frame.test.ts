@@ -694,12 +694,14 @@ describe('a frame of effects', () => {
     //     23 of the 24 (the one other 5.9 px under it, both well under the middle);
     //   - a shot breaks the gate (a tip more than 2 px over the middle, or a prong within 3% of it):
     //     17 of the 24;
-    //   - a tip rises over the middle: 12 of the 24, as high as 24.6 px (11 more than 2 px over it). Half,
-    //     not the clear majority the final review's synthesis asked for (its item 15): a tip clears the
-    //     AK's irons, 0.0675 m over the bore, only from a prong reaching that far off it, its length
-    //     (0.15 to 0.30 m) by the sine of its splay (15° to 25°), 0.04 to 0.13 m, and rolled within the
-    //     arc that reach allows about the gun's up. A third or more is asserted: fewer, and the gate's
-    //     "no tip over the middle" would hold whatever the rolls, and prove nothing.
+    //   - a tip rises over the middle: 12 of the 24, as high as 24.6 px (11 more than 2 px over it). Half:
+    //     a tip clears the AK's irons, 0.0675 m over the bore, only from a prong reaching that far off it,
+    //     its length (0.15 to 0.30 m) by the sine of its splay (15° to 25°), 0.04 to 0.13 m, and rolled
+    //     within the arc that reach allows about the gun's up; over 1200 of the hash's shots, 605 (the
+    //     next test). A third or more is asserted here: fewer, and the gate's "no tip over the middle"
+    //     would hold whatever the rolls, and prove nothing. The clear majority over the middle that the
+    //     final review's synthesis asks of the control (its item 15) is the next test's, on the lowest
+    //     irons, where the skip does the most.
     const whole = run({ ...t, flashAimedBlend: 2 });
     const wholeSaid = JSON.stringify(whole.shots.map((x) => [+x.highest.toFixed(1), +x.nearest.toFixed(1)]));
     expect(whole.shots.map((x) => x.tick)).toEqual(aimed.shots.map((x) => x.tick));
@@ -708,6 +710,45 @@ describe('a frame of effects', () => {
     expect(higher, `${wholeSaid} against ${said}`).toBeGreaterThanOrEqual(clear);
     expect(whole.shots.filter((x) => !keeps(x)).length, wholeSaid).toBeGreaterThanOrEqual(clear);
     expect(whole.shots.filter((x) => x.highest > 0).length, wholeSaid).toBeGreaterThanOrEqual(whole.shots.length / 3);
+  });
+
+  it("the control on the lowest irons (the PM's, 0.0375 m over the bore): the hash's own rolls put a tip over the line of sight in a clear majority of shots, over 1200 of its shots and on the screen shot by shot, where the same 24 shots' skipped rolls keep every tip under the screen's middle", () => {
+    // The final review's synthesis, item 15: the control must show the rolls left whole rising over the
+    // middle in a clear majority of the shots, not on one extreme. A tip rises over the line of sight
+    // when its prong reaches farther off the bore than the sight (its length by the sine of its splay,
+    // 0.04 to 0.13 m) and is rolled within acos(sight / reach) of the gun's up, so how many shots show
+    // one is the sight's height's. Over these 1200 of the hash's shots, in the gun's frame: 1154 at the
+    // PM's 0.0375 m (0.96), 952 at the MP5's and the M870's 0.0525 (0.79), 605 at the AK's 0.0675
+    // (0.50). The AK's half (12 of its 24 on the screen, the test above) is the look's, not its sample's;
+    // the clear majority is asserted here, on the lowest irons, where the skip does the most.
+    // Measured on the screen (1600 × 1000): skipped, every tip 18.0 px or more under the middle; whole,
+    // 22 of the 24 over it (21 by more than 2 px, as high as 88.9 px).
+    const res: [number, number] = [1600, 1000];
+    const lowest = GUNS.reduce((a, g) => (sightOf(g, BARE).y < sightOf(a, BARE).y ? g : a));
+    const sight = sightOf(lowest, BARE).y;
+    expect([lowest, sight]).toEqual(['pm', 0.0375]);
+    const draws = 1200;
+    let over = 0;
+    for (let tick = 0; tick < draws; tick++) {
+      const at: V3 = [12.8, 1.5 + tick * 0.003, 2.3];
+      // The highest tip over the bore along the gun's up, the rolls whole (as from the hip).
+      const rise = Math.max(...flashDraw(tick, at, false, t).prongs.map((p) => p.lengthM * Math.sin(p.splay) * Math.sin(p.roll)));
+      if (rise > sight) over++;
+    }
+    expect(over).toBeGreaterThanOrEqual((2 / 3) * draws);
+    /** Whether a shot keeps the aimed gate: no tip more than 2 px over the middle, every prong 3% of the height or more from it. */
+    const keeps = (shot: { highest: number; nearest: number }) => shot.highest <= 2 && shot.nearest >= 0.03 * res[1];
+    const said = (r: { shots: { highest: number; nearest: number }[] }) => JSON.stringify(r.shots.map((x) => [+x.highest.toFixed(1), +x.nearest.toFixed(1)]));
+    const aimed = aimedFlashesOnScreen(t, lowest);
+    expect(aimed.shots).toHaveLength(24);
+    for (const shot of aimed.shots) expect(keeps(shot), said(aimed)).toBe(true);
+    // The same 24 shots (the same ticks, so the same hash), the rolls whole: over the middle in a clear
+    // majority, and by more than the gate's 2 px in a clear majority.
+    const whole = aimedFlashesOnScreen({ ...t, flashAimedBlend: 2 }, lowest);
+    expect(whole.shots.map((x) => x.tick)).toEqual(aimed.shots.map((x) => x.tick));
+    const clear = (2 / 3) * whole.shots.length;
+    expect(whole.shots.filter((x) => x.highest > 0).length, said(whole)).toBeGreaterThanOrEqual(clear);
+    expect(whole.shots.filter((x) => x.highest > 2).length, said(whole)).toBeGreaterThanOrEqual(clear);
   });
 
   it("on every gun's irons too, the lowest sights among them, aimed, no tip shows more than 2 px over the screen's middle and every prong passes 3% of the screen's height or more from it", () => {
