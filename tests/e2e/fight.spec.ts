@@ -9,13 +9,30 @@ import { expect, test, type Browser, type BrowserContext, type Page } from '@pla
 // round that killed them reached their page first. A headshot kill says HEADSHOT once, the room's
 // word naming the victim in the round's pop without starting it again, and the shooter's ear hears
 // its crack and gush. Then a team kill, which costs the killer's team a point and is no kill of
-// theirs to celebrate: no kill marker, no thud and chime.
+// theirs to celebrate: no kill marker, no thud and chime. These quiet the room's battle, so the only
+// rounds in the air, and the only harm, are the players'. Last, a fight under the room's default
+// light battle (the final review's item 15.10): the front firing on both and the shells landing, a
+// round's kill is still the shooter's, in the feed, the score and the crosshair, and the dead come back.
 
 const RELAY = 'http://127.0.0.1:8787';
 
 type H = {
   ready: boolean;
-  together: { room(): string | null; you(): number; seats(): { id: number; team: string; name: string }[]; begun(): boolean; others(): { id: number; position: [number, number, number] }[]; deadFor(): number | null; score(): { red: number; blue: number } | null; claimed(): number };
+  together: {
+    room(): string | null;
+    you(): number;
+    seats(): { id: number; team: string; name: string }[];
+    begun(): boolean;
+    others(): { id: number; position: [number, number, number] }[];
+    deadFor(): number | null;
+    score(): { red: number; blue: number } | null;
+    claimed(): number;
+    shells(): { landed: { id: number }[] };
+    hurts(): number;
+    harmed(): { shell: { n: number; hp: number }; round: { n: number; hp: number } };
+  };
+  /** The front: its intensity, from which side, and the rounds it has fired (Front.fired); the visitor's shells. */
+  session: { front: { intensity: string; fired: number }; frontSide: number; artillery: { intensity: string } };
   hitFeedback(): { marker: 'hit' | 'head' | 'kill' | null; pop: string | null; voices: Record<string, number>; flashes: number; markers: Record<'hit' | 'head' | 'kill', number> };
   views: Record<string, { position: [number, number, number] }>;
   teleport(at: { position: [number, number, number]; yaw: number; pitch: number }): void;
@@ -52,8 +69,12 @@ async function open(browser: Browser, path: string): Promise<{ page: Page; error
   return { page, errors };
 }
 
-/** A host and a friend in one room, the friend on `friendTeam`, the match started, both gone in, respawning after `respawnS`. */
-async function match(browser: Browser, friendTeam: 'red' | 'blue', respawnS: number) {
+/**
+ * A host and a friend in one room, the friend on `friendTeam`, the match started, both gone in,
+ * respawning after `respawnS`. The room's battle quiet (`off`), so the only rounds in the air are the
+ * players' own, unless the test asks for the room's default (`default`: light, left as the lobby has it).
+ */
+async function match(browser: Browser, friendTeam: 'red' | 'blue', respawnS: number, battle: 'off' | 'default' = 'off') {
   const host = await open(browser, `/?relay=${RELAY}`);
   // The start screen is taller than this 800 × 500 window: it scrolls with its head in reach, as the
   // pause menu and the lobby do, rather than rise off the top, so Host lies inside the window.
@@ -65,7 +86,8 @@ async function match(browser: Browser, friendTeam: 'red' | 'blue', respawnS: num
   await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.seats().length === 2);
   if (friendTeam === 'red') await friend.page.locator('button[data-team="red"]').click();
   await host.page.waitForFunction((t) => (window as unknown as { __trenchline: H }).__trenchline.together.seats()[1]?.team === t, friendTeam);
-  await host.page.locator('#match-settings select[name="intensity"]').selectOption('off');
+  if (battle === 'off') await host.page.locator('#match-settings select[name="intensity"]').selectOption('off');
+  else for (const p of [host.page, friend.page]) await expect(p.locator('#match-settings select[name="intensity"]')).toHaveValue('light');
   // The respawn time is the room's; the test asks for a short one through the owner's config message.
   await host.page.evaluate((s) => (window as unknown as { __trenchline: { together: unknown } }).__trenchline && void s, respawnS);
   await host.page.locator('#start').click();
@@ -324,4 +346,76 @@ test("a team kill costs the killer's team a point, and is no kill of theirs to c
   expect(after.markers.kill, said).toBe(before.markers.kill);
   expect(after.voices.kill ?? 0, said).toBe(before.voices.kill ?? 0);
   expect(after.marker, said).not.toBe('kill');
+});
+
+/** A line of the kill feed: the killer (their team and name; none for the battle's), how, and the victim. */
+type FeedLine = { killer: { team: string; name: string } | null; how: string; victim: { team: string; name: string } | null };
+
+/** `page`'s kill feed, newest line first. */
+const feedOf = (page: Page): Promise<FeedLine[]> =>
+  page.evaluate(() =>
+    [...document.querySelectorAll('#hud .feed li')].map((li) => {
+      const spans = [...li.querySelectorAll('span')];
+      const how = spans.findIndex((s) => s.className === 'how');
+      const who = (s: Element | undefined) => (s ? { team: s.className, name: s.textContent ?? '' } : null);
+      return { killer: how > 0 ? who(spans[0]) : null, how: spans[how]?.textContent ?? '', victim: who(spans[how + 1]) };
+    }),
+  );
+
+test("under the room's default light battle, the front firing on both and its shells landing: a round kills, the shooter's in the feed and the score, and the dead come back in", async ({ browser }) => {
+  test.setTimeout(300_000);
+  // The lobby's battle left as it is: light, the room's default (the other tests quiet it).
+  const { host, friend } = await match(browser, 'blue', 5, 'default');
+  // On each page the room's battle, light: its front from the line across from the page's team, the shells the room's alone.
+  const battleOf = (p: Page) => h(p, (x) => ({ front: x.session.front.intensity, side: x.session.frontSide, artillery: x.session.artillery.intensity }));
+  expect(await battleOf(host.page)).toEqual({ front: 'light', side: 1, artillery: 'off' });
+  expect(await battleOf(friend.page)).toEqual({ front: 'light', side: 0, artillery: 'off' });
+  const firedOf = (p: Page) => h(p, (x) => x.session.front.fired);
+  const fired0 = [await firedOf(host.page), await firedOf(friend.page)];
+  const name = await otherName(host.page);
+  /** Back in, if killed. */
+  const alive = (p: Page) => p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.deadFor() === null, null, { timeout: 15_000 });
+  // The host shoots the friend in the open, where the front fires at both: tried again if the battle
+  // (the front's round, a shell) kills the friend first, or the host, so the host cannot.
+  let killed: FeedLine | null = null;
+  const tried: string[] = [];
+  for (let tries = 0; tries < 3 && !killed; tries++) {
+    await alive(host.page);
+    await alive(friend.page);
+    await face(host.page, friend.page);
+    // The front firing at each, there, before the host shoots (light: 40 rounds a minute).
+    const [fh, ff] = [await firedOf(host.page), await firedOf(friend.page)];
+    for (const [p, n] of [[host.page, fh + 2], [friend.page, ff + 2]] as const) {
+      await p.waitForFunction((k) => (window as unknown as { __trenchline: H }).__trenchline.session.front.fired >= (k as number), n, { timeout: 20_000 });
+    }
+    if (!(await tapUntilDead(host.page, friend.page, 8000))) {
+      tried.push('the friend standing');
+      continue;
+    }
+    await host.page.waitForTimeout(300);
+    const line = (await feedOf(host.page)).find((l) => l.victim?.name === name) ?? null;
+    tried.push(JSON.stringify(line));
+    if (line?.killer) killed = line;
+  }
+  const hurt = { host: await h(host.page, (x) => ({ hurts: x.together.hurts(), harmed: x.together.harmed() })), friend: await h(friend.page, (x) => ({ hurts: x.together.hurts(), harmed: x.together.harmed() })) };
+  console.log(`the fight under the light battle: ${tried.join('; ')}; the front fired ${(await firedOf(host.page)) - fired0[0]} rounds at the host and ${(await firedOf(friend.page)) - fired0[1]} at the friend; the battle's harm told the room: ${JSON.stringify(hurt)}`);
+  // The host's round, the host's kill: in the feed, Red's name, how, and Blue's.
+  expect(killed, tried.join('; ')).not.toBeNull();
+  const hostName = await h(host.page, (x) => x.together.seats().find((s) => s.id === x.together.you())!.name);
+  expect(killed!.killer).toEqual({ team: 'red', name: hostName });
+  expect(['shot', 'headshot']).toContain(killed!.how);
+  expect(killed!.victim).toEqual({ team: 'blue', name });
+  // The score is the host's team's (the battle's kills score nothing), and the host's crosshair marks it.
+  await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.score()?.red === 1);
+  await expect(host.page.locator('#roomline')).toContainText('RED 1');
+  await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.hitFeedback().markers.kill === 1, null, { timeout: 5000 });
+  // The dead come back in.
+  await alive(friend.page);
+  await expect(friend.page.locator('#hud .fallen')).toBeHidden();
+  // All the while the battle was on: the front fired at both, and the room's shells landed on both pages.
+  expect((await firedOf(host.page)) - fired0[0]).toBeGreaterThanOrEqual(2);
+  expect((await firedOf(friend.page)) - fired0[1]).toBeGreaterThanOrEqual(2);
+  for (const p of [host.page, friend.page]) await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.shells().landed.length >= 1, null, { timeout: 30_000 });
+  expect(host.errors).toEqual([]);
+  expect(friend.errors).toEqual([]);
 });

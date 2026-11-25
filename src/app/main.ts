@@ -289,6 +289,8 @@ async function start(): Promise<void> {
   const cutsIn = new Map<number, number>();
   let cratersLanded = 0;
   let shellsDropped = 0;
+  /** The battle's harm the session reckoned on the player (CombatEvents.harms), by cause: how many and how much, this visit, told the room or not. */
+  const harmed = { shell: { n: 0, hp: 0 }, round: { n: 0, hp: 0 } };
   const voxelM = world.plan.params.voxel;
   const dropShell = (at: readonly number[], radiusM: number, keep: boolean) => {
     const x = at[0] / voxelM;
@@ -1132,6 +1134,10 @@ async function start(): Promise<void> {
     renderer.setSuppressionLook(shaken ? session.suppression.desaturation : 0, shaken ? session.suppression.vignette : 0);
     // What this frame's ticks did, once: seen, from the rifle as it is drawn, and heard.
     const events = session.drainEvents();
+    for (const m of events.harms) {
+      harmed[m.cause].n++;
+      harmed[m.cause].hp += m.amount;
+    }
     // A crater of more than 64 bricks: the key's shadow map is traced outright once they are up.
     if (events.craters.some((c) => c.bricks > 64)) renderer.largeEdit();
     for (const c of events.cuts) if (craterWaiters.has(c.id)) cutsIn.set(c.id, performance.now());
@@ -1538,6 +1544,13 @@ async function start(): Promise<void> {
       lastLanded: () => (together.lastBattle?.landed ?? []).map((s) => s.id),
       /** The battle's harms this player told the room, this visit (NetClient.hurtsSent). */
       hurts: () => together.net?.hurtsSent ?? 0,
+      /**
+       * The battle's harm the session reckoned on this player, this visit (CombatEvents.harms), by cause
+       * (a shell's blast, the front's round): how many, and how much. Reckoned wherever the body stands in
+       * a match, the deploy screen's too; what was told the room of it is hurts(), and on the deploy
+       * screen nothing is (Together.after), nor felt (HitFeedback.frame's `felt`).
+       */
+      harmed: () => ({ shell: { ...harmed.shell }, round: { ...harmed.round } }),
       /** The owner's: the match ended for everyone, as the pause menu's End match does. */
       end: () => together.endMatch(),
       /** The room's log as the last welcome gave it (NetClient.log). */

@@ -3,7 +3,9 @@ import { expect, test, type Browser, type Page } from '@playwright/test';
 // Playing with friends (the multiplayer spec's §2), two players in two windows against the relay
 // run locally (`npm run dev` in server/, the config's second web server): one hosts, the other
 // follows the link; they see each other in the lobby, on their teams; the host starts the match,
-// both go in, and each sees the other where they stand.
+// both go in, and each sees the other where they stand. The first test quiets the room's battle, so the
+// only rounds drawn are the players'; the second leaves it at the room's default, light (the final
+// review's item 15.10), the front's amber rounds drawn among theirs.
 
 const RELAY = 'http://127.0.0.1:8787';
 
@@ -25,8 +27,11 @@ type H = {
   trigger(held: boolean): void;
   /** The session's tracers the last frame drew (net/gear.ts TRACER_KIND: amber 1, red 2, blue 3): this player's rounds and the others'. */
   tracerPixels(): { tracers: { kind: number }[] };
-  /** The side this page fires for: its own rounds' colour, and the word each of its shots carries. */
-  session: { team: 'red' | 'blue' };
+  /**
+   * The side this page fires for: its own rounds' colour, and the word each of its shots carries; the
+   * front (its intensity, from which side, and the rounds it has fired: Front.fired); the visitor's shells.
+   */
+  session: { team: 'red' | 'blue'; front: { intensity: string; fired: number }; frontSide: number; artillery: { intensity: string } };
   waitFrames(n: number): Promise<void>;
 };
 
@@ -44,6 +49,39 @@ async function open(browser: Browser, path: string): Promise<{ page: Page; error
   await page.goto(path);
   await page.waitForFunction(() => (window as unknown as { __trenchline?: H }).__trenchline?.ready === true, null, { timeout: 120_000 });
   return { page, errors };
+}
+
+/** A tracer's kind (net/gear.ts TRACER_KIND): the front's rounds are amber, no team's colour. */
+const AMBER = 1;
+
+/**
+ * A short burst from `shooter`, fired well up into the sky: every kind each of `pages` draws over the
+ * next 240 frames, how many frames drew one, and how many drew each kind.
+ */
+async function burstOn(pages: readonly Page[], shooter: Page): Promise<{ kinds: number[]; frames: number; framesOf: Record<number, number> }[]> {
+  for (const p of pages) await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.tracerPixels().tracers.length === 0, null, { timeout: 15_000 });
+  const watch = (p: Page) =>
+    h(p, async (x) => {
+      const kinds: number[] = [];
+      const framesOf: Record<number, number> = {};
+      let frames = 0;
+      for (let k = 0; k < 240; k++) {
+        await x.waitFrames(1);
+        const drawn = x.tracerPixels().tracers;
+        if (drawn.length > 0) frames++;
+        for (const kind of new Set(drawn.map((t) => t.kind))) framesOf[kind] = (framesOf[kind] ?? 0) + 1;
+        for (const t of drawn) if (!kinds.includes(t.kind)) kinds.push(t.kind);
+      }
+      return { kinds, frames, framesOf };
+    });
+  const seen = Promise.all(pages.map(watch));
+  await h(shooter, (x) => {
+    x.teleport({ position: x.player().position, yaw: x.camera().yaw, pitch: 35 });
+    x.trigger(true);
+  });
+  await shooter.waitForTimeout(300);
+  await h(shooter, (x) => x.trigger(false));
+  return seen;
 }
 
 test('one hosts, a friend follows the link: one lobby, two teams, a match, and each sees the other', async ({ browser }) => {
@@ -101,30 +139,7 @@ test('one hosts, a friend follows the link: one lobby, two teams, a match, and e
   // Each sees the other's rounds in their team's colour (the shots spec §1, done row 2): a short burst
   // from the friend (Blue) is drawn blue on both pages, the shooter's own rounds and the room's copy
   // of them; then one from the host (Red), red on both. Fired well up into the sky, clear of everyone.
-  /** A short burst from `shooter`: every kind each page (the host's, the friend's) draws over the next 240 frames, and how many frames drew one. */
-  const burst = async (shooter: Page) => {
-    for (const p of [host.page, friend.page]) await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.tracerPixels().tracers.length === 0, null, { timeout: 15_000 });
-    const watch = (p: Page) =>
-      h(p, async (x) => {
-        const kinds: number[] = [];
-        let frames = 0;
-        for (let k = 0; k < 240; k++) {
-          await x.waitFrames(1);
-          const drawn = x.tracerPixels().tracers;
-          if (drawn.length > 0) frames++;
-          for (const t of drawn) if (!kinds.includes(t.kind)) kinds.push(t.kind);
-        }
-        return { kinds, frames };
-      });
-    const seen = Promise.all([watch(host.page), watch(friend.page)]);
-    await h(shooter, (x) => {
-      x.teleport({ position: x.player().position, yaw: x.camera().yaw, pitch: 35 });
-      x.trigger(true);
-    });
-    await shooter.waitForTimeout(300);
-    await h(shooter, (x) => x.trigger(false));
-    return seen;
-  };
+  const burst = (shooter: Page) => burstOn([host.page, friend.page], shooter);
   for (const [shooter, kind, who] of [[friend.page, 3, 'Blue'], [host.page, 2, 'Red']] as const) {
     const [onHost, onFriend] = await burst(shooter);
     expect(onHost.frames, `${who}'s rounds drawn on the host's page`).toBeGreaterThan(0);
@@ -146,6 +161,57 @@ test('one hosts, a friend follows the link: one lobby, two teams, a match, and e
   expect(host.errors).toEqual([]);
   expect(friend.errors).toEqual([]);
   // Each window draws the world on the one GPU: let them go before the next test's.
+  await host.page.context().close();
+  await friend.page.context().close();
+});
+
+test("under the room's default light battle, the front firing on both: each sees the other where they stand, and the other's rounds in their team's colour beside the front's amber", async ({ browser }) => {
+  test.setTimeout(300_000);
+  const host = await open(browser, `/?relay=${RELAY}`);
+  await host.page.locator('#host').click();
+  await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.you() === 0);
+  const room = (await h(host.page, (x) => x.together.room()))!;
+  const friend = await open(browser, `/?room=${room}&relay=${RELAY}`);
+  for (const p of [host.page, friend.page]) await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.seats().length === 2);
+  // The lobby's battle left as it is: light, the room's default.
+  for (const p of [host.page, friend.page]) await expect(p.locator('#match-settings select[name="intensity"]')).toHaveValue('light');
+  await host.page.locator('#start').click();
+  for (const p of [host.page, friend.page]) {
+    await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.begun(), null, { timeout: 15_000 });
+    await p.locator('#go').click();
+    await expect(p.locator('#lobby')).toBeHidden();
+  }
+  // On each page the room's battle, light: its front from the line across from the page's team, the shells the room's alone.
+  const battleOf = (p: Page) => h(p, (x) => ({ front: x.session.front.intensity, side: x.session.frontSide, artillery: x.session.artillery.intensity }));
+  expect(await battleOf(host.page)).toEqual({ front: 'light', side: 1, artillery: 'off' });
+  expect(await battleOf(friend.page)).toEqual({ front: 'light', side: 0, artillery: 'off' });
+  const fired0 = [await h(host.page, (x) => x.session.front.fired), await h(friend.page, (x) => x.session.front.fired)];
+  // Each sees the other, where they stand.
+  const hostAt = await h(host.page, (x) => x.player().position);
+  const friendAt = await h(friend.page, (x) => x.player().position);
+  for (const [page, other] of [[host.page, friendAt], [friend.page, hostAt]] as const) {
+    await page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.others().length === 1, null, { timeout: 10_000 });
+    const seen = (await h(page, (x) => x.together.others()))[0];
+    expect(Math.hypot(seen.position[0] - other[0], seen.position[2] - other[2])).toBeLessThan(0.3);
+  }
+  // Each one's rounds in their team's colour on both pages, Blue's and then Red's; any other drawn the front's, amber.
+  const amber: number[] = [];
+  for (const [shooter, kind, who] of [[friend.page, 3, 'Blue'], [host.page, 2, 'Red']] as const) {
+    const [onHost, onFriend] = await burstOn([host.page, friend.page], shooter);
+    console.log(`${who}'s burst under the light battle: the host's page drew ${JSON.stringify(onHost.framesOf)}, the friend's ${JSON.stringify(onFriend.framesOf)} (frames of each kind)`);
+    for (const [on, page] of [[onHost, "the host's"], [onFriend, "the friend's"]] as const) {
+      expect(on.framesOf[kind] ?? 0, `${who}'s rounds drawn on ${page} page`).toBeGreaterThan(0);
+      expect(on.kinds.filter((k) => k !== AMBER), `${who}'s rounds on ${page} page, the front's amber aside`).toEqual([kind]);
+      amber.push(on.framesOf[AMBER] ?? 0);
+    }
+  }
+  // The front fired at each all the while (light: 40 a minute).
+  const fired = [(await h(host.page, (x) => x.session.front.fired)) - fired0[0], (await h(friend.page, (x) => x.session.front.fired)) - fired0[1]];
+  console.log(`the front fired ${fired[0]} rounds at the host and ${fired[1]} at the friend; its amber drawn in ${amber.join(', ')} frames of the bursts' watches`);
+  expect(fired[0]).toBeGreaterThan(0);
+  expect(fired[1]).toBeGreaterThan(0);
+  expect(host.errors).toEqual([]);
+  expect(friend.errors).toEqual([]);
   await host.page.context().close();
   await friend.page.context().close();
 });

@@ -9,8 +9,9 @@ import { goIn, groundAt, h, hostAndJoin, ready, sameWorlds, windows, type Compar
 //    no shells of the visitor's (artillery off, seen before anything sets it), the battle around the
 //    page (the battle() hook's seconds) at 0 through the countdown.
 // 2. The deploy screen: B stays on it through landings, its world running and the same as A's; A never
-//    draws it, and it is never hurt. Spawn: A, in play at its start with the room's heavy front on, is
-//    never hurt; then both, for 30 s more.
+//    draws it, and it is never hurt: not even with its body where a shell lands and in the front's
+//    sight, whose harm its session reckons but neither tells the room nor shows. Spawn: A, in play at
+//    its start with the room's heavy front on, is never hurt; then both, for 30 s more.
 // 3. The crest: A crouched on its bay's firing step, the front at light from 185 m firing at it all
 //    the while (its rounds counted), is never hurt in 20 s.
 // 4. Kills: the front kills B in the open, and the feed says "shot from the line"; A's rounds kill B,
@@ -152,8 +153,8 @@ test("deploy: each at a start of its team's, the room's front set, no shells of 
   expect(B.errors).toEqual([]);
 });
 
-test("the deploy screen: B's world runs there and is A's, A never draws it, it is never hurt; A at its start under the heavy front takes nothing, nor both for 30 s more", async () => {
-  test.setTimeout(240_000);
+test("the deploy screen: B's world runs there and is A's, A never draws it, it is never hurt, even under a shell and in the front's sight; A at its start under the heavy front takes nothing, nor both for 30 s more", async () => {
+  test.setTimeout(300_000);
   await goIn(A.page);
   const t0 = { a: await harmOf(A.page), b: await harmOf(B.page), ticks: await h(B.page, (x) => x.session.ticks), landed: await h(A.page, (x) => x.together.shells().landed.length), feet: await h(A.page, (x) => x.player().position) };
   expect([t0.a.alive, t0.a.dead, t0.b.alive, t0.b.dead]).toEqual([true, null, true, null]);
@@ -182,6 +183,58 @@ test("the deploy screen: B's world runs there and is A's, A never draws it, it i
   expect(t1.b).toEqual(t0.b);
   expect(t1.a).toEqual(t0.a);
   await expect(B.page.locator('#go')).toBeVisible();
+  // B's body in the battle's reach, still on the deploy screen. At its start nothing reaches it (no
+  // shell lands within spawn_clear_m of a start, and the front sees no one there), so it is put where
+  // they do: first where the next shell told will land, as soon as it is told (its blast's reach);
+  // then in the open 25 m out from Red's line, whose front fires at Blue, until a round of it strikes.
+  // Its session reckons that harm (harmed), but none is told the room (Together.after: not in play),
+  // none is felt (HitFeedback.frame's `felt`, false on the deploy screen), and A draws it nowhere.
+  const r0 = { b: await harmOf(B.page), harmed: await h(B.page, (x) => x.together.harmed()) };
+  let struck: { id: number; at: [number, number] } | null = null;
+  for (let tries = 0; tries < 3 && !struck; tries++) {
+    const target = await h(B.page, async (x) => {
+      const t0 = performance.now();
+      const seen = new Set(x.together.shells().landed.map((s) => s.id));
+      for (;;) {
+        const next = x.together.shells().next;
+        const top = next ? x.footAt(next.at[0], next.at[1]) : null;
+        if (next && !seen.has(next.id) && next.landsInS > 1.2 && top !== null) {
+          x.teleport({ position: [next.at[0], top + 0.05, next.at[1]], yaw: 0, pitch: 0 });
+          return { id: next.id, at: next.at };
+        }
+        if (performance.now() - t0 > 30_000) return null;
+        await x.waitFrames(1);
+      }
+    });
+    if (!target) continue;
+    await B.page.waitForFunction((id) => (window as unknown as { __trenchline: RoomHooks }).__trenchline.together.shells().landed.some((s) => s.id === id), target.id, { timeout: 10_000 });
+    await hold(B.page, 500);
+    struck = target;
+  }
+  expect(struck, 'a shell landed where B stood on the deploy screen').not.toBeNull();
+  const shelled = { b: await harmOf(B.page), harmed: await h(B.page, (x) => x.together.harmed()), at: await h(B.page, (x) => x.player().position) };
+  const blast = `shell ${struck!.id} landed ${Math.hypot(shelled.at[0] - struck!.at[0], shelled.at[2] - struck!.at[1]).toFixed(2)} m off, its session reckoning ${shelled.harmed.shell.n - r0.harmed.shell.n} blast(s) of ${(shelled.harmed.shell.hp - r0.harmed.shell.hp).toFixed(0)} hp and ${shelled.harmed.round.n - r0.harmed.round.n} round(s) of the front's; B ${JSON.stringify(shelled.b)} (was ${JSON.stringify(r0.b)})`;
+  // In its reach: the session reckoned the blast's harm. None told, felt or fatal.
+  expect(shelled.harmed.shell.n, blast).toBeGreaterThan(r0.harmed.shell.n);
+  expect(shelled.harmed.shell.hp, blast).toBeGreaterThan(r0.harmed.shell.hp);
+  expect(shelled.b, blast).toEqual(r0.b);
+  expect(await h(B.page, (x) => x.together.shells().landed.map((s) => s.id))).toContain(struck!.id);
+  const red = SHELL_FIELDS.corridor.spawns[0];
+  const open = await groundAt(B.page, red[0], red[1] + 25);
+  await h(B.page, (x, a) => x.teleport({ position: a as [number, number, number], yaw: 0, pitch: 0 }), [red[0], open!, red[1] + 25]);
+  await B.page.waitForFunction((n) => (window as unknown as { __trenchline: RoomHooks }).__trenchline.together.harmed().round.n > (n as number), shelled.harmed.round.n, { timeout: 60_000 });
+  await hold(B.page, 500);
+  const fronted = { b: await harmOf(B.page), harmed: await h(B.page, (x) => x.together.harmed()) };
+  const listedInReach = await A.page.evaluate(() => (window as unknown as { __listed: { frames: number; b: number } }).__listed);
+  console.log(`B on the deploy screen in the battle's reach: ${blast}; then in the front's sight, its rounds ${fronted.harmed.round.n - shelled.harmed.round.n} of ${(fronted.harmed.round.hp - shelled.harmed.round.hp).toFixed(0)} hp; B ${JSON.stringify(fronted.b)}; A drew B in ${listedInReach.b} of ${listedInReach.frames} frames`);
+  // In the front's sight: the session reckoned its round's harm. None told, felt or fatal; and A drew B nowhere.
+  expect(fronted.harmed.round.n).toBeGreaterThan(shelled.harmed.round.n);
+  expect(fronted.b).toEqual(r0.b);
+  expect(listedInReach.b).toBe(0);
+  await expect(B.page.locator('#go')).toBeVisible();
+  // Back at its start: Go puts the player in play where its body stands.
+  const blue = SHELL_FIELDS.corridor.spawns[4];
+  await h(B.page, (x, s) => x.teleport({ position: [(s as number[])[0], x.footAt((s as number[])[0], (s as number[])[1])! + 0.05, (s as number[])[1]], yaw: 0, pitch: 0 }), blue);
   const same = await sameWorlds(A.page, B.page);
   console.log(`B on the deploy screen, ${same.landed[0].length} shells: the worlds ${same.same ? 'hash the same' : 'differ'} (try ${same.tries}, ${same.masked} voxels of blood masked; seconds ${JSON.stringify(same.seconds)})`);
   expect(same.same, says(same)).toBe(true);

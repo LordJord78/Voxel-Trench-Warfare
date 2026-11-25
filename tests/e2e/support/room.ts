@@ -44,6 +44,8 @@ export interface RoomHooks {
     blood(): number[];
     lastLanded(): number[];
     hurts(): number;
+    /** The battle's harm the session reckoned on this player, by cause, told or not (main.ts). */
+    harmed(): { shell: { n: number; hp: number }; round: { n: number; hp: number } };
     end(): void;
     log(): { shells: number[][]; digs: number[][] } | null;
     catchUps(): { from: number; ms: number | null; total: number; done: [number, number][] }[];
