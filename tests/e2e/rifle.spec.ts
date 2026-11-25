@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { projectToPixel } from '../../src/render/camera';
-import { hooks, openGame, type Hooks } from './support/app';
+import { handsBecome, hooks, openGame, type Hooks } from './support/app';
 
 // The rifle, traced and shaded in its own pass: where the CPU's trace of the model meets it, the
 // G-buffer's depth is the rifle's; a wall nearer than it hides it; it is not drawn in fly mode or
@@ -16,18 +16,6 @@ type Held = Hooks & {
 };
 
 const held = <T>(page: Page, fn: (h: Held, arg: unknown) => T | Promise<T>, arg?: unknown): Promise<T> => hooks(page, fn as unknown as (h: Hooks, arg: unknown) => T | Promise<T>, arg);
-
-/** Until the hands are as `want` says (the session's ticks are the clock: frames come faster headless). */
-async function handsBecome(page: Page, want: Partial<{ held: number; ready: number; aimed: number; gun: string }>) {
-  await page.waitForFunction(
-    (w) => {
-      const h = (window as unknown as { __trenchline: { hands(): Record<string, number | string> } }).__trenchline.hands();
-      return Object.entries(w).every(([k, v]) => h[k] === v);
-    },
-    want,
-    { timeout: 10_000 },
-  );
-}
 
 /** Playing at a view's foot, still, jitter off (so the pixels' rays are the CPU's). */
 async function holding(page: Page, view: 'bay' | 'step', yaw = 0) {
@@ -217,7 +205,9 @@ test('from the hip the gun covers at most 30% of the view', async ({ page }) => 
   // still: the share of the view where the renderer drew it (the CPU's trace of the model meets the
   // pixel and the G-buffer's depth there is the model's), over every other pixel each way, the frame
   // stepped and held as it is read. The trace alone (drawn or hidden by something nearer) is reported
-  // beside it. Then, reported and not gated (the firing step's raised pose keeps its look on the
+  // beside it, and floors the share: nothing in the bay is nearer than the gun, so the drawn share is
+  // nine tenths of the traced or more (a gun not drawn where it is traced reads as a share near none),
+  // and every gun shows on 1% of the view or more. Then, reported and not gated (the firing step's raised pose keeps its look on the
   // parapet: the G4 ledger), the AK raised on the Ravine's firing step with the range up: its share,
   // and whether it covers the range's 30 m torso plate (right of the middle, just under the horizon).
   await page.setViewportSize({ width: 1600, height: 1000 });
@@ -245,12 +235,15 @@ test('from the hip the gun covers at most 30% of the view', async ({ page }) => 
     const r = await shareNow();
     shares[gun] = { share: r.share, traced: r.traced };
     expect(r.drawn, gun).toBeGreaterThan(0);
+    expect(r.share, `${gun}: ${JSON.stringify(r)}`).toBeGreaterThanOrEqual(0.9 * r.traced);
+    expect(r.share, `${gun}: ${JSON.stringify(r)}`).toBeGreaterThanOrEqual(0.01);
   }
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
   console.log(`from the hip off the step, each gun's share of the view (drawn; traced): ${Object.entries(shares).map(([g, s]) => `${g} ${pct(s.share)} (${pct(s.traced)})`).join(', ')}`);
   for (const [gun, s] of Object.entries(shares)) expect(s.share, gun).toBeLessThanOrEqual(0.3);
 
-  // Reported: on the Ravine's firing step with the range up, the AK raised, not aimed.
+  // Reported: on the Ravine's firing step with the range up, the AK raised, not aimed (aimed, it is
+  // gated: the next test).
   const step = await held(page, async (h) => {
     h.setLoadout({ primary: 'ak74', secondary: 'm17', fits: {} });
     h.range(true);
@@ -280,5 +273,55 @@ test('from the hip the gun covers at most 30% of the view', async ({ page }) => 
   }
   await held(page, (h) => h.thaw());
   console.log(`on the ${step.map}'s firing step (${step.onStep ? 'on it' : 'off it'}), the AK raised (aimed ${step.hands.aimed}): its share ${pct(step.share)} (traced ${pct(step.traced)}), its box ${JSON.stringify(step.box)} of ${step.res.join(' x ')}; ${cover}`);
+  expect(errors).toEqual([]);
+});
+
+test("aimed on the Ravine's firing step, the AK leaves the range's 30 m plate clear", async ({ page }) => {
+  // The G4 ledger's ruling: raised and not aimed, the AK on the firing step may cover the range's 30 m
+  // torso plate (hip framing, reported above); aimed, it must not. At 1600 x 1000, the range up, the AK
+  // aimed down its irons, its hands held still, the frame stepped and held: on the step and aimed, the
+  // plate (index 0, right of the middle, just under the horizon) on the screen, and none of the pixels
+  // of a box 8 px of the canvas's each way round its middle the gun's (the CPU's trace of the drawn
+  // model meets it and the G-buffer's depth there is the model's). Aimed whole, the pose is the sight
+  // line's alone: the step's raise is not in it.
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const errors = await openGame(page);
+  await held(page, (h) => h.setQuality({ dynres: false }));
+  await hooks(page, (h) => h.play());
+  await held(page, (h) => {
+    h.setLoadout({ primary: 'ak74', secondary: 'm17', fits: {} });
+    h.range(true);
+    h.standAt('step');
+    h.jitter(false);
+    h.session.handsStill = true;
+    h.aim(true);
+  });
+  await handsBecome(page, { gun: 'ak74', aimed: 1 });
+  const step = await held(page, async (h) => {
+    await h.waitFrames(40);
+    h.freeze();
+    await h.stepFrames(2);
+    return { map: (h as unknown as { map: string }).map, plates: h.rangeState().plates, camera: h.camera(), res: h.stats().res, onStep: h.player().onFiringStep, hands: h.hands() };
+  });
+  const said = JSON.stringify(step);
+  expect(step.onStep, said).toBe(true);
+  expect(step.hands.aimed, said).toBe(1);
+  const plate = step.plates.find((p) => p.index === 0);
+  expect(plate, said).toBeDefined();
+  const at = projectToPixel({ ...step.camera, fov: step.camera.fov! }, step.res, plate!.at);
+  expect(at, said).not.toBeNull();
+  const [w, ht] = step.res;
+  expect(at![0] >= 0 && at![0] < w && at![1] >= 0 && at![1] < ht, `${JSON.stringify(at)} of ${w} x ${ht}`).toBe(true);
+  // Its middle, and a box 8 px of the canvas's each way round it.
+  const k = ht / 1000;
+  const r = Math.ceil(8 * k);
+  const points: [number, number][] = [];
+  for (let dy = -r; dy <= r; dy += 2) for (let dx = -r; dx <= r; dx += 2) points.push([Math.floor(at![0]) + dx, Math.floor(at![1]) + dy]);
+  const read = await held(page, (h, p) => h.riflePixels(p as [number, number][]), points);
+  await held(page, (h) => h.thaw());
+  const gun = read.samples.filter((s) => s.cpu !== null && Math.abs(s.gpu - s.cpu) < 1e-3);
+  console.log(`on the ${step.map}'s firing step, the AK aimed: the 30 m plate at (${(at![0] / k).toFixed(0)}, ${(at![1] / k).toFixed(0)}) of 1600 x 1000; ${gun.length} of ${points.length} pixels round it the gun's`);
+  expect(read.visible).toBe(true);
+  expect(gun, JSON.stringify(gun)).toHaveLength(0);
   expect(errors).toEqual([]);
 });

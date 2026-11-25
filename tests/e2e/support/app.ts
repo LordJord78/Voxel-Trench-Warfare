@@ -284,6 +284,26 @@ export async function openGame(page: Page, path = '/'): Promise<string[]> {
   return errors;
 }
 
+/** What the page's `hands()` hook says of the hands that a test waits on: what is held (an arm's place, -1 the shovel), how far up and how far aimed (0 to 1), and the gun's key. */
+export interface HandsState {
+  held: number;
+  ready: number;
+  aimed: number;
+  gun: string;
+}
+
+/** Until the hands are as `want` says (the session's ticks are the clock: frames come faster headless). */
+export async function handsBecome(page: Page, want: Partial<HandsState>, timeout = 10_000): Promise<void> {
+  await page.waitForFunction(
+    (w) => {
+      const h = (window as unknown as { __trenchline: { hands(): Record<string, number | string> } }).__trenchline.hands();
+      return Object.entries(w).every(([k, v]) => h[k] === v);
+    },
+    want,
+    { timeout },
+  );
+}
+
 export function hooks<T>(page: Page, fn: (h: Hooks, arg: unknown) => T | Promise<T>, arg?: unknown): Promise<T> {
   return page.evaluate(
     ([source, a]) => {

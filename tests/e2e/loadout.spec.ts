@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { encodeGear, type Gear } from '../../src/net/gear';
 import { STATE } from '../../src/net/protocol';
-import { hooks, openGame, type Hooks } from './support/app';
+import { handsBecome, hooks, openGame, type Hooks } from './support/app';
 
 // The loadout in the browser: the menu chooses it; every gun with its fit, the pistol and the shovel
 // are drawn where the CPU's trace of their models says (their models uploaded over the rifle's);
@@ -42,18 +42,6 @@ async function inTheBay(page: Page) {
     h.setQuality({ dynres: false });
   });
   await kit(page, (h) => h.waitFrames(30));
-}
-
-/** Until the hands are as `want` says (the session's ticks are the clock: frames come faster headless). */
-async function handsBecome(page: Page, want: Partial<{ held: number; ready: number; aimed: number }>) {
-  await page.waitForFunction(
-    (w) => {
-      const h = (window as unknown as { __trenchline: { hands(): Record<string, number> } }).__trenchline.hands();
-      return Object.entries(w).every(([k, v]) => h[k] === v);
-    },
-    want,
-    { timeout: 10_000 },
-  );
 }
 
 /** Where the drawn model's pass disagrees with the CPU's trace (or with the world where it is not), and how many pixels it drew. */
