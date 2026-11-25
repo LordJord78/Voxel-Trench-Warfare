@@ -310,8 +310,8 @@ describe('a report as planned', () => {
     }
   });
 
-  it("each gun's report has its own weight, report_gain in its [viewkick.<gun>]: the M870 heaviest, then the SVD, the AK and M249, the M4, the MP5, the pistols lightest", () => {
-    const pinned: Record<GunKey, number> = { m870: 1.78, svd: 1.58, ak74: 0.86, m249: 0.86, m4: 0.76, mp5: 0.66, m17: 0.63, pm: 0.63 };
+  it("each gun's report has its own weight, report_gain in its [viewkick.<gun>]: the SVD heaviest, then the M870, the M4, the MP5, the AK and M249, the pistols lightest (tuned on the heard renders: npm run sounds orders them as heard)", () => {
+    const pinned: Record<GunKey, number> = { svd: 1.43, m870: 1.35, m4: 0.76, mp5: 0.66, ak74: 0.65, m249: 0.65, m17: 0.62, pm: 0.62 };
     for (const gun of GUNS) {
       expect(tun.f(`viewkick.${GUN_DEFS[gun].table}.report_gain`), gun).toBe(pinned[gun]);
       expect(t.reportGain[gun], gun).toBe(pinned[gun]);
@@ -328,9 +328,10 @@ describe('a report as planned', () => {
     // The front's (no word, no gun known), and a shot whose word is not known: no weight but their own.
     expect(front(40).gain).toBeCloseTo(t.frontReportGain * Math.pow(t.referenceM / 40, t.rolloff), 12);
     expect(planVoices(t, { ...none(), shots: [shot(muzzle)] }, ear)[0].gain).toBe(1);
-    // In the order they weigh, heaviest first.
+    // In the order they weigh, heaviest first: on paper the SVD over the M870, as their peaks cap them
+    // (the compressor passes a third of a paper dB on them), though no gate orders the two as heard.
     const order = [...GUNS].sort((a, b) => t.reportGain[b] - t.reportGain[a]);
-    expect(order.slice(0, 2)).toEqual(['m870', 'svd']);
+    expect(order.slice(0, 2)).toEqual(['svd', 'm870']);
     expect(order.slice(-2).sort()).toEqual(['m17', 'pm']);
   });
 

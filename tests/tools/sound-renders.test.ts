@@ -9,7 +9,7 @@ import { rangeTunables } from '../../src/combat/range';
 import { loadTunables } from '../../src/core/tunables';
 import { BARE } from '../../src/net/gear';
 import { COMPRESSOR_THRESHOLD_DB, PEAK_DB } from '../../tools/lib/sound-measures.mjs';
-import { FRAME_S, FRONT_M, LEAD_S, MUZZLE, RATE, renders, SETTLE_S, TAIL_S } from '../../tools/sounds/renders';
+import { DRAWS, FRAME_S, FRONT_M, LEAD_S, MUZZLE, RATE, renders, SETTLE_S, TAIL_S } from '../../tools/sounds/renders';
 import { FakeContext, install, madeOf } from '../support/fake-web-audio';
 
 // The sounds' proof (npm run sounds; the shots spec's §6, G3's Task 5): what is rendered, and what each
@@ -43,8 +43,12 @@ const OTHERS_S: Record<(typeof OTHERS)[number], number> = {
   crack: 0.13, 'impact-soil': 0.2158309, 'impact-timber': 0.2158309, 'impact-metal': 0.5158309, whistle: 1.61, blast: 1.9658309,
   scrape: 0.4642047, flare: 3.2158309, rumble: 4.5254519, thump: 1.4930904, chatter: 1.2849271, crackle: 0.1658309, splash: 0.2258309,
 };
-/** The order the reports weigh in and the tail rules (G5's final review): all three read alike, so one reading serves each render (tools/sounds/page.ts). */
-const ORDER = { band: [20, 20000], firstS: 0.08, db: 0 } as const;
+/** The order the reports weigh in (G5's final review), each by 0.5 dB on the mean of its draws (the controller's ruling, resumed a second time): all read alike, so one reading serves each render (tools/sounds/page.ts). */
+const ORDER = { band: [20, 20000], firstS: 0.08, db: 0.5 } as const;
+/** The renders drawn DRAWS times, each its named seed and eight more: those a rule read on the mean reads (the reports' order, the suppressed SVD's, the gush's, the hit voices under the AK), and the bursts, whose peaks hold on every draw. */
+const DRAWN = ['hit', 'head', 'gush', 'kill', 'mag-out', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870', 'report-pistol', 'report-m4', 'report-ak-burst', 'report-m249-burst'] as const;
+/** The hit voices under the gun (the controller's ruling, resumed a second time): each one's loudest 50 ms so many dB or more under the AK report's, on the mean of their draws. */
+const UNDER_AK = { hit: 2, head: 2, gush: 2, kill: 0 } as const;
 /** Each gun's own body heard (G5's final review): the share of the first 80 ms in its body's band, halfway between the share with the gun's own body and with the defaults' 140 Hz in its place (measured with the compressor settled: 0.726 and 0.458 for the M870, 0.835 and 0.159 for the pistol). */
 const M870_BODY = 0.59;
 const PISTOL_BODY = 0.5;
@@ -106,7 +110,7 @@ describe("the sounds' proof: what it renders", () => {
   });
 
   it("the gush gushes: at least 55% of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill's thud's (the kill under 400 Hz, apart from its chime)", () => {
-    expect(byName('gush').rules).toEqual({ high: 0.25, band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3, low: true } });
+    expect(byName('gush').rules).toEqual({ high: 0.25, band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3, low: true }, under: { of: 'report-ak', db: 2 } });
     // No other render is held to another's level, and only the gush, the headshot that kills and two reports' bodies to a band.
     for (const r of list) if (r.name !== 'gush') expect(r.rules?.near, r.name).toBeUndefined();
     expect(list.filter((r) => r.rules?.band).map((r) => r.name)).toEqual(['gush', 'headshot-kill', 'report-m870', 'report-pistol']);
@@ -144,7 +148,17 @@ describe("the sounds' proof: what it renders", () => {
     expect([dry.gated, dry.rules]).toEqual([true, undefined]);
     expect(dry.lengthS).toBeCloseTo(LEAD_S + Math.max(...dry.plans.map((p) => p.delayS + voiceLength(p))) + TAIL_S, 9);
     // No other render is held over another's but the reports' (their weights' order, and a suppressed shot over its reload).
-    expect(list.filter((x) => x.rules?.over).map((x) => x.name)).toEqual(['headshot-kill', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870']);
+    expect(list.filter((x) => x.rules?.over).map((x) => x.name)).toEqual(['headshot-kill', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870', 'report-m4']);
+  });
+
+  it("the renders drawn nine times (the controller's ruling E), each its named seed and eight more: those a rule read on the mean reads, and the bursts; every other render once", () => {
+    expect(DRAWS).toBe(9);
+    expect(list.filter((r) => r.draws > 1).map((r) => r.name)).toEqual([...DRAWN]);
+    for (const r of list) expect(r.draws, r.name).toBe((DRAWN as readonly string[]).includes(r.name) ? DRAWS : 1);
+    // A render held to another, each read on the mean of as many draws: the other is drawn as often.
+    for (const r of list) {
+      for (const of of [r.rules?.near?.of, r.rules?.over?.of, r.rules?.under?.of, r.rules?.highOver?.of]) if (of !== undefined) expect(byName(of).draws, `${r.name} against ${of}`).toBe(r.draws);
+    }
   });
 
   it('every name is its own (a file each), and a render held to another names one rendered', () => {
@@ -225,13 +239,27 @@ describe("the sounds' proof: the reports, and every kind", () => {
 
   it("the suppressed SVD's report: its loudest 50 ms 6 dB or more under the bare SVD's, more of it over 400 Hz than the bare one's, and its first 50 ms 2 dB or more over its own reload's mag-out", () => {
     expect(byName('report-svd-suppressed').rules).toEqual({ under: { of: 'report-svd', db: 6 }, highOver: { of: 'report-svd', by: 0.1 }, over: { of: 'mag-out', band: [20, 20000], firstS: 0.05, db: 2 } });
-    for (const r of list) if (r.name !== 'report-svd-suppressed') expect([r.rules?.under, r.rules?.highOver], r.name).toEqual([undefined, undefined]);
+    for (const r of list) if (r.name !== 'report-svd-suppressed') expect(r.rules?.highOver, r.name).toBeUndefined();
+    // Only it and the hit voices are held under another's loudness.
+    expect(list.filter((r) => r.rules?.under).map((r) => r.name)).toEqual(['hit', 'head', 'gush', 'kill', 'report-svd-suppressed']);
   });
 
-  it("the reports' weight, in order: the M870 and the SVD over the AK, the AK over the pistol, each its first 80 ms's energy across the band (20 Hz-20 kHz)", () => {
+  it("the reports' weight, in order, each by 0.5 dB on the mean of their draws: the M870 and the SVD over the AK, the AK and the M4 over the pistols, each its first 80 ms's energy across the band (20 Hz-20 kHz)", () => {
     expect(byName('report-m870').rules?.over).toEqual({ of: 'report-ak', ...ORDER });
     expect(byName('report-svd').rules?.over).toEqual({ of: 'report-ak', ...ORDER });
     expect(byName('report-ak').rules?.over).toEqual({ of: 'report-pistol', ...ORDER });
+    expect(byName('report-m4').rules).toEqual({ over: { of: 'report-pistol', ...ORDER } });
+    // The M17 stands for both pistols: the PM's report is its body, and no heavier.
+    const [m17] = byName('report-pistol').plans;
+    const [pm] = byName('report-pm').plans;
+    expect(pm.bodyHz).toBe(m17.bodyHz);
+    expect(pm.gain).toBeLessThanOrEqual(m17.gain);
+  });
+
+  it("the hit voices sit under the gun: the kill's loudest 50 ms at or under the AK report's, the hit's, the head's and the gush's 2 dB or more under it, on the mean of their draws", () => {
+    for (const [kind, db] of Object.entries(UNDER_AK)) expect(byName(kind).rules?.under, kind).toEqual({ of: 'report-ak', db });
+    // Being hit, and a steel plate's ring afar, are not held to it.
+    for (const name of ['hurt', 'ding', 'ding-30m', 'ding-85m']) expect(byName(name).rules?.under, name).toBeUndefined();
   });
 
   it("the reports' tail, held from both sides: the M870's and the SVD's loudest 50 ms after their own layers 3 to 24 dB under their report's; an AK burst's after its last report 6 to 24 dB under", () => {
@@ -246,7 +274,7 @@ describe("the sounds' proof: the reports, and every kind", () => {
     expect(byName('report-m870').rules?.band).toEqual({ hz: [20, 120], share: M870_BODY, firstS: 0.08 });
     expect(byName('report-pistol').rules).toEqual({ band: { hz: [130, 400], share: PISTOL_BODY, firstS: 0.08 } });
     // Only these reports hold more than their peak's range; the rest, nothing else.
-    for (const name of ['report', 'report-mp5', 'report-m249', 'report-m4', 'report-pm', 'report-m249-burst'] as const) expect(byName(name).rules, name).toBeUndefined();
+    for (const name of ['report', 'report-mp5', 'report-m249', 'report-pm', 'report-m249-burst'] as const) expect(byName(name).rules, name).toBeUndefined();
   });
 
   it('an AK burst: ten of its reports at the muzzle 0.1 s apart (600 rpm), each as report-ak plans it, its file the tail past the last', () => {

@@ -22,13 +22,17 @@
 // context runs SETTLE_S first, cut from its file, as the game's runs from the click that starts play);
 // each other it is held to rendered too, and theirs, if --only left them out; or if the page fails. Exits
 // 2, with the usage, if --only has no list or names no render. A render reported and not held says
-// what fails of it, and does not fail the run.
+// what fails of it, and does not fail the run. A render drawn more than once (tools/sounds/renders.ts
+// DRAWS: its noise and each shot's body drawn afresh) is held on the mean of its draws, its peak's range
+// and floor on every draw, and fails if a draw of it or of another it is held to is missing or silent
+// (sound-measures.mjs checkDraws); a second table, and report.json, give each gated reading's value on
+// the named draw, on the mean and on the worst draw.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { parseOnly } from './lib/cli.mjs';
 import { readReport, stamp, writeReport } from './lib/report.mjs';
-import { checkSound, settledFailures, table, wav } from './lib/sound-measures.mjs';
+import { checkDraws, drawLabel, meanOf, readings, readingsTable, settledFailures, table, wav } from './lib/sound-measures.mjs';
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 
@@ -57,6 +61,11 @@ const read = (m) => ({
   ...(m.tailDb !== undefined ? { dryDb: round2(m.dryDb), tailDb: round2(m.tailDb) } : {}),
 });
 const samplesOf = (b64) => new Float32Array(Uint8Array.from(Buffer.from(b64, 'base64')).buffer);
+/** A reading's values to 0.01 dB, or 0.001 of a share. */
+const roundReading = (r) => {
+  const round = (x) => (typeof x !== 'number' ? null : r.unit === 'share' ? (Number.isFinite(x) ? round3(x) : null) : round2(x));
+  return { ...r, named: round(r.named), mean: round(r.mean), worst: round(r.worst) };
+};
 
 let server;
 let browser;
@@ -91,11 +100,15 @@ try {
       only = next;
     }
     const rendered = await page.evaluate((o) => window.sounds.render(o), only);
-    const heard = Object.fromEntries(rendered.map((r) => [r.name, r.heard]));
+    // Each render's draws, read: what its rules, and those of each render held to it, read.
+    const drawsOf = Object.fromEntries(rendered.map((r) => [r.name, r.drawn.map((d) => d.heard)]));
     const rows = [];
+    const gatedReadings = [];
     for (const r of rendered) {
       writeFileSync(`${OUT}/${r.name}.wav`, wav(r.samples.map(samplesOf), r.rate));
-      const found = [...checkSound(r.heard, r.rules ?? {}, heard), ...settledFailures(r.into, r.heard)];
+      const found = [...checkDraws(drawsOf[r.name], r.rules ?? {}, drawsOf, r.draws), ...r.drawn.flatMap((d, k) => settledFailures(d.into, d.heard).map((f) => f + drawLabel(k, r.drawn.length)))];
+      const held = readings(drawsOf[r.name], r.rules ?? {}, drawsOf).map(roundReading);
+      if (r.draws > 1 || Object.keys(r.rules ?? {}).length > 0) gatedReadings.push({ name: r.name, readings: held });
       rows.push({ name: r.name, ...r.heard, failures: found, gated: r.gated });
       if (r.gated) for (const f of found) failures.push(`${r.name}: ${f}`);
       report[r.name] = {
@@ -107,7 +120,12 @@ try {
         gated: r.gated,
         rules: r.rules,
         plans: r.plans,
+        draws: r.draws,
+        // Each gated reading on the named draw, on the mean of its draws, and on the worst.
+        readings: held,
         heard: read(r.heard),
+        // A render drawn more than once: its readings' mean over its draws (its loudest 50 ms as heard over many shots).
+        ...(r.draws > 1 ? { heardMean: read(meanOf(drawsOf[r.name])) } : {}),
         intoCompressor: read(r.into),
         // The compressor's change to the peak (dB): under 0 it took that off; over 0, its make-up gain lifted a quiet voice.
         compressorDb: Number.isFinite(r.into.peakDb) && Number.isFinite(r.heard.peakDb) ? round2(r.heard.peakDb - r.into.peakDb) : null,
@@ -115,6 +133,9 @@ try {
       };
     }
     console.log(table(rows));
+    console.log('');
+    console.log(`Each gated reading, on the named draw, the mean of its draws and the worst (a render drawn once is its own):`);
+    console.log(readingsTable(gatedReadings));
     console.log('');
     for (const r of rendered) console.log(`${r.name}: into the compressor ${round2(r.into.peakDb)} dBFS peak, ${round2(r.into.rmsDb)} RMS; out of it, the peak ${report[r.name].compressorDb ?? '-'} dB; its loudest 50 ms from ${Math.round(r.heard.loudestAtS * 1000)} ms; its loudest 50 ms under 400 Hz alone ${round2(r.heard.lowLoudestDb)} dBFS${r.heard.ruleShare !== undefined ? `; its band rule's share ${Math.round(r.heard.ruleShare * 1000) / 10}%` : ''}${r.heard.overDb !== undefined ? `; its energy in its over rule's band ${round2(r.heard.overDb)} dB` : ''}${r.heard.tailDb !== undefined ? `; its tail's loudest 50 ms ${round2(r.heard.tailDb)} dBFS, ${round2(r.heard.dryDb - r.heard.tailDb)} dB under its report's ${round2(r.heard.dryDb)}` : ''}`);
   }

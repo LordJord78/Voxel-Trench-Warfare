@@ -27,8 +27,8 @@ const TAIL_DULL_HZ = 400;
 /**
  * What the tail returns of a report's body, in dB of the send squared: the send squared itself (G5's
  * final review), which the heard renders hold (npm run sounds, its compressor settled as the game's
- * is): the M870's and the SVD's tails 3 dB or more under their reports, an AK burst's 6 dB under its
- * last.
+ * is): the M870's and the SVD's tails 3 dB or more under their reports, an AK burst's 6 dB or more
+ * under its last (on the mean of nine draws, 6.7, 8.9 and 12.7 dB under).
  */
 const TAIL_RETURN_DB = 0;
 

@@ -91,3 +91,23 @@ export function checkSound(m: Measured, rules?: SoundRules, others?: Readonly<Re
 export const COMPRESSOR_THRESHOLD_DB: number;
 export function settledFailures(into: Measured, heard: Measured): string[];
 export function table(rows: readonly Row[]): string;
+
+/** A reading a render's gates read over its draws (readings): its value on the named draw, on their mean, and on the worst draw; null if not read. */
+export interface Reading {
+  rule: 'peak' | 'floorDb' | 'band' | 'high' | 'near' | 'over' | 'under' | 'highOver' | 'tail';
+  /** The render it reads against, for a rule that names one. */
+  of?: string;
+  bound: string;
+  unit: 'dB' | 'share';
+  /** Held on every draw (the peak's range, a floor), or on the mean of the draws (every other rule). */
+  on: 'every' | 'mean';
+  named: number | null;
+  mean: number | null;
+  worst: number | null;
+}
+
+export function meanOf(draws: readonly Measured[]): Measured;
+export function drawLabel(k: number, n: number): string;
+export function checkDraws(draws: readonly Measured[], rules?: SoundRules, others?: Readonly<Record<string, readonly Measured[]>>, asked?: number): string[];
+export function readings(draws: readonly Measured[], rules?: SoundRules, others?: Readonly<Record<string, readonly Measured[]>>): Reading[];
+export function readingsTable(rows: readonly { name: string; readings: readonly Reading[] }[]): string;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BAND, bandShare, checkSound, COMPRESSOR_THRESHOLD_DB, dbfs, LOUDEST_S, loudest, loudestUnder, measure, ONSET_DB, onset, PEAK_DB, ruleEnergyDb, ruleShare, ruleTail, settledFailures, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
+import { BAND, bandShare, checkDraws, checkSound, COMPRESSOR_THRESHOLD_DB, dbfs, LOUDEST_S, loudest, loudestUnder, meanOf, measure, ONSET_DB, onset, PEAK_DB, readings, readingsTable, ruleEnergyDb, ruleShare, ruleTail, settledFailures, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
 
 // The sounds' proof (tools/render-sounds.mjs, npm run sounds; the shots spec's §6, G3's Task 5): each
 // voice rendered to a stereo WAV, its peak held between −30 and −1 dBFS, nothing silent; a voice held
@@ -354,6 +354,127 @@ describe("the sounds' measures", () => {
     // The other silent, or not rendered, is a failure, not a pass.
     expect(checkSound(read({ highShare: 0.42 }), { highOver }, { bare: read({ peakDb: -Infinity, highShare: 0 }) })).toEqual(["its share over 400 Hz is held over bare's, which is silent"]);
     expect(checkSound(read({ highShare: 0.42 }), { highOver }, {})).toEqual(["its share over 400 Hz is held over bare's, which was not rendered"]);
+  });
+
+  it("a render held to another's level (`near`) or over its energy (`over`) fails on the other silent, as `under` and `highOver` do: never a pass", () => {
+    const silent = read({ peakDb: -Infinity, rmsDb: -Infinity, loudestDb: -Infinity, lowLoudestDb: -Infinity, overDb: -Infinity });
+    expect(checkSound(read({ overDb: 42 }), { over: { of: 'dry', band: [400, 2000], firstS: 0.3, db: 1.5 } }, { dry: silent })).toEqual(["its energy is held over dry's, which is silent"]);
+    expect(checkSound(read({ loudestDb: -16 }), { near: { of: 'kill', withinDb: 3 } }, { kill: silent })).toEqual(["its level is held to kill's, which is silent"]);
+    expect(checkSound(read({ loudestDb: -16 }), { near: { of: 'kill', withinDb: 3, low: true } }, { kill: silent })).toEqual(["its level is held to kill's under 400 Hz, which is silent"]);
+  });
+
+  // A render's draws (G5's fix wave, resumed a second time: the controller's ruling E): its named seed
+  // and more (tools/sounds/page.ts), each shot's body and noise drawn afresh (audio/voices.ts), so a
+  // gate reads what a player hears over many shots, not one.
+  /** `n` draws, each read ok by every rule but as `f(k)` changes draw k. */
+  const draws = (n: number, f: (k: number) => Partial<Parameters<typeof checkSound>[0]>) => Array.from({ length: n }, (_, k) => read(f(k)));
+
+  it("a render's draws' mean: each reading every draw has, averaged (its levels in dB, as a level heard over many shots); a silent draw's levels make it silent; one draw is its own", () => {
+    const m = meanOf([read({ loudestDb: -12, overDb: 40, ruleShare: 0.5, highShare: 0.2 }), read({ loudestDb: -15, overDb: 43, ruleShare: 0.6, highShare: 0.3 })]);
+    expect(m.loudestDb).toBeCloseTo(-13.5, 12);
+    expect(m.overDb).toBeCloseTo(41.5, 12);
+    expect(m.ruleShare).toBeCloseTo(0.55, 12);
+    expect(m.highShare).toBeCloseTo(0.25, 12);
+    expect(m.peakDb).toBeCloseTo(-6, 12);
+    // A reading only some draws have is not a mean of the rest: it is left out, as not measured.
+    expect(meanOf([read({ tailDb: -30, dryDb: -18 }), read()])).not.toHaveProperty('tailDb');
+    expect(meanOf([read({ loudestDb: -Infinity, peakDb: -Infinity }), read()])).toMatchObject({ loudestDb: -Infinity, peakDb: -Infinity });
+    const one = read({ ruleShare: 0.4 });
+    expect(meanOf([one])).toEqual(one);
+  });
+
+  it("a render read on its draws: every rule on their mean (what a player hears over many shots), its peak's range and its floor on every draw (one shot may clip)", () => {
+    const under = { of: 'bare', db: 6 };
+    const bare = draws(3, (k) => ({ loudestDb: [-15, -14.5, -15.5][k] }));
+    // The suppressed SVD 6, 5.5 and 7.5 dB under the bare one, draw by draw: 6.33 on the mean, which holds, where its draw 1 alone would not.
+    const held = draws(3, (k) => ({ loudestDb: [-21, -20, -23][k] }));
+    expect(checkDraws(held, { under }, { bare })).toEqual([]);
+    expect(checkSound(held[1], { under }, { bare: bare[1] })).toHaveLength(1);
+    // 5.5, 5.8 and 6.2 under: 5.83 on the mean, which fails, said so.
+    const close = draws(3, (k) => ({ loudestDb: [-20.5, -20.3, -21.7][k] }));
+    expect(checkDraws(close, { under }, { bare })).toEqual(["its loudest 50 ms, -20.8 dBFS, is 5.8 dB under bare's (-15.0 dBFS), not 6 dB or more under it (the mean of 3 draws)"]);
+    // The order on the mean: the M870 over the AK by 0.5 dB, though one draw is under it.
+    const order = { of: 'ak', band: [20, 20000] as [number, number], firstS: 0.08, db: 0.5 };
+    const ak = draws(3, () => ({ overDb: 40 }));
+    expect(checkDraws(draws(3, (k) => ({ overDb: [41, 39.8, 41.2][k] })), { over: order }, { ak })).toEqual([]);
+    expect(checkDraws(draws(3, (k) => ({ overDb: [40.4, 40.2, 40.6][k] })), { over: order }, { ak })).toEqual(["its first 80 ms's energy in 20-20000 Hz is 0.4 dB over ak's, not 0.5 dB or more over it (the mean of 3 draws)"]);
+    // A share on the mean too: the gush's band, 58%, 48% and 60%.
+    const band = { hz: [400, 2000] as [number, number], share: 0.55 };
+    expect(checkDraws(draws(3, (k) => ({ ruleShare: [0.58, 0.48, 0.6][k] })), { band })).toEqual([]);
+    expect(checkDraws(draws(3, (k) => ({ ruleShare: [0.5, 0.48, 0.6][k] })), { band })).toEqual(['only 52.7% of its energy is in 400-2000 Hz, not 55% or more (the mean of 3 draws)']);
+    // The peak on every draw: one over -1 dBFS fails, whatever the mean; one under the floor too.
+    expect(checkDraws(draws(3, (k) => ({ peakDb: [-3, -0.6, -4][k] })))).toEqual(['its peak, -0.6 dBFS, is over -1 dBFS: it may clip (draw 1 of 3)']);
+    expect(checkDraws(draws(3, (k) => ({ peakDb: [-20, -25, -21][k] })), { floorDb: -24 })).toEqual(['its peak, -25.0 dBFS, is under its floor of -24 dBFS (draw 1 of 3)']);
+    // One draw is read as checkSound reads it.
+    expect(checkDraws([read({ peakDb: -0.4 })])).toEqual(checkSound(read({ peakDb: -0.4 })));
+    expect(checkDraws([held[1]], { under }, { bare: [bare[1]] })).toEqual(checkSound(held[1], { under }, { bare: bare[1] }));
+    expect(checkDraws([read({ ruleShare: 0.3 })], { band, floorDb: -24 })).toEqual(checkSound(read({ ruleShare: 0.3 }), { band, floorDb: -24 }));
+  });
+
+  it("a render read on its draws fails closed: none rendered, fewer than asked, a silent draw; another's draws silent, fewer, or not rendered", () => {
+    const under = { of: 'bare', db: 6 };
+    const bare = draws(3, () => ({ loudestDb: -15 }));
+    const held = draws(3, () => ({ loudestDb: -22 }));
+    expect(checkDraws(held, { under }, { bare })).toEqual([]);
+    expect(checkDraws([])).toEqual(['it was not rendered']);
+    expect(checkDraws(held.slice(0, 2), { under }, { bare }, 3)).toEqual(['only 2 of its 3 draws were rendered']);
+    // One of its draws silent: nothing else of it is read.
+    const gap = draws(3, (k) => (k === 2 ? { peakDb: -Infinity, rmsDb: -Infinity, loudestDb: -Infinity } : { loudestDb: -22 }));
+    expect(checkDraws(gap, { under }, { bare })).toEqual(['it is silent (draw 2 of 3)']);
+    // The other's: one draw silent, fewer draws than its own, or none.
+    expect(checkDraws(held, { under }, { bare: gap })).toEqual(["its loudest 50 ms is held under bare's, which is silent (the mean of 3 draws)"]);
+    expect(checkDraws(held, { under, highOver: { of: 'bare', by: 0.1 } }, { bare: bare.slice(0, 2) })).toEqual(['bare was read on 2 draws, not 3: its mean is not of as many']);
+    expect(checkDraws(held, { under }, {})).toEqual(["its loudest 50 ms is held under bare's, which was not rendered (the mean of 3 draws)"]);
+  });
+
+  it("each reading a render's gates read over its draws, for the table and report.json: on the named draw, on their mean, and on the worst draw (the nearest its bound, or furthest past it)", () => {
+    const bare = draws(3, (k) => ({ peakDb: -3, loudestDb: [-15, -14.5, -15.5][k] }));
+    const held = draws(3, (k) => ({ peakDb: [-6, -2, -9][k], loudestDb: [-21, -20, -23][k] }));
+    const under = { of: 'bare', db: 6 };
+    const rows = readings(held, { under }, { bare });
+    expect(rows.map((r) => [r.rule, r.on])).toEqual([['peak', 'every'], ['under', 'mean']]);
+    // Its peak, held on every draw: the worst is the draw nearest -1 dBFS.
+    expect(rows[0]).toMatchObject({ named: -6, worst: -2, bound: '-30 to -1' });
+    expect(rows[0].mean).toBeCloseTo(-17 / 3, 12);
+    // Under the bare one, the draws paired one to one: 6, 5.5 and 7.5 dB.
+    expect(rows[1]).toMatchObject({ of: 'bare', named: 6, worst: 5.5 });
+    expect(rows[1].mean).toBeCloseTo(19 / 3, 12);
+    // Nearest either end of a range: a peak at -29.5 is worse than one at -2.
+    expect(readings(draws(3, (k) => ({ peakDb: [-10, -29.5, -2][k] })))[0].worst).toBe(-29.5);
+    // A tail, 3 to 24 dB under: 20 dB under is 4 from its end, 4 under 1 from its, and 2.5 under past it.
+    const tail = { afterS: 0.07, underDb: [3, 24] as [number, number] };
+    const tails = readings(draws(3, (k) => ({ dryDb: -18, tailDb: [-38, -22, -20.5][k] })), { tail });
+    expect(tails[1]).toMatchObject({ rule: 'tail', on: 'mean', named: 20, worst: 2.5 });
+    // The gush near the kill's thud: the worst is the furthest either way.
+    const kill = draws(3, () => ({ lowLoudestDb: -16 }));
+    const near = readings(draws(3, (k) => ({ loudestDb: [-17, -14.5, -18.9][k] })), { near: { of: 'kill', withinDb: 3, low: true } }, { kill });
+    expect(near[1].named).toBeCloseTo(-1, 12);
+    expect(near[1].worst).toBeCloseTo(-2.9, 12);
+    // Shares, a floor, the other's over-reading, and its tone.
+    const all = readings(draws(2, (k) => ({ peakDb: -20, ruleShare: [0.6, 0.5][k], highShare: [0.4, 0.3][k], overDb: [41, 42][k] })), { floorDb: -24, band: { hz: [400, 2000], share: 0.55 }, high: 0.25, over: { of: 'dry', band: [400, 2000], db: 1 }, highOver: { of: 'dry', by: 0.1 } }, { dry: draws(2, () => ({ overDb: 40, highShare: 0.2 })) });
+    expect(all.map((r) => [r.rule, r.on, r.named, r.worst])).toEqual([
+      ['peak', 'every', -20, -20],
+      ['floorDb', 'every', -20, -20],
+      ['band', 'mean', 0.6, 0.5],
+      ['high', 'mean', 0.4, 0.3],
+      ['over', 'mean', 1, 1],
+      ['highOver', 'mean', expect.closeTo(0.2, 12), expect.closeTo(0.1, 12)],
+    ]);
+    // Another not rendered, or read on fewer draws: no values.
+    expect(readings(held, { under }, {})[1]).toMatchObject({ named: null, mean: null, worst: null });
+    expect(readings(held, { under }, { bare: bare.slice(1) })[1]).toMatchObject({ named: null, mean: null, worst: null });
+  });
+
+  it("a table of each gated reading: the render, the rule (and whose), its bound, whether it holds on every draw or the mean, and its named, mean and worst values", () => {
+    const bare = draws(3, (k) => ({ loudestDb: [-15, -14.5, -15.5][k] }));
+    const held = draws(3, (k) => ({ peakDb: [-6, -2, -9][k], loudestDb: [-21, -20, -23][k], ruleShare: [0.6, 0.5, 0.58][k] }));
+    const out = readingsTable([{ name: 'report-svd-suppressed', readings: readings(held, { under: { of: 'report-svd', db: 6 }, band: { hz: [400, 2000], share: 0.55 } }, { 'report-svd': bare }) }]);
+    const lines = out.split('\n');
+    expect(lines[0]).toMatch(/^render\s+rule\s+bound\s+held on\s+named\s+mean\s+worst$/);
+    expect(lines[1]).toMatch(/^report-svd-suppressed\s+peak\s+-30 to -1\s+every draw\s+-6\.00\s+-5\.67\s+-2\.00$/);
+    expect(lines[2]).toMatch(/^report-svd-suppressed\s+band\s+>= 55%\s+the mean\s+60\.0%\s+56\.0%\s+50\.0%$/);
+    expect(lines[3]).toMatch(/^report-svd-suppressed\s+under report-svd\s+>= 6\s+the mean\s+6\.00\s+6\.33\s+5\.50$/);
+    expect(readingsTable([{ name: 'x', readings: readings(held, { under: { of: 'gone', db: 6 } }, {}) }]).split('\n')[2]).toMatch(/^x\s+under gone\s+>= 6\s+the mean\s+-\s+-\s+-$/);
   });
 
   it("the compressor settled: a render whose mix never reaches its threshold (-14 dBFS) comes out no quieter, as a settled compressor passes it whole, lifted by its make-up; one cut is the compressor still settling from its start", () => {

@@ -295,6 +295,6 @@ describe('playing with friends, and the hit feedback', () => {
       ['show', 'kill', FRAME],
       ['pop', 'KILL', { name: 'Bob', team: 'blue' }, FRAME],
     ]);
-    expect(fb.frame(s, none(), FRAME + 32)).toEqual([{ kind: 'kill', at: null, gain: 0.9 }]);
+    expect(fb.frame(s, none(), FRAME + 32)).toEqual([{ kind: 'kill', at: null, gain: 0.37 }]);
   });
 });

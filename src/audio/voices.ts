@@ -469,10 +469,11 @@ export function playVoice(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuf
       break;
     case 'hurt':
       // Being hit: a low thump, and a 3 kHz ring in the ears fading over 0.6 s to a hundredth: on a
-      // laptop's speakers the ring is what is heard of it.
+      // laptop's speakers the ring is what is heard of it (npm run sounds holds a quarter of it over
+      // 400 Hz, the compressor settled: the thump's start no longer cut).
       tone(ctx, dull, when, 'sine', 95, 50, 0.85 * g, 0.18);
       burst(ctx, noise, dull, when, { type: 'lowpass', frequency: 250 }, 0.6 * g, 0.003, 0.1);
-      tone(ctx, dull, when, 'sine', 3000, 2990, 0.25 * g, 0.6, 1e-2);
+      tone(ctx, dull, when, 'sine', 3000, 2990, 0.33 * g, 0.6, 1e-2);
       break;
     case 'mag-out':
       // A dull click as the catch lets go, and the magazine scraping out over 60 ms.

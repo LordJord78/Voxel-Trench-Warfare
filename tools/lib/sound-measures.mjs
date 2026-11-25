@@ -11,7 +11,10 @@
 // another's (the same, its tone), or its tail's loudest 50 ms between so many dB under its report's (a
 // report's shared tail, neither missing nor outweighing it). And a render's mix that never reaches the
 // master compressor's threshold must come out of it no quieter: a settled compressor passes it whole,
-// as the game's does. Plain JS, so the render page
+// as the game's does. A render may be drawn several times (its noise and each shot's body drawn afresh,
+// audio/voices.ts): its rules then read the mean of its draws, what a player hears over many shots, and
+// its peak's range and floor hold on every draw (checkDraws; each reading's named, mean and worst
+// values for the table and report.json, readings). Plain JS, so the render page
 // (tools/sounds/page.ts, which runs the FFT where it renders) and the tests read the same code.
 
 /** A file's peak must lie in this range (dBFS): over the top it may clip, under the bottom it is too quiet. */
@@ -341,10 +344,21 @@ const pct = (x) => `${Math.round(x * 100)}%`;
  */
 export function checkSound(m, rules = {}, others = {}) {
   if (!(m.peakDb >= SILENT_DB)) return ['it is silent'];
+  return [...peakFailures(m, rules.floorDb), ...ruleFailures(m, rules, others)];
+}
+
+/** What fails of a file's peak (read by measure(), not silent): over −1 dBFS or under −30, or under `floorDb` if given. */
+function peakFailures(m, floorDb) {
   const out = [];
   if (m.peakDb > PEAK_DB[1]) out.push(`its peak, ${db1(m.peakDb)} dBFS, is over ${PEAK_DB[1]} dBFS: it may clip`);
   if (m.peakDb < PEAK_DB[0]) out.push(`its peak, ${db1(m.peakDb)} dBFS, is under ${PEAK_DB[0]} dBFS: too quiet`);
-  if (rules.floorDb !== undefined && m.peakDb < rules.floorDb) out.push(`its peak, ${db1(m.peakDb)} dBFS, is under its floor of ${rules.floorDb} dBFS`);
+  if (floorDb !== undefined && m.peakDb < floorDb) out.push(`its peak, ${db1(m.peakDb)} dBFS, is under its floor of ${floorDb} dBFS`);
+  return out;
+}
+
+/** What fails of a file (read by measure(), with its rules' readings) by its rules but its peak's: each as checkSound says. */
+function ruleFailures(m, rules, others) {
+  const out = [];
   if (rules.band) {
     const { hz, firstS } = rules.band;
     const share = rules.band.share ?? HALF;
@@ -359,6 +373,7 @@ export function checkSound(m, rules = {}, others = {}) {
     const whose = low ? `${of}'s under ${SMALL_SPEAKER_HZ} Hz` : `${of}'s`;
     const level = other && (low ? other.lowLoudestDb : other.loudestDb);
     if (!other) out.push(`its level is held to ${of}'s, which was not rendered`);
+    else if (!(other.peakDb >= SILENT_DB)) out.push(`its level is held to ${whose}, which is silent`);
     else if (typeof level !== 'number') out.push(`its level is held to ${whose}, which was not measured`);
     else {
       const gap = m.loudestDb - level;
@@ -370,6 +385,7 @@ export function checkSound(m, rules = {}, others = {}) {
     const other = others[of];
     const whose = `${firstS === undefined ? 'its energy' : `its first ${Math.round(firstS * 1000)} ms's energy`} in ${band[0]}-${band[1]} Hz`;
     if (!other) out.push(`its energy is held over ${of}'s, which was not rendered`);
+    else if (!(other.peakDb >= SILENT_DB)) out.push(`its energy is held over ${of}'s, which is silent`);
     else if (typeof m.overDb !== 'number' || typeof other.overDb !== 'number') out.push(`${whose} over ${of}'s was not measured`);
     else {
       const gap = m.overDb - other.overDb;
@@ -412,6 +428,105 @@ export function checkSound(m, rules = {}, others = {}) {
   return out;
 }
 
+/** The rules another render's reading is held to: each names it (`of`). */
+const RELATIONS = ['near', 'over', 'under', 'highOver'];
+
+/**
+ * The mean of a render's draws (each read by measure(), with its rules' readings): each reading every
+ * draw has as a number, averaged, its levels in dB (a level as heard over many shots). A draw silent
+ * (−Infinity) leaves its levels silent; a reading not every draw has is left out, as not measured. One
+ * draw is its own mean.
+ */
+export function meanOf(draws) {
+  if (draws.length === 1) return draws[0];
+  const out = {};
+  for (const key of Object.keys(draws[0] ?? {})) {
+    if (draws.every((d) => typeof d[key] === 'number')) out[key] = draws.reduce((sum, d) => sum + d[key], 0) / draws.length;
+  }
+  return out;
+}
+
+/** Draw `k` of `n` (0 the named seed; draw k seeded `<name>~k`, tools/sounds/page.ts), as a failure says it: nothing for a render drawn once. */
+export function drawLabel(k, n) {
+  return n === 1 ? '' : ` (draw ${k} of ${n})`;
+}
+
+/**
+ * What fails of a render read on its draws (`draws`: each read by measure() with its rules' readings,
+ * the named seed's first), held to `rules` against `others` (each render's draws by its name), of
+ * `asked` draws: its peak's range and its floor on every draw (one shot may clip), and every other rule
+ * on the mean of its draws against the mean of the other's (meanOf), as checkSound says, and said so.
+ * The other's draws are as many as its own, paired one to one. Fails closed: none rendered, fewer than
+ * asked, a draw of its own silent (nothing else of it read), another's draws fewer or more, one of them
+ * silent, or none: never a pass. One draw is read as checkSound reads it.
+ */
+export function checkDraws(draws, rules = {}, others = {}, asked = draws.length) {
+  const n = draws.length;
+  if (n === 0) return ['it was not rendered'];
+  if (n < asked) return [`only ${n} of its ${asked} draws were rendered`];
+  const silent = draws.flatMap((m, k) => (m.peakDb >= SILENT_DB ? [] : [`it is silent${drawLabel(k, n)}`]));
+  if (silent.length > 0) return silent;
+  const out = draws.flatMap((m, k) => peakFailures(m, rules.floorDb).map((f) => f + drawLabel(k, n)));
+  const onMean = { ...rules };
+  delete onMean.floorDb;
+  const theirs = {};
+  for (const key of RELATIONS) {
+    const of = rules[key]?.of;
+    if (of === undefined || others[of] === undefined) continue;
+    if (others[of].length === n) theirs[of] = meanOf(others[of]);
+    else {
+      if (!out.some((f) => f.startsWith(`${of} was read on`))) out.push(`${of} was read on ${others[of].length} draws, not ${n}: its mean is not of as many`);
+      delete onMean[key];
+    }
+  }
+  const mean = n === 1 ? '' : ` (the mean of ${n} draws)`;
+  return [...out, ...ruleFailures(meanOf(draws), onMean, theirs).map((f) => f + mean)];
+}
+
+/**
+ * Each reading a render's gates read (checkDraws) over its draws, for the table and report.json, in
+ * checkSound's order: its rule, the render it reads against (`of`), its bound, its unit (dB, or a
+ * share), whether it holds on every draw ('every': the peak's range, a floor) or on their mean
+ * ('mean': every other rule), and its value on the named draw, on the mean of the draws, and on the worst
+ * draw: the one nearest its bound, or furthest past it. A reading against another pairs their draws one
+ * to one; the other not rendered, or read on as many draws, gives null values. A gap is its own render's
+ * over the other's (dB, or share points), but `under`'s: the other's loudness over its own.
+ */
+export function readings(draws, rules = {}, others = {}) {
+  const n = draws.length;
+  const out = [];
+  const pc = (x) => `${Math.round(x * 100)}%`;
+  const add = (rule, of, bound, unit, on, value, margin) => {
+    const theirs = of === undefined ? null : others[of];
+    const row = { rule, ...(of === undefined ? {} : { of }), bound, unit, on };
+    if (n === 0 || theirs === undefined || (theirs !== null && theirs.length !== n)) return out.push({ ...row, named: null, mean: null, worst: null });
+    const values = draws.map((m, k) => value(m, theirs?.[k]));
+    // The worst: the least margin; a reading not taken (NaN) is worst of all.
+    const worst = values.reduce((w, v) => (Number.isNaN(margin(w)) ? w : !(margin(v) >= margin(w)) ? v : w));
+    out.push({ ...row, named: values[0], mean: value(meanOf(draws), theirs && meanOf(theirs)), worst });
+  };
+  const num = (x) => (typeof x === 'number' ? x : NaN);
+  add('peak', undefined, `${PEAK_DB[0]} to ${PEAK_DB[1]}`, 'dB', 'every', (m) => num(m.peakDb), (v) => Math.min(v - PEAK_DB[0], PEAK_DB[1] - v));
+  if (rules.floorDb !== undefined) add('floorDb', undefined, `>= ${rules.floorDb}`, 'dB', 'every', (m) => num(m.peakDb), (v) => v - rules.floorDb);
+  if (rules.band) {
+    const share = rules.band.share ?? HALF;
+    add('band', undefined, `>= ${pc(share)}`, 'share', 'mean', (m) => num(m.ruleShare), (v) => v - share);
+  }
+  if (rules.high !== undefined) add('high', undefined, `>= ${pc(rules.high)}`, 'share', 'mean', (m) => num(m.highShare), (v) => v - rules.high);
+  if (rules.near) {
+    const { of, withinDb, low } = rules.near;
+    add('near', of, `within ${withinDb}`, 'dB', 'mean', (m, o) => num(m.loudestDb) - num(low ? o.lowLoudestDb : o.loudestDb), (v) => withinDb - Math.abs(v));
+  }
+  if (rules.over) add('over', rules.over.of, `>= ${rules.over.db}`, 'dB', 'mean', (m, o) => num(m.overDb) - num(o.overDb), (v) => v - rules.over.db);
+  if (rules.under) add('under', rules.under.of, `>= ${rules.under.db}`, 'dB', 'mean', (m, o) => num(o.loudestDb) - num(m.loudestDb), (v) => v - rules.under.db);
+  if (rules.highOver) add('highOver', rules.highOver.of, `>= ${pc(rules.highOver.by)}`, 'share', 'mean', (m, o) => num(m.highShare) - num(o.highShare), (v) => v - rules.highOver.by);
+  if (rules.tail) {
+    const [lo, hi] = rules.tail.underDb;
+    add('tail', undefined, `${lo} to ${hi}`, 'dB', 'mean', (m) => num(m.dryDb) - num(m.tailDb), (v) => Math.min(v - lo, hi - v));
+  }
+  return out;
+}
+
 /**
  * What fails of a render's pass through the master compressor, from the mix into it (`into`) and what
  * comes out (`heard`), each read by measure(): a mix that never reaches COMPRESSOR_THRESHOLD_DB, which a
@@ -438,6 +553,21 @@ export function table(rows) {
   const last = head.length - 1;
   const cells = rows.map((r) => [r.name, db1(r.peakDb), db1(r.rmsDb), db1(r.loudestDb), pct(r.bandShare), pct(r.highShare), r.failures.length === 0 ? 'ok' : `${r.gated === false ? '(reported)' : 'FAIL'} ${r.failures.join('; ')}`]);
   const widths = head.map((h, i) => Math.max(h.length, ...cells.map((c) => (i < last ? c[i].length : 0))));
+  const line = (c) => c.map((s, i) => (i < last ? s.padEnd(widths[i] + 2) : s)).join('');
+  return [line(head), ...cells.map(line)].join('\n');
+}
+
+/**
+ * Each render's gated readings (readings()) as rows: the render, the rule (and the render it reads
+ * against), its bound, whether it holds on every draw or on the mean, and its named, mean and worst
+ * values (dB to 0.01, shares in %; '-' where none was read).
+ */
+export function readingsTable(rows) {
+  const head = ['render', 'rule', 'bound', 'held on', 'named', 'mean', 'worst'];
+  const value = (r, x) => (typeof x !== 'number' || Number.isNaN(x) ? '-' : x === -Infinity ? '-inf' : x === Infinity ? 'inf' : r.unit === 'share' ? pct1(x) : x.toFixed(2));
+  const cells = rows.flatMap(({ name, readings: rs }) => rs.map((r) => [name, r.of === undefined ? r.rule : `${r.rule} ${r.of}`, r.bound, r.on === 'every' ? 'every draw' : 'the mean', value(r, r.named), value(r, r.mean), value(r, r.worst)]));
+  const last = head.length - 1;
+  const widths = head.map((h, i) => Math.max(h.length, ...cells.map((c) => c[i].length)));
   const line = (c) => c.map((s, i) => (i < last ? s.padEnd(widths[i] + 2) : s)).join('');
   return [line(head), ...cells.map(line)].join('\n');
 }

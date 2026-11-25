@@ -407,7 +407,9 @@ move                = 0.97
 
 [attachment.suppressor]
 flash               = 0.12     # a wisp at the can's mouth
-report_gain         = 0.50     # still a crack, no longer a bang
+report_gain         = 0.43     # still a crack, no longer a bang: the highest that keeps
+                               # the suppressed SVD 6 dB under the bare one (npm run sounds,
+                               # on the mean of nine draws), and over its own mag-out
 blast_hz            = 500.0    # its report's blast (the click and the body) loses what is over this,
 blast_share         = 0.5      # and falls to this share of its level; its crack and action are whole
 velocity            = 0.97
@@ -769,16 +771,22 @@ pop_scale           = 1.3      # popping in from this over marker_pop_s, fading
                                # over marker_fade_s at its end
 kill_window_s       = 0.3      # a kill bursts and falls from the victim's last hit
                                # seen this recently; failing one, at their chest
-hit_gain            = 0.85     # the voices (audio/voices.ts): a body hit's thwack,
-head_gain           = 0.9      # a headshot's crack, its wet gush, a kill's thud and
-gush_gain           = 6.0      # chime (the shooter's, at the ear), a steel plate's
-kill_gain           = 0.9      # ring (at the plate, heard from the firing step), and
+hit_gain            = 0.70     # the voices (audio/voices.ts): a body hit's thwack,
+head_gain           = 0.88     # a headshot's crack, its wet gush, a kill's thud and
+gush_gain           = 4.5      # chime (the shooter's, at the ear), a steel plate's
+kill_gain           = 0.37     # ring (at the plate, heard from the firing step), and
 ding_gain           = 1.5      # being hit. npm run sounds holds each: its peak in
 hurt_gain           = 0.7      # -30 to -1 dBFS, a quarter of it over 400 Hz (a
                                # laptop's speakers), and the gush's loudest 50 ms
                                # within 3 dB of the kill's thud's. The gush is a
                                # narrow band of noise fluttering down to a quarter,
-                               # and the compressor takes its peaks: hence its gain
+                               # and the compressor takes its peaks: hence its gain.
+                               # And the shooter's under the gun: the hit, the head
+                               # and the gush 2 dB or more under an AK's report, the
+                               # kill at or under it (on the mean of nine draws). The
+                               # gush's gain is the lowest that keeps its band (under
+                               # it, its splat under 400 Hz outweighs the band), and
+                               # sits 0.8 dB over the AK's report: it fails that rule
 hit_heard_m         = 30.0     # another's round into a body is heard where it struck
 gush_heard_m        = 25.0     # this near; a headshot's gush this near,
 gush_others_gain    = 0.8      # at this gain, not gush_gain: that is the shooter's,
@@ -860,9 +868,12 @@ report_peak_db      = 158.0    # 5.45 at the shooter's ear
 # report_tail_s of decaying noise, its highs falling faster); a suppressed one half as much, a far
 # one less by its distance's share of far_m (the share that dulls it), never under a quarter. Each
 # gun's report weighs report_gain (its table's): the player's own and another's; the front's are 1.
-# Tuned on the heard renders (npm run sounds holds the M870 and the SVD over the AK, the AK over the
-# pistol): the compressor flattens the paper dB, and the bursts' peaks (an AK's ten, an M249's twenty
-# at its rate, each under -1 dBFS) hold the rifles under 1.
+# Tuned on the settled renders (the master compressor settled, as the game's is by its first shot),
+# over nine draws of each shot's body and noise: npm run sounds holds the M870 and the SVD over the
+# AK, and the AK and the M4 over the pistols, each by 0.5 dB on the mean of the draws, and every draw's
+# peak under -1 dBFS. The compressor passes about a third of a paper dB on the heavy two, so their
+# peaks cap them (the M870 1.35, the SVD 1.43); the M870 caps the AK (and the M249 with it) at 0.65,
+# and the M4 (0.76, as before) the pistols at 0.62.
 report_body_hz      = 140.0
 report_tail_send    = 0.35
 report_tail_s       = 1.2
@@ -874,7 +885,7 @@ punch_pitch_deg     = 1.5625
 punch_roll_deg      = 0.55
 fov_pulse_deg       = -0.60
 report_body_hz      = 140.0
-report_gain         = 0.86
+report_gain         = 0.65
 
 [viewkick.m4]
 punch_back_m        = 0.039
@@ -900,14 +911,14 @@ settle_time_s       = 0.32
 fov_pulse_deg       = -1.10
 cam_roll_deg        = 1.40
 report_body_hz      = 110.0
-report_gain         = 1.58
+report_gain         = 1.43
 
 [viewkick.m249]
 punch_back_m        = 0.0416
 punch_pitch_deg     = 1.25
 punch_roll_deg      = 0.70
 report_body_hz      = 135.0
-report_gain         = 0.86
+report_gain         = 0.65
 
 [viewkick.m870]
 punch_back_m        = 0.104
@@ -918,7 +929,7 @@ settle_time_s       = 0.36
 fov_pulse_deg       = -1.40
 cam_roll_deg        = 1.80
 report_body_hz      = 95.0
-report_gain         = 1.78
+report_gain         = 1.35
 
 [viewkick.m17]
 punch_back_m        = 0.0325
@@ -928,7 +939,7 @@ punch_roll_deg      = 1.00
 settle_time_s       = 0.20
 cam_roll_deg        = 0.90
 report_body_hz      = 210.0
-report_gain         = 0.63
+report_gain         = 0.62
 
 [viewkick.pm]
 punch_back_m        = 0.0325
@@ -938,7 +949,7 @@ punch_roll_deg      = 1.10
 settle_time_s       = 0.20
 cam_roll_deg        = 0.90
 report_body_hz      = 210.0
-report_gain         = 0.63
+report_gain         = 0.62
 
 # ---------------------------------------------------------------------------
 # PARTICLES

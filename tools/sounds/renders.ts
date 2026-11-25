@@ -8,7 +8,9 @@
  *
  * The hits' voices (the shots spec's §4), each at the ear as the shooter hears it, at its [hits] gain,
  * and each held to the small speaker: a laptop barely plays what is under 400 Hz, so at least a quarter
- * of a voice's energy lies over it. The gush gushes: most of it in 400 Hz–2 kHz, and as loud over its
+ * of a voice's energy lies over it. The shooter's own under the gun (MIX): the kill's loudest 50 ms at
+ * or under the AK report's, the hit's, the head's and the gush's 2 dB or more under it, on the mean of
+ * their draws. The gush gushes: most of it in 400 Hz–2 kHz, and as loud over its
  * loudest 50 ms as the kill's thud, within 3 dB (the kill's part under 400 Hz: its chime, louder, is
  * not the thud). A steel plate rings at the plate, so it is heard from the
  * spawn at the range's nearest and farthest plates too, the farthest held to a floor: its ring is the
@@ -19,8 +21,9 @@
  * places it, at hands_gain, held to the peak range and the small speaker. The reports (the shots spec's
  * §6, G5's Task 2 and its final review): the front's, FRONT_M ahead, the player's own at the muzzle from
  * every gun (the SVD bare and suppressed), an AK burst and a long M249 burst, each heard with the shared
- * tail (its file runs the tail's length past its own layers). Their weight is held in order (the M870
- * and the SVD over the AK, the AK over the pistol); the M870's and the SVD's tails, and the AK burst's
+ * tail (its file runs the tail's length past its own layers). Their weight is held in order, by 0.5 dB
+ * on the mean of their draws (the M870 and the SVD over the AK, the AK and the M4 over the pistol); the
+ * M870's and the SVD's tails, and the AK burst's
  * after its last report, from both sides (TailRule); the M870's and the pistol's own bodies in their
  * bands; the suppressed SVD's loudest 50 ms under the bare one's, its tone brighter than it, and over
  * its own reload's mag-out; and the M249's burst under the peak's ceiling, its twenty noise draws
@@ -29,6 +32,11 @@
  * (one heard afar within reference_m; a distant gun at its range's nearest), held to the peak's range:
  * every VoiceKind has its <kind>.wav. One only reported (`gated` false)
  * says what fails of it and does not fail the run.
+ *
+ * Each shot's body and every noise are drawn (audio/voices.ts), so one render is one shot. Those the
+ * rules read on the mean (DRAWN) are rendered DRAWS times: their rules hold on the mean of their draws,
+ * what a player hears over many shots, and their peaks on every draw (tools/lib/sound-measures.mjs
+ * checkDraws).
  */
 
 import { hitFeedbackTunables } from '../../src/app/hit-feedback';
@@ -47,6 +55,14 @@ import type { SoundRules, TailRule } from '../lib/sound-measures.mjs';
 
 /** Every file's rate (Hz). */
 export const RATE = 48000;
+/**
+ * How many times a render in DRAWN is rendered (G5's fix wave, resumed a second time: the controller's
+ * ruling E): its named seed and eight more (page.ts seeds draw k by `<name>~k`). Each shot's body is
+ * drawn a little about its gun's (item 8) and its noise afresh, as the game plays a magazine, so a gate
+ * read on one draw reads one shot: the reports' order spread over 2 dB across nine. Their mean is what a
+ * player hears over many shots.
+ */
+export const DRAWS = 9;
 /**
  * How long each render's context runs before its file starts (s), silent, cut from the file: the
  * master compressor settling. Chrome's DynamicsCompressorNode starts from its reset state, and over its
@@ -76,6 +92,8 @@ export interface Render {
   lengthS: number;
   /** A failure of it fails the run, or it is only reported. */
   gated: boolean;
+  /** How many times it is rendered: DRAWS for those in DRAWN, held on their mean and their peaks on every draw; 1 for the rest. */
+  draws: number;
   /** What it is held to besides its peak's range: a band, the small speaker, a floor, another render's level, or over another's energy in a band. */
   rules?: SoundRules;
 }
@@ -85,6 +103,24 @@ const EARS: readonly FeedbackKind[] = ['hit', 'head', 'gush', 'kill', 'ding', 'h
 const CUES: readonly HandlingCue[] = ['mag-out', 'mag-in', 'bolt', 'cover', 'shell', 'pump', 'dry'];
 /** The small speaker: at least this share of a voice's energy over 400 Hz. */
 const SMALL_SPEAKER = 0.25;
+/**
+ * The hits' voices under the gun (the controller's ruling, resumed a second time): each one's loudest
+ * 50 ms at least so many dB under the AK report's, on the mean of their draws. Settled, the kill
+ * (-10.7 dBFS) and the gush (-13.6) were heard over every report. Being hit, and a plate's ring afar,
+ * are not held to it.
+ */
+const MIX: Partial<Record<FeedbackKind, SoundRules>> = {
+  hit: { under: { of: 'report-ak', db: 2 } },
+  head: { under: { of: 'report-ak', db: 2 } },
+  gush: { under: { of: 'report-ak', db: 2 } },
+  kill: { under: { of: 'report-ak', db: 0 } },
+};
+/**
+ * The renders drawn DRAWS times: those a rule read on the mean reads (the reports' order, the suppressed
+ * SVD's against the bare one and its mag-out, the gush's band and its kill, the hits' voices under the AK
+ * report), and the bursts, whose peaks hold on every draw. Every other render is drawn once.
+ */
+const DRAWN: readonly string[] = ['hit', 'head', 'gush', 'kill', 'mag-out', 'report-ak', 'report-svd', 'report-svd-suppressed', 'report-m870', 'report-pistol', 'report-m4', 'report-ak-burst', 'report-m249-burst'];
 /** The gush gushes: at least this share of its energy in 400 Hz–2 kHz, and its loudest 50 ms within 3 dB of the kill thud's (the kill's part under 400 Hz, apart from its chime). */
 const GUSH: SoundRules = { band: { hz: [400, 2000], share: 0.55 }, near: { of: 'kill', withinDb: 3, low: true } };
 /**
@@ -118,10 +154,11 @@ const BURST = 10;
 const BURST_GAP_S = 0.1;
 const BURST_LAST_S = 0.9;
 /**
- * The reports' weight in order (G5's final review): each held over the next lighter, its first 80 ms's
- * energy across the band. All read alike, as page.ts reads one over-reading a render.
+ * The reports' weight in order (G5's final review): each held over the next lighter by 0.5 dB on the mean
+ * of their draws (the controller's ruling, resumed a second time), its first 80 ms's energy across the
+ * band. All read alike, as page.ts reads one over-reading a render.
  */
-const ORDER = { band: [20, 20000] as const, firstS: 0.08, db: 0 };
+const ORDER = { band: [20, 20000] as const, firstS: 0.08, db: 0.5 };
 /**
  * A long M249 burst (G5's fix wave): this many of its reports at the gun's own rate, held to the peak's
  * range alone. Each report peaks about as a single one does (the compressor settled: 1.6 to 3.5 dB
@@ -140,13 +177,14 @@ const TAIL: TailRule = { afterS: REPORT_S, underDb: [3, 24] };
 const M870_BODY = 0.59;
 const PISTOL_BODY = 0.5;
 /**
- * What each of the player's own reports is held to besides its peak's range: the order; the tails of the
- * two the hot tail outweighed; each body in its band; and the suppressed SVD's loudest 50 ms 6 dB or
- * more under the bare one's (G5's review focus), its tone brighter, and its first 50 ms 2 dB over its
- * mag-out's.
+ * What each of the player's own reports is held to besides its peak's range: the order (the M17 stands
+ * for both pistols: the PM's report is its body and weight); the tails of the two the hot tail
+ * outweighed; each body in its band; and the suppressed SVD's loudest 50 ms 6 dB or more under the bare
+ * one's (G5's review focus), its tone brighter, and its first 50 ms 2 dB over its mag-out's.
  */
 const OWN_RULES: Readonly<Record<string, SoundRules>> = {
   'report-ak': { over: { of: 'report-pistol', ...ORDER } },
+  'report-m4': { over: { of: 'report-pistol', ...ORDER } },
   'report-svd': { over: { of: 'report-ak', ...ORDER }, tail: TAIL },
   'report-svd-suppressed': { under: { of: 'report-svd', db: 6 }, highOver: { of: 'report-svd', by: 0.1 }, over: { of: 'mag-out', band: [20, 20000], firstS: 0.05, db: 2 } },
   'report-m870': { over: { of: 'report-ak', ...ORDER }, tail: TAIL, band: { hz: [20, 120], share: M870_BODY, firstS: 0.08 } },
@@ -164,10 +202,11 @@ export function renders(tun: Tunables): Render[] {
     plans,
     lengthS: LEAD_S + Math.max(...plans.map((p) => p.delayS + voiceLength(p) + ((p.send ?? 0) > 0 ? report.tailS : 0))) + TAIL_S,
     gated: true,
+    draws: DRAWN.includes(name) ? DRAWS : 1,
     ...(rules ? { rules } : {}),
   });
   const atEar = (kinds: readonly FeedbackKind[]) => planFeedback(t, kinds.map((kind) => ({ kind, at: null, gain: gains[kind] })), ear);
-  const out = EARS.map((kind) => of(kind, atEar([kind]), { high: SMALL_SPEAKER, ...(kind === 'gush' ? GUSH : {}) }));
+  const out = EARS.map((kind) => of(kind, atEar([kind]), { high: SMALL_SPEAKER, ...(kind === 'gush' ? GUSH : {}), ...MIX[kind] }));
   // A plate's ring heard from the spawn, straight ahead, at the nearest and farthest plates.
   const r = rangeTunables(tun);
   const plates = [...r.torsoPlatesM, ...r.headPlatesM];

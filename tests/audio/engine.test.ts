@@ -69,8 +69,8 @@ describe("the reports' shared tail", () => {
   it("each ear returns a report's body at about the send squared (G5's final review), as the renders hold it with the compressor settled: its energy in the bodies' band (60-210 Hz) against a unit-energy white noise's there, within 1 dB of it", () => {
     // What a sine in the band sent at `send` comes back as: its energy times the send squared times
     // this return, the impulse's energy in the band over a unit-energy white noise's there (dB). Held
-    // from both sides: hotter, the tail outweighs a low report (the M870's did, 7 dB over this);
-    // colder, the reports go dry.
+    // from both sides: hotter, the tail outweighs a low report (958c940's unit-energy impulse returned
+    // the body 7.0 dB over this, and the M870's loudest 50 ms was its tail); colder, the reports go dry.
     const BODIES: [number, number] = [60, 210];
     for (const x of [left, right]) {
       const back = ruleEnergyDb(x, RATE, { hz: BODIES }) - 10 * Math.log10((BODIES[1] - BODIES[0]) / (RATE / 2));
