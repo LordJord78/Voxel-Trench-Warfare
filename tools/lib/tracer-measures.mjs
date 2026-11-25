@@ -29,10 +29,11 @@
 //   - (d) noon contrast: the brightest pixel of the player's tracer at NOON_AT_M of flight over its
 //     NOON_RING_PX ring, gated at noon and reported at 17:35.
 //   - (e) the stream from the hip: the followed round's drawn ribbons from STREAM_FROM_M past the muzzle
-//     to within STREAM_AIM_PX of the point of aim, each sample read across the line as (c)'s are, the
-//     share shown, and how far out the shown stream reaches over the muzzle's distance from the point
-//     of aim; a sample brighter than a background the lit rule cannot reach (LIT.ratio times it past
-//     255) and not tinted left out, counted (`unread`).
+//     to within STREAM_AIM_PX of the point of aim, each sample read across the line (PATH_ACROSS_PX
+//     either side, each pixel over its own background), the share shown, and how far out the shown
+//     stream reaches over the muzzle's distance from the point of aim; a sample with a pixel brighter
+//     than a background the lit rule cannot reach (LIT.ratio times it past 255), and none shown, left
+//     out, counted (`unread`).
 //   - the graze: a ricochet of the player's kind drawn in the burst (not the front's amber beside it).
 //   - the wall (10 m out, at night): its rounds strike within their first tick, each drawn once, to the
 //     wall: gated on (a) and (e) as a near burst is, its stream the struck rounds'; its head, drawn only
@@ -521,18 +522,19 @@ export function battleColour(imgs, comp, frames) {
 /**
  * (e): the stream from the hip. The followed round's drawn ribbons, from STREAM_FROM_M past the drawn
  * muzzle to within STREAM_AIM_PX of the point of aim (the view's middle), sampled a pixel apart on each
- * frame's image and read across the line as (c) reads its path (PATH_ACROSS_PX either side: the
- * brightest over the median of their backgrounds, tinted if any is): the share of them shown in the
- * composite ((c)'s rule: lit, or by day (`day`) lit or tinted by `team`'s colour); and how far out from
- * the point of aim the shown stream reaches, over the muzzle's distance from it. Beside them (`lit`),
- * the share lit and its reach alone.
+ * frame's image and read across the line, PATH_ACROSS_PX either side, each pixel over its own
+ * background (lit if any is, tinted if any is: a drawn core a pixel off the sample is read by its core,
+ * and a band across the crest's edge does not read the sky's own brightness over the parapet's as a
+ * line): the share of them shown in the composite ((c)'s rule: lit, or by day (`day`) lit or tinted by
+ * `team`'s colour); and how far out from the point of aim the shown stream reaches, over the muzzle's
+ * distance from it. Beside them (`lit`), the share lit and its reach alone.
  *
- * A sample over a background the lit rule cannot reach (LIT.ratio times it past 255: 17:35's sky,
- * 170 and brighter, through a gap in the crest) that is brighter than it by LIT.min, but not shown, is
- * left out of both shares and counted (`unread`), as (c) leaves out what the gun and the world hide:
- * a white core there cannot be lit, nor is white its team's colour, and it is not a miss. One no
- * brighter than its background is (nothing is drawn there), and a tinted one is shown, as before. Under
- * STREAM_READ_MIN of the samples read, the share is no measure.
+ * A sample with a pixel over a background the lit rule cannot reach (LIT.ratio times it past 255:
+ * 17:35's sky, 170 and brighter, through a gap in the crest) that is brighter than that background by
+ * LIT.min, and none shown, is left out of both shares and counted (`unread`), as (c) leaves out what
+ * the gun and the world hide: a white core there cannot be lit, nor is white its team's colour, and it
+ * is not a miss. One with no pixel brighter than its own background is (nothing is drawn there), and a
+ * tinted one is shown, as before. Under STREAM_READ_MIN of the samples read, the share is no measure.
  */
 export function streamCover(comp, frames, track, team = null, day = false) {
   if (!track) return { share: null, why: 'no round followed' };
@@ -557,28 +559,36 @@ export function streamCover(comp, frames, track, team = null, day = false) {
       if (last && Math.hypot(q[0] - last[0], q[1] - last[1]) < 1) continue;
       last = q;
       if (at(comp, q) < 0) continue;
-      // Across the line as (c) reads its path: PATH_ACROSS_PX either side, its brightest over the median
-      // of their backgrounds, tinted if any is (a line along the crest's edge has the sky behind one side
-      // of its band and the parapet behind the other).
+      // Across the line: PATH_ACROSS_PX either side, each pixel over its own background (a line along the
+      // crest's edge has the sky behind one side of its band and the parapet behind the other, and the
+      // sky's own brightness is not a line over the parapet's); lit if any is, tinted if any is.
       const ahead = project(pose, res, lerp(t.tailM, t.headM, Math.min(1, j / 2000 + 1e-3)));
       const along = ahead ? Math.hypot(ahead[0] - q[0], ahead[1] - q[1]) : 0;
       const n = along > 0 ? [-(ahead[1] - q[1]) / along, (ahead[0] - q[0]) / along] : [0, 1];
-      let best = 0;
-      const bgs = [];
+      let covered = false;
       let tint = false;
+      let past = false;
+      // Reported: the pixel most over its own background.
+      let lum = 0;
+      let bg = null;
       for (let o = -PATH_ACROSS_PX; o <= PATH_ACROSS_PX + 1e-9; o += 0.5) {
         const k = at(comp, [q[0] + n[0] * o, q[1] + n[1] * o]);
         if (k < 0) continue;
-        best = Math.max(best, comp.lum[k]);
-        bgs.push(comp.least[k]);
+        const v = comp.lum[k];
+        const b = comp.least[k];
+        if (lit(v, b)) covered = true;
+        // Brighter than a background no reading can be lit over.
+        else if (LIT.ratio * b > 255 && v >= b + LIT.min) past = true;
         if (!tint && team && tinted([comp.data[k * 4], comp.data[k * 4 + 1], comp.data[k * 4 + 2]], [comp.back[k * 3], comp.back[k * 3 + 1], comp.back[k * 3 + 2]], team)) tint = true;
+        if (bg === null || v - b > lum - bg) {
+          lum = v;
+          bg = b;
+        }
       }
-      const bg = median(bgs);
-      const covered = lit(best, bg);
       const shown = covered || (day && tint);
-      // Brighter than a background no reading can be lit over, and not tinted: unread, not a miss.
-      const unread = !shown && LIT.ratio * bg > 255 && best >= bg + LIT.min;
-      samples.push({ at: q, off, covered, tint, shown, unread, lum: best, bg });
+      // A pixel brighter than its own background past the lit rule's reach, and none shown: unread, not a miss.
+      const unread = !shown && past;
+      samples.push({ at: q, off, covered, tint, shown, unread, lum, bg });
     }
   }
   // Where the stream is on the image STREAM_FROM_M, a metre and three metres past the muzzle (from the first frame it is drawn in): how far from the point of aim.

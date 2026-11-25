@@ -91,7 +91,7 @@ export function nearWidth(imgs: readonly Image[], frames: readonly Frame[], kind
 export function farColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[], kind: number, team: Hsv): Measures;
 export function frontColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[]): Measures;
 export function battleColour(imgs: readonly Image[], comp: Composite, frames: readonly Frame[]): Measures;
-/** (e): by day (`day`) a sample lit or tinted by `team`'s colour is shown, after dark a lit one; `lit` beside it, the share and span lit alone; `unread`, the samples left out, brighter than a background that cannot be lit and not tinted. */
+/** (e): by day (`day`) a sample lit or tinted by `team`'s colour is shown, after dark a lit one; `lit` beside it, the share and span lit alone; `unread`, the samples left out: a pixel across the line brighter than its own background, one that cannot be lit, and none shown. Each pixel across the line is read over its own background. */
 export function streamCover(comp: Composite, frames: readonly Frame[], track: Track | null, team?: Hsv | null, day?: boolean): Measures;
 export function trackRound(frames: readonly Frame[], kind: number): Track | null;
 export function pathSamples(frames: readonly Frame[], track: Track | null): { points: [number, number][]; metres: number[]; n: number[]; lengthPx: number; end: number } | null;

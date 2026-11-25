@@ -615,7 +615,7 @@ describe("G1's proof: by day (c) and (e) count a sample shown lit or tinted, aft
     expect(gateCapture(c, { ...passing(c), stream: most }, burstOf())).toHaveLength(1);
   });
 
-  it("(e) reads each sample across the line as (c) reads its path: its brightest within PATH_ACROSS_PX either side over the median of their backgrounds, so a line whose drawn core lies a pixel off the sample's is read by its core", () => {
+  it("(e) reads each sample across the line, PATH_ACROSS_PX either side, each pixel over its own background, so a line whose drawn core lies a pixel off the sample's is read by its core", () => {
     // A level stream on the image's row 120 from x 140 to 60 (2 m out), over a haze of luminance 166
     // (lit asks 249): the sampled row a shade under it (245), the core a pixel across at 252.
     const level: Track = { seen: [{ frame: 0, t: { kind: 2, flown: 30, headDrawn: true, head: null, tail: null, headM: [-0.8, -0.4, 2], tailM: [0.8, -0.4, 2], joinsM: 30 } }], path: null };
@@ -636,6 +636,59 @@ describe("G1's proof: by day (c) and (e) count a sample shown lit or tinted, aft
       for (let x = 55; x <= 145; x++) set(x, 120, [245, 245, 245]);
     }), at15, level, TEAM.red, true);
     expect(flat.share).toBe(0);
+  });
+
+  it("(e) judges each pixel across the line over its own background, not the band's: where the line runs along a bright-over-dark edge (17:35's sky over the crest; at night a parapet the flash lights against the sky) and nothing is drawn, no sample is shown or unread, by day or at night; a core drawn on either side is read as it is", () => {
+    // The level stream of the test above, its samples on row 120 and read 1.5 px either side (rows 118
+    // to 121), over an edge: `bright` on the rows from `from` to `to`, the parapet (40) on the rest.
+    const level: Track = { seen: [{ frame: 0, t: { kind: 2, flown: 30, headDrawn: true, head: null, tail: null, headM: [-0.8, -0.4, 2], tailM: [0.8, -0.4, 2], joinsM: 30 } }], path: null };
+    const at15: Frame[] = [{ ...frameOf(0, []), muzzle: [0.8, -0.4, 1.5] }];
+    const parapet = [40, 40, 40];
+    const edged = (bright: readonly number[], from: number, to: number, paint: (set: (x: number, y: number, c: readonly number[]) => void) => void = () => {}): Composite => {
+      const backAt = (y: number) => (y >= from && y <= to ? bright : parapet);
+      const shown = image(200, 200, parapet, (set) => {
+        for (let y = Math.max(0, from); y <= Math.min(199, to); y++) for (let x = 0; x < 200; x++) set(x, y, bright);
+        paint(set);
+      });
+      const n = shown.w * shown.h;
+      const backs = new Uint8Array(n * 3);
+      const least = new Float32Array(n);
+      for (let p = 0; p < n; p++) {
+        const b = backAt(Math.floor(p / shown.w));
+        backs.set(b, p * 3);
+        least[p] = luminance(b[0], b[1], b[2]);
+      }
+      return { ...shown, least, back: backs };
+    };
+    // The sky above the edge (rows up to `edge`) or below it (rows from `edge`), the edge each row the band
+    // crosses and a row either side; 17:35's sky (200, past the lit rule's reach) and a duller one (120).
+    for (const bright of [[200, 200, 200], [120, 120, 120]]) {
+      for (let edge = 116; edge <= 123; edge++) {
+        for (const [from, to] of [[0, edge], [edge, 199]]) {
+          for (const day of [true, false]) {
+            const e = streamCover(edged(bright, from, to), at15, level, TEAM.red, day);
+            const where = `${bright[0]} on rows ${from}-${to}, ${day ? 'by day' : 'at night'}`;
+            expect(e.samples, where).toBeGreaterThan(60);
+            expect(e.share, where).toBe(0);
+            expect(e.lit.share, where).toBe(0);
+            expect(e.unread, where).toBe(0);
+          }
+        }
+      }
+    }
+    // A white core drawn a pixel off the sample on the parapet's side of the edge (the sky on rows up to
+    // 119): lit over its own background (40), and shown.
+    const core = (row: number) => (set: (x: number, y: number, c: readonly number[]) => void) => {
+      for (let x = 55; x <= 145; x++) set(x, row, [250, 250, 250]);
+    };
+    const below = streamCover(edged([200, 200, 200], 0, 119, core(121)), at15, level, TEAM.red, true);
+    expect(below.share).toBe(1);
+    expect(below.unread).toBe(0);
+    // On the sky's side (the sky on rows up to 120, the core on 119): no reading of it can be lit, nor is
+    // white its team's colour; unread, not a miss, and with most of the stream so, no measure.
+    const above = streamCover(edged([200, 200, 200], 0, 120, core(119)), at15, level, TEAM.red, true);
+    expect(above.unread).toBe(above.samples);
+    expect(above.share).toBeNull();
   });
 
   it('(c) and (e) after dark: a sample tinted and not lit is not shown, and a lit one is, as before', () => {
