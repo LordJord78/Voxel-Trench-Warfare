@@ -224,7 +224,7 @@ export function renders(tun: Tunables): Render[] {
     out.push(of(cue, planVoices(t, events, ear), { high: SMALL_SPEAKER }));
   }
   // The reports and every other kind, each from its event as planVoices hears it (the battle's too).
-  const quiet: CombatEvents = { shots: [], frontShots: [], impacts: [], cracks: [], cuts: [], craters: [], incoming: [], blasts: [], scoops: [], splashes: [], remoteShots: [], hits: [], handling: [], harms: [] };
+  const quiet: CombatEvents = { ...cueEvents('dry'), handling: [] };
   const heard = (events: Partial<CombatEvents>, battle?: Partial<BattleEvents>) => planVoices(t, { ...quiet, ...events }, ear, battle && { ...noBattleEvents(), ...battle });
   const shot = (at: [number, number, number]): ShotEvent => ({ tick: 1, origin: at, dir: [0, 0, -1], tracer: false, muzzle: at });
   // The front's report, FRONT_M ahead; the player's own at the muzzle, its word and its report's share as the session gives them.

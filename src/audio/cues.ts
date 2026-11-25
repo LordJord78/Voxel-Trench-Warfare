@@ -41,8 +41,10 @@ export interface CueShape {
   parts: CuePart[];
 }
 
+/** Every hands' cue, once: a Record of every HandlingCue, so one added to combat/handling.ts's type and not here does not compile (it would throw from audio.play in the frame loop). */
+const CUE_SET = { 'mag-out': true, 'mag-in': true, bolt: true, cover: true, shell: true, pump: true, dry: true } satisfies Record<HandlingCue, true>;
 /** Every hands' cue, as combat/handling.ts names them. */
-export const CUE_NAMES: readonly HandlingCue[] = ['mag-out', 'mag-in', 'bolt', 'cover', 'shell', 'pump', 'dry'];
+export const CUE_NAMES = Object.keys(CUE_SET) as HandlingCue[];
 const FILTERS = ['lowpass', 'highpass', 'bandpass'] as const;
 const WAVES = ['sine', 'square', 'triangle', 'sawtooth'] as const;
 
