@@ -4,11 +4,18 @@
  * settings and match, the other players' states, and the room's edits to the world (its shells,
  * and the others' scoops) in the order they came.
  *
+ * It watches the room as the room watches it (the release audit's ROBUST-7): with the page shown, a
+ * ping the room has not answered, nor said anything since, for `silentMs` ([net] room_silent_s) is
+ * the line lost, as if it had closed. Hidden, it does not judge: a hidden tab's timers are throttled
+ * (to one run a minute at their slowest), so its own pings go late and their answers with them; shown
+ * again, it waits afresh. Whatever ends the line is said once (`lost`): the room's refusal, its word
+ * that it is closing the line, the close, or the silence.
+ *
  * Only made for a game with friends: solo play never loads this, and makes no request at all.
  */
 
 import { matchSeconds, ServerClock } from '../net/clock';
-import { decodeDig, decodeShell, decodeShot, defaultConfig, encodeState, parseRoom, PROTOCOL, type Cause, type ClientMsg, type Dig, type MatchInfo, type MatchLog, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type RoomShell, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
+import { decodeDig, decodeShell, decodeShot, defaultConfig, encodeState, isRoomCode, MAX_PLAYERS, parseRoom, PROTOCOL, ROOM_IDLE_MS, type Cause, type ClientMsg, type Closing, type Dig, type MatchInfo, type MatchLog, type Phase, type PlayerState, type Refusal, type RoomConfig, type RoomMsg, type RoomShell, type Seat, type ShotState, type Team, type Zone } from '../net/protocol';
 import { RemotePlayers } from './net-players';
 
 export interface NetEvents {
@@ -54,20 +61,46 @@ export type RoomEdit = { t: 'shell'; shell: RoomShell } | { t: 'dig'; dig: Dig }
 
 const PING_MS = 500;
 
-const REFUSED: Record<Refusal, string> = {
-  full: 'That game is full: eight players already.',
-  version: "That game is running another version of TRENCHLINE. Reload the page (it may need a moment to update), and ask the host to reload too.",
-  'no-room': 'There is no game with that code. Ask the host for a new link.',
+/** What a page is told when the room turns it away: what happened, and what to do. */
+export const REFUSED: Record<Refusal, string> = {
+  full: `That game is full (${MAX_PLAYERS} players)`,
+  version: 'That game is on another version: reload the page',
+  'no-room': 'No game with that code',
   'bad-hello': 'The game could not join that room.',
 };
+
+/** What a page is told when its line to the room ends. */
+export const LOST = {
+  /** After the welcome: the line closed, or went silent. */
+  line: 'The connection to the game was lost. Reload the page to rejoin.',
+  /** Before it: the relay could not be reached, or did not answer. */
+  unreachable: 'The game could not be reached: check your connection',
+  /** The room closed for nobody playing in it (protocol.ts ROOM_IDLE_MS). */
+  idle: `The game was closed after ${ROOM_IDLE_MS / 60_000} minutes with nobody playing`,
+  /** The same page came back on another line (another tab with this one's storage): this line let go. */
+  replaced: 'This game was opened again in another tab: it goes on there.',
+} as const;
+
+const CLOSED: Record<Closing, string> = { idle: LOST.idle, replaced: LOST.replaced };
+
+/** What a line's close says, by its reason, if the room gave one a page is told of. */
+function closedFor(reason: string): string | undefined {
+  return (REFUSED as Record<string, string>)[reason] ?? (CLOSED as Record<string, string>)[reason];
+}
 
 /** Make a room at the relay: its code. */
 export async function makeRoom(relay: string): Promise<string> {
   const r = await fetch(`${relay}/rooms`, { method: 'POST' });
   if (!r.ok) throw new Error(`the relay said ${r.status}`);
   const { room } = (await r.json()) as { room?: unknown };
-  if (typeof room !== 'string' || !/^[A-Z]{5}$/.test(room)) throw new Error('the relay gave no room');
+  if (typeof room !== 'string' || !isRoomCode(room)) throw new Error('the relay gave no room');
   return room;
+}
+
+/** How a line is opened: the page's rejoin token for the room, said in its hello; and how long (ms) the room may say nothing, with the page shown, before the line is lost (none: never). */
+export interface NetOptions {
+  token?: string;
+  silentMs?: number;
 }
 
 export class NetClient {
@@ -97,9 +130,15 @@ export class NetClient {
   private edits: RoomEdit[] = [];
   private readonly ws: WebSocket;
   private pinger: ReturnType<typeof setInterval> | null = null;
+  /** The line is over for this page (it closed it, or it was said lost): nothing more is said of it. */
   private closedByUs = false;
   /** The page's time the hello went: the welcome is its reply, so the clock's first sample. */
   private helloAt = 0;
+  /** Whether the page is shown: hidden, the room's silence is not judged. */
+  private shown = true;
+  /** The page's time of the first ping since the room last said anything (from the line's making: the room has said nothing yet); null, none since. */
+  private waitingSince: number | null;
+  private readonly silentMs: number;
 
   constructor(
     relay: string,
@@ -108,22 +147,26 @@ export class NetClient {
     build: string,
     private readonly on: NetEvents,
     private readonly now: () => number = () => performance.now(),
+    options: NetOptions = {},
   ) {
+    this.silentMs = options.silentMs ?? Number.POSITIVE_INFINITY;
+    this.waitingSince = this.now();
     this.ws = new WebSocket(`${relay.replace(/^http/, 'ws')}/room/${room}`);
     this.ws.addEventListener('open', () => {
       this.helloAt = this.now();
-      this.send({ t: 'hello', v: PROTOCOL, build, name: this.name });
+      this.send({ t: 'hello', v: PROTOCOL, build, name: this.name, ...(options.token === undefined ? {} : { token: options.token }) });
       this.burst();
-      this.pinger = setInterval(() => this.ping(), PING_MS);
     });
-    this.ws.addEventListener('message', (e) => this.receive(e.data));
+    // From the line's making: the silence is judged while it opens too (a relay that never answers).
+    this.pinger = setInterval(() => this.ping(), PING_MS);
+    this.ws.addEventListener('message', (e) => {
+      this.waitingSince = null;
+      this.receive(e.data);
+    });
     this.ws.addEventListener('close', (e) => {
       if (this.pinger) clearInterval(this.pinger);
-      if (this.closedByUs || e.reason === 'version' || e.reason === 'full' || e.reason === 'no-room') return;
-      // A match the line went in is over for this page, as if the owner had ended it: the battle is
-      // the visitor's again (together.ts ended), not the room's carried on alone.
-      if (this.phase === 'playing') this.endMatch();
-      this.on.lost(this.joined ? 'The connection to the game was lost. Reload the page to rejoin.' : 'The game could not be reached.');
+      if (this.closedByUs) return;
+      this.gone(closedFor(e.reason));
     });
   }
 
@@ -172,7 +215,12 @@ export class NetClient {
 
   away(away: boolean): void {
     this.send({ t: 'away', away });
-    if (!away) this.burst();
+    this.shown = !away;
+    if (!away) {
+      // Shown again: the room's silence judged afresh, from the burst's pings.
+      this.waitingSince = null;
+      this.burst();
+    }
   }
 
   /** This player's state, and the shots they fired since the last, as their words (protocol.ts encodeShot, or sent's: what they flew). */
@@ -211,10 +259,24 @@ export class NetClient {
     return out;
   }
 
-  close(): void {
+  /** Let go of the line, saying why (`left`: the player left; `stopped`: the page stopped); nothing is said of it here. */
+  close(reason = 'left'): void {
     this.closedByUs = true;
     if (this.pinger) clearInterval(this.pinger);
-    this.ws.close(1000, 'left');
+    this.ws.close(1000, reason);
+  }
+
+  /**
+   * The line is over for this page (`why`; by default, lost): said once. A match the line went in is
+   * over for this page first, as if the owner had ended it: the battle is the visitor's again
+   * (together.ts ended), not the room's carried on alone.
+   */
+  private gone(why?: string): void {
+    if (this.closedByUs) return;
+    this.closedByUs = true;
+    if (this.pinger) clearInterval(this.pinger);
+    if (this.phase === 'playing') this.endMatch();
+    this.on.lost(why ?? (this.joined ? LOST.line : LOST.unreachable));
   }
 
   /** The match over: back to the lobby. */
@@ -230,8 +292,18 @@ export class NetClient {
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
   }
 
+  /** A ping, unless the room has been silent too long with the page shown: then the line is let go, and lost. */
   private ping(): void {
-    this.send({ t: 'ping', c: this.now() });
+    if (this.closedByUs) return;
+    const now = this.now();
+    if (this.shown && this.waitingSince !== null && now - this.waitingSince >= this.silentMs) {
+      this.ws.close(4000, 'silent');
+      this.gone();
+      return;
+    }
+    if (this.ws.readyState !== WebSocket.OPEN) return;
+    this.send({ t: 'ping', c: now });
+    this.waitingSince ??= now;
   }
 
   /** Five pings a tenth of a second apart: the clock's offset, quickly, after joining or a hidden tab. */
@@ -264,8 +336,10 @@ export class NetClient {
         this.on.welcomed();
         return;
       case 'refused':
-        this.closedByUs = true;
-        this.on.lost(REFUSED[m.reason]);
+        this.gone(REFUSED[m.reason]);
+        return;
+      case 'closing':
+        this.gone(CLOSED[m.reason]);
         return;
       case 'roster':
         this.owner = m.owner;

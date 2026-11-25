@@ -11,13 +11,19 @@
  *
  * It is made with the page but does nothing until the player hosts or follows a link: solo play
  * never opens a socket or asks the relay anything.
+ *
+ * Joining, the start screen stays up and says so until the room's welcome brings the lobby; a join the
+ * room turns away, or that never reaches it, goes back to the start screen saying why and what to do,
+ * the room gone from the address. The page keeps a rejoin token for each room in its tab
+ * (sessionStorage), said in its hello, so a reload or a map change gets its place back
+ * (net/room-core.ts). A page that stops lets go of its line, so the others see its player leave.
  */
 
 import { holdOf, muzzleOf } from '../combat/arsenal';
 import { hitParts, pose, toWorld, type Flinch } from '../combat/soldier-rig';
 import { SILENT_STEP_S } from '../net/clock';
 import { decodeGear, encodeGear, teamTracer } from '../net/gear';
-import { encodeShot, MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type Dig, type MatchInfo, type MatchLog, type PlayerState, type RoomConfig, type Team, type Zone } from '../net/protocol';
+import { encodeShot, isRoomCode, isToken, MAX_PLAYERS, SHOTS_MAX, STATE, type Cause, type Dig, type MatchInfo, type MatchLog, type PlayerState, type RoomConfig, type Team, type Zone } from '../net/protocol';
 import { Stance } from '../physics/character';
 import type { SoldierDraw } from '../render/soldiers';
 import type { Held, RoomBattle } from '../sim/room-battle';
@@ -26,7 +32,7 @@ import { Lobby } from '../ui/lobby';
 import { MatchHud, type BoardRow } from '../ui/match-hud';
 import { MAP_NAMES, isMapId, type MapId } from '../world/generation/params';
 import type { FigureOverlay, HitFeedback } from './hit-feedback';
-import { makeRoom, NetClient, type RemoteShot, type RoomEdit } from './net-client';
+import { LOST, makeRoom, NetClient, type RemoteShot, type RoomEdit } from './net-client';
 import type { RemotePlayer } from './net-players';
 
 /** States sent a second. */
@@ -34,6 +40,8 @@ const SEND_HZ = 20;
 /** What the lobby, or the way in, says while the room's log is caught up. */
 const CATCHING_UP = 'Catching up on the battle\u2026';
 const NAME_KEY = 'trenchline.name';
+/** A room's rejoin token is kept in the tab's sessionStorage under this and the room's code. */
+const TOKEN_KEY = 'trenchline.rejoin.';
 /** Strides a second at a walk (camera.head_bob_hz), and the walking speed they are at (stance.standing.speed). */
 const STRIDE_HZ = 1.9;
 const WALK_MS = 4.1;
@@ -151,13 +159,65 @@ export function mapAction(loaded: string, room: string, madeHere: boolean, owner
   return isMapId(room) ? 'switch' : 'stay';
 }
 
+/** Why a typed code is no room's, or null if it could be: the relay's codes are five of its letters, never I or O. */
+export function codeProblem(room: string): string | null {
+  if (!/^[A-Z]{5}$/.test(room)) return 'A game code is five letters.';
+  return isRoomCode(room) ? null : 'Codes never use I or O: check the code';
+}
+
+/** 128 random bits, as 32 hex digits: a rejoin token no one could guess. */
+export function randomToken(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * This tab's rejoin token for room `room`: the one `tab` (its sessionStorage) keeps for it, or one
+ * made now and kept. A reload in the same tab says the same; another room, another tab or another
+ * browser has its own. Without storage, a fresh one each time (the page's own, for as long as it lives).
+ */
+export function rejoinToken(tab: Storage | null, room: string, make: () => string = randomToken): string {
+  const key = TOKEN_KEY + room;
+  try {
+    const kept = tab?.getItem(key);
+    if (isToken(kept)) return kept;
+  } catch {
+    // Storage refused: a fresh one.
+  }
+  const made = make();
+  try {
+    tab?.setItem(key, made);
+  } catch {
+    // Not kept: a reload is a newcomer.
+  }
+  return made;
+}
+
+/** The way in after a win, while the room counts down to its lobby: who won, by what, and where the next starts. */
+export function wonLine(won: { winner: Team; red: number; blue: number }): string {
+  const [side, by, against] = won.winner === 'red' ? ['Red', won.red, won.blue] : ['Blue', won.blue, won.red];
+  return `${side} won ${by}\u2013${against}. The next match starts in the lobby.`;
+}
+
+/** What Together is given besides the page: the tab's sessionStorage (the rejoin tokens), and how long the room may say nothing before the line is lost ([net] room_silent_s). */
+export interface TogetherOptions {
+  tab?: Storage | null;
+  silentS?: number;
+}
+
 export interface TogetherHooks {
   /** The map this page has generated. */
   readonly map: string;
   /** Go to the room's map: the page generates that world and rejoins `room`. */
   switchMap(map: string, room: string): void;
-  /** The lobby is up: the loading screen goes. */
+  /** The lobby is up: the start screen goes. */
   showLobby(): void;
+  /**
+   * The start screen, up or back over the world, saying `text` by its way in: a join under way
+   * (`busy`: Play, Host and Join wait for it), or why one failed and what to do.
+   */
+  startScreen(text: string, busy: boolean): void;
   /** The match is starting (or on, for a late joiner): the player is put at their team's start. */
   deploy(team: Team, index: number, match: MatchInfo): void;
   /** Go: into play, with the mouse. */
@@ -282,6 +342,7 @@ export class Together {
     private readonly storage: Storage | null,
     private readonly hooks: TogetherHooks,
     private readonly hits: HitFeedback | null = null,
+    private readonly options: TogetherOptions = {},
   ) {
     this.lobby = new Lobby(doc, {
       name: (name) => {
@@ -326,28 +387,35 @@ export class Together {
 
   /** Make a room and join it, set to this page's map. */
   async host(): Promise<void> {
-    if (!this.relay) return;
+    if (!this.relay || this.net) return;
+    this.hooks.startScreen('Making a game\u2026', true);
     try {
       const code = await makeRoom(this.relay);
       this.made = true;
       this.join(code);
     } catch (e) {
-      this.hooks.note(`Could not make a game: ${e instanceof Error ? e.message : String(e)}`);
+      this.hooks.startScreen(e instanceof TypeError ? LOST.unreachable : `Could not make a game: ${e instanceof Error ? e.message : String(e)}`, false);
     }
   }
 
-  /** Join the room `code`: the lobby comes up, and the page's address becomes the room's link. */
+  /**
+   * Join the room `code`, checked first against the relay's letters: the start screen says so until
+   * the room's welcome brings the lobby, and the page's address becomes the room's link.
+   */
   join(code: string): void {
     if (!this.relay || this.net) return;
     const room = code.trim().toUpperCase();
-    if (!/^[A-Z]{5}$/.test(room)) {
-      this.hooks.note('A game code is five letters.');
+    const problem = codeProblem(room);
+    if (problem) {
+      this.forgetRoom();
+      this.hooks.startScreen(problem, false);
       return;
     }
     const url = new URL(location.href);
     url.searchParams.set('room', room);
     history.replaceState(null, '', url);
-    this.net = new NetClient(this.relay, room, this.savedName(), this.build, {
+    const silentS = this.options.silentS;
+    const net = new NetClient(this.relay, room, this.savedName(), this.build, {
       changed: () => {
         if (!this.followMap()) this.show();
       },
@@ -364,9 +432,14 @@ export class Together {
         // firing on would only flash and voice hits that do nothing. The end gives the visitor's back.
         if (this.session) this.session.front.intensity = 'off';
       },
-    });
-    this.hooks.showLobby();
-    this.lobby.status('Joining…');
+    }, undefined, { token: rejoinToken(this.options.tab ?? null, room), ...(silentS === undefined ? {} : { silentMs: 1000 * silentS }) });
+    this.net = net;
+    this.hooks.startScreen(`Joining game ${room}\u2026`, true);
+  }
+
+  /** The page has stopped (main.ts stop): its line let go, so the others see this player leave and the host role passes on. Nothing more is said here. */
+  letGo(): void {
+    this.net?.close('stopped');
   }
 
   /** Every frame: the countdown shown, and this player's state sent while in the match. */
@@ -376,8 +449,10 @@ export class Together {
     const left = net.match!.startAt - net.serverNow();
     if (!this.inPlay) {
       const side = this.team === 'blue' ? 'Blue' : 'Red';
-      const line = !this.caughtUp ? (this.failure ?? this.catching()) : left > 0 ? `You fight for ${side}. The match starts in ${Math.ceil(left / 1000)}…` : `The match is on. You fight for ${side}.`;
-      this.lobby.deploy(line, this.caughtUp && left <= 0);
+      // Won, the room goes back to its lobby in a few seconds: who won, and no way into it.
+      const won = this.winner;
+      const line = won ? wonLine(won) : !this.caughtUp ? (this.failure ?? this.catching()) : left > 0 ? `You fight for ${side}. The match starts in ${Math.ceil(left / 1000)}…` : `The match is on. You fight for ${side}.`;
+      this.lobby.deploy(line, !won && this.caughtUp && left <= 0);
     }
     // Sent only once they have gone in: on the deploy screen the world runs on, but nobody draws or shoots them.
     if (!playing || !this.inPlay || left > 0) return;
@@ -622,7 +697,7 @@ export class Together {
   }
 
   private go(): void {
-    if (!this.begun || !this.caughtUp) return;
+    if (!this.begun || !this.caughtUp || this.winner) return;
     this.inPlay = true;
     this.lobby.hide();
     this.hooks.play();
@@ -738,10 +813,30 @@ export class Together {
   }
 
   private lost(why: string): void {
+    const net = this.net;
+    if (net && !net.joined) {
+      // Turned away, or never reached: back to the start screen, saying why, the room gone from the
+      // address (a reload would only try again), and the way in open to another join.
+      net.close();
+      this.net = null;
+      this.made = false;
+      this.forgetRoom();
+      this.hooks.startScreen(why, false);
+      return;
+    }
     this.lostWhy = why;
     this.lobby.gather();
+    this.lobby.lost();
     this.lobby.status(why);
     this.hooks.note(why);
+  }
+
+  /** The room gone from the page's address (a link's, or a join's), so a reload does not try it again. */
+  private forgetRoom(): void {
+    const url = new URL(location.href);
+    if (!url.searchParams.has('room')) return;
+    url.searchParams.delete('room');
+    history.replaceState(null, '', url);
   }
 
   /**
@@ -756,7 +851,10 @@ export class Together {
     if (action === 'claim') net.configure({ map: this.hooks.map });
     if (action !== 'switch') return false;
     this.leaving = true;
-    this.lobby.status(`Going to ${MAP_NAMES[net.config.map as MapId]}: the world is being dug…`);
+    const going = `Going to ${MAP_NAMES[net.config.map as MapId]}: the world is being dug…`;
+    this.lobby.status(going);
+    // Before the lobby is up (a link to a room on another map), the start screen says it.
+    if (!this.lobby.isOpen) this.hooks.startScreen(going, true);
     this.hooks.switchMap(net.config.map, net.room);
     return true;
   }
@@ -769,12 +867,16 @@ export class Together {
     url.search = '';
     url.searchParams.set('room', net.room);
     url.searchParams.set('map', net.config.map);
+    this.hooks.showLobby();
     this.lobby.show({ room: net.room, invite: url.toString(), you: net.you, owner: net.owner, seats: net.seats, config: net.config });
     if (!this.caughtUp) this.lobby.status(this.failure ?? this.catching());
     // Not ready, nor started, on a world that is not yet the room's.
-    this.lobby.playable(this.caughtUp);
-    // A line gone is gone (a catch-up ending after it shows the lobby again): the page says why, not that the host will start.
-    if (this.lostWhy) this.lobby.status(this.lostWhy);
+    this.lobby.playable(this.caughtUp && !this.lostWhy);
+    // A line gone is gone (a catch-up ending after it shows the lobby again): the page says why, not that the host will start, and only the way back is left.
+    if (this.lostWhy) {
+      this.lobby.lost();
+      this.lobby.status(this.lostWhy);
+    }
   }
 
   /** "Catching up on the battle…", and how far it has come once it has said. */

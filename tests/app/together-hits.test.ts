@@ -115,7 +115,7 @@ function anything(): unknown {
 }
 
 /** The page's hooks, its room battle on `session`; no welcome comes, so nothing is caught up. */
-const hooks = (session: Session): TogetherHooks => ({ map: 'ravine', switchMap() {}, showLobby() {}, deploy() {}, play() {}, ended() {}, note() {}, killed() {}, respawn() {}, battle: () => new RoomBattle(session, fireTunables(tun)), catchUp: async () => {}, failed() {} });
+const hooks = (session: Session): TogetherHooks => ({ map: 'ravine', switchMap() {}, showLobby() {}, startScreen() {}, deploy() {}, play() {}, ended() {}, note() {}, killed() {}, respawn() {}, battle: () => new RoomBattle(session, fireTunables(tun)), catchUp: async () => {}, failed() {} });
 
 /** 25.6 × 6.4 × 51.2 m of sod 0.4 m deep, the player at (12.8, 0.4, 5) facing +z, settled. */
 function field(): Session {

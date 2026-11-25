@@ -86,10 +86,10 @@ import { coverAt, daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, t
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
 import { Input } from './input';
-import { actionFor, fullscreenKeyName, isFullscreenKey, nextTimeKey, stepTime, type KeyAction } from './keys';
+import { developerAction, fullscreenKeyName, gunSlot, isFullscreenKey, nextTimeKey, stepTime, type KeyAction } from './keys';
 import { pointerLockAction } from './pointer';
 import { standardViews, VIEW_NAMES, type ViewName } from './views';
-import { fallbackReason, placeHere, showFallback, type FallbackReason } from './fallback';
+import { fallbackReason, PHONE, placeHere, showFallback, type FallbackReason } from './fallback';
 import { Warmup } from './tiers';
 
 /** The map this page plays (`?map=`, the Ravine if none), and its seed: every player of a map generates the same world. */
@@ -109,8 +109,10 @@ const hooks: Record<string, unknown> = { ready: false, phases: loading.phases, m
 (window as unknown as { __trenchline: unknown }).__trenchline = hooks;
 /** Set once the game has stopped for good: its message stays, and no more frames are drawn. */
 let stopped = false;
+/** Let go of the room's line, if the page has one (Together.letGo, set once it is made): a stopped page leaves its room. */
+let letGo: (() => void) | null = null;
 /** `?check=<run>`: measure and photograph the standard views and report them (check.ts). */
-/** `?dev`: the developer keys work without F3's overlay open. */
+/** `?dev`: the developer keys (views, fly, time, quality) work; F3's overlay is the frame timings alone. */
 const devMode = new URLSearchParams(location.search).has('dev');
 const checkRun = (() => {
   const run = new URLSearchParams(location.search).get('check');
@@ -122,6 +124,9 @@ if (checkRun) loading.onPhase = (stage) => void reporter(checkRun)('progress.jso
 function stop(message: string): void {
   if (stopped) return;
   stopped = true;
+  // Out of the room: the others see this player leave, rather than a frozen soldier they can kill
+  // again and again, and the host role passes on.
+  letGo?.();
   // The message goes over everything: a pause menu left open would hide it, and the HUD and the
   // periscope's frame would sit on it.
   document.getElementById('pause')!.hidden = true;
@@ -156,7 +161,7 @@ function fallBack(reason: FallbackReason, tryAnyway?: () => void): void {
   showFallback(document, reason, tryAnyway && (() => {
     hooks.fallback = undefined;
     tryAnyway();
-  }));
+  }), navigator.userAgent);
 }
 
 /** The canvas in device pixels: its CSS size at up to twice the CSS pixel density (a check's, CHECK_CANVAS). */
@@ -215,6 +220,15 @@ const storage = (() => {
     return null;
   }
 })();
+
+/** The tab's own storage (the rooms' rejoin tokens: a reload in this tab gets its place back), or null where it is refused. */
+function tabStorage(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
 
 async function start(): Promise<void> {
   loading.progress('Starting', null, 0.02);
@@ -713,6 +727,7 @@ async function start(): Promise<void> {
       location.assign(url);
     },
     showLobby: () => loading.hide(),
+    startScreen: (text, busy) => loading.back(text, busy),
     deploy: (team, index, match) => {
       const at = startOf(team, index);
       session.team = team;
@@ -818,7 +833,8 @@ async function start(): Promise<void> {
       console.error(e);
       stop(`TRENCHLINE stopped: ${e instanceof Error ? e.message : String(e)}`);
     },
-  }, hits);
+  }, hits, { tab: tabStorage(), silentS: tun.f('net.room_silent_s') });
+  letGo = () => together.letGo();
 
   // The range (range.ts): solo play's dummies and steel plates in front of the spawn bay, from the
   // click that starts play. Never in a room or a check run, nor with ?range=0; and a test's world has
@@ -926,10 +942,11 @@ async function start(): Promise<void> {
       together.boardOpen = true;
       return;
     }
-    // The developer keys (views, fly, time, quality) wait behind F3, so a visitor's 1 or T does nothing strange.
-    const developer = overlay.visible || devMode;
+    // The developer keys (views, fly, time, quality) need ?dev, so a visitor's 1 or T does nothing
+    // strange; F3's overlay is the frame timings alone, and turns none of them on (keys.ts).
+    const action = developerAction(e.code, devMode);
     if (e.code === 'Backquote' && !e.repeat) {
-      if (!developer) return;
+      if (action?.kind !== 'fly') return;
       if (mode === 'fly') mode = 'playing';
       else enterFly(lastPose);
       return;
@@ -937,17 +954,17 @@ async function start(): Promise<void> {
     held.add(e.code);
     if (mode === 'playing') input.keyDown(e.code, e.repeat);
     if (mode === 'playing' && !e.repeat) {
-      // The guns by their numbers (the developer's views have them behind F3), the keys' card, the map.
-      if (!developer && (e.code === 'Digit1' || e.code === 'Digit2')) {
-        input.swap(e.code === 'Digit1' ? 0 : 1);
+      // The guns by their numbers (the developer's views have them with ?dev), the keys' card, the map.
+      const slot = gunSlot(e.code, devMode);
+      if (slot !== null) {
+        input.swap(slot);
         return;
       }
       if (e.code === 'KeyH') hud.toggleHelp();
       if (e.code === 'KeyM') mapView.show(true);
     }
-    const action = actionFor(e.code);
     // Held keys repeat only the time steps.
-    if (!action || (e.repeat && action.kind !== 'time-step') || (action.kind !== 'overlay' && !developer)) return;
+    if (!action || action.kind === 'fly' || (e.repeat && action.kind !== 'time-step')) return;
     e.preventDefault();
     act(action);
   });
@@ -1567,6 +1584,10 @@ async function start(): Promise<void> {
       deadFor: () => together.deadFor(performance.now()),
       score: () => together.net?.score ?? null,
       claimed: () => together.claimed,
+      /** Each player's kills and deaths, as the room last told them: [seat, kills, deaths]. */
+      tallies: () => [...(together.net?.tallies ?? new Map<number, { kills: number; deaths: number }>()).entries()].map(([id, t]) => [id, t.kills, t.deaths]),
+      /** The start screen's word on a join (its note under Join), and whether the start screen is up. */
+      joinNote: () => ({ up: !document.getElementById('loading')!.hidden, text: document.getElementById('join-note')?.textContent ?? '' }),
       others: () => together.others().map(({ seat, state }) => ({ id: seat.id, team: seat.team, name: seat.name, position: state.position, stance: state.stance })),
       /**
        * The room's shells on this page (sim/room-battle.ts), this match's: how many it has heard (landed
@@ -2000,5 +2021,10 @@ async function start(): Promise<void> {
 // shown the game's video first, and may try it anyway (fallback.ts).
 const why = fallbackReason(placeHere(window));
 if (why === 'no-webgpu') fail(new GpuUnavailable('no-webgpu', 'This browser has no WebGPU.'));
+else if (why === 'phone') {
+  // A phone or tablet without WebGPU: no browser would make it a computer, so it is told how the game is played.
+  stop(PHONE);
+  if (!checkRun) fallBack('phone');
+}
 else if (why === 'touch' && !checkRun) fallBack('touch', () => void start().catch(fail));
 else start().catch(fail);

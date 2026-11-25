@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { actionFor, fullscreenKeyName, isFullscreenKey, nextTimeKey, stepTime } from '../../src/app/keys';
+import { actionFor, developerAction, fullscreenKeyName, gunSlot, isFullscreenKey, nextTimeKey, stepTime } from '../../src/app/keys';
 import { VIEW_NAMES } from '../../src/app/views';
 import { CLOCK_KEYS } from '../../src/core/sky-clock';
 
@@ -18,6 +18,18 @@ describe('keys', () => {
     expect(actionFor('KeyR')).toBeNull();
     expect(actionFor('F3')).toEqual({ kind: 'overlay' });
     expect(actionFor('KeyW')).toBeNull();
+  });
+  it("F3 is the frame timings alone: 1 and 2 are the guns whatever it shows, and the developer's keys (views, time, quality, fly) need ?dev", () => {
+    // Without the developer flag (F3's overlay open or not: it is no flag), 1 and 2 switch guns and nothing else acts.
+    expect([gunSlot('Digit1', false), gunSlot('Digit2', false), gunSlot('Digit3', false), gunSlot('KeyQ', false)]).toEqual([0, 1, null, null]);
+    for (const code of ['Digit1', 'Digit2', 'Digit4', 'KeyT', 'BracketLeft', 'KeyP', 'KeyY', 'Backquote']) expect(developerAction(code, false), code).toBeNull();
+    // F3 itself still opens and closes the overlay.
+    expect(developerAction('F3', false)).toEqual({ kind: 'overlay' });
+    // With ?dev, the numbers are the views, and the rest act.
+    expect([gunSlot('Digit1', true), gunSlot('Digit2', true)]).toEqual([null, null]);
+    expect(developerAction('Digit1', true)).toEqual({ kind: 'view', name: VIEW_NAMES[0] });
+    expect(developerAction('KeyT', true)).toEqual({ kind: 'time-next' });
+    expect(developerAction('Backquote', true)).toEqual({ kind: 'fly' });
   });
   it("T walks the clock's keys in the day's order, dusk, night, dawn, noon and dusk again, from wherever the time is", () => {
     const { dawn, noon, dusk, night } = CLOCK_KEYS;

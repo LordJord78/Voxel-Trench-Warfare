@@ -6,7 +6,11 @@
  * visitor who can play downloads none of it.
  */
 
-export type FallbackReason = 'no-webgpu' | 'no-adapter' | 'failed' | 'touch';
+/** Why: no WebGPU; none on a phone or tablet (touch alone: no browser would make it a computer); no adapter; the renderer failed; touch alone, with WebGPU (it may try). */
+export type FallbackReason = 'no-webgpu' | 'phone' | 'no-adapter' | 'failed' | 'touch';
+
+/** What a phone or tablet is told. */
+export const PHONE = 'TRENCHLINE is played with a keyboard and mouse on a computer.';
 
 /**
  * What the page knows of where it runs:
@@ -25,7 +29,7 @@ export interface Place {
 
 /** Why the page shows the video instead of the game, or null to play it. */
 export function fallbackReason(p: Place): FallbackReason | null {
-  if (!p.gpu) return 'no-webgpu';
+  if (!p.gpu) return p.coarse && !p.fine ? 'phone' : 'no-webgpu';
   if (p.adapter === false) return 'no-adapter';
   if (p.failed) return 'failed';
   // Touch alone: a tablet with a mouse or trackpad plays.
@@ -38,10 +42,20 @@ export function placeHere(win: Window): Place {
   return { gpu: Boolean((win.navigator as Navigator & { gpu?: unknown }).gpu), coarse: win.matchMedia('(pointer: coarse)').matches, fine: win.matchMedia('(any-pointer: fine)').matches };
 }
 
-/** What the page says under the video, by why it shows it (without WebGPU, the failure itself names the browsers). */
-export function fallbackLine(reason: FallbackReason): string {
-  if (reason === 'touch') return "It's played with a keyboard and mouse. Here it is in motion.";
-  if (reason === 'no-webgpu') return 'Here it is in motion.';
+/** Whether `userAgent` is Chrome or Edge (or another Chromium): a browser with WebGPU, whose missing adapter is its settings' or the driver's. */
+function chromium(userAgent: string): boolean {
+  return /\b(Chrome|Chromium|Edg)\//.test(userAgent);
+}
+
+/**
+ * What the page says under the video, by why it shows it and in which browser (`userAgent`): without
+ * WebGPU, the failure itself names the browsers (or, on a phone, says it is played on a computer);
+ * Chrome or Edge without an adapter, how to give it one.
+ */
+export function fallbackLine(reason: FallbackReason, userAgent = ''): string {
+  if (reason === 'touch') return `${PHONE} Here it is in motion.`;
+  if (reason === 'no-webgpu' || reason === 'phone') return 'Here it is in motion.';
+  if (reason === 'no-adapter' && chromium(userAgent)) return "Here it is in motion. Turn on hardware acceleration in your browser's settings, or update your graphics driver.";
   return 'Here it is in motion — or open it in Chrome or Edge, or Safari 26, on a computer.';
 }
 
@@ -52,7 +66,7 @@ export function fallbackLine(reason: FallbackReason): string {
  * - for touch, the status itself (nothing is loading), and a button that tries the game anyway: the
  *   video goes, the progress comes back, and `tryAnyway` runs.
  */
-export function showFallback(doc: Document, reason: FallbackReason, tryAnyway?: () => void): HTMLVideoElement {
+export function showFallback(doc: Document, reason: FallbackReason, tryAnyway?: () => void, userAgent = ''): HTMLVideoElement {
   const video = doc.createElement('video');
   video.id = 'motion';
   video.muted = true;
@@ -109,7 +123,7 @@ export function showFallback(doc: Document, reason: FallbackReason, tryAnyway?: 
   } else {
     const line = doc.createElement('p');
     line.id = 'motion-line';
-    line.textContent = fallbackLine(reason);
+    line.textContent = fallbackLine(reason, userAgent);
     status.after(line);
     line.after(toggle);
   }

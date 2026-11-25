@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Gaits, howKilled, mapAction, relayUrl, shotTracer, Together, type Figure, type TogetherHooks } from '../../src/app/together';
+import { LOST } from '../../src/app/net-client';
+import { Gaits, howKilled, mapAction, rejoinToken, relayUrl, shotTracer, stateOf, Together, type Figure, type TogetherHooks } from '../../src/app/together';
 import { fireTunables } from '../../src/battle/fires';
 import { holdOf } from '../../src/combat/arsenal';
 import { packCell } from '../../src/combat/entrenching';
 import { pose, type PoseInput, type V3 } from '../../src/combat/soldier-rig';
 import { loadTunables } from '../../src/core/tunables';
 import { decodeGear, TRACER_KIND } from '../../src/net/gear';
-import { defaultConfig, encodeShot, type Dig, type RoomShell, type Seat } from '../../src/net/protocol';
+import { defaultConfig, encodeShot, encodeState, isToken, type Dig, type RoomShell, type Seat } from '../../src/net/protocol';
 import { RoomBattle } from '../../src/sim/room-battle';
 import { idleIntent } from '../../src/sim/session';
 import { fallenLine, MatchHud } from '../../src/ui/match-hud';
@@ -177,8 +178,11 @@ class StubSocket {
   send(text: string): void {
     this.sent.push(JSON.parse(text) as { t: string });
   }
-  close(): void {
+  /** How the page closed it, if it did. */
+  closedWith: [number | undefined, string | undefined] | null = null;
+  close(code?: number, reason?: string): void {
     this.readyState = 3;
+    this.closedWith = [code, reason];
   }
   open(): void {
     this.readyState = StubSocket.OPEN;
@@ -285,6 +289,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
       map: defaultConfig().map,
       switchMap() {},
       showLobby() {},
+      startScreen() {},
       deploy() {},
       play() {},
       ended() {},
@@ -402,6 +407,7 @@ describe("a page catching up on the room's log while the room plays on", () => {
       map: defaultConfig().map,
       switchMap() {},
       showLobby() {},
+      startScreen() {},
       deploy() {},
       play() {},
       ended() {},
@@ -676,5 +682,212 @@ describe("a page catching up on the room's log while the room plays on", () => {
     expect(line(1, 'round')).toBe('Killed by Sam');
     expect(line(-1, 'round')).toBe('Shot from the line');
     expect(line(-1, 'shell')).toBe('Killed by the shelling');
+  });
+});
+
+// Joining a game, as a friend does it (the release audit's UX-1, ROBUST-6, UX-6, ROBUST-2/3/5/8): the
+// start screen stays up, saying so, until the room's welcome; a join that fails before it goes back to
+// the start screen saying why; the page keeps a rejoin token per room in its tab, and lets go of its
+// line when it stops; and the way in after a win says who won.
+describe('joining a game from the start screen', () => {
+  const PLAYER: [number, number, number] = [12.8, 6.4, 3.0];
+  const MATCH = { startAt: 1_000, seed: 3, config: defaultConfig() };
+  const fireT = fireTunables(loadTunables());
+
+  /** A tab's sessionStorage: what is set, kept. */
+  class FakeStorage {
+    private readonly items = new Map<string, string>();
+    get length(): number {
+      return this.items.size;
+    }
+    getItem(k: string): string | null {
+      return this.items.get(k) ?? null;
+    }
+    setItem(k: string, v: string): void {
+      this.items.set(k, v);
+    }
+    removeItem(k: string): void {
+      this.items.delete(k);
+    }
+    clear(): void {
+      this.items.clear();
+    }
+    key(i: number): string | null {
+      return [...this.items.keys()][i] ?? null;
+    }
+  }
+
+  let address: { href: string };
+  beforeEach(() => {
+    vi.stubGlobal('WebSocket', StubSocket);
+    address = { href: 'http://localhost:5320/?map=ravine' };
+    vi.stubGlobal('location', address);
+    vi.stubGlobal('history', { replaceState: (_s: unknown, _t: string, url: URL | string) => void (address.href = String(url)) });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  /** A page with the start screen up (what it says kept), its tab's storage `tab`. */
+  function aPage(tab: FakeStorage | null = null) {
+    const doc = new FakePage();
+    const said: [string, boolean][] = [];
+    const notes: string[] = [];
+    const count = { lobby: 0, play: 0 };
+    let b: ReturnType<typeof roomClient> | null = null;
+    const hooks: TogetherHooks = {
+      map: defaultConfig().map,
+      switchMap() {},
+      showLobby: () => void count.lobby++,
+      startScreen: (text, busy) => void said.push([text, busy]),
+      deploy() {},
+      play: () => void count.play++,
+      ended() {},
+      note: (text) => void notes.push(text),
+      killed() {},
+      respawn() {},
+      battle: () => new RoomBattle((b ??= roomClient(trenchArena(), PLAYER)).session, fireT),
+      catchUp: async () => {},
+      failed() {},
+    };
+    const together = new Together(doc as unknown as Document, 'http://relay.test', 'build', null, hooks, null, { tab: tab as unknown as Storage | null, silentS: 10 });
+    return { doc, said, notes, count, together, session: () => (b ??= roomClient(trenchArena(), PLAYER)).session };
+  }
+
+  it('waits on the start screen, saying so; turned away, says why there, the address forgetting the room, and another join can go', () => {
+    const { said, count, together } = aPage();
+    together.join('abcde');
+    expect(said).toEqual([['Joining game ABCDE\u2026', true]]);
+    expect(address.href).toContain('room=ABCDE');
+    StubSocket.last!.open();
+    StubSocket.last!.say({ t: 'refused', reason: 'no-room' });
+    StubSocket.last!.drop('no-room');
+    expect(said.at(-1)).toEqual(['No game with that code', false]);
+    expect(said).toHaveLength(2);
+    expect(together.net).toBeNull();
+    expect(address.href).not.toContain('room=');
+    expect(count.lobby).toBe(0);
+    // The relay never answers: said so, the same way.
+    together.join('KXQRT');
+    expect(StubSocket.last!.url).toBe('ws://relay.test/room/KXQRT');
+    StubSocket.last!.drop();
+    expect(said.at(-1)).toEqual([LOST.unreachable, false]);
+    expect(together.net).toBeNull();
+    // A full game, and one on another version.
+    for (const [reason, text] of [['full', 'That game is full (8 players)'], ['version', 'That game is on another version: reload the page']]) {
+      together.join('KXQRT');
+      StubSocket.last!.open();
+      StubSocket.last!.say({ t: 'refused', reason });
+      expect(said.at(-1)).toEqual([text, false]);
+    }
+  });
+
+  it("checks a typed code against the relay's letters before connecting", () => {
+    const { said, together } = aPage();
+    const before = StubSocket.last;
+    together.join('HOUSE');
+    expect(said).toEqual([['Codes never use I or O: check the code', false]]);
+    together.join('ab');
+    expect(said.at(-1)).toEqual(['A game code is five letters.', false]);
+    expect(StubSocket.last).toBe(before);
+    expect(together.net).toBeNull();
+  });
+
+  it('brings the lobby up with the welcome, and not before', async () => {
+    const { count, together } = aPage();
+    together.join('ABCDE');
+    StubSocket.last!.open();
+    expect(count.lobby).toBe(0);
+    StubSocket.last!.say({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats: [{ id: 0, name: 'Jordan', team: 'red', ready: false, away: false }], config: defaultConfig(), phase: 'lobby', match: null, now: 9_000, log: { shells: [], digs: [] } });
+    await together.catchingUp;
+    expect(count.lobby).toBeGreaterThan(0);
+  });
+
+  it("keeps a rejoin token for each room in the tab, random, and says it in its hello: the same tab's reload the same, another room's or another tab's its own", () => {
+    const hello = (tab: FakeStorage | null, code: string) => {
+      aPage(tab).together.join(code);
+      StubSocket.last!.open();
+      return StubSocket.last!.sent.find((m) => m.t === 'hello')!.token as string;
+    };
+    const tab = new FakeStorage();
+    const first = hello(tab, 'ABCDE');
+    expect(isToken(first)).toBe(true);
+    expect(tab.getItem('trenchline.rejoin.ABCDE')).toBe(first);
+    expect(hello(tab, 'ABCDE')).toBe(first);
+    expect(hello(tab, 'KXQRT')).not.toBe(first);
+    expect(hello(new FakeStorage(), 'ABCDE')).not.toBe(first);
+    // No storage (refused it, or none): a token still, the page's own.
+    const a = rejoinToken(null, 'ABCDE');
+    expect(isToken(a)).toBe(true);
+    expect(rejoinToken(null, 'ABCDE')).not.toBe(a);
+    // One the tab kept that is not a page's is made afresh.
+    const odd = new FakeStorage();
+    odd.setItem('trenchline.rejoin.ABCDE', 'x');
+    expect(isToken(rejoinToken(odd as unknown as Storage, 'ABCDE'))).toBe(true);
+  });
+
+  /** Welcomed into the match from the room's 9 000, caught up. */
+  async function inMatch(tab: FakeStorage | null = null) {
+    const p = aPage(tab);
+    p.together.join('ABCDE');
+    StubSocket.last!.open();
+    const seats = [
+      { id: 0, name: 'Jordan', team: 'red', ready: true, away: false },
+      { id: 1, name: 'Sam', team: 'blue', ready: true, away: false },
+    ];
+    StubSocket.last!.say({ t: 'welcome', you: 0, room: 'ABCDE', owner: 0, seats, config: defaultConfig(), phase: 'playing', match: MATCH, now: 9_000, log: { shells: [], digs: [] } });
+    await p.together.catchingUp;
+    expect(p.together.caughtUp).toBe(true);
+    return p;
+  }
+
+  it('lets go of its line when the page stops, saying nothing: the others see the player leave', async () => {
+    const { said, notes, together } = await inMatch();
+    const before = said.length;
+    together.letGo();
+    expect(StubSocket.last!.closedWith).toEqual([1000, 'stopped']);
+    StubSocket.last!.drop('stopped');
+    expect([said.length, notes]).toEqual([before, []]);
+  });
+
+  it('says on the way in, in the seconds after a win, who won and that the next match starts in the lobby, with no Go', async () => {
+    const { doc, count, together, session } = await inMatch();
+    together.frame(session(), false);
+    expect(doc.getElementById('deploy-line').textContent).toBe('The match is on. You fight for Red.');
+    expect(doc.getElementById('go').hidden).toBe(false);
+    StubSocket.last!.say({ t: 'over', winner: 'blue', red: 14, blue: 20 });
+    together.frame(session(), false);
+    expect(doc.getElementById('deploy-line').textContent).toBe('Blue won 20\u201314. The next match starts in the lobby.');
+    expect(doc.getElementById('go').hidden).toBe(true);
+    doc.getElementById('go').click();
+    expect(count.play).toBe(0);
+  });
+
+  it('says the room closed for nobody playing in it, with only the way back to the start screen left', async () => {
+    const { doc, notes, together } = await inMatch();
+    StubSocket.last!.say({ t: 'closing', reason: 'idle' });
+    StubSocket.last!.drop('idle');
+    expect(together.inMatch).toBe(false);
+    expect(doc.getElementById('lobby-status').textContent).toBe('The game was closed after 20 minutes with nobody playing');
+    expect(notes).toEqual([LOST.idle]);
+    expect(doc.getElementById('leave').textContent).toBe('Back to the start');
+    expect([doc.getElementById('ready').disabled, doc.getElementById('start').disabled]).toEqual([true, true]);
+    // Whatever is shown again after, the same.
+    StubSocket.last!.say({ t: 'roster', owner: 0, seats: [] });
+    expect(doc.getElementById('lobby-status').textContent).toBe(LOST.idle);
+    expect(doc.getElementById('ready').disabled).toBe(true);
+  });
+
+  it('sends a still soldier\u2019s state unchanged but for its tick, which the room does not count as playing (a forgotten tab mid-match idles)', () => {
+    const b = roomClient(trenchArena(), PLAYER);
+    for (let k = 0; k < 120; k++) b.session.advance(1 / 60);
+    const first = encodeState(stateOf(b.session));
+    for (let k = 0; k < 600; k++) {
+      b.session.advance(1 / 60);
+      const now = encodeState(stateOf(b.session));
+      expect(now.slice(1), `frame ${k}`).toEqual(first.slice(1));
+      if (k === 599) expect(now[0]).toBeGreaterThan(first[0]);
+    }
   });
 });

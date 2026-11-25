@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NetClient, SHOT_QUEUE_MAX, type NetEvents, type RemoteShot } from '../../src/app/net-client';
-import { defaultConfig, encodeShot, encodeState, type PlayerState } from '../../src/net/protocol';
+import { LOST, NetClient, REFUSED, SHOT_QUEUE_MAX, type NetEvents, type RemoteShot } from '../../src/app/net-client';
+import { defaultConfig, encodeShot, encodeState, MAX_PLAYERS, type PlayerState } from '../../src/net/protocol';
 
 // One player's line to their room (net-client.ts), spoken through a stub socket the test opens and
 // answers, on a page clock the test sets: the welcome is the hello's reply, so it is the room's clock's
@@ -22,8 +22,11 @@ class StubSocket {
   send(text: string): void {
     this.sent.push(JSON.parse(text) as Record<string, unknown>);
   }
-  close(): void {
+  /** How the client closed it, if it did. */
+  closedWith: [number | undefined, string | undefined] | null = null;
+  close(code?: number, reason?: string): void {
     this.readyState = 3;
+    this.closedWith = [code, reason];
   }
   open(): void {
     this.readyState = StubSocket.OPEN;
@@ -218,14 +221,140 @@ describe("a player's line to the room", () => {
     StubSocket.last!.drop();
     expect(heard).toEqual([LOST]);
     expect(lobby.phase).toBe('lobby');
-    // Closed by the player, or refused for being full, nothing is said.
+    // Closed by the player, nothing is said; refused for being full, that, once, the room's close after its word saying nothing more.
     heard.length = 0;
     const leaving = joined({ ...quiet, ended: () => heard.push('ended'), lost: (why) => heard.push(why) });
     StubSocket.last!.say(welcome(5_000_000, { startAt: 4_990_000, seed: 3, config: defaultConfig() }));
     leaving.close();
     StubSocket.last!.drop('left');
-    joined({ ...quiet, ended: () => heard.push('ended'), lost: (why) => heard.push(why) });
-    StubSocket.last!.drop('full');
     expect(heard).toEqual([]);
+    heard.length = 0;
+    joined({ ...quiet, ended: () => heard.push('ended'), lost: (why) => heard.push(why) });
+    StubSocket.last!.say({ t: 'refused', reason: 'full' });
+    StubSocket.last!.drop('full');
+    expect(heard).toEqual([REFUSED.full]);
+  });
+
+  it('says its rejoin token in its hello, when it has one', () => {
+    const token = '0123456789abcdef0123456789abcdef';
+    new NetClient('http://relay.test', 'ABCDE', 'Jordan', 'build', quiet, () => page, { token });
+    StubSocket.last!.open();
+    expect(StubSocket.last!.sent[0]).toMatchObject({ t: 'hello', name: 'Jordan', token });
+    joined();
+    expect(StubSocket.last!.sent[0]).not.toHaveProperty('token');
+  });
+
+  it('says what happened before the welcome, and what to do: no game, a full one, another version, the relay unreachable', () => {
+    expect(REFUSED['no-room']).toBe('No game with that code');
+    expect(REFUSED.full).toBe(`That game is full (${MAX_PLAYERS} players)`);
+    expect(REFUSED.full).toBe('That game is full (8 players)');
+    expect(REFUSED.version).toBe('That game is on another version: reload the page');
+    expect(LOST.unreachable).toBe('The game could not be reached: check your connection');
+    for (const reason of ['no-room', 'full', 'version'] as const) {
+      const heard: string[] = [];
+      joined({ ...quiet, lost: (why) => heard.push(why) });
+      StubSocket.last!.say({ t: 'refused', reason });
+      StubSocket.last!.drop(reason);
+      expect(heard, reason).toEqual([REFUSED[reason]]);
+      // The room's close alone, its word lost: the same.
+      heard.length = 0;
+      joined({ ...quiet, lost: (why) => heard.push(why) });
+      StubSocket.last!.drop(reason);
+      expect(heard, reason).toEqual([REFUSED[reason]]);
+    }
+    const heard: string[] = [];
+    joined({ ...quiet, lost: (why) => heard.push(why) });
+    StubSocket.last!.drop();
+    expect(heard).toEqual([LOST.unreachable]);
+  });
+
+  it('says the room closed for nobody playing in it as such, ending a match first; its close after the word says nothing more', () => {
+    expect(LOST.idle).toBe('The game was closed after 20 minutes with nobody playing');
+    const heard: string[] = [];
+    const client: NetClient = joined({ ...quiet, ended: () => heard.push(`ended: ${client.phase}`), lost: (why) => heard.push(why) });
+    StubSocket.last!.say(welcome(5_000_000, { startAt: 4_990_000, seed: 3, config: defaultConfig() }));
+    StubSocket.last!.say({ t: 'closing', reason: 'idle' });
+    StubSocket.last!.drop('idle');
+    expect(heard).toEqual(['ended: lobby', LOST.idle]);
+    // Its own page come back on another line: said, and this one let go.
+    heard.length = 0;
+    joined({ ...quiet, lost: (why) => heard.push(why) });
+    StubSocket.last!.say(welcome(5_000_000));
+    StubSocket.last!.drop('replaced');
+    expect(heard).toEqual([LOST.replaced]);
+  });
+
+  describe('watching the room', () => {
+    /** The page's clock and its timers on together, a tenth of a second at a time. */
+    const run = (ms: number) => {
+      for (let t = 0; t < ms; t += 100) {
+        page += 100;
+        vi.advanceTimersByTime(100);
+      }
+    };
+    const watched = (heard: string[]) => {
+      const client = new NetClient('http://relay.test', 'ABCDE', 'Jordan', 'build', { ...quiet, ended: () => heard.push('ended'), lost: (why) => heard.push(why) }, () => page, { silentMs: 10_000 });
+      return client;
+    };
+
+    it('with the page shown, a ping unanswered for silentMs is the line lost: said, the socket let go, a match ended first', () => {
+      const heard: string[] = [];
+      page = 1000;
+      const client = watched(heard);
+      StubSocket.last!.open();
+      page = 1040;
+      StubSocket.last!.say(welcome(5_000_000, { startAt: 4_990_000, seed: 3, config: defaultConfig() }));
+      // The room answers for a while.
+      for (let k = 0; k < 20; k++) {
+        run(500);
+        StubSocket.last!.say({ t: 'pong', c: page, s: 5_000_000 + page });
+      }
+      expect(heard).toEqual([]);
+      // Then nothing more comes: lost once a ping has gone unanswered for 10 s, not before.
+      run(9_500);
+      expect(heard).toEqual([]);
+      run(1_000);
+      expect(heard).toEqual(['ended', LOST.line]);
+      expect(client.phase).toBe('lobby');
+      expect(StubSocket.last!.closedWith?.[1]).toBe('silent');
+      // Said once, whatever comes after.
+      StubSocket.last!.drop('silent');
+      run(20_000);
+      expect(heard).toEqual(['ended', LOST.line]);
+    });
+
+    it('hidden, never; shown again, a fresh wait; and any word from the room answers it', () => {
+      const heard: string[] = [];
+      page = 1000;
+      const client = watched(heard);
+      StubSocket.last!.open();
+      StubSocket.last!.say(welcome(5_000_000));
+      // Hidden for five minutes: its pings throttled, unanswered, nothing said.
+      client.away(true);
+      run(300_000);
+      expect(heard).toEqual([]);
+      // Shown: the burst's pings, unanswered; 10 s from now, not from when it hid.
+      client.away(false);
+      run(9_000);
+      expect(heard).toEqual([]);
+      // Any word answers (a roster), and the wait starts again from the next ping.
+      StubSocket.last!.say({ t: 'roster', owner: 0, seats });
+      run(9_000);
+      expect(heard).toEqual([]);
+      run(2_000);
+      expect(heard).toEqual([LOST.line]);
+    });
+
+    it('before the welcome, no word from the room in silentMs is the game not reached', () => {
+      const heard: string[] = [];
+      page = 1000;
+      watched(heard);
+      run(9_000);
+      StubSocket.last!.open();
+      run(500);
+      expect(heard).toEqual([]);
+      run(1_000);
+      expect(heard).toEqual([LOST.unreachable]);
+    });
   });
 });
