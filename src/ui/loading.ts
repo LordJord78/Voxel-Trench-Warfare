@@ -21,6 +21,9 @@ export class LoadingScreen {
   private readonly controls: HTMLElement;
   /** The game's still behind the sheet until the world is drawn (index.html), if the page has one. */
   private readonly still: HTMLElement | null;
+  /** How a join stands, under the way in (`back`), and the controls a join under way holds. */
+  private readonly joinNote: HTMLElement | null;
+  private readonly waits: (HTMLButtonElement | HTMLInputElement | null)[];
   private failed = false;
 
   constructor(doc: Document) {
@@ -33,6 +36,8 @@ export class LoadingScreen {
     this.together = doc.getElementById('together');
     this.controls = doc.getElementById('controls')!;
     this.still = doc.getElementById('still');
+    this.joinNote = doc.getElementById('join-note');
+    this.waits = [this.play, doc.getElementById('host') as HTMLButtonElement | null, doc.getElementById('join-go') as HTMLButtonElement | null, doc.getElementById('join-code') as HTMLInputElement | null];
   }
 
   /** A phase, with a detail such as "strip 3 of 32", and the fraction of the whole load done. */
@@ -72,6 +77,7 @@ export class LoadingScreen {
     const kit = this.root.querySelector<HTMLElement>('#kit-row');
     if (kit) kit.hidden = false;
     this.play.onclick = onPlay;
+    if (this.joinNote) this.joinNote.hidden = true;
     if (together && this.together) {
       this.together.hidden = false;
       const host = this.together.querySelector<HTMLButtonElement>('#host');
@@ -88,6 +94,21 @@ export class LoadingScreen {
     this.play.focus();
   }
 
+  /**
+   * The start screen up, or back over the world, saying `text` under the way in: a join under way
+   * (`busy`: Play, Host and Join wait for it), or why one failed and what to do, the way in open again.
+   * Not over a failure: a page that has stopped says why for good.
+   */
+  back(text: string, busy: boolean): void {
+    if (this.failed) return;
+    this.root.hidden = false;
+    if (this.joinNote) {
+      this.joinNote.textContent = text;
+      this.joinNote.hidden = false;
+    }
+    for (const c of this.waits) if (c) c.disabled = busy;
+  }
+
   /** The world has settled behind the still: the still fades out over it. */
   reveal(): void {
     const still = this.still;
@@ -99,8 +120,9 @@ export class LoadingScreen {
     setTimeout(remove, 1000);
   }
 
-  /** The sheet gone, and the still with it at once (play, or flying, before or during its fade). */
+  /** The sheet gone, and the still with it at once (play, or flying, before or during its fade, or the lobby up); never over a failure, which stays. */
   hide(): void {
+    if (this.failed) return;
     this.root.hidden = true;
     if (this.still) this.still.hidden = true;
   }

@@ -84,7 +84,10 @@ All in `src/physics/character.ts`. Each addition is off without its tunable, as 
   - Only the Pages origin and localhost may connect.
   - A room has 8 seats with teams and ready flags, and an owner (the host), who is migrated if they leave.
   - The host's config: map, kill target, time of day and lapse, intensity, respawn time.
-  - Sockets hibernate in the lobby. In a match, a 50 ms loop sends each client one frame at 20 Hz.
+  - In a match, a 50 ms loop sends each client one frame at 20 Hz. Out of one the room wakes only for its next deadline (`server/src/pacer.ts`).
+  - Sockets are not hibernated: the room lives in the object's memory, and pings carry the page's clock (release R1). Instead, a room nobody has played in for 20 minutes closes every socket, and a seat silent (not even a ping) for 90 s is let go, so a forgotten tab does not hold a Durable Object (billed while a socket is open) all day.
+  - A page's rejoin token (sessionStorage, per room) gets a seat back its team, its kills and deaths and the host role for 2 minutes after it leaves: a reload, or the map change that reloads every page.
+  - A room with nobody in it has no socket, timer or request, so Cloudflare evicts its object after about 10 s. Its settings, the seats that left and the claims on the host role go to storage as its last seat leaves, and the next object wakes the room from them (`server/src/keeper.ts`), so a map change outlives the eviction.
   - With 8 players: 160 messages a second in and 160 out. That is about 1.2 KB/s up and 8 KB/s down a client, and about 29,000 billed requests an hour. The free plan's 100,000 a day covers about 3 hours a day of a full lobby.
 - **The client:**
   - `src/app/net-client.ts`, `src/app/net-players.ts`, and `src/ui/lobby.ts` with a `#lobby` section in the page. The lobby has Solo, Host and Join by code; a name; Red and Blue columns; a link to copy; the host's settings; Ready; and the host's Start.

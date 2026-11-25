@@ -199,15 +199,38 @@ test('losing the pointer lock pauses', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test('the developer keys work only with the F3 overlay open', async ({ page }) => {
+/** The arm in the player's hands (0 the long gun, 1 the pistol; the session's `held`), once its swap is done. */
+const heldArm = (page: Page) => hooks(page, (h) => (h as unknown as { hands(): { held: number; ready: number } }).hands());
+
+test("F3 is the frame timings alone: with it open, 1 and 2 switch guns and play goes on; the developer's keys do nothing", async ({ page }) => {
+  // The release audit's UX-2: with F3 open, 1 or 2 threw the player into the free-fly camera.
   const errors = await playing(page);
-  await page.keyboard.press('Digit4');
-  await page.keyboard.press('KeyT');
-  await hooks(page, (h) => h.waitFrames(3));
-  expect(await hooks(page, (h) => [h.mode(), h.timeOfDay()])).toEqual(['playing', 17 + 35 / 60]);
+  const hours = await hooks(page, (h) => h.timeOfDay());
   await page.keyboard.press('F3');
+  await page.keyboard.press('Digit2');
+  await page.waitForFunction(() => (window as unknown as { __trenchline: { hands(): { held: number; ready: number } } }).__trenchline.hands().held === 1, null, { timeout: 5000 });
+  expect(await hooks(page, (h) => h.mode())).toBe('playing');
+  await page.keyboard.press('Digit1');
+  await page.waitForFunction(() => (window as unknown as { __trenchline: { hands(): { held: number; ready: number } } }).__trenchline.hands().held === 0, null, { timeout: 5000 });
+  // The developer's views, clock and fly: nothing, F3 open or not.
+  for (const key of ['Digit4', 'KeyT', 'Backquote']) await page.keyboard.press(key);
+  await page.keyboard.press('F3');
+  for (const key of ['Digit4', 'KeyT', 'Backquote']) await page.keyboard.press(key);
+  await hooks(page, (h) => h.waitFrames(3));
+  expect(await hooks(page, (h) => [h.mode(), h.timeOfDay()])).toEqual(['playing', hours]);
+  expect((await heldArm(page)).held).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test("the developer's keys work with ?dev: the views on the numbers, and the backquote's fly", async ({ page }) => {
+  const errors = await openGame(page, '/?dev');
+  await page.locator('#play').click();
+  await expect(page.locator('#loading')).toBeHidden();
   await page.keyboard.press('Digit4');
   await hooks(page, (h) => h.waitFrames(3));
   expect(await hooks(page, (h) => h.mode())).toBe('fly');
+  await page.keyboard.press('Backquote');
+  await hooks(page, (h) => h.waitFrames(3));
+  expect(await hooks(page, (h) => h.mode())).toBe('playing');
   expect(errors).toEqual([]);
 });

@@ -18,6 +18,10 @@ You carry a long gun and a pistol. Every round is a tracer; a hit is marked, hea
 
 Play it at [lordjord78.github.io/Voxel-Trench-Warfare](https://lordjord78.github.io/Voxel-Trench-Warfare/), in a desktop browser with WebGPU: Chrome or Edge 113 or later, or Safari 26. Where WebGPU is missing, the page shows a video of the game instead. Click to play; the mouse looks around.
 
+There are two maps, and the start screen's **Map** picker chooses one (each is its own world, generated afresh):
+- **Sukhyi Yar:** two systems of trenches across a field, with the dry ravine between them;
+- **The Corridor:** a wood down the middle of the map, with one side dug in at each end of it.
+
 **Play solo** puts you on a range in front of your fire bay:
 - dummies stand at 25 to 150 m, and two walk back and forth at 50 and 90 m;
 - steel plates ring at 30 to 85 m, with head-sized ones at 45 and 70 m;
@@ -34,16 +38,24 @@ You choose before you go in, and again while you wait to come back after a death
 ## Play with friends
 
 Up to eight players, Red against Blue:
-1. Click **Host a game with friends** and send the link it gives you (Discord works well). Friends who open it land in your lobby.
-2. Everyone names themselves and picks Red or Blue. The host sets the kills to win, the time of day and the battle, then starts the match.
-3. Each side wears its colour on the arm and the helmet; friendly fire is on, and a team kill costs your side a point. The first side to the kill target wins.
-4. The battle is everyone's (quiet, light fire or heavy fire):
-   - every shell lands at the same moment and place for everyone, and cuts the same crater;
-   - the enemy line fires on both sides, in amber;
-   - what one player digs, everyone sees dug;
-   - a friend who joins mid-match, or reloads, catches up on the battle so far before they deploy.
+1. **Host.** One of you clicks **Host a game with friends** on the start screen. Your lobby opens with the game's five-letter code in its title and its link beside **Copy link**.
+2. **Join.** Send your friends the link (Discord works well), or tell them the code: they type it in the box next to **Join** on their start screen. A code never has an I or an O. A friend's page builds the world first, then their lobby opens.
+3. **The host's settings.** Everyone names themselves and picks Red or Blue. The host sets the match:
+   - the map, Sukhyi Yar or The Corridor (everyone's page goes to it and builds its world, and everyone comes back on their side, the host still the host);
+   - the kills to win;
+   - the time of day;
+   - the battle: quiet, light fire or heavy fire.
+4. **Ready.** Everyone but the host clicks **Ready**; the host sees who is ready, and clicks **Start the match** whenever they like.
+5. **The countdown.** Three seconds, while each page puts you at your side's start.
+6. **Go.** Click **Go** to go in. Each side wears its colour on the arm and the helmet; friendly fire is on, and a team kill costs your side a point. The first side to the kill target wins, and everyone goes back to the lobby for the next match.
 
-The rooms run on a small Cloudflare Worker ([server/](server/)). Everyone needs a desktop browser with WebGPU, and the same version of the page (reload if the lobby says otherwise).
+The battle is everyone's:
+- every shell lands at the same moment and place for everyone, and cuts the same crater;
+- the enemy line fires on both sides, in amber;
+- what one player digs, everyone sees dug;
+- a friend who joins mid-match, or reloads, catches up on the battle so far before they deploy. A reload within two minutes puts them back on their side, with their kills and deaths.
+
+The rooms run on a small Cloudflare Worker ([server/](server/)). Everyone needs a desktop browser with WebGPU, and the same version of the page: the start screen says so if a game is on another one, and a reload fixes it. A game nobody has played in for 20 minutes is closed, so a tab left open does not keep it running.
 
 ## Controls
 
@@ -73,7 +85,7 @@ The rooms run on a small Cloudflare Worker ([server/](server/)). Everyone needs 
 ## How it is made
 
 TypeScript and raw WebGPU, with no engine:
-- **The world:** a 256 × 256 m map, 32 m deep, of 10 cm voxels, generated in the browser by workers. It holds trenches, dugouts, a hamlet and a wood, and distant terrain beyond to the horizon.
+- **The worlds:** two maps, each 256 × 256 m and 32 m deep, of 10 cm voxels, generated in the browser by workers. They hold trenches, dugouts, a hamlet and woods, and distant terrain beyond to the horizon.
 - **Rendering:** a voxel ray tracer over a brick map. Its main features:
   - many shadow-casting lights, with reuse between pixels and frames;
   - a froxel haze with light shafts and smoke;

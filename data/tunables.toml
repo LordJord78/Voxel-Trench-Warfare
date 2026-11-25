@@ -684,6 +684,16 @@ catch_up_chunks     = 4        # chunks a frame at most: a dark heavy second is 
 catch_up_ahead      = 8        # shells past the next to have out at once: twice the workers and more,
                                # so none waits for work; each holds a copy of its region (about 2 MB)
 
+[net]
+# The page's line to its room (src/app/net-client.ts). The relay cannot read this file: its own
+# numbers (the room's idle close, a silent seat let go, a rejoin remembered) are constants in
+# src/net/protocol.ts and src/net/room-core.ts.
+room_silent_s       = 10.0     # with the page shown, a ping the room has not answered, nor said
+                               # anything since, this long is the line lost ("Reload the page to
+                               # rejoin"); a shown page pings twice a second, so twenty unanswered.
+                               # Hidden, never judged: its timers are throttled (a minute apart at
+                               # their slowest), and it waits afresh once shown
+
 [range]
 # Solo play's firing range (the shots spec's §5, combat/range.ts): dummies and
 # steel plates out along the spawn bay's facing, each this far out from the

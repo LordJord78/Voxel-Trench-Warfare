@@ -1,25 +1,36 @@
 /**
  * The relay: `POST /rooms` makes a room and gives its five-letter code; `GET /room/CODE`, as a
  * WebSocket upgrade, joins it. Each room is a Durable Object named by its code, running the
- * room's logic (src/net/room-core.ts) over its players' sockets and ticking it every 50 ms while
- * anyone is connected.
+ * room's logic (src/net/room-core.ts) over its players' sockets: ticked every 50 ms while a match
+ * is on, and otherwise only at its next deadline (pacer.ts). The room closes a seat silent too long
+ * and, once nobody has played in it for 20 minutes, every socket, so a forgotten tab does not hold
+ * its Durable Object (billed for every second a socket is open to it) all day.
+ *
+ * Its sockets are not hibernated (ctx.acceptWebSocket): the room lives in the object's memory (its
+ * seats, the match's rules, the world's log), which hibernation would drop with the object, and a
+ * page's pings carry its clock and are answered with the room's (net/clock.ts), which the runtime's
+ * fixed auto-response cannot do; so every ping would wake it anyway. With nobody in it, though, the
+ * object is evicted after ten seconds: what the room must keep through that (its settings, the seats
+ * that left, the host's claim; a map change reloads every page) goes to storage as its last seat
+ * leaves, and the next object wakes the room from it (keeper.ts).
  *
  * Only the game's pages may make or join rooms: its GitHub Pages origin (ALLOWED_ORIGINS) and
  * any localhost, for development. A room forgets itself a day after its last player left.
  */
 
 import { DurableObject } from 'cloudflare:workers';
-import { RoomCore, type Conn } from '../../src/net/room-core';
+import { CODE_LETTERS } from '../../src/net/protocol';
+import type { Conn, RoomCore, RoomMemory } from '../../src/net/room-core';
+import { Keeper, MEMORY, wakeRoom } from './keeper';
+import { Pacer, RUNTIME_TIMERS } from './pacer';
 
 export interface Env {
   ROOM: DurableObjectNamespace<Room>;
   ALLOWED_ORIGINS: string;
 }
 
-/** Letters a code is made of: no I or O, which read as 1 and 0. */
-const CODE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+/** A join's path: five of the code's letters (protocol.ts CODE_LETTERS, ROOM_CODE), no I or O. */
 const CODE = /^\/room\/([A-HJ-NP-Z]{5})$/;
-const TICK_MS = 50;
 const FORGET_MS = 24 * 3600 * 1000;
 
 function newCode(): string {
@@ -67,7 +78,8 @@ export default {
 
 export class Room extends DurableObject<Env> {
   private core: RoomCore | null = null;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private pacer: Pacer | null = null;
+  private keeper: Keeper | null = null;
 
   /** Make the room, if its code is free: whether it was. */
   async create(): Promise<boolean> {
@@ -82,28 +94,53 @@ export class Room extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const [client, socket] = [pair[0], pair[1]];
     socket.accept();
-    if (!(await this.ctx.storage.get('created'))) {
+    const stored = await this.ctx.storage.get<unknown>(['created', MEMORY]);
+    if (!stored.get('created')) {
       socket.send(JSON.stringify({ t: 'refused', reason: 'no-room' }));
       socket.close(1008, 'no-room');
       return new Response(null, { status: 101, webSocket: client });
     }
-    const core = (this.core ??= new RoomCore(code));
+    if (!this.core) {
+      // A new object (the room's first, or the next after one evicted): the room as it was kept, if it was.
+      const memory = stored.get(MEMORY) as RoomMemory | undefined;
+      const core = (this.core = wakeRoom(code, memory));
+      const keeper = (this.keeper = new Keeper(core, this.ctx.storage, memory !== undefined));
+      this.pacer = new Pacer(
+        {
+          get ticking() {
+            return core.ticking;
+          },
+          wakeAt: () => core.wakeAt(),
+          // The room's own tick may let its last seat go (silent, idle).
+          tick: (now) => {
+            core.tick(now);
+            keeper.settle();
+          },
+        },
+        RUNTIME_TIMERS,
+      );
+    }
+    const [core, pacer, keeper] = [this.core, this.pacer!, this.keeper!];
+    const after = () => {
+      keeper.settle();
+      pacer.pace();
+    };
     const conn: Conn = {
       send: (text) => socket.send(text),
       close: (c, reason) => socket.close(c, reason),
     };
     core.open(conn, Date.now());
-    socket.addEventListener('message', (e) => core.message(conn, typeof e.data === 'string' ? e.data : null, Date.now()));
+    socket.addEventListener('message', (e) => {
+      core.message(conn, typeof e.data === 'string' ? e.data : null, Date.now());
+      after();
+    });
     const gone = () => {
-      core.close(conn);
-      if (core.empty && this.timer) {
-        clearInterval(this.timer);
-        this.timer = null;
-      }
+      core.close(conn, Date.now());
+      after();
     };
     socket.addEventListener('close', gone);
     socket.addEventListener('error', gone);
-    this.timer ??= setInterval(() => core.tick(Date.now()), TICK_MS);
+    after();
     await this.ctx.storage.setAlarm(Date.now() + FORGET_MS);
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -116,5 +153,7 @@ export class Room extends DurableObject<Env> {
     }
     await this.ctx.storage.deleteAll();
     this.core = null;
+    this.pacer = null;
+    this.keeper = null;
   }
 }

@@ -86,10 +86,10 @@ It is built on what exists:
 ## 5. The portfolio card
 
 - **The user's live portfolio already lists the game** as the Python original, with a link to the source alone. The integration is that entry, brought to the browser game: its clip (the game's own video), its poster (the still, 16:9), words traced to this repository's README, and a "Play in the browser" link beside the source. It is prepared outside this repository, built and photographed; publishing it is the user's. (Found by S5's review: the card below was made first, for a template that is published nowhere.)
-- **`showcase/portfolio/`** holds what the user needs for the template site (`~/repos/portfolio-website`, unpublished), kept as the alternative:
-  - `card.html`: the card, in the site's `details-container color-container` markup with its `project-img`, `project-title` and `btn-container` classes;
+- **`showcase/portfolio/`** holds what the user needs for the template site (the owner's portfolio site, unpublished), kept as the alternative:
+  - `card.html`: the card, in the site's own markup and classes;
   - `trenchline.png`: the square thumbnail;
-  - `README.md`: copy the image into `assets/` and paste the card first in `#projects`.
+  - `README.md`: copy the image into `assets/` and paste the card first among the site's projects.
 - **The links:** the repository and `https://lordjord78.github.io/Voxel-Trench-Warfare/` (the Pages address the workflow would publish to).
 - **The review capture** opens the user's site from disk read-only, puts the card first among its projects in the browser's copy of the page, and photographs it. No file of the user's site is written.
 

@@ -2,6 +2,10 @@
  * What the keys do until milestone 5's controls: views, time of day,
  * quality and the overlay. (Flying is held keys, read by the fly camera.)
  * And fullscreen's key, Alt+Enter, which works anywhere in the game.
+ *
+ * F3's overlay is the frame timings alone: the developer's keys (the views on the numbers, the clock,
+ * quality, fly) need the developer flag (?dev), so with F3 open 1 and 2 are still the guns (the
+ * release audit's UX-2: they threw a player into the free-fly camera, gone for everyone else).
  */
 
 import { CLOCK_KEYS } from '../core/sky-clock';
@@ -14,6 +18,19 @@ export type KeyAction =
   | { kind: 'preset' }
   | { kind: 'dynres' }
   | { kind: 'overlay' };
+
+/** A key the developer's alone (`dev`: ?dev): its action, F3's overlay whatever the flag, and the backquote's fly. */
+export function developerAction(code: string, dev: boolean): KeyAction | { kind: 'fly' } | null {
+  if (code === 'Backquote') return dev ? { kind: 'fly' } : null;
+  const action = actionFor(code);
+  return action && (dev || action.kind === 'overlay') ? action : null;
+}
+
+/** The gun a key takes in hand (1 the long gun, 2 the pistol), unless the developer's numbers are the views. */
+export function gunSlot(code: string, dev: boolean): 0 | 1 | null {
+  if (dev) return null;
+  return code === 'Digit1' ? 0 : code === 'Digit2' ? 1 : null;
+}
 
 /** The clock's keys in the day's order. */
 const TIME_KEYS = [CLOCK_KEYS.dawn, CLOCK_KEYS.noon, CLOCK_KEYS.dusk, CLOCK_KEYS.night];

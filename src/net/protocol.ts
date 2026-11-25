@@ -37,6 +37,31 @@ export const HURT_MAX = 200;
 export const MAX_PLAYERS = 8;
 /** A name, at most this long once trimmed. */
 export const NAME_MAX = 16;
+/**
+ * A room in which no seat has played for this long is closed, every socket told it was idle
+ * (room-core.ts; the page says so: net-client.ts). Playing is anything but a ping, a state unchanged
+ * but for its tick, or the battle's hurt. A Durable Object is billed for every second a socket is open
+ * to it (the Workers Free plan's 13,000 GB-s a day, about 29 room-hours across every room), so a tab
+ * forgotten in a lobby or a match must not hold its room open all day. 20 minutes: longer than any
+ * pause between matches, and a forgotten room costs at most a third of an hour.
+ */
+export const ROOM_IDLE_MS = 20 * 60_000;
+/** The letters a room's code is made of: no I or O, which read as 1 and 0 (the relay makes codes of these, and routes only these). */
+export const CODE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+/** A room's code: five of CODE_LETTERS. */
+export const ROOM_CODE = /^[A-HJ-NP-Z]{5}$/;
+
+export function isRoomCode(code: string): boolean {
+  return ROOM_CODE.test(code);
+}
+
+/**
+ * Whether `t` is a page's rejoin token (together.ts rejoinToken): 22 to 64 of the URL-safe letters,
+ * so at least 128 bits a page makes at random (32 hex digits), not a word anyone would guess.
+ */
+export function isToken(t: unknown): t is string {
+  return typeof t === 'string' && /^[A-Za-z0-9_-]{22,64}$/.test(t);
+}
 
 export type Team = 'red' | 'blue';
 export const TEAMS: readonly Team[] = ['red', 'blue'];
@@ -264,7 +289,8 @@ function log(raw: unknown): MatchLog {
 
 /** What a player sends their room. */
 export type ClientMsg =
-  | { t: 'hello'; v: number; build: string; name: string }
+  /** The first word: this page's protocol, build and name, and its rejoin token for this room (isToken), which gets a seat that left back its place. */
+  | { t: 'hello'; v: number; build: string; name: string; token?: string }
   | { t: 'name'; name: string }
   | { t: 'team'; team: Team }
   | { t: 'ready'; ready: boolean }
@@ -284,12 +310,17 @@ export type ClientMsg =
   | { t: 'dig'; c: number[] };
 
 export type Refusal = 'full' | 'version' | 'no-room' | 'bad-hello';
+/** Why the room closes a seated player's line: nobody has played in it for ROOM_IDLE_MS, or the same page came back on a new line. */
+export type Closing = 'idle' | 'replaced';
+const CLOSINGS: readonly Closing[] = ['idle', 'replaced'];
 
 /** What a room sends its players. */
 export type RoomMsg =
   /** The hello's reply: this player's seat, the room as it stands, its clock, and its log of the world so far. */
   | { t: 'welcome'; you: number; room: string; owner: number; seats: Seat[]; config: RoomConfig; phase: Phase; match: MatchInfo | null; now: number; log: MatchLog }
   | { t: 'refused'; reason: Refusal }
+  /** The room is closing this line (and closes it with the same reason). */
+  | { t: 'closing'; reason: Closing }
   | { t: 'roster'; owner: number; seats: Seat[] }
   | { t: 'config'; config: RoomConfig }
   | { t: 'start'; match: MatchInfo }
@@ -363,7 +394,8 @@ export function parseClient(raw: unknown): ClientMsg | null {
   if (!m) return null;
   switch (m.t) {
     case 'hello':
-      return typeof m.v === 'number' && typeof m.build === 'string' && m.build.length <= 64 ? { t: 'hello', v: m.v, build: m.build, name: cleanName(m.name) } : null;
+      if (typeof m.v !== 'number' || typeof m.build !== 'string' || m.build.length > 64) return null;
+      return { t: 'hello', v: m.v, build: m.build, name: cleanName(m.name), ...(isToken(m.token) ? { token: m.token } : {}) };
     case 'name':
       return { t: 'name', name: cleanName(m.name) };
     case 'team':
@@ -433,6 +465,8 @@ export function parseRoom(raw: unknown): RoomMsg | null {
     }
     case 'refused':
       return m.reason === 'full' || m.reason === 'version' || m.reason === 'no-room' || m.reason === 'bad-hello' ? { t: 'refused', reason: m.reason } : null;
+    case 'closing':
+      return CLOSINGS.includes(m.reason as Closing) ? { t: 'closing', reason: m.reason as Closing } : null;
     case 'roster': {
       const s = seats(m.seats);
       return s ? { t: 'roster', owner: Number.isInteger(m.owner) ? (m.owner as number) : -1, seats: s } : null;

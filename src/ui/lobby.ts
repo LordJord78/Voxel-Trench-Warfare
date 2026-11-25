@@ -38,6 +38,7 @@ export class Lobby {
   private readonly startButton: HTMLButtonElement;
   private readonly deployLine: HTMLElement;
   private readonly goButton: HTMLButtonElement;
+  private readonly leaveButton: HTMLButtonElement;
   private ready = false;
   private shownName = '';
   /** Whether Go was offered at the last frame of the way in: it takes the focus as it appears. */
@@ -59,6 +60,7 @@ export class Lobby {
     this.startButton = el<HTMLButtonElement>('start');
     this.deployLine = el('deploy-line');
     this.goButton = el<HTMLButtonElement>('go');
+    this.leaveButton = el<HTMLButtonElement>('leave');
 
     el<HTMLButtonElement>('copy').addEventListener('click', () => {
       this.invite.select();
@@ -71,7 +73,7 @@ export class Lobby {
     for (const b of this.root.querySelectorAll<HTMLButtonElement>('button[data-team]')) b.addEventListener('click', () => handlers.team(b.dataset.team as Team));
     this.readyButton.addEventListener('click', () => handlers.ready(!this.ready));
     this.startButton.addEventListener('click', () => handlers.start());
-    el<HTMLButtonElement>('leave').addEventListener('click', () => handlers.leave());
+    this.leaveButton.addEventListener('click', () => handlers.leave());
     this.goButton.addEventListener('click', () => handlers.go());
     this.settings.addEventListener('submit', (e) => e.preventDefault());
     this.settings.addEventListener('change', () => {
@@ -160,6 +162,15 @@ export class Lobby {
     // keys can reach the loadout and fullscreen.
     if (canGo && !this.goOffered) this.goButton.focus();
     this.goOffered = canGo;
+  }
+
+  /** The line to the room is gone: nothing here can be done but going back to the start screen (Leave, which reloads the page without the room). */
+  lost(): void {
+    this.readyButton.disabled = true;
+    this.startButton.disabled = true;
+    for (const b of this.root.querySelectorAll<HTMLButtonElement>('button[data-team]')) b.disabled = true;
+    for (const field of this.settings.elements) (field as HTMLInputElement).disabled = true;
+    this.leaveButton.textContent = 'Back to the start';
   }
 
   /** Back to gathering, after a match. */
