@@ -247,7 +247,11 @@ export class Session {
    */
   risen = 0;
   prevRisen = 0;
-  /** The tick the player last came down on (its landing speed rising: a fall's end), or -1 (none since a teleport). */
+  /**
+   * The tick the player last came down on (its landing speed rising: a fall's end), or -1 (none since
+   * a teleport). A test's probe, as handsStill is: nothing in play reads it (the camera's rig is
+   * tested against it, tests/app/camera-rig.test.ts).
+   */
   landedTick = -1;
   /** The view's offsets before the last tick. */
   private prevView: ViewOffsets;
@@ -292,8 +296,13 @@ export class Session {
   handsStill = false;
   /** The view's yaw and pitch as the last tick left them: the next tick's turn is from here. */
   private look: [number, number];
-  /** The trigger as the last tick had it in the hands (a press is its rising), and an empty trigger's reload: its tick, and its gun. */
+  /**
+   * The trigger as the last tick had it in the hands (a press is its rising); whether a round has
+   * left since it was last let go (an automatic emptied on a held trigger clicks once, dryTrigger);
+   * and an empty trigger's reload: its tick, and its gun.
+   */
   private triggerWas = false;
+  private firedThisPress = false;
   private dryReload: { tick: number; weapon: Weapon } | null = null;
   /**
    * A press the gun could not take yet: one the sprint alone held back, the gun still swung low. It
@@ -652,6 +661,7 @@ export class Session {
     // A press waiting out a sprint was made for the last gun: none fires the new one. And the hands
     // start clean: no sprint, sway, landing or reload, and no pump to come from the last gun's shot.
     this.pressWaiting = false;
+    this.firedThisPress = false;
     this.handling.reset();
   }
 
@@ -703,8 +713,9 @@ export class Session {
     this.suppression.calm();
     this.digging = false;
     // Nor does one from the last life: a match's end and the next one's deploy run no tick between.
-    // Nor do the last life's hands.
+    // Nor do the last life's hands, nor its last gun's rounds on a held trigger.
     this.pressWaiting = false;
+    this.firedThisPress = false;
     this.handling.reset();
   }
 
@@ -803,7 +814,9 @@ export class Session {
   /**
    * The hands, after the dig: the gun asked for (1, 2, the wheel), or the shovel while digging;
    * what is held comes down and the next comes up. Then the sights, up while the right button is
-   * held and the gun is ready (not on the shovel, the periscope or a climb); the light (or laser)
+   * held and the gun is ready (not on the shovel, the periscope or a climb) and not reloading: a
+   * reload drops them (its curve is the hip's, drawn at the eye it would roll the sights off the point
+   * of aim), and with the button still held they come back up once it is done; the light (or laser)
    * switched; single shots or automatic; and the shovel's stroke while it clears.
    */
   private handle(dt: number): void {
@@ -826,7 +839,7 @@ export class Session {
       this.ready = Math.min(1, this.ready + dt / raise);
     }
     const spec = this.arm.spec;
-    const canAim = a.aim === true && this.alive && this.gunUp(p);
+    const canAim = a.aim === true && this.alive && this.gunUp(p) && !this.weapon.reloading;
     if (canAim) this.aimed = Math.min(1, this.aimed + dt / spec.adsTimeS);
     else if (this.aimed > 0) this.aimed = Math.max(0, this.aimed - dt / (spec.adsTimeS * 0.8));
     if (a.light && spec.fit.side !== 'none') this.lightOn = !this.lightOn;
@@ -840,7 +853,8 @@ export class Session {
    * rather than the gun), and no climb under way (the hands are on the parapet). The gun-up rule, in
    * one place, read as the hands stand when it is asked. `climbing` false asks it with the climb set
    * aside: a gun up but for a climb is not put down, so a press held through the climb waits it out
-   * (combat()).
+   * (combat()). A reload leaves the gun up: it drops the sights (handle()), not the trigger, whose
+   * press on a reloading gun is the weapon's to refuse, nor either button's hold on the sprint.
    */
   private gunUp(p: CharacterState, climbing = p.climbTo !== null): boolean {
     return this.held !== SHOVEL_HELD && this.ready >= 1 && !this.digging && p.stance !== Stance.PERISCOPE && !climbing;
@@ -878,6 +892,7 @@ export class Session {
       landingImpact: p.landingImpact,
       sprinting: sprints(this.acting, p) && p.onGround,
       aimed: this.aimed,
+      raised: this.raised,
       reload: phase === null ? null : { phase, shells: w.reloadShells },
       sinceShot: gun ? w.sinceShot : Number.POSITIVE_INFINITY,
       gun: gunClass(this.arm.spec.gun.key),
@@ -888,15 +903,23 @@ export class Session {
   }
 
   /**
-   * An empty trigger (the shots spec's §2): a press (the trigger in the hands rising) on an empty
-   * magazine, no reload under way, clicks (the cue `dry`), once a press; and the first click begins
-   * a reload dry_reload_s later, if the same gun is in the hands then.
+   * An empty trigger (the shots spec's §2, "a trigger pulled on an empty magazine"): a press (the
+   * trigger in the hands rising) on an empty magazine, no reload under way, clicks (the cue `dry`),
+   * once a press. So does an automatic (on automatic) emptied on a held trigger, once, on the tick its
+   * next round would have left (its cycle round: Weapon.cycled), rather than stopping silent, which
+   * reads as a jam; mid-climb (`climbing`, the gun not up) it waits for the climb's end. The first
+   * click begins a reload dry_reload_s later, if the same gun is in the hands then.
    */
-  private dryTrigger(w: Weapon, trigger: boolean): void {
-    if (trigger && !this.triggerWas && w.rounds <= 0 && !w.reloading) {
+  private dryTrigger(w: Weapon, trigger: boolean, climbing = false): void {
+    const empty = w.rounds <= 0 && !w.reloading;
+    const pressed = trigger && !this.triggerWas;
+    const ranDry = trigger && this.triggerWas && this.firedThisPress && !climbing && w.spec.automatic && !w.semi && w.cycled;
+    if ((pressed || ranDry) && empty) {
       this.heard.push('dry');
       this.dryReload ??= { tick: this.ticks + Math.max(1, Math.round(this.handling.t.dryReloadS / this.clock.dt)), weapon: w };
+      this.firedThisPress = false;
     }
+    if (!trigger) this.firedThisPress = false;
     this.triggerWas = trigger;
     if (this.dryReload && this.ticks >= this.dryReload.tick) {
       if (this.dryReload.weapon === w && this.held !== SHOVEL_HELD) w.beginReload();
@@ -956,7 +979,7 @@ export class Session {
     if (p.climbTo !== null && this.gunUp(p, false)) {
       const kept = this.triggerWas && this.acting.fire;
       this.pressWaiting = false;
-      this.dryTrigger(w, kept);
+      this.dryTrigger(w, kept, true);
       w.holdFire(this.acting.fire);
     } else {
       const pulled = wanted && this.gunUp(p);
@@ -1001,6 +1024,8 @@ export class Session {
           this.rounds.fire(origin, [d[0] * v, d[1] * v, d[2] * v], projectile, 0, kind, drawn, this.ticks);
         }
         w.shot();
+        // A round left on this press: emptied by it, held, an automatic clicks once (dryTrigger).
+        this.firedThisPress = true;
         this.throwShot(muzzle, arm.spec.flash, arm.spec.suppressed);
         const kick = this.recoil.kickPitch;
         this.recoil.shot(this.recoilRng);

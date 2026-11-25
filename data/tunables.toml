@@ -1542,6 +1542,9 @@ bob_side_m          = 0.006
 bob_roll_deg        = 0.8
 bob_aimed           = 0.15     # aimed, this much of it
 bob_sprint          = 1.8      # at a sprint, this many times it
+bob_ground_s        = 0.1      # in the air no stride: the bob held where the body
+                               # left the ground and eased out over this, and back in
+                               # over it on landing (the body's phase restarting)
 # The look's sway: the gun trails the view's turn on a spring, aside and up,
 # and banks into it, as a gun hung from the hands.
 sway_m_per_dps        = 0.00012  # metres per degree a second of turn
@@ -1573,6 +1576,8 @@ landing_pitch_deg   = -4.0
 landing_hard_mps    = 8.0      # landed this fast (m/s), the full dip, as the eye's
 landing_settle_s    = 0.25
 landing_damping     = 1.0      # critically damped: back without a bounce
+landing_aimed       = 0.35     # aimed, this much of it (breathing's share): the
+                               # post dips nearer the point of aim
 # An aim-in (the shots spec's §3): as the sights arrive (the aim's blend reaching
 # 1), the muzzle is carried on past the aim at a steady rate from that tick, then
 # eased back to it. Never a step: the sights arrive with no speed.
@@ -1581,7 +1586,9 @@ aim_overshoot_rise_s = 0.05    # carried there over this: a third of it a tick a
 aim_overshoot_s     = 0.15     # and back at the aim this long after the sights arrive
 # Reloads: curves keyed over the reload's phase (0 to 1), from rest and back to
 # it, eased between keys as the shovel's stroke is. A cue is heard as its key is
-# passed. The long guns' (rifle, carbine, SMG and marksman):
+# passed. On the firing step a curve's drop is held off by the step's raise, so no
+# reload sinks the gun into the parapet. The long guns' (rifle, carbine, SMG and
+# marksman):
 reload_tilt_at          = 0.12     # tilted: turned over, the muzzle up, low and in
 reload_tilt_m           = [-0.02, -0.04, -0.03]
 reload_tilt_pitch_deg   = 8.0
@@ -1601,11 +1608,12 @@ reload_cut_s            = 0.15     # a reload cut short eases back to rest over 
 mg_depth            = 1.3
 mg_cover_at         = 0.45
 # A pistol's: the long guns', tilted less, its magazine out and in and its slide
-# released (bolt) at its own marks.
+# released (bolt) at its own marks, turned less at the slide than a long gun's bolt.
 pistol_tilt_roll_deg = 18.0
 pistol_mag_out_at   = 0.30
 pistol_mag_in_at    = 0.62
 pistol_slide_at     = 0.86
+pistol_slide_roll_deg = 22.0   # the playtest's 18-22°, against reload_bolt_roll_deg's 34
 # The shotgun's: a shell at a time, each a push with the muzzle up at the middle
 # of its turn (shell), evenly after [weapon.m870]'s reload_base_s, each
 # reload_per_round_s long ...

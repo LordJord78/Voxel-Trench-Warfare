@@ -685,23 +685,6 @@ describe('the gun in the hands, in play', () => {
     }
     expect(clicks).toEqual([1, 6]);
 
-    // Held as the magazine runs dry (an automatic's), no click: the next press clicks.
-    const auto = stand();
-    auto.weapon.rounds = 3;
-    auto.intent = { ...idleIntent(), fire: true };
-    let shots = 0;
-    for (let k = 0; k < 60; k++) {
-      auto.tick();
-      shots += auto.shots.length;
-    }
-    expect(shots).toBe(3);
-    expect(auto.drainEvents().handling).toEqual([]);
-    expect(auto.weapon.reloading).toBe(false);
-    auto.intent = idleIntent();
-    auto.tick();
-    auto.intent = { ...idleIntent(), fire: true };
-    auto.tick();
-    expect(auto.drainEvents().handling.map((c) => c.cue)).toEqual(['dry']);
     // A press with a round left fires it, and does not click.
     const one = stand(bare('svd'));
     one.weapon.rounds = 1;
@@ -710,6 +693,117 @@ describe('the gun in the hands, in play', () => {
     expect(one.shots).toHaveLength(1);
     expect(one.weapon.rounds).toBe(0);
     expect(one.drainEvents().handling).toEqual([]);
+  });
+
+  it('an automatic emptied on a held trigger clicks once, where its next round would have left, and its reload begins 0.25 s after the click', () => {
+    /** The AK on automatic with `rounds` in it, the trigger held from the first tick for `ticks` ticks (let go from `release` on): the ticks its shots left and its clicks were heard on, and the reload's first. */
+    const held = (rounds: number, ticks: number, release = ticks, semi = false) => {
+      const s = stand();
+      s.weapon.rounds = rounds;
+      s.weapon.semi = semi;
+      const shots: number[] = [];
+      const dry: number[] = [];
+      let began = -1;
+      const start = s.ticks;
+      for (let k = 0; k < ticks; k++) {
+        s.intent = { ...idleIntent(), fire: k < release };
+        s.tick();
+        if (s.shots.length > 0) shots.push(s.ticks - start);
+        for (const c of s.drainEvents().handling) if (c.cue === 'dry') dry.push(c.tick - start);
+        if (began < 0 && s.weapon.reloading) began = s.ticks - start;
+      }
+      return { shots, dry, began, s };
+    };
+    // Three rounds, held: the click on the tick a fourth would have left (one interval after the
+    // third, as a magazine of four fires it), and the reload dry_reload_s (15 ticks) after the click.
+    const three = held(3, 60);
+    const four = held(4, 60);
+    expect(three.shots).toHaveLength(3);
+    expect(four.shots).toHaveLength(4);
+    expect(three.shots).toEqual(four.shots.slice(0, 3));
+    expect(three.dry).toEqual([four.shots[3]]);
+    expect((three.dry[0] - three.shots[2]) * TICK).toBeCloseTo(60 / three.s.weapon.spec.rpm, 1);
+    expect(three.began - three.dry[0]).toBe(Math.round(ht.dryReloadS / TICK));
+    // Held on through the reload: no click more.
+    const long = held(3, 240);
+    expect(long.dry).toEqual(three.dry);
+    // Let go before the cycle came round (the tick after the last round), no click: the next press clicks, as before.
+    const tap = held(3, 40, three.shots[2] + 1);
+    expect([tap.shots, tap.dry, tap.began]).toEqual([three.shots, [], -1]);
+    tap.s.intent = { ...idleIntent(), fire: true };
+    tap.s.tick();
+    expect(tap.s.drainEvents().handling.map((c) => c.cue)).toEqual(['dry']);
+    // A gun that fires once a press (the AK on single shots, the SVD) emptied by its last press and held: no click.
+    const single = held(1, 60, 60, true);
+    expect([single.shots, single.dry, single.began]).toEqual([[1], [], -1]);
+    const svd = stand(bare('svd'));
+    svd.weapon.rounds = 1;
+    svd.intent = { ...idleIntent(), fire: true };
+    const heard: HandlingCue[] = [];
+    for (let k = 0; k < 60; k++) {
+      svd.tick();
+      heard.push(...svd.drainEvents().handling.map((c) => c.cue));
+    }
+    expect([svd.weapon.shotsFired, heard, svd.weapon.reloading]).toEqual([1, [], false]);
+  });
+
+  it('a reload drops the sights: aimed, the empty trigger\'s reload or R takes them down within ads_time_s × 0.8 and holds them there, and with the aim held they come back up after it', () => {
+    for (const how of ['dry', 'R'] as const) {
+      const s = stand();
+      const w = s.weapon;
+      const ads = s.arm.spec.adsTimeS;
+      s.intent = { ...idleIntent(), aim: true };
+      for (let k = 0; k < 60; k++) s.tick();
+      expect(s.aimed).toBe(1);
+      // Emptied (a click and its reload 0.25 s on) or three short and R pressed, the aim held throughout.
+      w.rounds = how === 'dry' ? 0 : w.spec.magazine - 3;
+      const trace: { tick: number; aimed: number; reloading: boolean }[] = [];
+      for (let k = 0; k < 400; k++) {
+        s.intent = { ...idleIntent(), aim: true, fire: how === 'dry' && k === 0, reload: how === 'R' && k === 0 };
+        s.tick();
+        trace.push({ tick: k, aimed: s.aimed, reloading: w.reloading });
+      }
+      const began = trace.findIndex((f) => f.reloading);
+      const ended = trace.findIndex((f, k) => k > began && !f.reloading);
+      expect(began, how).toBe(how === 'dry' ? Math.round(ht.dryReloadS / TICK) : 0);
+      expect(ended, how).toBeGreaterThan(began + 60);
+      // Up until the reload begins.
+      for (let k = 0; k <= began; k++) expect(trace[k].aimed, `${how}, tick ${k}`).toBe(1);
+      // Down within ads_time_s × 0.8 of it (the sights read the reload the tick after it begins), and held down through it.
+      const down = trace.findIndex((f) => f.aimed === 0);
+      expect((down - began - 1) * TICK, how).toBeLessThanOrEqual(ads * 0.8 + 1e-9);
+      for (let k = down; k < ended; k++) expect(trace[k].aimed, `${how}, tick ${k}`).toBe(0);
+      // The magazine full, the sights back up as the aim is held: within ads_time_s.
+      const up = trace.findIndex((f, k) => k > ended && f.aimed === 1);
+      expect(up, how).toBeGreaterThan(ended);
+      expect((up - ended - 1) * TICK, how).toBeLessThanOrEqual(ads + 1e-9);
+      expect(w.rounds).toBe(w.spec.magazine);
+    }
+  });
+
+  it("on the firing step a reload never sinks the drawn gun under its rest: the session feeds the hands the step's raise", () => {
+    /** The AK's reload standing on the arena's floor, or on a firing step laid over it: the lowest the hands take the gun, less breathing. */
+    const lowest = (onStep: boolean) => {
+      const map = arena();
+      if (onStep) map.fillBox(0, 3, 0, 256, 4, 512, P.BENCH);
+      const s = Session.create({ map, plan: null, spawn: { position: [12.8, 0.4, 2] } }, tun, 7, 0);
+      for (let k = 0; k < 120; k++) s.tick();
+      expect(s.player.stance === Stance.FIRING_STEP, `on the step: ${onStep}`).toBe(onStep);
+      s.weapon.rounds = 3;
+      s.intent = { ...idleIntent(), reload: true };
+      s.tick();
+      s.intent = idleIntent();
+      let low = Infinity;
+      for (let k = 0; k < 300 && s.weapon.reloading; k++) {
+        s.tick();
+        const breath = ht.breathUpM * Math.sin(2 * Math.PI * ht.breathUpHz * s.ticks * TICK);
+        low = Math.min(low, s.handling.delta.offset[1] - breath);
+      }
+      expect(s.weapon.reloading).toBe(false);
+      return low;
+    };
+    expect(lowest(false)).toBeLessThan(-0.05);
+    expect(lowest(true)).toBeGreaterThan(-1e-3);
   });
 
   it("a reload's cues arrive in order with the gun's muzzle as where", () => {
@@ -1136,6 +1230,7 @@ describe('the gun in the hands, in play', () => {
         landingImpact: p.landingImpact,
         sprinting: false,
         aimed: s.aimed,
+        raised: 0,
         reload: null,
         sinceShot: s.weapon.sinceShot,
         gun: gunClass(s.arm.spec.gun.key),

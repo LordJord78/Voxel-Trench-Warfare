@@ -44,12 +44,13 @@ export type GunClass = 'long' | 'mg' | 'pistol' | 'pump';
 
 /** `[handling]`, and the shotgun's reload times, by which its pushes are laid out. */
 export interface HandlingTunables {
-  /** The stride's bob: up and down (m), across and its roll (m, °), and its share aimed and at a sprint. */
+  /** The stride's bob: up and down (m), across and its roll (m, °), and its share aimed and at a sprint; and how long it takes to ease out in the air and back in on landing (s). */
   bobUpM: number;
   bobSideM: number;
   bobRollDeg: number;
   bobAimed: number;
   bobSprint: number;
+  bobGroundS: number;
   /** The look's sway: metres and degrees of roll per °/s of turn, held to a most, on a spring; its share aimed. */
   swayMPerDps: number;
   swayRollDegPerDps: number;
@@ -72,12 +73,13 @@ export interface HandlingTunables {
   sprintInS: number;
   sprintOutS: number;
   sprintBlocksFire: number;
-  /** A landing's dip (m, °), the landing speed (m/s) that dips it fully, and its spring. */
+  /** A landing's dip (m, °), the landing speed (m/s) that dips it fully, its spring, and its share aimed. */
   landingDropM: number;
   landingPitchDeg: number;
   landingHardMps: number;
   landingSettleS: number;
   landingDamping: number;
+  landingAimed: number;
   /** An aim-in: the pitch (°) the muzzle is carried past the aim as the sights arrive, how long it takes to get there, and how long after they arrive it is back. */
   aimOvershootDeg: number;
   aimOvershootRiseS: number;
@@ -101,11 +103,12 @@ export interface HandlingTunables {
   /** The machine gun's: the long guns', this many times as deep, with the feed cover's mark. */
   mgDepth: number;
   mgCoverAt: number;
-  /** A pistol's: its tilt and its marks (the bolt is the slide's release). */
+  /** A pistol's: its tilt, its marks (the bolt is the slide's release), and its turn at the slide (the long guns' bolt's is reloadBoltRollDeg). */
   pistolTiltRollDeg: number;
   pistolMagOutAt: number;
   pistolMagInAt: number;
   pistolSlideAt: number;
+  pistolSlideRollDeg: number;
   /** The shotgun's shells: each one's push (m, °), after `[weapon.m870]`'s base time, each its per-shell time. */
   shellPushM: V3;
   shellPitchDeg: number;
@@ -134,6 +137,7 @@ export function handlingTunables(tun: Tunables): HandlingTunables {
     bobRollDeg: f('bob_roll_deg'),
     bobAimed: f('bob_aimed'),
     bobSprint: f('bob_sprint'),
+    bobGroundS: f('bob_ground_s'),
     swayMPerDps: f('sway_m_per_dps'),
     swayRollDegPerDps: f('sway_roll_deg_per_dps'),
     swayMaxM: f('sway_max_m'),
@@ -158,6 +162,7 @@ export function handlingTunables(tun: Tunables): HandlingTunables {
     landingHardMps: f('landing_hard_mps'),
     landingSettleS: f('landing_settle_s'),
     landingDamping: f('landing_damping'),
+    landingAimed: f('landing_aimed'),
     aimOvershootDeg: f('aim_overshoot_deg'),
     aimOvershootRiseS: rise,
     aimOvershootS: settled,
@@ -181,6 +186,7 @@ export function handlingTunables(tun: Tunables): HandlingTunables {
     pistolMagOutAt: f('pistol_mag_out_at'),
     pistolMagInAt: f('pistol_mag_in_at'),
     pistolSlideAt: f('pistol_slide_at'),
+    pistolSlideRollDeg: f('pistol_slide_roll_deg'),
     shellPushM: v('shell_push_m'),
     shellPitchDeg: f('shell_pitch_deg'),
     shellBaseS: tun.f('weapon.m870.reload_base_s'),
@@ -222,9 +228,10 @@ export interface HandlingInput {
   bobPhase: number;
   onGround: boolean;
   landingImpact: number;
-  /** Sprinting (the session's rule), and how far aimed (0 to 1). */
+  /** Sprinting (the session's rule), how far aimed (0 to 1), and how far raised for the firing step (0 to 1, the session's, easing over [viewmodel] raise_s). */
   sprinting: boolean;
   aimed: number;
+  raised: number;
   /** A reload under way: its phase (0 to 1) and, for the shotgun, the shells it loads (counted as it begins). */
   reload: { phase: number; shells: number } | null;
   /** Seconds since the last shot. */
@@ -274,9 +281,9 @@ function lerpHands(a: HandsDelta, b: HandsDelta, u: number): HandsDelta {
 /**
  * A magazine gun's reload, laid out as the long guns' is: tilted; the magazine out, a jolt down;
  * held tilted; the magazine in, a jolt up and the muzzle up; the bolt, drawn back and turned
- * further; at rest. `depth` deepens every key (the machine gun's), and `marks` are heard as well.
+ * (to `boltRoll`); at rest. `depth` deepens every key (the machine gun's), and `marks` are heard as well.
  */
-function magazineCurve(t: HandlingTunables, tiltRoll: number, magOutAt: number, magInAt: number, boltAt: number, depth: number, marks: readonly Mark[]): Curve {
+function magazineCurve(t: HandlingTunables, tiltRoll: number, magOutAt: number, magInAt: number, boltAt: number, boltRoll: number, depth: number, marks: readonly Mark[]): Curve {
   const [x, y, z] = t.reloadTiltM;
   const pitch = t.reloadTiltPitchDeg;
   const key = (at: number, o: V3, keyPitch: number, roll: number): Key => ({ at, offset: [o[0] * depth, o[1] * depth, o[2] * depth], pitch: keyPitch * depth, yaw: 0, roll: roll * depth });
@@ -286,7 +293,7 @@ function magazineCurve(t: HandlingTunables, tiltRoll: number, magOutAt: number, 
     key(magOutAt, [x, y - t.reloadMagOutDropM, z], pitch, tiltRoll),
     key(t.reloadHoldAt, [x, y, z], pitch, tiltRoll),
     key(magInAt, [x, y + t.reloadMagInRiseM, z], pitch + t.reloadMagInPitchDeg, tiltRoll),
-    key(boltAt, [x, y, z - t.reloadBoltBackM], pitch, t.reloadBoltRollDeg),
+    key(boltAt, [x, y, z - t.reloadBoltBackM], pitch, boltRoll),
     key(1, [0, 0, 0], 0, 0),
   ];
   const heard: Mark[] = [{ at: magOutAt, cue: 'mag-out' }, { at: magInAt, cue: 'mag-in' }, { at: boltAt, cue: 'bolt' }, ...marks];
@@ -351,6 +358,13 @@ export class Handling {
   /** The stride's last phase, and whether this is the second of a pair (the swing across runs over two). */
   private lastBob!: number;
   private secondStride!: boolean;
+  /**
+   * The stride's phase as the body last stood on the ground, held while it is in the air (where the
+   * body sweeps its own back toward nothing, character.ts); and the bob's ground blend (0 to 1), out
+   * in the air and back in on landing over bob_ground_s.
+   */
+  private airBob!: number;
+  private ground!: number;
   /** The reload drawn last tick (with the shells it counted as it began), and its pose; one let go, easing back from where it was. */
   private lastReload!: { phase: number; gun: GunClass; shells: number } | null;
   private lastCurve!: HandsDelta;
@@ -366,9 +380,9 @@ export class Handling {
     this.swayOmega = SETTLE_CONSTANT / Math.max(1e-3, t.swaySettleS);
     this.landOmega = SETTLE_CONSTANT / Math.max(1e-3, t.landingSettleS);
     this.curves = {
-      long: magazineCurve(t, t.reloadTiltRollDeg, t.reloadMagOutAt, t.reloadMagInAt, t.reloadBoltAt, 1, []),
-      mg: magazineCurve(t, t.reloadTiltRollDeg, t.reloadMagOutAt, t.reloadMagInAt, t.reloadBoltAt, t.mgDepth, [{ at: t.mgCoverAt, cue: 'cover' }]),
-      pistol: magazineCurve(t, t.pistolTiltRollDeg, t.pistolMagOutAt, t.pistolMagInAt, t.pistolSlideAt, 1, []),
+      long: magazineCurve(t, t.reloadTiltRollDeg, t.reloadMagOutAt, t.reloadMagInAt, t.reloadBoltAt, t.reloadBoltRollDeg, 1, []),
+      mg: magazineCurve(t, t.reloadTiltRollDeg, t.reloadMagOutAt, t.reloadMagInAt, t.reloadBoltAt, t.reloadBoltRollDeg, t.mgDepth, [{ at: t.mgCoverAt, cue: 'cover' }]),
+      pistol: magazineCurve(t, t.pistolTiltRollDeg, t.pistolMagOutAt, t.pistolMagInAt, t.pistolSlideAt, t.pistolSlideRollDeg, 1, []),
     };
     this.reset();
   }
@@ -380,9 +394,9 @@ export class Handling {
 
   /**
    * The hands as a fresh pair's, as the constructor makes them and for a deploy (the session's equip
-   * and respawn): no sprint, the sway and the landing at rest (on the ground), no reload drawn or
-   * easing back, no overshoot, the stride's pair and the last gun's shot forgotten (so no pump is to
-   * come), and both ticks' deltas none. Every field of the state starts here, and only here.
+   * and respawn): no sprint, the sway and the landing at rest (on the ground, the stride's bob whole),
+   * no reload drawn or easing back, no overshoot, the stride's pair and the last gun's shot forgotten
+   * (so no pump is to come), and both ticks' deltas none. Every field of the state starts here, and only here.
    */
   reset(): void {
     this.blend = 0;
@@ -397,6 +411,8 @@ export class Handling {
     this.overshootPitch = 0;
     this.lastBob = 0;
     this.secondStride = false;
+    this.airBob = 0;
+    this.ground = 1;
     this.lastReload = null;
     this.lastCurve = zero();
     this.release = null;
@@ -429,13 +445,19 @@ export class Handling {
     const sprint = smooth(this.blend);
 
     // The stride's bob: up and down at its phase, across and rolling at half of it, so the second
-    // stride of a pair swings the other way (the body wraps the phase at a turn).
-    if (i.bobPhase < this.lastBob - PI) this.secondStride = !this.secondStride;
-    this.lastBob = i.bobPhase;
-    const across = sin((i.bobPhase + (this.secondStride ? TAU : 0)) / 2);
-    const bob = speed * mix(1, t.bobAimed, aimed) * mix(1, t.bobSprint, sprint);
+    // stride of a pair swings the other way (the body wraps the phase at a turn). In the air there is
+    // no stride: the phase is held where the body left the ground (its own sweeps back toward nothing,
+    // which drawn would swing the gun backwards through a stride) and the bob eased out over
+    // bob_ground_s; on landing eased back in, over the body's phase starting again near nothing.
+    if (i.onGround) this.airBob = i.bobPhase;
+    this.ground = i.onGround ? Math.min(1, this.ground + i.dt / t.bobGroundS) : Math.max(0, this.ground - i.dt / t.bobGroundS);
+    const phase = this.airBob;
+    if (phase < this.lastBob - PI) this.secondStride = !this.secondStride;
+    this.lastBob = phase;
+    const across = sin((phase + (this.secondStride ? TAU : 0)) / 2);
+    const bob = speed * smooth(this.ground) * mix(1, t.bobAimed, aimed) * mix(1, t.bobSprint, sprint);
     o[0] += t.bobSideM * across * bob;
-    o[1] += t.bobUpM * sin(i.bobPhase) * bob;
+    o[1] += t.bobUpM * sin(phase) * bob;
     d.roll += t.bobRollDeg * across * bob;
 
     // The look's sway: trailing the turn, aside and up, and banking into it, as a gun hung from the hands.
@@ -461,7 +483,8 @@ export class Handling {
     d.roll += t.sprintRollDeg * sprint;
 
     // A landing: dipped on the tick it lands by its share of a hard one (the deeper, if one is
-    // still settling), then settling back.
+    // still settling), then settling back; aimed, landing_aimed of it (the sights' post stays nearer
+    // the point of aim, as breathing's does).
     [this.land, this.landSpeed] = advanceSpring(this.land, this.landSpeed, this.landOmega, t.landingDamping, i.dt);
     if (i.onGround && !this.wasOnGround) {
       const share = Math.min(1, Math.max(0, i.landingImpact / t.landingHardMps));
@@ -471,8 +494,9 @@ export class Handling {
       }
     }
     this.wasOnGround = i.onGround;
-    o[1] -= t.landingDropM * this.land;
-    d.pitch += t.landingPitchDeg * this.land;
+    const landing = this.land * mix(1, t.landingAimed, aimed);
+    o[1] -= t.landingDropM * landing;
+    d.pitch += t.landingPitchDeg * landing;
 
     // An aim-in: as the sights arrive (the aim's blend reaching 1), the muzzle is carried on past the
     // aim from that tick, at a steady rate to aim_overshoot_deg over aim_overshoot_rise_s, then eased
@@ -495,7 +519,13 @@ export class Handling {
       }
     }
 
-    addScaled(d, this.reloadPose(i, cues), 1);
+    // The reload, but on the firing step never lower than the gun at rest: the step's raise clears the
+    // parapet's crest at rest only, and a curve's tilt and jolt down would sink the frame and grip into
+    // it. Its drop is held by the raise's share, which eases as the raise does, so stepping on or off
+    // mid-reload never pops.
+    const r = this.reloadPose(i, cues);
+    if (r.offset[1] < 0) r.offset[1] *= 1 - Math.min(1, Math.max(0, i.raised));
+    addScaled(d, r, 1);
 
     // The pump, after a shot: back over its stroke, forward over as long again.
     if (i.gun === 'pump') {
