@@ -655,11 +655,11 @@ describe("the room's shells on a page", () => {
     expect(b.battle.landed).toEqual([S]);
     expect(b.battle.held).toEqual([d]);
     const carried = b.battle.finish();
-    expect(carried).toEqual([d]);
+    expect(carried.map((c) => c.dig)).toEqual([d]);
     expect(b.battle.held).toEqual([]);
     // The lobby ticks nothing. The next match's battle on B's session is given the dig before its first tick.
     b.battle = new RoomBattle(b.session, fireT);
-    for (const k of carried) b.battle.dug(k, 1_000 + b.offsetMs);
+    b.battle.carry(carried);
     expect(b.battle.held).toEqual([d]);
     const box = scoopBox(b.session.map.dims, d.cells);
     let held = 0;
@@ -669,6 +669,52 @@ describe("the room's shells on a page", () => {
       expect(b.battle.held).toEqual([d]);
     });
     expect(held).toBeGreaterThan(30);
+    expect(b.battle.held).toEqual([]);
+    expect(b.session.destruction.pending).toBe(0);
+    expect(sameWorld(a.session.map, b.session.map)).toBe(true);
+  }, 30_000);
+
+  it('a dig held behind a crater when the match ends keeps its place before a shell the end landed over it: the next match digs it first, as its digger did', () => {
+    // A was there: S1 on the bank ahead of it, its scoop in S1's rim, then S2, told after the scoop,
+    // over it. B's craters come back 3 s late: S1's is still being cut when the match ends at 5 000,
+    // so the scoop is held behind it, and the end lands S2 (finish), whose crater waits behind S1's.
+    // The next match's battle must dig the scoop before S2's crater goes out, as A did, and as a page
+    // catching up on the log does (time order); not after it, as a scoop dug at the next match's start.
+    const S1 = shell(1, 3_000, 12.8, 7.0, 1.5, 851);
+    const S2 = shell(2, 6_000, 12.4, 6.6, 1.5, 852);
+    const a = roomClient(heaped(), DIGGER);
+    a.step(1_530);
+    a.battle.hear(S1, 1_530);
+    a.step(2_000);
+    const made = digOnce(a, 2_000);
+    expect(made.ms).toBeLessThan(S2.landAt - 1_500);
+    a.step(4_530);
+    a.battle.hear(S2, 4_530);
+    a.step(10_000);
+    expect(a.session.destruction.pending).toBe(0);
+    const d: Dig = { seat: 0, at: Math.round(made.ms) + 30, cells: made.cells };
+    const box = scoopBox(a.session.map.dims, d.cells);
+    const region = detonationRegion(a.session.map.dims, [S2.at[0] / V, 0, S2.at[1] / V], S2.radius / V, tun.f('destruction.loosen_radius_scale'))!;
+    expect(overlapXZ(box, region)).toBe(true);
+    const b = roomClient(heaped(), AWAY, 0, 1 / 60, lateRunner(180));
+    b.step(1_530);
+    b.battle.hear(S1, 1_530);
+    b.step(d.at + 50);
+    b.battle.dug(d, d.at + 50);
+    b.step(4_530);
+    b.battle.hear(S2, 4_530);
+    b.step(5_000);
+    // The end: S1's crater still out, the scoop behind it; S2 landed by the end, in the air over it.
+    expect(b.session.destruction.overlapsPending(box)).toBe(true);
+    expect(b.battle.held).toEqual([d]);
+    const carried = b.battle.finish();
+    expect(b.battle.landed).toEqual([S1, S2]);
+    expect(carried.map((c) => c.dig)).toEqual([d]);
+    // The lobby ticks nothing. The next match's battle is given the scoops the last one carried before its first tick.
+    b.battle = new RoomBattle(b.session, fireT);
+    b.battle.carry(carried);
+    expect(b.battle.held).toEqual([d]);
+    b.step(14_000);
     expect(b.battle.held).toEqual([]);
     expect(b.session.destruction.pending).toBe(0);
     expect(sameWorld(a.session.map, b.session.map)).toBe(true);
