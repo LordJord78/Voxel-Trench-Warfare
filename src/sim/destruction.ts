@@ -17,6 +17,14 @@
  * another that is out, it goes back to wait its turn, its held marks made now.
  * With no tick nothing is written: a crater out while paused lands after.
  *
+ * A job asks for a wider region with its last result, when its cut came back
+ * long before: on a live page that cut is in the world. So each brick a job
+ * writes while it is out is kept as it was (`before`), and the wider region is
+ * copied with those under it: from the ground as it was before its cut, as where
+ * the cut and the ask come back in one take. A cut over its own cut would differ
+ * (a tree's trunk is a branch after one, air after two). They are let go once
+ * its settled crater is back, as no ask comes after it.
+ *
  * A shell on the ground (in a room) is cut where the ground is when its job goes out, not where it
  * was when it landed: by then every earlier crater that overlaps it is in, so every client cuts it
  * from the same ground however late its worker hands craters back, and says what it struck there.
@@ -45,7 +53,7 @@ import { detonationRegion, runDetonation, type DetonationRequest, type Detonatio
 import { P } from '../world/materials';
 import { groundTop } from '../world/raycast';
 import { overlapXZ, type Box } from '../world/region';
-import { applyPatch, copyRegion, sameCopy, type BrickPatch, type RegionCopy } from '../world/region-copy';
+import { applyPatch, brickAsIs, copyRegion, sameCopy, type BrickPatch, type RegionCopy } from '../world/region-copy';
 
 /**
  * Where a crater's job runs: post it, and take what has come back since. A job its runner loses (a
@@ -120,6 +128,11 @@ interface Job {
   cutEnd: number | null;
   cutIn: boolean;
   held: Mark[];
+  /**
+   * While it is out and its settled bricks are not back: each brick it has written, as it was before
+   * (by world brick index), for a wider region it asks for to be copied from (copyRegion's `under`).
+   */
+  before: Map<number, BrickPatch>;
 }
 
 /**
@@ -198,6 +211,20 @@ export class Destruction {
     return j ? { id: j.id, state: j.state } : null;
   }
 
+  /**
+   * The bricks kept as they were before a job out wrote them, against a wider region it may yet ask
+   * for: how many, and their bytes (a dense brick's 512; an empty or uniform one's none).
+   */
+  get kept(): { bricks: number; bytes: number } {
+    let bricks = 0;
+    let bytes = 0;
+    for (const j of this.jobs) {
+      bricks += j.before.size;
+      for (const p of j.before.values()) bytes += p.voxels?.length ?? 0;
+    }
+    return { bricks, bytes };
+  }
+
   /** The regions out now. */
   get out(): readonly Box[] {
     return this.jobs.filter((j) => j.state !== 'queued').map((j) => j.box);
@@ -231,7 +258,7 @@ export class Destruction {
   shell(centre: readonly [number, number, number], radius: number, seed: number, onGround = false): number {
     const id = this.nextId++;
     const box = detonationRegion(this.map.dims, centre, radius, this.t.options.loosen);
-    if (box) this.jobs.push({ id, centre: [centre[0], centre[1], centre[2]], radius, seed, box, onGround, state: 'queued', patches: [], applied: 0, cutEnd: null, cutIn: false, held: [] });
+    if (box) this.jobs.push({ id, centre: [centre[0], centre[1], centre[2]], radius, seed, box, onGround, state: 'queued', patches: [], applied: 0, cutEnd: null, cutIn: false, held: [], before: new Map() });
     return id;
   }
 
@@ -307,6 +334,7 @@ export class Destruction {
       const j = this.jobs.find((o) => o.id === r.id);
       if (!j || j.state !== 'out') continue;
       if ('wider' in r) {
+        // Copied again (post) from its ground as it was before its own writes: `before` under the world.
         j.box = r.wider;
         if (this.waits(j.id, j.box) || this.jobs.some((o) => o !== j && o.state !== 'queued' && overlapXZ(o.box, j.box))) {
           j.state = 'queued';
@@ -314,9 +342,14 @@ export class Destruction {
         } else this.post(j);
         continue;
       }
+      // A job posted again cuts its first cut's bricks again: those patches spend the budget, and count in its crater's `bricks`, twice.
       j.patches.push(...r.patches);
       if (r.stage === 'cut') j.cutEnd ??= j.patches.length;
-      else j.state = 'landing';
+      else {
+        // No ask comes after its settled crater: the ground kept for one is let go.
+        j.state = 'landing';
+        j.before.clear();
+      }
     }
     const landed: Crater[] = [];
     let budget = this.t.bricksPerTick;
@@ -324,7 +357,13 @@ export class Destruction {
     for (const j of this.jobs) {
       if (j.state === 'queued') continue;
       while (budget > 0 && j.applied < j.patches.length) {
-        applyPatch(this.map, j.patches[j.applied++]);
+        const p = j.patches[j.applied++];
+        // Out, it may yet ask for a wider region: the brick kept as it was before its first write.
+        if (j.state === 'out') {
+          const bi = this.map.brickIndex(p.at[0], p.at[1], p.at[2]);
+          if (!j.before.has(bi)) j.before.set(bi, brickAsIs(this.map, p.at));
+        }
+        applyPatch(this.map, p);
         budget--;
         this.written++;
       }
@@ -349,11 +388,12 @@ export class Destruction {
 
   private post(j: Job): void {
     // On the ground: centred where it is now, the first time it goes out (a wider region asked for
-    // is copied again about the same centre). Nothing has written into its region since.
+    // is copied again about the same centre). Nothing has written into its region since but itself,
+    // and what it wrote is copied as it was before.
     const first = j.onGround && j.material === undefined;
     if (first) j.material = this.groundUnder(j.centre);
     j.state = 'out';
-    const copy = copyRegion(this.map, j.box);
+    const copy = copyRegion(this.map, j.box, j.before);
     if (first && this.takeOver(j, copy)) return;
     this.runner.post({ id: j.id, centre: j.centre, radius: j.radius, seed: j.seed, options: this.t.options, copy, world: this.map.dims });
   }

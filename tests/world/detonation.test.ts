@@ -5,7 +5,7 @@ import { detonate } from '../../src/world/destruction';
 import { detonationRegion, runDetonation, type DetonationResult } from '../../src/world/detonation';
 import { isLoose, P } from '../../src/world/materials';
 import { groundTop } from '../../src/world/raycast';
-import { applyPatch, copyRegion, regionMap, sameCopy, sectorBox, type BrickPatch } from '../../src/world/region-copy';
+import { applyPatch, brickAsIs, copyBox, copyRegion, regionMap, sameCopy, sectorBox, type BrickPatch } from '../../src/world/region-copy';
 import { sameWorld, shellOptions, trenchArena } from '../support/worlds';
 
 // A shell's crater is cut off the main thread, on a copy of the region it works over: the copy is
@@ -64,6 +64,27 @@ describe('a crater cut on a copy of its region', () => {
       map.set(x, y, z, was);
     }
     expect(sameCopy(first, copyRegion(map, sectorBox(map.dims, { x0: 140, y0: 0, z0: 110, x1: 190, y1: 1, z1: 160 })!))).toBe(false);
+  });
+
+  it("a copy says the region it was taken from; one taken with bricks laid under it, each as it was, is the copy of the world as they were, encoding and all", () => {
+    const map = trench();
+    const box = sectorBox(map.dims, { x0: 100, y0: 60, z0: 110, x1: 150, y1: 80, z1: 160 })!;
+    const before = copyRegion(map, box);
+    expect(copyBox(before)).toEqual(box);
+    expect(copyBox(copyRegion(map, { x0: 0, y0: 0, z0: 224, x1: 64, y1: 128, z1: 256 }))).toEqual({ x0: 0, y0: 0, z0: 224, x1: 64, y1: 128, z1: 256 });
+    // Bricks kept as they are, then written: a dense one (the trench's floor), a uniform one (the clay
+    // under it), an empty one (the sky), and one outside the region, which is nothing to its copy.
+    const under = new Map<number, BrickPatch>();
+    for (const [x, y, z] of [[100, 44, 125], [130, 10, 130], [130, 120, 130], [20, 30, 20]] as const) {
+      const at: [number, number, number] = [x >> 3, y >> 3, z >> 3];
+      under.set(map.brickIndex(...at), brickAsIs(map, at));
+      map.set(x, y, z, P.RUBBLE);
+    }
+    expect([...under.values()].map((p) => [p.entry & 0x80000000 ? 'uniform' : p.entry === 0 ? 'empty' : 'dense', p.voxels?.length ?? 0])).toEqual([['dense', 512], ['uniform', 0], ['empty', 0], ['uniform', 0]]);
+    expect(sameCopy(before, copyRegion(map, box))).toBe(false);
+    expect(sameCopy(before, copyRegion(map, box, under))).toBe(true);
+    // The map itself is as written.
+    expect(map.get(130, 10, 130)).toBe(P.RUBBLE);
   });
 
   it("the job's crater is detonate's in place, voxel for voxel, and it lists only bricks that changed", () => {

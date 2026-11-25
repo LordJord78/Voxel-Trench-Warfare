@@ -480,12 +480,13 @@ describe("the room's battle, in Node: a late friend's catch-up", () => {
         `the first match's chars ${firstChars.length}, ${unmade.length} of them not made on J; hashes ${hash.A.slice(0, 12)}, ${hash.B.slice(0, 12)}, ${hash.J.slice(0, 12)}, with those masked ${masked[0].slice(0, 12)} and ${masked[1].slice(0, 12)}; ` +
         `J0, cutting none ahead, caught up on ${J0.catchUp?.entries} entries in ${J0.catchUp?.ms.toFixed(0)} ms, hash ${hash.J0.slice(0, 12)}`,
     );
+    // The old path against the new, on the whole log, unmasked: J, its craters cut ahead, is J0's world
+    // voxel for voxel, J0 having cut none ahead. First, so a crater cut ahead on changed ground fails here,
+    // by its own voxels, before the masked comparison with A below would fail on them too.
+    expect(hash.J, hash.J === hash.J0 ? '' : differences(J0.map, J.map)).toBe(hash.J0);
     // One world: B's, there all along, A's voxel for voxel; J's too, but for the first match's chars it did not make.
     expect(hash.B, hash.A === hash.B ? '' : differences(A.map, B.map)).toBe(hash.A);
     expect(masked[1], masked[0] === masked[1] ? '' : differences(A.map, J.map)).toBe(masked[0]);
-    // The old path against the new, on the whole log, unmasked: J, its craters cut ahead, is J0's world
-    // voxel for voxel, J0 having cut none ahead.
-    expect(hash.J, hash.J === hash.J0 ? '' : differences(J0.map, J.map)).toBe(hash.J0);
     expect([J0.catchUp!.entries, J0.session.destruction.aheadTaken, J0.session.destruction.aheadDropped]).toEqual([J.catchUp!.entries, 0, 0]);
     expect(J.battle!.landed.map((s) => s.id)).toEqual(A.battle!.landed.map((s) => s.id));
     expect([A, B, J, J0].map((p) => p.battle!.held)).toEqual([[], [], [], []]);

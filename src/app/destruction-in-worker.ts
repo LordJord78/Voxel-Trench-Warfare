@@ -24,9 +24,9 @@
  */
 
 import { inProcessRunner, type DetonationRunner } from '../sim/destruction';
-import { BRICK } from '../world/bricks';
 import type { DetonationRequest, DetonationResult } from '../world/detonation';
 import type { Box } from '../world/region';
+import { copyBox } from '../world/region-copy';
 
 /**
  * What the workers have handed back, for the page's profile of a catch-up: their jobs done (a settled
@@ -175,8 +175,7 @@ export function workerRunner(pool = 0): PageRunner {
       // its work over, and wait for it.
       const to = req.id < 0 ? pooled() : null;
       const on = to ?? worker;
-      const { origin, size } = req.copy;
-      out.set(req.id, { box: { x0: origin[0] * BRICK, y0: 0, z0: origin[2] * BRICK, x1: (origin[0] + size[0]) * BRICK, y1: size[1] * BRICK, z1: (origin[2] + size[2]) * BRICK }, on, pooled: to !== null, at: performance.now() });
+      out.set(req.id, { box: copyBox(req.copy), on, pooled: to !== null, at: performance.now() });
       if (to) load.set(to, load.get(to)! + 1);
       on.postMessage(req, [req.copy.entries.buffer as ArrayBuffer, req.copy.dense.buffer as ArrayBuffer]);
     },

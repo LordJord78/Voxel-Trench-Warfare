@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/core/rng';
 import { loadTunables } from '../../src/core/tunables';
-import { Destruction, destructionTunables, inProcessRunner, type DetonationRunner } from '../../src/sim/destruction';
+import { Destruction, destructionTunables, inProcessRunner, type Crater, type DetonationRunner } from '../../src/sim/destruction';
 import { chip, detonate } from '../../src/world/destruction';
 import { detonationRegion, runDetonation, type DetonationRequest, type DetonationResult } from '../../src/world/detonation';
 import { P } from '../../src/world/materials';
 import { groundTop } from '../../src/world/raycast';
-import { BRICK, type BrickMap } from '../../src/world/bricks';
+import { BRICK, BrickMap } from '../../src/world/bricks';
 import type { Box } from '../../src/world/region';
-import { sameCopy } from '../../src/world/region-copy';
+import { copyBox, regionMap, sameCopy } from '../../src/world/region-copy';
 import { sameWorld, shellOptions, trenchArena } from '../support/worlds';
 
 // The session's craters land through a queue (the spec's §3): posted to a runner, written back a
@@ -458,9 +458,7 @@ describe('craters cut ahead of their turn', () => {
         if (req.id >= 0) return void done.push(runDetonation(req, (cut) => done.push(cut)));
         let cut: DetonationResult | null = null;
         runDetonation(req, (c) => (cut = c));
-        const [ox, , oz] = req.copy.origin;
-        const [sx, sy, sz] = req.copy.size;
-        lost = { cut: cut!, region: { x0: ox * BRICK, y0: 0, z0: oz * BRICK, x1: (ox + sx) * BRICK, y1: sy * BRICK, z1: (oz + sz) * BRICK } };
+        lost = { cut: cut!, region: copyBox(req.copy) };
       },
       take: () => done.splice(0),
     };
@@ -481,6 +479,213 @@ describe('craters cut ahead of their turn', () => {
     expect(sameCopy(posted[1].copy, posted[0].copy)).toBe(true);
     expect(land(d).craters.map((c) => c.id)).toEqual([east]);
     expect(sameWorld(inPlace, map)).toBe(true);
+  });
+});
+
+/**
+ * A runner that hands back each job's cut and the rest of it (its settled crater, or its ask for a wider
+ * region) apart, each when released, a job's rest only once its cut is back: a live page's destruction
+ * worker, whose cut comes back within a frame of its post and its settling about 170 ms later. It keeps
+ * what it was posted.
+ */
+function liveRunner(): DetonationRunner & { posted: DetonationRequest[]; cuts(): void; rest(): void; lose(id: number, region: Box): void } {
+  const jobs: { cut: DetonationResult | null; rest: DetonationResult; cutBack: boolean }[] = [];
+  const done: DetonationResult[] = [];
+  const posted: DetonationRequest[] = [];
+  return {
+    posted,
+    post: (req) => {
+      posted.push(req);
+      const cut: DetonationResult[] = [];
+      const rest = runDetonation(req, (c) => cut.push(c));
+      jobs.push({ cut: cut[0] ?? null, rest, cutBack: cut.length === 0 });
+    },
+    take: () => done.splice(0),
+    cuts: () => {
+      for (const j of jobs) if (!j.cutBack) {
+        done.push(j.cut!);
+        j.cutBack = true;
+      }
+    },
+    rest: () => {
+      for (let k = 0; k < jobs.length; ) if (jobs[k].cutBack) done.push(jobs.splice(k, 1)[0].rest);
+      else k++;
+    },
+    // Its worker lost: nothing more of what is out comes back, and job `id` is handed back as `region`.
+    lose: (id, region) => {
+      jobs.length = 0;
+      done.push({ id, wider: region });
+    },
+  };
+}
+
+/** Ticks a live page's way until `n` craters have landed: each round, the cuts back and a tick to write them; then the rest, and a tick. */
+function live(d: Destruction, runner: { cuts(): void; rest(): void }, n = 1): Crater[] {
+  const craters: Crater[] = [];
+  for (let k = 0; k < 200 && craters.length < n; k++) {
+    runner.cuts();
+    craters.push(...d.tick());
+    runner.rest();
+    craters.push(...d.tick());
+  }
+  return craters;
+}
+
+/** The voxel at world (x, y, z) in a request's copy of its region. */
+function inCopy(req: DetonationRequest, [x, y, z]: readonly [number, number, number]): number {
+  return regionMap(req.copy).get(x - req.copy.origin[0] * BRICK, y, z - req.copy.origin[2] * BRICK);
+}
+
+// A crater whose settling needs more room than its region asks for a wider one (world/detonation.ts),
+// as the job's last result: on a live page its cut has come back long before, and is in the world. The
+// wider region is cut again from its ground as it was before that cut, as where the cut and the ask come
+// back in one take (in-process; a catch-up's crater cut ahead, all of it back before its turn): a cut over
+// its own cut would make the rim's trunk, a branch after one cut, air. A ridge of spoil standing sheer on
+// the clay, 1.6 m high, z 140–150, along x 256 ± `half`; a shell at its foot slumps it further along than
+// its region holds, asking once at 7 m (`half` 70) and twice at 11 m. A tree's trunk in the crater's rim,
+// 0.95–1.05 m south of the shell.
+describe('a crater whose job asks for a wider region', () => {
+  const AT: [number, number, number] = [256, 0, 135];
+  const R = 8;
+  const SEED = 5;
+  const TRUNK: [number, number, number] = [256, 65, 124];
+  const ridged = (half = 70) => {
+    const map = new BrickMap({ x: 512, y: 128, z: 256 });
+    map.fillBox(0, 0, 0, 512, 64, 256, P.CLAY);
+    map.fillBox(256 - half, 64, 140, 256 + half, 80, 150, P.SPOIL);
+    map.fillBox(255, 64, 124, 257, 72, 126, P.TRUNK);
+    map.takeDirty();
+    return map;
+  };
+  /** The crater cut once, in place: detonate at the ground's top. */
+  const inPlace = (half?: number) => {
+    const map = ridged(half);
+    detonate(map, AT[0], groundTop(map, AT[0], AT[2])!, AT[2], R, Rng.root(SEED), shellOptions());
+    return map;
+  };
+  /** Through the queue in-process, each job's results in one take: the world, and the size of each region posted. */
+  const oneTake = (half?: number) => {
+    const map = ridged(half);
+    const sizes: [number, number, number][] = [];
+    const runner = inProcessRunner();
+    const d = new Destruction(map, { post: (req) => (sizes.push(req.copy.size), runner.post(req)), take: runner.take }, t());
+    d.shell(AT, R, SEED, true);
+    expect(land(d).craters).toHaveLength(1);
+    return { map, sizes };
+  };
+
+  it("its cut in the world when it asks (a live page's order), it is cut again from its region's ground as it was before its cut: the world is the one where both come back in one take", () => {
+    const together = oneTake();
+    expect(together.sizes).toHaveLength(2);
+    expect(together.map.get(...TRUNK)).toBe(P.BRANCH);
+    expect(sameWorld(inPlace(), together.map)).toBe(true);
+    // Its cut written whole within a tick of coming back; or 16 bricks a tick, part of it when the ask comes.
+    for (const budget of [512, 16]) {
+      const map = ridged();
+      const runner = liveRunner();
+      const d = new Destruction(map, runner, t(budget));
+      const id = d.shell(AT, R, SEED, true);
+      d.tick();
+      runner.cuts();
+      d.tick();
+      expect(d.written).toBe(budget === 512 ? d.cuts[0].bricks : 16);
+      expect(map.get(...TRUNK)).toBe(P.BRANCH);
+      runner.rest();
+      d.tick();
+      expect(runner.posted.map((r) => r.copy.size)).toEqual(together.sizes);
+      expect(inCopy(runner.posted[1], TRUNK), `${budget} bricks a tick`).toBe(P.TRUNK);
+      expect(live(d, runner).map((c) => c.id)).toEqual([id]);
+      expect(map.get(...TRUNK)).toBe(P.BRANCH);
+      expect(sameWorld(together.map, map), `${budget} bricks a tick`).toBe(true);
+    }
+  });
+
+  it("so is one cut ahead of its turn and taken over, its cut back and in after its shell's job took it over, then its ask", () => {
+    const together = oneTake();
+    const map = ridged();
+    const runner = liveRunner();
+    const d = new Destruction(map, runner, t());
+    d.ahead([AT[0], 64, AT[2]], R, SEED);
+    const id = d.shell(AT, R, SEED, true);
+    d.tick();
+    expect([d.aheadTaken, runner.posted.map((r) => r.id)]).toEqual([1, [-1]]);
+    runner.cuts();
+    d.tick();
+    expect(d.cuts.map((c) => c.id)).toEqual([id]);
+    expect(map.get(...TRUNK)).toBe(P.BRANCH);
+    runner.rest();
+    d.tick();
+    expect(runner.posted.map((r) => [r.id, r.copy.size])).toEqual([[-1, together.sizes[0]], [id, together.sizes[1]]]);
+    expect(inCopy(runner.posted[1], TRUNK)).toBe(P.TRUNK);
+    expect(live(d, runner).map((c) => c.id)).toEqual([id]);
+    expect(sameWorld(together.map, map)).toBe(true);
+  });
+
+  it('one that asks twice is cut once, from the ground as it was before its cut, whether its results come back in one take or live', () => {
+    // In one take its first cut is written while its first wider job is out; then that job asks again.
+    const together = oneTake(110);
+    expect(together.sizes).toHaveLength(3);
+    expect(together.map.get(...TRUNK)).toBe(P.BRANCH);
+    expect(sameWorld(inPlace(110), together.map)).toBe(true);
+    const map = ridged(110);
+    const runner = liveRunner();
+    const d = new Destruction(map, runner, t());
+    d.shell(AT, R, SEED, true);
+    d.tick();
+    expect(live(d, runner)).toHaveLength(1);
+    expect(runner.posted.map((r) => r.copy.size)).toEqual(together.sizes);
+    expect(runner.posted.map((r) => inCopy(r, TRUNK))).toEqual([P.TRUNK, P.TRUNK, P.TRUNK]);
+    expect(sameWorld(together.map, map)).toBe(true);
+  });
+
+  it("one handed back as its own region once its cut is in (its worker lost: the page's runner falls back) goes out again on its region's ground as it was before its cut", () => {
+    // A ridge 3 m along: the crater's region holds its slump, and it asks for nothing wider.
+    const map = ridged(30);
+    const runner = liveRunner();
+    const d = new Destruction(map, runner, t());
+    const id = d.shell(AT, R, SEED, true);
+    d.tick();
+    runner.cuts();
+    d.tick();
+    expect(map.get(...TRUNK)).toBe(P.BRANCH);
+    // Lost: its settled crater never comes, and its own region is handed back (app/destruction-in-worker.ts handBack).
+    const own = runner.posted[0];
+    runner.lose(id, copyBox(own.copy));
+    d.tick();
+    expect(runner.posted.map((r) => [r.id, r.copy.size])).toEqual([[id, own.copy.size], [id, own.copy.size]]);
+    expect(inCopy(runner.posted[1], TRUNK)).toBe(P.TRUNK);
+    expect(live(d, runner).map((c) => c.id)).toEqual([id]);
+    expect(sameWorld(inPlace(30), map)).toBe(true);
+  });
+
+  it("keeps each brick its cut wrote, as it was, only while it is out and might yet ask: let go once its settled crater is back, and never kept where both come back in one take", () => {
+    // 8 bricks a tick: its cut (24 bricks), then its settled crater, written over several.
+    const map = ridged(30);
+    const runner = liveRunner();
+    const d = new Destruction(map, runner, t(8));
+    d.shell(AT, R, SEED, true);
+    d.tick();
+    expect(d.kept).toEqual({ bricks: 0, bytes: 0 });
+    runner.cuts();
+    for (let k = 0; k < 50 && d.cuts.length === 0; k++) d.tick();
+    const cut = d.cuts[0].bricks;
+    expect(cut).toBeGreaterThan(8);
+    expect(d.kept.bricks).toBe(cut);
+    expect(d.kept.bytes).toBeGreaterThan(0);
+    expect(d.kept.bytes).toBeLessThanOrEqual(512 * cut);
+    // Its settled crater back, and still being written: nothing kept.
+    runner.rest();
+    expect(d.tick()).toEqual([]);
+    expect([d.pending, d.out.length]).toEqual([1, 1]);
+    expect(d.kept).toEqual({ bricks: 0, bytes: 0 });
+    expect(land(d).craters).toHaveLength(1);
+    const together = new Destruction(ridged(30), inProcessRunner(), t(16));
+    together.shell(AT, R, SEED, true);
+    for (let k = 0; k < 100 && together.pending > 0; k++) {
+      together.tick();
+      expect(together.kept.bricks).toBe(0);
+    }
+    expect(together.pending).toBe(0);
   });
 });
 

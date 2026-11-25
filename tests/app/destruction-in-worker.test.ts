@@ -245,7 +245,7 @@ describe("a catch-up's craters cut ahead only where a pool runs them", () => {
     // No pool (a page with two cores): every job sent ahead would queue on the session's worker, before the next shell's own.
     const noPool = await caughtUp(workerRunner(0));
     expect(noPool.sent).toEqual([]);
-    expect(FakeWorker.posts.every(([w, id]) => w === 0 && id > 0)).toBe(true);
+    expect(FakeWorker.posts).toEqual([1, 2, 3, 4, 5].map((id) => [0, id]));
     expect(sameWorld(without.map, noPool.map)).toBe(true);
     // A pool of two: S2 and S4 at the start, S3 once S1 is in, S5 once S2 is; on the pool.
     FakeWorker.all = [];
@@ -279,7 +279,11 @@ describe("a catch-up's craters cut ahead only where a pool runs them", () => {
       expect(warned.some((m) => /pool/.test(m))).toBe(true);
       expect(warned.some((m) => /in-process/.test(m))).toBe(false);
       // From the failure on, every job is the session's own, on its worker: none more cut ahead (not S5).
-      expect(FakeWorker.posts.slice(FakeWorker.failedAt!).every(([w, id]) => w === 0 && id > 0)).toBe(true);
+      // S2's own among them: its work, taken over and lost with the pool, cut again there.
+      const after = FakeWorker.posts.slice(FakeWorker.failedAt!);
+      expect(after.length).toBeGreaterThan(0);
+      expect(after.every(([w, id]) => w === 0 && id > 0)).toBe(true);
+      expect(after).toContainEqual([0, 2]);
       expect(sent).not.toContain(5);
       expect(runner.parallel).toBe(0);
       expect(sameWorld(without.map, map)).toBe(true);

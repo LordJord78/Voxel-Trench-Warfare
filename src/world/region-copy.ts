@@ -43,8 +43,13 @@ export function sectorBox(dims: Dims, box: Box): Box | null {
   );
 }
 
-/** Copy `box` out of the map: it must be whole sectors across, within the world, and its full height. */
-export function copyRegion(map: BrickMap, box: Box): RegionCopy {
+/**
+ * Copy `box` out of the map: it must be whole sectors across, within the world, and its full height.
+ * Each brick in `under` (by its world brick index) is copied as that patch would leave it, not as the
+ * map holds it: a crater's region copied again from its ground as it was before its own cut was
+ * written (sim/destruction.ts). One outside the region is nothing to the copy.
+ */
+export function copyRegion(map: BrickMap, box: Box, under?: ReadonlyMap<number, BrickPatch>): RegionCopy {
   const { dims } = map;
   const across = [box.x0, box.x1, box.z0, box.z1].every((v) => Number.isInteger(v) && v % SECTOR === 0);
   if (!across || box.y0 !== 0 || box.y1 !== dims.y || box.x0 < 0 || box.z0 < 0 || box.x1 > dims.x || box.z1 > dims.z || box.x0 >= box.x1 || box.z0 >= box.z1) {
@@ -54,11 +59,16 @@ export function copyRegion(map: BrickMap, box: Box): RegionCopy {
   const size: [number, number, number] = [(box.x1 - box.x0) / BRICK, map.bricks.y, (box.z1 - box.z0) / BRICK];
   const entries = new Uint32Array(size[0] * size[1] * size[2]);
   const world = (bx: number, by: number, bz: number) => map.brickIndex(origin[0] + bx, by, origin[2] + bz);
+  // A brick's entry: the map's, or as the patch under it would leave it (1 for its bytes: dense).
+  const entry = (bi: number) => {
+    const p = under?.get(bi);
+    return p ? (p.voxels ? 1 : p.entry) : map.table[bi];
+  };
   let denseCount = 0;
   for (let bz = 0; bz < size[2]; bz++) {
     for (let by = 0; by < size[1]; by++) {
       for (let bx = 0; bx < size[0]; bx++) {
-        const e = map.table[world(bx, by, bz)];
+        const e = entry(world(bx, by, bz));
         if (e !== 0 && !(e & UNIFORM)) denseCount++;
       }
     }
@@ -70,17 +80,40 @@ export function copyRegion(map: BrickMap, box: Box): RegionCopy {
     for (let by = 0; by < size[1]; by++) {
       for (let bx = 0; bx < size[0]; bx++, i++) {
         const bi = world(bx, by, bz);
-        const e = map.table[bi];
+        const e = entry(bi);
         if (e === 0 || e & UNIFORM) {
           entries[i] = e;
           continue;
         }
-        map.readBrick(bi, dense.subarray(k * 512, k * 512 + 512));
+        const voxels = under?.get(bi)?.voxels;
+        if (voxels) dense.set(voxels.subarray(0, 512), k * 512);
+        else map.readBrick(bi, dense.subarray(k * 512, k * 512 + 512));
         entries[i] = ++k;
       }
     }
   }
   return { origin, size, entries, dense };
+}
+
+/** The region a copy was taken from (copyRegion's `box`): whole sectors across, the world's full height. */
+export function copyBox(copy: RegionCopy): Box {
+  const [ox, oy, oz] = copy.origin;
+  const [sx, sy, sz] = copy.size;
+  return { x0: ox * BRICK, y0: oy * BRICK, z0: oz * BRICK, x1: (ox + sx) * BRICK, y1: (oy + sy) * BRICK, z1: (oz + sz) * BRICK };
+}
+
+/**
+ * The brick at `at` (world brick coordinates) as `map` holds it now, as a patch that would put it back
+ * so: its entry if it is empty or uniform, else a copy of its bytes.
+ */
+export function brickAsIs(map: BrickMap, at: readonly [number, number, number]): BrickPatch {
+  const bi = map.brickIndex(at[0], at[1], at[2]);
+  const e = map.table[bi];
+  const where: [number, number, number] = [at[0], at[1], at[2]];
+  if (e === 0 || e & UNIFORM) return { at: where, entry: e };
+  const voxels = new Uint8Array(512);
+  map.readBrick(bi, voxels);
+  return { at: where, entry: 1, voxels };
 }
 
 /**
