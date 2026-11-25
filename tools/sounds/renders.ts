@@ -23,8 +23,8 @@
  * and the SVD over the AK, the AK over the pistol); the M870's and the SVD's tails, and the AK burst's
  * after its last report, from both sides (TailRule); the M870's and the pistol's own bodies in their
  * bands; the suppressed SVD's loudest 50 ms under the bare one's, its tone brighter than it, and over
- * its own reload's mag-out; and the M249's burst under the peak's ceiling, as a stream comes through
- * the compressor hotter than a shot from silence. And
+ * its own reload's mag-out; and the M249's burst under the peak's ceiling, its twenty noise draws
+ * reaching hotter than one report's over its stacking tail. And
  * every other voice's kind, each as planVoices plans it from its event where the game plays it whole
  * (one heard afar within reference_m; a distant gun at its range's nearest), held to the peak's range:
  * every VoiceKind has its <kind>.wav. One only reported (`gated` false)
@@ -47,7 +47,16 @@ import type { SoundRules, TailRule } from '../lib/sound-measures.mjs';
 
 /** Every file's rate (Hz). */
 export const RATE = 48000;
-/** Silence before a voice starts (s). */
+/**
+ * How long each render's context runs before its file starts (s), silent, cut from the file: the
+ * master compressor settling. Chrome's DynamicsCompressorNode starts from its reset state, and over its
+ * first 0.15 s it cuts what a settled one passes (a tone into it at -27.5 dBFS, its first 5 ms: cut
+ * 7.0 dB at 10 ms and 1.5 dB at 30 ms, lifted 1.2 dB at 50 ms, and by its whole make-up, 4.28 dB, from
+ * 0.15 s on; one at +0.4 dBFS cut 8.9 dB at 10 ms, 3.1 dB settled). The game's context runs from the
+ * click that starts play, so no shot is heard so. Over three times what it takes.
+ */
+export const SETTLE_S = 0.5;
+/** Silence before a voice starts in its file (s). */
 export const LEAD_S = 0.01;
 /** A file runs this far past its last voice's end (s). */
 export const TAIL_S = 0.1;
@@ -115,19 +124,20 @@ const BURST_LAST_S = 0.9;
 const ORDER = { band: [20, 20000] as const, firstS: 0.08, db: 0 };
 /**
  * A long M249 burst (G5's fix wave): this many of its reports at the gun's own rate, held to the peak's
- * range alone. Through the master compressor each report after the first comes hotter than one from
- * silence, so its −1 dBFS ceiling is what holds the rifles' report_gain.
+ * range alone. Each report peaks about as a single one does (the compressor settled: 1.6 to 3.5 dB
+ * under full scale in the AK's), but twenty draws over the stacking tail reach the hottest, so its
+ * −1 dBFS ceiling is what holds the rifles' report_gain.
  */
 const LONG_BURST = 20;
 /** A single report's tail: its loudest 50 ms after its own layers 3 to 24 dB under its report's (over 24, it is missing). */
 const TAIL: TailRule = { afterS: REPORT_S, underDb: [3, 24] };
 /**
  * Each gun's own body heard (G5's final review): the share of the first 80 ms in its body's band,
- * halfway between the share with the gun's own body and with the defaults' 140 Hz in its place (the
- * M870's under 120 Hz 0.772 and 0.516; the pistol's in 130-400 Hz 0.880 and 0.112). A voice that
- * played every gun at 140 Hz fails both.
+ * halfway between the share with the gun's own body and with the defaults' 140 Hz in its place,
+ * measured with the compressor settled (the M870's under 120 Hz 0.726 and 0.458; the pistol's in
+ * 130-400 Hz 0.835 and 0.159). A voice that played every gun at 140 Hz fails both.
  */
-const M870_BODY = 0.64;
+const M870_BODY = 0.59;
 const PISTOL_BODY = 0.5;
 /**
  * What each of the player's own reports is held to besides its peak's range: the order; the tails of the

@@ -17,8 +17,10 @@
 // kill's thud), or its energy in a band too little over another's (a headshot's kill over the same
 // without its gush, a report over a lighter gun's), its loudest 50 ms too little under another's (a
 // suppressed SVD's report under the bare one's) or its share over 400 Hz too little over it, or its
-// tail's loudest 50 ms not between so many dB under its report's (missing, or outweighing it); each
-// other it is held to rendered too, and theirs, if --only left them out; or if the page fails. Exits
+// tail's loudest 50 ms not between so many dB under its report's (missing, or outweighing it); or the
+// master compressor cut a mix that never reached its threshold (it had not settled: each render's
+// context runs SETTLE_S first, cut from its file, as the game's runs from the click that starts play);
+// each other it is held to rendered too, and theirs, if --only left them out; or if the page fails. Exits
 // 2, with the usage, if --only has no list or names no render. A render reported and not held says
 // what fails of it, and does not fail the run.
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -26,7 +28,7 @@ import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { parseOnly } from './lib/cli.mjs';
 import { readReport, stamp, writeReport } from './lib/report.mjs';
-import { checkSound, table, wav } from './lib/sound-measures.mjs';
+import { checkSound, settledFailures, table, wav } from './lib/sound-measures.mjs';
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 
@@ -93,7 +95,7 @@ try {
     const rows = [];
     for (const r of rendered) {
       writeFileSync(`${OUT}/${r.name}.wav`, wav(r.samples.map(samplesOf), r.rate));
-      const found = checkSound(r.heard, r.rules ?? {}, heard);
+      const found = [...checkSound(r.heard, r.rules ?? {}, heard), ...settledFailures(r.into, r.heard)];
       rows.push({ name: r.name, ...r.heard, failures: found, gated: r.gated });
       if (r.gated) for (const f of found) failures.push(`${r.name}: ${f}`);
       report[r.name] = {

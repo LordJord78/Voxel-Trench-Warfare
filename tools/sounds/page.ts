@@ -7,7 +7,8 @@
  * band rule's own share, an `over` rule's reading, of the render held over another and of that
  * other alike, and a `tail` rule's, its report's loudest 50 ms and its tail's). The context has four
  * channels: 0 and 1 are what the game puts out, left and right; 2 and 3 the mix before the compressor,
- * left and right: how hard the voice drives it.
+ * left and right: how hard the voice drives it. It runs SETTLE_S silent first, while the compressor
+ * settles from its start as the game's has by its first shot, and the file is what follows.
  *
  * Its noise and its draws (a noise's offset, the gush's flutter) come from Math.random, seeded here for
  * each render by its name, so a file renders the same every run.
@@ -18,7 +19,7 @@ import { mixInto, tailInto, whiteNoise } from '../../src/audio/engine';
 import { playVoice, reportShape } from '../../src/audio/voices';
 import { loadTunables } from '../../src/core/tunables';
 import { measure, ruleEnergyDb, ruleShare, ruleTail, type Measured, type OverRule } from '../lib/sound-measures.mjs';
-import { LEAD_S, RATE, renders, type Render } from './renders';
+import { LEAD_S, RATE, renders, SETTLE_S, type Render } from './renders';
 
 /** A render done: its file's samples (base64 of float32, left and right), and both mixes read. */
 export interface Rendered {
@@ -77,7 +78,10 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
     for (const r of all) {
       if (only && !only.includes(r.name)) continue;
       Math.random = seeded(seedOf(r.name));
-      const ctx = new OfflineAudioContext({ numberOfChannels: 4, length: Math.ceil(r.lengthS * RATE), sampleRate: RATE });
+      // SETTLE_S of silence first, while the compressor settles, cut from the file: its voices from SETTLE_S + LEAD_S.
+      const from = Math.round(SETTLE_S * RATE);
+      const length = Math.ceil(r.lengthS * RATE);
+      const ctx = new OfflineAudioContext({ numberOfChannels: 4, length: from + length, sampleRate: RATE });
       ctx.destination.channelInterpretation = 'discrete';
       // Channels 0 and 1, what the game puts out (left, right); 2 and 3, the mix before the compressor.
       const merger = new ChannelMergerNode(ctx, { numberOfInputs: 4 });
@@ -89,10 +93,11 @@ async function render(only: string[] | null = null): Promise<Rendered[]> {
       mix.connect(intoEars);
       const noise = whiteNoise(ctx);
       const tail = tailInto(ctx, mix, report);
-      for (const v of r.plans) playVoice(ctx, mix, noise, v, LEAD_S + v.delayS, report, tail);
+      for (const v of r.plans) playVoice(ctx, mix, noise, v, from / RATE + LEAD_S + v.delayS, report, tail);
       const buffer = await ctx.startRendering();
-      const heard = [buffer.getChannelData(0), buffer.getChannelData(1)];
-      const into = [buffer.getChannelData(2), buffer.getChannelData(3)];
+      const file = (k: number) => buffer.getChannelData(k).subarray(from, from + length);
+      const heard = [file(0), file(1)];
+      const into = [file(2), file(3)];
       const band = r.rules?.band;
       const over = r.rules?.over ?? under.get(r.name);
       const tailRule = r.rules?.tail;

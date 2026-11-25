@@ -9,7 +9,9 @@
 // another's (a suppressed SVD's report under a bare one's: its loudness, as `near` and `tail` read it,
 // never its sample peak, which a noise burst's seed swings by 4 dB), its share over 400 Hz over
 // another's (the same, its tone), or its tail's loudest 50 ms between so many dB under its report's (a
-// report's shared tail, neither missing nor outweighing it). Plain JS, so the render page
+// report's shared tail, neither missing nor outweighing it). And a render's mix that never reaches the
+// master compressor's threshold must come out of it no quieter: a settled compressor passes it whole,
+// as the game's does. Plain JS, so the render page
 // (tools/sounds/page.ts, which runs the FFT where it renders) and the tests read the same code.
 
 /** A file's peak must lie in this range (dBFS): over the top it may clip, under the bottom it is too quiet. */
@@ -26,6 +28,8 @@ export const LOUDEST_S = 0.05;
 export const ONSET_DB = -60;
 /** A band rule's share, when it asks none. */
 const HALF = 0.5;
+/** The master compressor's threshold (dBFS): audio/engine.ts mixInto's (tests/tools/sound-renders.test.ts holds them alike). */
+export const COMPRESSOR_THRESHOLD_DB = -14;
 
 /** `x` (a linear level, full scale 1) in dBFS; −Infinity for 0. */
 export const dbfs = (x) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
@@ -406,6 +410,22 @@ export function checkSound(m, rules = {}, others = {}) {
     }
   }
   return out;
+}
+
+/**
+ * What fails of a render's pass through the master compressor, from the mix into it (`into`) and what
+ * comes out (`heard`), each read by measure(): a mix that never reaches COMPRESSOR_THRESHOLD_DB, which a
+ * settled compressor passes whole (lifting it by its make-up gain), coming out with a lower peak, or
+ * none measured. That is the compressor still settling from its start, never what the game plays: its
+ * context runs from the click that starts play. A mix at the threshold or over it is the compressor's
+ * to cut, and a silent one checkSound's to say.
+ */
+export function settledFailures(into, heard) {
+  if (!(into.peakDb >= SILENT_DB) || !(into.peakDb < COMPRESSOR_THRESHOLD_DB)) return [];
+  const where = `${db1(into.peakDb)} dBFS into it, under its threshold of ${COMPRESSOR_THRESHOLD_DB} dBFS`;
+  if (!(heard.peakDb >= SILENT_DB)) return [`the compressor cut it, ${where}: what came out was not measured`];
+  if (!(heard.peakDb >= into.peakDb)) return [`the compressor cut it ${(into.peakDb - heard.peakDb).toFixed(1)} dB at its peak, ${where}: it had not settled`];
+  return [];
 }
 
 /**

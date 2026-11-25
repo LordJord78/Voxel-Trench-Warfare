@@ -88,4 +88,6 @@ export function ruleShare(x: Channels, rate: number, rule: BandRule): number;
 export function ruleEnergyDb(x: Channels, rate: number, rule: { hz: readonly [number, number]; firstS?: number }): number;
 export function ruleTail(x: Channels, rate: number, rule: { afterS: number }): { dryDb: number; tailDb: number };
 export function checkSound(m: Measured, rules?: SoundRules, others?: Readonly<Record<string, Measured>>): string[];
+export const COMPRESSOR_THRESHOLD_DB: number;
+export function settledFailures(into: Measured, heard: Measured): string[];
 export function table(rows: readonly Row[]): string;

@@ -25,21 +25,21 @@ const TAIL_FALL_DB = 60;
 const TAIL_OPEN_HZ = 8000;
 const TAIL_DULL_HZ = 400;
 /**
- * What the tail returns of a report's body, in dB of the send squared: tuned against the heard renders
- * (npm run sounds), as the master compressor takes about 6 dB off a report and leaves its tail, so a
- * tail returning the body at the send squared is still heard hot. Here the M870's and the SVD's tails
- * sit 4 dB or more under their reports, and an AK burst's 12 dB under its last (the gates: 3 and 6).
+ * What the tail returns of a report's body, in dB of the send squared: the send squared itself (G5's
+ * final review), which the heard renders hold (npm run sounds, its compressor settled as the game's
+ * is): the M870's and the SVD's tails 3 dB or more under their reports, an AK burst's 6 dB under its
+ * last.
  */
-const TAIL_RETURN_DB = -2;
+const TAIL_RETURN_DB = 0;
 
 /**
  * The reports' tail's impulse at `rate`: `lengthS` of noise in each ear (each its own draw, so the
  * tail is wide), falling TAIL_FALL_DB over it, through a lowpass of two one-pole stages (12 dB an
  * octave) whose corner falls geometrically from TAIL_OPEN_HZ to TAIL_DULL_HZ, so its highs die faster
  * than its lows (over 2 kHz, about 9 dB further over its first 0.6 s than under 500 Hz). Each ear
- * scaled so that its noise, before the lowpass, has TAIL_RETURN_DB's energy (2 dB under unity): the
- * lowpass passes a report's body (under 400 Hz) whole, so what a voice sends of its body comes back as
- * its energy times the send squared, 2 dB under (engine.test holds the bodies' band there within 1 dB);
+ * scaled so that its noise, before the lowpass, has TAIL_RETURN_DB's energy (unity): the lowpass
+ * passes a report's body (under 400 Hz) whole, so what a voice sends of its body comes back as its
+ * energy times the send squared (engine.test holds the bodies' band there within 1 dB);
  * its highs, which the lowpass thins, come back less. Drawn from one seeded stream (core/rng,
  * 'audio.tail'), so it is the same every start and in every render.
  */

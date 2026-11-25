@@ -66,7 +66,7 @@ describe("the reports' shared tail", () => {
     for (const x of [left, right]) expect(Math.max(...x.map(Math.abs))).toBeLessThan(1);
   });
 
-  it("each ear returns a report's body at about the send squared, 2 dB under it (tuned on the heard renders): its energy in the bodies' band (60-210 Hz) against a unit-energy white noise's there, within 1 dB", () => {
+  it("each ear returns a report's body at about the send squared (G5's final review), as the renders hold it with the compressor settled: its energy in the bodies' band (60-210 Hz) against a unit-energy white noise's there, within 1 dB of it", () => {
     // What a sine in the band sent at `send` comes back as: its energy times the send squared times
     // this return, the impulse's energy in the band over a unit-energy white noise's there (dB). Held
     // from both sides: hotter, the tail outweighs a low report (the M870's did, 7 dB over this);
@@ -74,7 +74,7 @@ describe("the reports' shared tail", () => {
     const BODIES: [number, number] = [60, 210];
     for (const x of [left, right]) {
       const back = ruleEnergyDb(x, RATE, { hz: BODIES }) - 10 * Math.log10((BODIES[1] - BODIES[0]) / (RATE / 2));
-      expect(Math.abs(back - -2)).toBeLessThan(1);
+      expect(Math.abs(back)).toBeLessThan(1);
     }
     // Its highs, which its lowpass thins, come back less: all told it holds under a unit energy.
     expect(energy(left)).toBeLessThan(1);

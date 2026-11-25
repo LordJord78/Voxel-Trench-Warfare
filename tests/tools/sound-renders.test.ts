@@ -1,14 +1,16 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { hitFeedbackTunables } from '../../src/app/hit-feedback';
+import { mixInto } from '../../src/audio/engine';
 import { audioTunables, planFeedback, planVoices, type VoiceKind } from '../../src/audio/plan';
 import { REPORT_S, reportShape, voiceLength } from '../../src/audio/voices';
 import { armSpec } from '../../src/combat/arsenal';
 import { rangeTunables } from '../../src/combat/range';
 import { loadTunables } from '../../src/core/tunables';
 import { BARE } from '../../src/net/gear';
-import { PEAK_DB } from '../../tools/lib/sound-measures.mjs';
-import { FRAME_S, FRONT_M, LEAD_S, MUZZLE, RATE, renders, TAIL_S } from '../../tools/sounds/renders';
+import { COMPRESSOR_THRESHOLD_DB, PEAK_DB } from '../../tools/lib/sound-measures.mjs';
+import { FRAME_S, FRONT_M, LEAD_S, MUZZLE, RATE, renders, SETTLE_S, TAIL_S } from '../../tools/sounds/renders';
+import { FakeContext, install, madeOf } from '../support/fake-web-audio';
 
 // The sounds' proof (npm run sounds; the shots spec's §6, G3's Task 5): what is rendered, and what each
 // render is held to. Each hit's voice at the ear as the shooter hears it (planFeedback's placing, its
@@ -43,13 +45,25 @@ const OTHERS_S: Record<(typeof OTHERS)[number], number> = {
 };
 /** The order the reports weigh in and the tail rules (G5's final review): all three read alike, so one reading serves each render (tools/sounds/page.ts). */
 const ORDER = { band: [20, 20000], firstS: 0.08, db: 0 } as const;
-/** Each gun's own body heard (G5's final review): the share of the first 80 ms in its body's band, halfway between the share with the gun's own body and with the defaults' 140 Hz in its place (measured 0.772 and 0.516 for the M870, 0.880 and 0.112 for the pistol). */
-const M870_BODY = 0.64;
+/** Each gun's own body heard (G5's final review): the share of the first 80 ms in its body's band, halfway between the share with the gun's own body and with the defaults' 140 Hz in its place (measured with the compressor settled: 0.726 and 0.458 for the M870, 0.835 and 0.159 for the pistol). */
+const M870_BODY = 0.59;
 const PISTOL_BODY = 0.5;
 
 describe("the sounds' proof: what it renders", () => {
-  it('48 kHz, a voice 10 ms in and its file 100 ms past its end; a frame at 60 Hz', () => {
-    expect([RATE, LEAD_S, TAIL_S, FRAME_S]).toEqual([48000, 0.01, 0.1, 1 / 60]);
+  it('48 kHz, a voice 10 ms into its file and the file 100 ms past its end, each context running 0.5 s first while the compressor settles (cut from the file); a frame at 60 Hz', () => {
+    expect([RATE, SETTLE_S, LEAD_S, TAIL_S, FRAME_S]).toEqual([48000, 0.5, 0.01, 0.1, 1 / 60]);
+  });
+
+  it("the renders are read through the engine's own compressor (audio/engine.ts mixInto): the threshold a settled one passes a mix under whole is its own", () => {
+    install();
+    try {
+      mixInto(new FakeContext() as unknown as BaseAudioContext, t.masterGain);
+      const compressors = madeOf('Compressor');
+      expect(compressors).toHaveLength(1);
+      expect(compressors[0].options.threshold).toBe(COMPRESSOR_THRESHOLD_DB);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("one report shape (the reports' shared tail), src/audio's, the engine is given (app/main.ts) and the renders read", () => {
@@ -242,7 +256,7 @@ describe("the sounds' proof: the reports, and every kind", () => {
     expect(r.lengthS).toBeCloseTo(LEAD_S + 0.9 + REPORT_S + report.tailS + TAIL_S, 9);
   });
 
-  it("a long M249 burst: twenty of its reports at the muzzle at its own rate (750 rpm, 0.08 s apart), each as report-m249 plans it, held to its peak's range alone: through the compressor a stream comes hotter than a shot from silence, and it must keep under -1 dBFS", () => {
+  it("a long M249 burst: twenty of its reports at the muzzle at its own rate (750 rpm, 0.08 s apart), each as report-m249 plans it, held to its peak's range alone: twenty draws over the stacking tail reach hotter than one report, and it must keep under -1 dBFS", () => {
     const r = byName('report-m249-burst');
     const [one] = byName('report-m249').plans;
     const gap = 60 / armSpec(tun, 'm249', BARE).weapon.rpm;

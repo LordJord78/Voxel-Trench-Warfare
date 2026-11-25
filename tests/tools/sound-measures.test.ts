@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BAND, bandShare, checkSound, dbfs, LOUDEST_S, loudest, loudestUnder, measure, ONSET_DB, onset, PEAK_DB, ruleEnergyDb, ruleShare, ruleTail, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
+import { BAND, bandShare, checkSound, COMPRESSOR_THRESHOLD_DB, dbfs, LOUDEST_S, loudest, loudestUnder, measure, ONSET_DB, onset, PEAK_DB, ruleEnergyDb, ruleShare, ruleTail, settledFailures, SILENT_DB, SMALL_SPEAKER_HZ, table, wav } from '../../tools/lib/sound-measures.mjs';
 
 // The sounds' proof (tools/render-sounds.mjs, npm run sounds; the shots spec's §6, G3's Task 5): each
 // voice rendered to a stereo WAV, its peak held between −30 and −1 dBFS, nothing silent; a voice held
@@ -289,7 +289,8 @@ describe("the sounds' measures", () => {
     expect(checkSound(read({ loudestDb: -21 }), { under }, { bare })).toEqual([]);
     expect(checkSound(read({ loudestDb: -29.2 }), { under }, { bare })).toEqual([]);
     // Its loudness, not one sample: a noise burst's peak swings 4 dB with its seed. The suppressed SVD
-    // (G5's fix wave) peaks 3.7 dB under the bare one and sits 8.8 dB under it over 50 ms: it passes.
+    // (G5's fix wave, as first read in the compressor's start-up dip) peaked 3.7 dB under the bare one
+    // and sat 8.8 dB under it over 50 ms: it passes.
     // A peak far under it with its loudness near the other's fails.
     expect(checkSound(read({ peakDb: -6.7, loudestDb: -23.8 }), { under }, { bare })).toEqual([]);
     expect(checkSound(read({ peakDb: -20, loudestDb: -17 }), { under }, { bare })).toEqual(["its loudest 50 ms, -17.0 dBFS, is 2.0 dB under bare's (-15.0 dBFS), not 6 dB or more under it"]);
@@ -353,6 +354,22 @@ describe("the sounds' measures", () => {
     // The other silent, or not rendered, is a failure, not a pass.
     expect(checkSound(read({ highShare: 0.42 }), { highOver }, { bare: read({ peakDb: -Infinity, highShare: 0 }) })).toEqual(["its share over 400 Hz is held over bare's, which is silent"]);
     expect(checkSound(read({ highShare: 0.42 }), { highOver }, {})).toEqual(["its share over 400 Hz is held over bare's, which was not rendered"]);
+  });
+
+  it("the compressor settled: a render whose mix never reaches its threshold (-14 dBFS) comes out no quieter, as a settled compressor passes it whole, lifted by its make-up; one cut is the compressor still settling from its start", () => {
+    expect(COMPRESSOR_THRESHOLD_DB).toBe(-14);
+    // Settled: impact-soil's mix at -23.5 dBFS, lifted by the make-up (+4.28 dB).
+    expect(settledFailures(read({ peakDb: -23.52 }), read({ peakDb: -19.24 }))).toEqual([]);
+    // Its voice 10 ms into a fresh context (G5's fix-wave renders): cut 3.1 dB in the compressor's start-up dip.
+    expect(settledFailures(read({ peakDb: -23.52 }), read({ peakDb: -26.6 }))).toEqual(['the compressor cut it 3.1 dB at its peak, -23.5 dBFS into it, under its threshold of -14 dBFS: it had not settled']);
+    // A mix at the threshold or over it is the compressor's to cut: the SVD's report, 6.7 dB.
+    expect(settledFailures(read({ peakDb: 0.96 }), read({ peakDb: -5.77 }))).toEqual([]);
+    expect(settledFailures(read({ peakDb: -14 }), read({ peakDb: -15 }))).toEqual([]);
+    // A silent mix is checkSound's to say.
+    expect(settledFailures(read({ peakDb: -Infinity }), read({ peakDb: -Infinity }))).toEqual([]);
+    // What comes out not measured, or silent, fails: never a pass.
+    expect(settledFailures(read({ peakDb: -23.52 }), { ...read(), peakDb: undefined } as never)).toEqual(['the compressor cut it, -23.5 dBFS into it, under its threshold of -14 dBFS: what came out was not measured']);
+    expect(settledFailures(read({ peakDb: -23.52 }), read({ peakDb: -Infinity }))).toEqual(['the compressor cut it, -23.5 dBFS into it, under its threshold of -14 dBFS: what came out was not measured']);
   });
 
   it('a table of each file: its name, peak, RMS, loudest 50 ms, its share in BAND and over 400 Hz, and what failed of it', () => {
