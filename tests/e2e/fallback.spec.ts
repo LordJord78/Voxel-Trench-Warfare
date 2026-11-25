@@ -36,14 +36,30 @@ test('without WebGPU the page shows the video playing, muted and looping, and sa
   expect(await hooks(page, (h) => (h as unknown as { fallback?: string }).fallback)).toBe('no-webgpu');
 });
 
-test('with no adapter, the same', async ({ page }) => {
+test('with no adapter, the same, and Chrome is told how to give it one', async ({ page }) => {
   await page.addInitScript(() => {
     if (navigator.gpu) navigator.gpu.requestAdapter = async () => null;
   });
   await page.goto('/');
   const v = await playing(page);
-  expect(v.line).toContain('Chrome or Edge, or Safari 26');
+  // The tests run in Chrome: hardware acceleration off, or a driver it will not use, is why there.
+  expect(v.line).toBe("Here it is in motion. Turn on hardware acceleration in your browser's settings, or update your graphics driver.");
   expect(await hooks(page, (h) => (h as unknown as { fallback?: string }).fallback)).toBe('no-adapter');
+});
+
+test('a phone without WebGPU is told the game is played with a keyboard and mouse on a computer', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  await withoutWebGpu(page);
+  await page.goto('/');
+  const v = await playing(page);
+  expect(v.status).toBe('TRENCHLINE is played with a keyboard and mouse on a computer.');
+  expect(v.line).toBe('Here it is in motion.');
+  expect(v.progress).toBe(false);
+  expect(await hooks(page, (h) => (h as unknown as { fallback?: string }).fallback)).toBe('phone');
+  // No "Try it anyway": nothing would run it.
+  expect(await page.locator('#anyway').count()).toBe(0);
+  await context.close();
 });
 
 test('on a touch-only device the video shows first, and "Try it anyway" loads the game', async ({ browser }) => {

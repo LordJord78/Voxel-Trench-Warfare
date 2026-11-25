@@ -105,7 +105,7 @@ type Mode = 'loading' | 'ready' | 'playing' | 'paused' | 'fly';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const loading = new LoadingScreen(document);
-const hooks: Record<string, unknown> = { ready: false, phases: loading.phases, map: MAP };
+const hooks: Record<string, unknown> = { ready: false, phases: loading.phases, map: MAP, build: __TRENCHLINE_BUILD__ };
 (window as unknown as { __trenchline: unknown }).__trenchline = hooks;
 /** Set once the game has stopped for good: its message stays, and no more frames are drawn. */
 let stopped = false;
