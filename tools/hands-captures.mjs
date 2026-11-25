@@ -6,6 +6,7 @@
 // a phase is caught on its frame), the range down (h.range(false)), the front's fire and shells off.
 //
 //   npm run hands-captures [-- --only rest,flash-ak]   (or --only=rest,flash-ak)
+//   HANDS_PORT=5328 npm run hands-captures            (its own dev server's port: 5318 unless given)
 //
 // Writes artifacts/sp7/hands/<name>.png for each:
 //   rest.png      the AK on the firing step at 14:00, still;
@@ -14,6 +15,9 @@
 //   reload-{12,28,62,82}.png  the AK's reload at those hundredths of its phase (the tilt, the magazine
 //                 out, in, the bolt);
 //   reload-m17-{12,30,62,86}.png  the pistol's (its tilt, the magazine out and in, the slide);
+//   reload-m249-{28,45}.png  the M249's, 1.3 times as deep (the magazine out, its lowest; the feed
+//                 cover): every reload is taken on the firing step, raised, where none sinks the gun
+//                 into the parapet;
 //   pump.png      the M870 0.24 s after a shot: the pump at its deepest;
 //   flash-ak.png, flash-m4comp.png, flash-svd.png  the frame of a shot at night (22:30): the core and
 //                 prongs, the compensator's side prongs, the casing lit by the flash;
@@ -36,7 +40,7 @@ import { failedEntry, readReport, removePictures, stamp, writeReport } from './l
 
 process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING ??= 'true';
 
-const PORT = 5318;
+const PORT = Number(process.env.HANDS_PORT ?? 5318);
 const OUT = 'artifacts/sp7/hands';
 const SIZE = { width: 1600, height: 1000 };
 /** The page's wait for a step, ms. */
@@ -192,6 +196,7 @@ async function reloadOf(page, { primary, pistol, marks, prefix }) {
 
 const reload = (page) => reloadOf(page, { primary: 'ak74', pistol: false, marks: [12, 28, 62, 82], prefix: 'reload' });
 const reloadPistol = (page) => reloadOf(page, { primary: 'ak74', pistol: true, marks: [12, 30, 62, 86], prefix: 'reload-m17' });
+const reloadMg = (page) => reloadOf(page, { primary: 'm249', pistol: false, marks: [28, 45], prefix: 'reload-m249' });
 
 /** The shotgun 0.24 s after a shot: the pump back at its deepest. */
 async function pump(page) {
@@ -337,6 +342,7 @@ const CAPTURES = [
   { name: 'sprint', take: sprint },
   { name: 'reload', take: reload, pictures: ['reload-12', 'reload-28', 'reload-62', 'reload-82'] },
   { name: 'reload-m17', take: reloadPistol, pictures: ['reload-m17-12', 'reload-m17-30', 'reload-m17-62', 'reload-m17-86'] },
+  { name: 'reload-m249', take: reloadMg, pictures: ['reload-m249-28', 'reload-m249-45'] },
   { name: 'pump', take: pump },
   { name: 'flash-ak', take: (page) => shot(page, { name: 'flash-ak', primary: 'ak74', hours: NIGHT }) },
   { name: 'flash-m4comp', take: (page) => shot(page, { name: 'flash-m4comp', primary: 'm4', fit: { optic: 'iron', muzzle: 'compensator', under: 'none', side: 'none' }, hours: NIGHT }) },

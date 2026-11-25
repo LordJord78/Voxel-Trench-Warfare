@@ -857,17 +857,28 @@ catch_up_workers       = 3     # workers more than the session's one, made for a
 # channels of its own, which turn and move the eye and never the round: a roll
 # about the line of sight, its side drawn each shot, and a shake for a moment
 # after it, drawn afresh each tick. Their draws are their own stream's.
+#
+# Aimed (G4 Task 4: the sights stay on the line the rounds take), the drawn gun
+# takes only punch_back_m (×0.8, along the line of sight) and punch_roll_deg
+# (×0.3, about it); punch_up_m, punch_side_m, punch_pitch_deg, punch_yaw_deg and
+# aim_pitch_follow act from the hip only. The aimed kick's feel is in the levers
+# that move no round: punch_back_m, punch_roll_deg, cam_roll_deg, cam_shake_m,
+# cam_shake_deg and fov_pulse_deg. If aimed recoil reads light (the playtest's
+# item (g)), tune these first: [recoil] kick_pitch_deg lifts the view too, but
+# it moves the rounds with it.
 # ---------------------------------------------------------------------------
 
 [viewkick.defaults]
 punch_back_m        = 0.039    # shoved toward the eye; the biggest weight cue
 punch_up_m          = 0.008
 punch_side_m        = 0.002
-punch_pitch_deg     = 1.375    # viewmodel only — the sight picture moves 0.44
+punch_pitch_deg     = 1.375    # viewmodel only, from the hip only: aimed, the
+                               # drawn gun is not pitched (the view's kick is the climb)
 punch_yaw_deg       = 0.15
 punch_roll_deg      = 0.45
-aim_pitch_follow    = 0.90     # viewmodel pitch per degree of aim kick, so the
-                               # two layers are visibly one event
+aim_pitch_follow    = 0.90     # viewmodel pitch per degree of aim kick, from the
+                               # hip only, so the two layers are one event there;
+                               # aimed the gun stays on the line and the view climbs
 settle_time_s       = 0.22     # close to the aim layer's 0.20 so they finish
                                # together; drift these apart and the gun reads
                                # as two guns
@@ -1423,8 +1434,13 @@ own_smoke_flash_share = 0.15   # of the shots' flash light, what the player's ow
                                # and the shells' blasts' light, whole): kept at the drawn muzzle a hand
                                # from the eye, on the next round's line, its puffs lit whole by each
                                # shot's flash read as a cream ball round the tracer leaving through them.
-                               # G1's (a), its limit 14 px: at night 35.5 px at 1, 30.5 at 0.5, 26.5 at
-                               # 0.35, 3.5 at 0.25; at dusk 25.5 at 0.3; under 8 at 0.2 and 0.15
+                               # G1's (a), its limit 14 px, read under the puff (Task 3b's subset runs):
+                               #   night (--only night,wall-night): 35.5 px at 1, 30.5 at 0.5, 26.5 at
+                               #     0.35, 3.5 at 0.25, 3 at 0.15;
+                               #   dusk (--only dusk): 25.5 px at 0.3, 7.5 at 0.2, 3 to 7 at 0.15 (the
+                               #     dusk sky's own light on the puffs, not the flash)
+                               # and only the shots' flashes are so shared: a gun's light's pool lights
+                               # it whole (renderer.ts transientOrder)
 # A shot's flash (the shots spec §2), all of it drawn from a hash of the shot (its tick and its muzzle):
 # a white-hot core, an emissive disc this wide, a little out along the bore; and its star, this many
 # forward prongs, each this long and this far off the bore, each at its own roll about it, anywhere
