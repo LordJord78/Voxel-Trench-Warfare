@@ -9,7 +9,7 @@ import { groundTop } from '../../src/world/raycast';
 import { BRICK, BrickMap } from '../../src/world/bricks';
 import type { Box } from '../../src/world/region';
 import { copyBox, regionMap, sameCopy } from '../../src/world/region-copy';
-import { sameWorld, shellOptions, trenchArena } from '../support/worlds';
+import { liveRunner, sameWorld, shellOptions, trenchArena } from '../support/worlds';
 
 // The session's craters land through a queue (the spec's §3): posted to a runner, written back a
 // budget a tick, in order; a mark inside a region that is out is held and made again after; a shell
@@ -482,43 +482,6 @@ describe('craters cut ahead of their turn', () => {
   });
 });
 
-/**
- * A runner that hands back each job's cut and the rest of it (its settled crater, or its ask for a wider
- * region) apart, each when released, a job's rest only once its cut is back: a live page's destruction
- * worker, whose cut comes back within a frame of its post and its settling about 170 ms later. It keeps
- * what it was posted.
- */
-function liveRunner(): DetonationRunner & { posted: DetonationRequest[]; cuts(): void; rest(): void; lose(id: number, region: Box): void } {
-  const jobs: { cut: DetonationResult | null; rest: DetonationResult; cutBack: boolean }[] = [];
-  const done: DetonationResult[] = [];
-  const posted: DetonationRequest[] = [];
-  return {
-    posted,
-    post: (req) => {
-      posted.push(req);
-      const cut: DetonationResult[] = [];
-      const rest = runDetonation(req, (c) => cut.push(c));
-      jobs.push({ cut: cut[0] ?? null, rest, cutBack: cut.length === 0 });
-    },
-    take: () => done.splice(0),
-    cuts: () => {
-      for (const j of jobs) if (!j.cutBack) {
-        done.push(j.cut!);
-        j.cutBack = true;
-      }
-    },
-    rest: () => {
-      for (let k = 0; k < jobs.length; ) if (jobs[k].cutBack) done.push(jobs.splice(k, 1)[0].rest);
-      else k++;
-    },
-    // Its worker lost: nothing more of what is out comes back, and job `id` is handed back as `region`.
-    lose: (id, region) => {
-      jobs.length = 0;
-      done.push({ id, wider: region });
-    },
-  };
-}
-
 /** Ticks a live page's way until `n` craters have landed: each round, the cuts back and a tick to write them; then the rest, and a tick. */
 function live(d: Destruction, runner: { cuts(): void; rest(): void }, n = 1): Crater[] {
   const craters: Crater[] = [];
@@ -686,6 +649,115 @@ describe('a crater whose job asks for a wider region', () => {
       expect(together.kept.bricks).toBe(0);
     }
     expect(together.pending).toBe(0);
+  });
+});
+
+// A crater whose job asks for a wider region over a neighbour's that is out goes back to wait, its cut in
+// the world on a live page and the ground under it kept. While it waits it still holds that ground, as it
+// did out: anything written there in the meantime would be undone when it is copied from that ground again
+// and its settled crater comes back over it. One ridge of spoil standing sheer on the clay, 1.6 m high,
+// z 140–150, x 40–330; two shells at its foot 12.8 m apart, their regions side by side (x 64–192 and
+// 192–320). Each slumps the ridge further along than its region holds. The east's asks first, over the
+// west's region, and waits; then the west's asks for a region over the east's ground (x 0–256), and cuts
+// the ridge where the east's cut stands, then once more, before the east's goes out again.
+describe('a crater waiting with its cut in', () => {
+  const WEST: [number, number, number] = [128, 0, 135];
+  const EAST: [number, number, number] = [256, 0, 135];
+  const R = 8;
+  const SEEDS = { west: 7, east: 5 };
+  /**
+   * Marks on the clay under the east's crater, in bricks its cut writes, each clear of both craters:
+   * made while both are out; while the east waits; and once the west is out over the east's ground,
+   * inside the west's region too.
+   */
+  const MARKS: Record<'out' | 'waiting' | 'over', [number, number, number]> = { out: [262, 49, 135], waiting: [256, 49, 135], over: [250, 49, 135] };
+  /** Clay just under the ground at the east's centre: air once its cut is in. */
+  const UNDER: [number, number, number] = [252, 62, 135];
+  const ridge = () => {
+    const map = new BrickMap({ x: 512, y: 128, z: 256 });
+    map.fillBox(0, 0, 0, 512, 64, 256, P.CLAY);
+    map.fillBox(40, 64, 140, 330, 80, 150, P.SPOIL);
+    map.takeDirty();
+    return map;
+  };
+  const voxel = ([x, y, z]: readonly number[]): Box => ({ x0: x, y0: y, z0: z, x1: x + 1, y1: y + 1, z1: z + 1 });
+  /** Clay in the rind the east's cut loosens, in the bricks of the marks made while it waits and over it. */
+  const RIND: [number, number, number][] = [[256, 53, 135], [255, 53, 135]];
+  /**
+   * The two shells, the west's shelled first or the east's, through the queue: each job's results in one
+   * take, or a live page's way (both cuts back and written, then each job's rest apart). The world, and
+   * what was seen on the way.
+   */
+  function battle(westFirst: boolean, isLive: boolean) {
+    const map = ridge();
+    const runner = liveRunner();
+    const d = new Destruction(map, runner, t());
+    const shell = (at: [number, number, number], seed: number) => d.shell(at, R, seed, true);
+    const [west, east] = westFirst ? [shell(WEST, SEEDS.west), shell(EAST, SEEDS.east)] : [shell(EAST, SEEDS.east), shell(WEST, SEEDS.west)].reverse();
+    d.tick();
+    const posted = runner.posted.map((r) => r.id);
+    if (isLive) {
+      runner.cuts();
+      d.tick();
+    }
+    const out = d.mark(...MARKS.out, 1e6, CHIP);
+    /** Job `id`'s rest back, its cut with it in one take, and a tick. */
+    const back = (id: number) => {
+      if (!isLive) runner.cuts([id]);
+      runner.rest([id]);
+      d.tick();
+    };
+    // The east's asks for a region over the west's, which is out: it goes back to wait.
+    back(east);
+    const waits = { pending: d.pending, out: d.out.length, cutWrote: RIND.map((v) => map.get(...v) === P.SPOIL) };
+    const waiting = { edit: d.overlapsOut(voxel(MARKS.waiting)), mark: d.mark(...MARKS.waiting, 1e6, CHIP) };
+    // The west's asks for a region over the east's first.
+    back(west);
+    const again = runner.posted.at(-1)!;
+    const westOver = { id: again.id === west, x1: copyBox(again.copy).x1, copied: inCopy(again, UNDER), world: map.get(...UNDER) };
+    const over = d.mark(...MARKS.over, 1e6, CHIP);
+    const landed: number[] = [];
+    for (let k = 0; k < 200 && d.pending > 0; k++) {
+      runner.cuts();
+      if (isLive) landed.push(...d.tick().map((c) => c.id));
+      runner.rest();
+      landed.push(...d.tick().map((c) => c.id));
+    }
+    const seen = {
+      posted: posted.length,
+      marked: { out, waiting, over },
+      waits,
+      westOver,
+      westThenEast: landed.length === 2 && landed[0] === west && landed[1] === east,
+      marks: Object.values(MARKS).map((m) => map.get(...m)),
+    };
+    return { map, seen };
+  }
+
+  it('holds the ground its cut wrote: a mark there is held and an edit waits, a neighbour asking wider over it is cut from it as it was before that cut, and the world is the one where each job comes back in one take', () => {
+    for (const westFirst of [true, false]) {
+      const together = battle(westFirst, false);
+      // In one take nothing of the east's cut is in while it waits, and it holds nothing: the west's is cut
+      // over the bare ridge, then the east's over what the west left.
+      expect(together.seen, `one take, the ${westFirst ? 'west' : 'east'}'s shelled first`).toEqual({
+        posted: 2,
+        marked: { out: 'held', waiting: { edit: false, mark: true }, over: 'held' },
+        waits: { pending: 2, out: 1, cutWrote: [false, false] },
+        westOver: { id: true, x1: 256, copied: P.CLAY, world: P.CLAY },
+        westThenEast: true,
+        marks: [P.SPOIL, P.SPOIL, P.SPOIL],
+      });
+      const live = battle(westFirst, true);
+      expect({ ...live.seen, same: sameWorld(together.map, live.map) }, `live, the ${westFirst ? 'west' : 'east'}'s shelled first`).toEqual({
+        posted: 2,
+        marked: { out: 'held', waiting: { edit: true, mark: 'held' }, over: 'held' },
+        waits: { pending: 2, out: 1, cutWrote: [true, true] },
+        westOver: { id: true, x1: 256, copied: P.CLAY, world: P.AIR },
+        westThenEast: true,
+        marks: [P.SPOIL, P.SPOIL, P.SPOIL],
+        same: true,
+      });
+    }
   });
 });
 

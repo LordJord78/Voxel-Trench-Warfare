@@ -5,9 +5,9 @@ import { MAP_SEEDS } from '../../src/net/room-core';
 import { SHELL_FIELDS } from '../../src/net/shell-fields';
 import { Shelling, shellingSeed } from '../../src/net/shelling';
 import { Destruction, destructionTunables, inProcessRunner, type DetonationRunner } from '../../src/sim/destruction';
-import { BrickMap } from '../../src/world/bricks';
+import { BRICK, BrickMap, UNIFORM } from '../../src/world/bricks';
 import { cutCrater } from '../../src/world/destruction';
-import { runDetonation, type DetonationRequest, type DetonationResult } from '../../src/world/detonation';
+import type { DetonationRequest } from '../../src/world/detonation';
 import { fillBand } from '../../src/world/generation/fill';
 import { generateWorld } from '../../src/world/generation/generate';
 import { genParams, type MapId } from '../../src/world/generation/params';
@@ -15,11 +15,12 @@ import { planWorld } from '../../src/world/generation/plan';
 import { K, kindOf } from '../../src/world/materials';
 import { groundTop } from '../../src/world/raycast';
 import { regionMap, type RegionCopy } from '../../src/world/region-copy';
-import { cloneMap, sameWorld } from '../support/worlds';
+import { cloneMap, liveRunner, sameWorld } from '../support/worlds';
 
-// A bench, not a test of the suite (some 4 minutes): how often a room's crater asks for a wider region, on
-// each map's heavy shelling, and how often such a crater has a tree's trunk in its rim, the one
-// material a cut over its own cut changes (sim/destruction.ts `before`). Each map's world generated
+// A bench, not a test of the suite (some 5.5 minutes: 332 s measured, both maps): how often a room's
+// crater asks for a wider region, on each map's heavy shelling, and how often such a crater has a
+// tree's trunk in its rim, the one material a cut over its own cut changes (sim/destruction.ts
+// `before`). Each map's world generated
 // as the room's pages have it; the room's heavy schedule (net/shelling.ts) from one match's start,
 // its shells landed in turn as Session.land lands them in a room. Twice: each job's results in one
 // take (in-process), and a live page's way (its cut back and written, then the rest), the worlds
@@ -45,8 +46,8 @@ interface Asked {
 /** The trunk voxels in the rim `cutCrater` loosens (spoilOf: a trunk to a branch): from radius to radius × loosen of the centre. */
 function trunksInRim(req: DetonationRequest): number {
   const map = regionMap(req.copy);
-  const ox = req.copy.origin[0] * 8;
-  const oz = req.copy.origin[2] * 8;
+  const ox = req.copy.origin[0] * BRICK;
+  const oz = req.copy.origin[2] * BRICK;
   const [cx, cy, cz] = [req.centre[0] - ox, req.centre[1], req.centre[2] - oz];
   const inner = req.radius;
   const outer = req.radius * req.options.loosen;
@@ -66,8 +67,8 @@ function trunksInRim(req: DetonationRequest): number {
 function cutTwiceDiffers(req: DetonationRequest): boolean {
   const cut = (copy: RegionCopy, times: number) => {
     const map = regionMap(copy);
-    const ox = copy.origin[0] * 8;
-    const oz = copy.origin[2] * 8;
+    const ox = copy.origin[0] * BRICK;
+    const oz = copy.origin[2] * BRICK;
     for (let k = 0; k < times; k++) cutCrater(map, req.centre[0] - ox, req.centre[1], req.centre[2] - oz, req.radius, Rng.root(req.seed), req.options);
     return map;
   };
@@ -80,7 +81,7 @@ function voxelsDiffering(a: BrickMap, b: BrickMap): number {
   const y = new Uint8Array(512);
   let n = 0;
   for (let bi = 0; bi < a.table.length; bi++) {
-    if (a.table[bi] === b.table[bi] && (a.table[bi] === 0 || a.table[bi] & 0x80000000)) continue;
+    if (a.table[bi] === b.table[bi] && (a.table[bi] === 0 || a.table[bi] & UNIFORM)) continue;
     a.readBrick(bi, x);
     b.readBrick(bi, y);
     for (let i = 0; i < 512; i++) if (x[i] !== y[i]) n++;
@@ -102,30 +103,6 @@ function watched(inner: DetonationRunner, asked: Map<number, Asked>): Detonation
       const out = inner.take();
       for (const r of out) if ('wider' in r) asked.get(r.id)!.wider++;
       return out;
-    },
-  };
-}
-
-/** A live page's worker: each job's cut handed back when released, and its rest (settled, or a wider region) when released once its cut is back. */
-function liveRunner(): DetonationRunner & { cuts(): void; rest(): void } {
-  const jobs: { cut: DetonationResult | null; rest: DetonationResult; cutBack: boolean }[] = [];
-  const done: DetonationResult[] = [];
-  return {
-    post: (req) => {
-      const cut: DetonationResult[] = [];
-      const rest = runDetonation(req, (c) => cut.push(c));
-      jobs.push({ cut: cut[0] ?? null, rest, cutBack: cut.length === 0 });
-    },
-    take: () => done.splice(0),
-    cuts: () => {
-      for (const j of jobs) if (!j.cutBack) {
-        done.push(j.cut!);
-        j.cutBack = true;
-      }
-    },
-    rest: () => {
-      for (let k = 0; k < jobs.length; ) if (jobs[k].cutBack) done.push(jobs.splice(k, 1)[0].rest);
-      else k++;
     },
   };
 }
@@ -166,9 +143,8 @@ describe.skipIf(!process.env.TRENCHLINE_BENCH)('the bench: craters that ask for 
             lr.cuts();
             d.tick();
             while (d.written > 0) d.tick();
-            // (Absent on a Destruction from before Task 8e, which this bench also runs on.)
-            const kept = d.kept as { bricks: number; bytes: number } | undefined;
-            if (kept && kept.bricks > peak.bricks) Object.assign(peak, kept);
+            const { kept } = d;
+            if (kept.bricks > peak.bricks) Object.assign(peak, kept);
             lr.rest();
             d.tick();
           }

@@ -14,7 +14,8 @@
  * waits for it, and so does every shell behind it: they are served in order,
  * each copied from the world as the last left it. A job that asks for a wider
  * region is copied again, wider, and posted again; if the wider one overlaps
- * another that is out, it goes back to wait its turn, its held marks made now.
+ * another that is out, it goes back to wait its turn, its held marks made now
+ * if nothing of it is in the world (held on if its cut is: below).
  * With no tick nothing is written: a crater out while paused lands after.
  *
  * A job asks for a wider region with its last result, when its cut came back
@@ -24,6 +25,19 @@
  * the cut and the ask come back in one take. A cut over its own cut would differ
  * (a tree's trunk is a branch after one, air after two). They are let go once
  * its settled crater is back, as no ask comes after it.
+ *
+ * One that goes back to wait with its cut in still holds that ground, as it did
+ * out, for it is to be copied from it again: a mark there is held until no
+ * crater holds it, and an edit waits (overlapsOut). Another crater may go out
+ * over it meanwhile: a neighbour's job asking for a wider region, or one before
+ * it in the queue, which never waits on a waiting crater (two over each other's
+ * ground would wait for each other). That one is copied with the waiting one's
+ * kept bricks under it too, as the waiting one goes out after it, and each such
+ * brick it writes is its own kept ground from then on, what it leaves there the
+ * waiting one's. Until the waiting one is cut again, its cut is gone from those
+ * bricks. So where their results come back in the same order, a live page cuts
+ * the same craters in the same order from the same ground as a page whose jobs'
+ * results each come back in one take.
  *
  * A shell on the ground (in a room) is cut where the ground is when its job goes out, not where it
  * was when it landed: by then every earlier crater that overlaps it is in, so every client cuts it
@@ -131,6 +145,7 @@ interface Job {
   /**
    * While it is out and its settled bricks are not back: each brick it has written, as it was before
    * (by world brick index), for a wider region it asks for to be copied from (copyRegion's `under`).
+   * Kept while it waits after such an ask, less each brick another crater writes meanwhile (`keep`).
    */
   before: Map<number, BrickPatch>;
 }
@@ -156,6 +171,8 @@ interface Ahead {
 const crater = (j: Job, bricks: number): Crater => ({ id: j.id, centre: j.centre, radius: j.radius, bricks, ...(j.material === undefined ? {} : { material: j.material }) });
 const inside = (b: Box, x: number, y: number, z: number) => x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1 && z >= b.z0 && z < b.z1;
 const sameBox = (a: Box, b: Box) => a.x0 === b.x0 && a.y0 === b.y0 && a.z0 === b.z0 && a.x1 === b.x1 && a.y1 === b.y1 && a.z1 === b.z1;
+/** Whether a job holds its region against edits: out or landing; or waiting with its cut in, the ground under it kept. */
+const holds = (j: Job) => j.state !== 'queued' || j.before.size > 0;
 
 export class Destruction {
   /** Queued, out or landing, in the order they were shelled. */
@@ -213,7 +230,8 @@ export class Destruction {
 
   /**
    * The bricks kept as they were before a job out wrote them, against a wider region it may yet ask
-   * for: how many, and their bytes (a dense brick's 512; an empty or uniform one's none).
+   * for (or, waiting after its ask, will be copied from): how many, and their bytes (a dense brick's
+   * 512; an empty or uniform one's none).
    */
   get kept(): { bricks: number; bytes: number } {
     let bricks = 0;
@@ -230,9 +248,12 @@ export class Destruction {
     return this.jobs.filter((j) => j.state !== 'queued').map((j) => j.box);
   }
 
-  /** Whether `box` reaches into a region out now: an edit there would be undone when its bricks come back. */
+  /**
+   * Whether `box` reaches into a region held now: out, or waiting with its cut in. An edit there would be
+   * undone when its bricks come back.
+   */
   overlapsOut(box: Box): boolean {
-    return this.jobs.some((j) => j.state !== 'queued' && overlapXZ(j.box, box));
+    return this.jobs.some((j) => holds(j) && overlapXZ(j.box, box));
   }
 
   /** Whether `box` reaches into the region of a shell queued, out or landing: ground a crater is still to be cut from. */
@@ -286,14 +307,15 @@ export class Destruction {
     for (const [id, a] of this.aheads) if (!a.job) this.aheads.delete(id);
   }
 
-  /** A round's mark (world/destruction.ts `chip`): made now, or held while a region it is in is out. */
+  /**
+   * A round's mark (world/destruction.ts `chip`): made now, or held while a region it is in is held (out,
+   * or waiting with its cut in), and made once none is (makeHeld).
+   */
   mark(x: number, y: number, z: number, energyJ: number, chipEnergyJ: number): boolean | 'held' {
-    for (const j of this.jobs) {
-      if (j.state === 'queued' || !inside(j.box, x, y, z)) continue;
-      j.held.push({ x, y, z, energyJ, chipEnergyJ });
-      return 'held';
-    }
-    return chip(this.map, x, y, z, energyJ, chipEnergyJ);
+    const j = this.holderOf(x, y, z);
+    if (!j) return chip(this.map, x, y, z, energyJ, chipEnergyJ);
+    j.held.push({ x, y, z, energyJ, chipEnergyJ });
+    return 'held';
   }
 
   /** One tick: what has come back, the write-back's budget of it, and the shells now free to go out; the craters that settled (their cuts in `cuts`). */
@@ -335,10 +357,12 @@ export class Destruction {
       if (!j || j.state !== 'out') continue;
       if ('wider' in r) {
         // Copied again (post) from its ground as it was before its own writes: `before` under the world.
+        // It waits only for a region out or landing, as a shell in the queue does: one waiting with its
+        // cut in goes out after it, its kept ground under this one's copy (keptUnder).
         j.box = r.wider;
         if (this.waits(j.id, j.box) || this.jobs.some((o) => o !== j && o.state !== 'queued' && overlapXZ(o.box, j.box))) {
           j.state = 'queued';
-          this.makeHeld(j);
+          if (j.before.size === 0) this.makeHeld(j);
         } else this.post(j);
         continue;
       }
@@ -354,15 +378,13 @@ export class Destruction {
     const landed: Crater[] = [];
     let budget = this.t.bricksPerTick;
     this.written = 0;
+    // The craters waiting with their cuts in: none, but where one asked for a wider region over another's.
+    const waiting = this.jobs.filter((o) => o.state === 'queued' && o.before.size > 0);
     for (const j of this.jobs) {
       if (j.state === 'queued') continue;
       while (budget > 0 && j.applied < j.patches.length) {
         const p = j.patches[j.applied++];
-        // Out, it may yet ask for a wider region: the brick kept as it was before its first write.
-        if (j.state === 'out') {
-          const bi = this.map.brickIndex(p.at[0], p.at[1], p.at[2]);
-          if (!j.before.has(bi)) j.before.set(bi, brickAsIs(this.map, p.at));
-        }
+        if (j.state === 'out' || waiting.length > 0) this.keep(j, p, waiting);
         applyPatch(this.map, p);
         budget--;
         this.written++;
@@ -377,7 +399,8 @@ export class Destruction {
       landed.push(crater(j, j.patches.length - (j.cutEnd ?? 0)));
     }
     for (const c of landed) this.jobs.splice(this.jobs.findIndex((j) => j.id === c.id), 1);
-    // In order: the first that would overlap a region out, or that `waits` holds, waits, and every one behind it.
+    // In order: the first that would overlap a region out, or that `waits` holds, waits, and every one
+    // behind it. Never for one waiting, whose kept ground the one going out is copied with (keptUnder).
     for (const j of this.jobs) {
       if (j.state !== 'queued') continue;
       if (this.waits(j.id, j.box) || this.jobs.some((o) => o !== j && o.state !== 'queued' && overlapXZ(o.box, j.box))) break;
@@ -388,12 +411,17 @@ export class Destruction {
 
   private post(j: Job): void {
     // On the ground: centred where it is now, the first time it goes out (a wider region asked for
-    // is copied again about the same centre). Nothing has written into its region since but itself,
-    // and what it wrote is copied as it was before.
+    // is copied again about the same centre). In its region every crater before it is in, and nothing
+    // else has written there since it was held but itself and craters waiting with their cuts in,
+    // which go out after it: what those wrote is copied as it was before (keptUnder). So it is copied
+    // as on a page whose jobs' results each come back in one take. The plan's accepted drift (c)
+    // stays: which of two neighbours is cut first, when one asks for a wider region while the other
+    // is out, is as their results come back; and a mark held by a waiting crater is made after it is
+    // in, where one take makes it before (a chip racing a crater).
     const first = j.onGround && j.material === undefined;
     if (first) j.material = this.groundUnder(j.centre);
     j.state = 'out';
-    const copy = copyRegion(this.map, j.box, j.before);
+    const copy = copyRegion(this.map, j.box, this.keptUnder(j));
     if (first && this.takeOver(j, copy)) return;
     this.runner.post({ id: j.id, centre: j.centre, radius: j.radius, seed: j.seed, options: this.t.options, copy, world: this.map.dims });
   }
@@ -429,7 +457,50 @@ export class Destruction {
     return false;
   }
 
+  /**
+   * Job `j`'s held marks, made now; each in a region another crater still holds is held on by that one
+   * (a crater out over one waiting with its cut in lands first): a mark is made once no crater holds it.
+   */
   private makeHeld(j: Job): void {
-    for (const m of j.held.splice(0)) chip(this.map, m.x, m.y, m.z, m.energyJ, m.chipEnergyJ);
+    for (const m of j.held.splice(0)) {
+      const h = this.holderOf(m.x, m.y, m.z, j);
+      if (h) h.held.push(m);
+      else chip(this.map, m.x, m.y, m.z, m.energyJ, m.chipEnergyJ);
+    }
+  }
+
+  /** A crater but `but` holding a region voxel (x, y, z) is in: out or landing, or waiting with its cut in. */
+  private holderOf(x: number, y: number, z: number, but?: Job): Job | undefined {
+    return this.jobs.find((j) => j !== but && holds(j) && inside(j.box, x, y, z));
+  }
+
+  /**
+   * The bricks `j` is copied from as they were, not as the world holds them (copyRegion's `under`): those it
+   * has written itself (it may be posted again), and those each crater waiting with its cut in has, as that
+   * one goes out after it. None kept, none: the copy is the world's.
+   */
+  private keptUnder(j: Job): ReadonlyMap<number, BrickPatch> | undefined {
+    const kept = this.jobs.filter((o) => o.before.size > 0 && (o === j || o.state === 'queued'));
+    if (kept.length <= 1) return kept[0]?.before;
+    const all = new Map<number, BrickPatch>();
+    for (const o of kept) for (const [bi, p] of o.before) all.set(bi, p);
+    return all;
+  }
+
+  /**
+   * Before `j` writes patch `p`: the brick kept as it was while `j` is out, as it may yet ask for a wider
+   * region. A brick a crater waiting with its cut in kept, `j` was copied with under it (keptUnder): that is
+   * `j`'s ground there, now kept as `j`'s, and what `j` writes is the waiting one's.
+   */
+  private keep(j: Job, p: BrickPatch, waiting: readonly Job[]): void {
+    const bi = this.map.brickIndex(p.at[0], p.at[1], p.at[2]);
+    let was: BrickPatch | undefined;
+    for (const o of waiting) {
+      const k = o.before.get(bi);
+      if (k === undefined) continue;
+      o.before.delete(bi);
+      was = k;
+    }
+    if (j.state === 'out' && !j.before.has(bi)) j.before.set(bi, was ?? brickAsIs(this.map, p.at));
   }
 }
