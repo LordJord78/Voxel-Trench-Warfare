@@ -154,6 +154,19 @@ const KNEE_MIN_WIDTH = 1e-3;
  * presented, greyed all the way under the first, not at all from the second; the second held at least
  * KNEE_MIN_WIDTH over the first, so an equal-ended knee greys as a step would rather than undefined.
  */
+/**
+ * A frame's transient lights as it is lit by them: the shots' flashes first, then the rest (the guns'
+ * lights' pools, a test's lights), each by intensity, the strongest MAX_FLASHES in all; and how many of
+ * those are shots' flashes, the first so many. The player's own kept smoke takes its share of those
+ * alone ([effects] own_smoke_flash_share; effects-light.wgsl flashesAt): a pool lights it whole.
+ */
+export function transientOrder(lights: readonly TransientLight[]): { flashes: TransientLight[]; shots: number } {
+  const strongest = (a: TransientLight, b: TransientLight) => b.intensity - a.intensity;
+  const shots = lights.filter((l) => l.shot === true).sort(strongest);
+  const rest = lights.filter((l) => l.shot !== true).sort(strongest);
+  return { flashes: [...shots, ...rest].slice(0, MAX_FLASHES), shots: Math.min(shots.length, MAX_FLASHES) };
+}
+
 export function desaturateKneeOf(tun: Tunables): [number, number] {
   const [lo, hi] = tun.pair('suppression.desaturate_knee');
   return [lo, Math.max(hi, lo + KNEE_MIN_WIDTH)];
@@ -402,6 +415,8 @@ export class Renderer {
   private lightCount = 0;
   /** This frame's shots' flashes, lighting the trench outside the denoiser (flash.wgsl). */
   private flashes: TransientLight[] = [];
+  /** How many of `flashes` are shots' flashes (the first so many): the uniforms' shotFlashCount. */
+  private shotFlashes = 0;
   /** This frame's shells' blasts, shadowed at the lighting resolution, outside the denoiser. */
   private blasts: TransientLight[] = [];
   /** This frame's puffs of shells' and fires' smoke in the haze, nearest the eye first. */
@@ -634,9 +649,11 @@ export class Renderer {
     this.blasts = [...lights].sort((a, b) => b.intensity - a.intensity).slice(0, MAX_BLASTS);
   }
 
-  /** This frame's transient lights (shots' flashes): the strongest MAX_FLASHES of them light it. */
+  /** This frame's transient lights (shots' flashes, the guns' lights' pools): the shots' first, MAX_FLASHES of them in all (transientOrder). */
   setTransientLights(lights: readonly TransientLight[]): void {
-    this.flashes = [...lights].sort((a, b) => b.intensity - a.intensity).slice(0, MAX_FLASHES);
+    const { flashes, shots } = transientOrder(lights);
+    this.flashes = flashes;
+    this.shotFlashes = shots;
   }
 
   /** The haze the last frame left over the whole of the froxel column through the view at each (u, v): the light it scatters toward the eye (rgb) and what it lets through (a). */
@@ -874,6 +891,7 @@ export class Renderer {
     w.set('casSharpness', this.options.sharpness ?? 0.4);
     writeSky(w, this.flareGlow === 1 ? this.sky : { ...this.sky, frontGlow: this.sky.frontGlow.map((c) => c * this.flareGlow) });
     w.set('flashCount', this.flashes.length);
+    w.set('shotFlashCount', this.shotFlashes);
     this.flashes.forEach((f, k) => {
       w.set(`flashes.${k}.pos`, f.position.map((m) => m / voxel));
       w.set(`flashes.${k}.radius`, f.radiusM / voxel);

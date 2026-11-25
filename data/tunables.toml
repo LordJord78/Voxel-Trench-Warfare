@@ -857,17 +857,28 @@ catch_up_workers       = 3     # workers more than the session's one, made for a
 # channels of its own, which turn and move the eye and never the round: a roll
 # about the line of sight, its side drawn each shot, and a shake for a moment
 # after it, drawn afresh each tick. Their draws are their own stream's.
+#
+# Aimed (G4 Task 4: the sights stay on the line the rounds take), the drawn gun
+# takes only punch_back_m (×0.8, along the line of sight) and punch_roll_deg
+# (×0.3, about it); punch_up_m, punch_side_m, punch_pitch_deg, punch_yaw_deg and
+# aim_pitch_follow act from the hip only. The aimed kick's feel is in the levers
+# that move no round: punch_back_m, punch_roll_deg, cam_roll_deg, cam_shake_m,
+# cam_shake_deg and fov_pulse_deg. If aimed recoil reads light (the playtest's
+# item (g)), tune these first: [recoil] kick_pitch_deg lifts the view too, but
+# it moves the rounds with it.
 # ---------------------------------------------------------------------------
 
 [viewkick.defaults]
 punch_back_m        = 0.039    # shoved toward the eye; the biggest weight cue
 punch_up_m          = 0.008
 punch_side_m        = 0.002
-punch_pitch_deg     = 1.375    # viewmodel only — the sight picture moves 0.44
+punch_pitch_deg     = 1.375    # viewmodel only, from the hip only: aimed, the
+                               # drawn gun is not pitched (the view's kick is the climb)
 punch_yaw_deg       = 0.15
 punch_roll_deg      = 0.45
-aim_pitch_follow    = 0.90     # viewmodel pitch per degree of aim kick, so the
-                               # two layers are visibly one event
+aim_pitch_follow    = 0.90     # viewmodel pitch per degree of aim kick, from the
+                               # hip only, so the two layers are one event there;
+                               # aimed the gun stays on the line and the view climbs
 settle_time_s       = 0.22     # close to the aim layer's 0.20 so they finish
                                # together; drift these apart and the gun reads
                                # as two guns
@@ -1423,8 +1434,13 @@ own_smoke_flash_share = 0.15   # of the shots' flash light, what the player's ow
                                # and the shells' blasts' light, whole): kept at the drawn muzzle a hand
                                # from the eye, on the next round's line, its puffs lit whole by each
                                # shot's flash read as a cream ball round the tracer leaving through them.
-                               # G1's (a), its limit 14 px: at night 35.5 px at 1, 30.5 at 0.5, 26.5 at
-                               # 0.35, 3.5 at 0.25; at dusk 25.5 at 0.3; under 8 at 0.2 and 0.15
+                               # G1's (a), its limit 14 px, read under the puff (Task 3b's subset runs):
+                               #   night (--only night,wall-night): 35.5 px at 1, 30.5 at 0.5, 26.5 at
+                               #     0.35, 3.5 at 0.25, 3 at 0.15;
+                               #   dusk (--only dusk): 25.5 px at 0.3, 7.5 at 0.2, 3 to 7 at 0.15 (the
+                               #     dusk sky's own light on the puffs, not the flash)
+                               # and only the shots' flashes are so shared: a gun's light's pool lights
+                               # it whole (renderer.ts transientOrder)
 # A shot's flash (the shots spec §2), all of it drawn from a hash of the shot (its tick and its muzzle):
 # a white-hot core, an emissive disc this wide, a little out along the bore; and its star, this many
 # forward prongs, each this long and this far off the bore, each at its own roll about it, anywhere
@@ -1542,6 +1558,9 @@ bob_side_m          = 0.006
 bob_roll_deg        = 0.8
 bob_aimed           = 0.15     # aimed, this much of it
 bob_sprint          = 1.8      # at a sprint, this many times it
+bob_ground_s        = 0.1      # in the air no stride: the bob held where the body
+                               # left the ground and eased out over this, and back in
+                               # over it on landing (the body's phase restarting)
 # The look's sway: the gun trails the view's turn on a spring, aside and up,
 # and banks into it, as a gun hung from the hands.
 sway_m_per_dps        = 0.00012  # metres per degree a second of turn
@@ -1573,6 +1592,8 @@ landing_pitch_deg   = -4.0
 landing_hard_mps    = 8.0      # landed this fast (m/s), the full dip, as the eye's
 landing_settle_s    = 0.25
 landing_damping     = 1.0      # critically damped: back without a bounce
+landing_aimed       = 0.35     # aimed, this much of it (breathing's share): the
+                               # post dips nearer the point of aim
 # An aim-in (the shots spec's §3): as the sights arrive (the aim's blend reaching
 # 1), the muzzle is carried on past the aim at a steady rate from that tick, then
 # eased back to it. Never a step: the sights arrive with no speed.
@@ -1581,7 +1602,13 @@ aim_overshoot_rise_s = 0.05    # carried there over this: a third of it a tick a
 aim_overshoot_s     = 0.15     # and back at the aim this long after the sights arrive
 # Reloads: curves keyed over the reload's phase (0 to 1), from rest and back to
 # it, eased between keys as the shovel's stroke is. A cue is heard as its key is
-# passed. The long guns' (rifle, carbine, SMG and marksman):
+# passed. On the firing step (handling.ts) a curve's drop is held off by the step's
+# raise, so no reload sinks the gun lower than it rests, and a pistol's draw toward
+# the eye too: its grip hangs under the crest at rest, behind the parapet's face,
+# and drawn in, the grip's base came out through the face under the crest. What
+# hangs under the crest at rest (a pistol's grip, a long gun's magazine) is in the
+# parapet still; turned in place, it shows no more of it. The long guns' (rifle,
+# carbine, SMG and marksman):
 reload_tilt_at          = 0.12     # tilted: turned over, the muzzle up, low and in
 reload_tilt_m           = [-0.02, -0.04, -0.03]
 reload_tilt_pitch_deg   = 8.0
@@ -1601,11 +1628,12 @@ reload_cut_s            = 0.15     # a reload cut short eases back to rest over 
 mg_depth            = 1.3
 mg_cover_at         = 0.45
 # A pistol's: the long guns', tilted less, its magazine out and in and its slide
-# released (bolt) at its own marks.
+# released (bolt) at its own marks, turned less at the slide than a long gun's bolt.
 pistol_tilt_roll_deg = 18.0
 pistol_mag_out_at   = 0.30
 pistol_mag_in_at    = 0.62
 pistol_slide_at     = 0.86
+pistol_slide_roll_deg = 22.0   # the playtest's 18-22°, against reload_bolt_roll_deg's 34
 # The shotgun's: a shell at a time, each a push with the muzzle up at the middle
 # of its turn (shell), evenly after [weapon.m870]'s reload_base_s, each
 # reload_per_round_s long ...

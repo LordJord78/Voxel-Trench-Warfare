@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
+import { sightOf } from '../../src/combat/arsenal';
+import { gunModel } from '../../src/combat/gun-models';
 import { Handling, ZERO_HANDS, gunClass, handlingTunables, type GunClass, type HandlingCue, type HandlingInput, type HandsDelta } from '../../src/combat/handling';
+import { heldPose, modelToView, viewmodelTunables } from '../../src/combat/viewmodel';
 import { weaponSpec } from '../../src/combat/weapon';
 import { TAU } from '../../src/core/dmath';
 import { loadTunables, Tunables } from '../../src/core/tunables';
-import { GUNS } from '../../src/net/gear';
+import { BARE, GUNS, type GunKey } from '../../src/net/gear';
 
 // The gun in the hands (the shots spec's §2): the stride's bob, the look's sway, breathing, the
 // sprint, a landing, the reloads and the pump, as a pose delta heldPose adds to the held gun.
@@ -16,7 +19,7 @@ const t = handlingTunables(tun);
 /** Still, on the ground, unaimed, long since a shot, at the session's start (breathing at its zero). */
 const REST: HandlingInput = {
   dt: TICK, time: 0, yawRate: 0, pitchRate: 0, speedRatio: 0, bobPhase: 0, onGround: true, landingImpact: 0,
-  sprinting: false, aimed: 0, reload: null, sinceShot: 10, gun: 'long',
+  sprinting: false, aimed: 0, raised: 0, reload: null, sinceShot: 10, gun: 'long',
 };
 
 type Ticked = ReturnType<Handling['tick']>;
@@ -56,17 +59,17 @@ function heardAt(heard: { cue: HandlingCue; phase: number }[], cue: HandlingCue,
 describe('handling', () => {
   it("reads [handling] as the spec's §2 has it", () => {
     expect(t).toMatchObject({
-      bobUpM: 0.008, bobSideM: 0.006, bobRollDeg: 0.8, bobAimed: 0.15, bobSprint: 1.8,
+      bobUpM: 0.008, bobSideM: 0.006, bobRollDeg: 0.8, bobAimed: 0.15, bobSprint: 1.8, bobGroundS: 0.1,
       swayMPerDps: 0.00012, swayRollDegPerDps: 0.004, swayMaxM: 0.025, swayMaxDeg: 4, swaySettleS: 0.18, swayDamping: 0.7, swayAimed: 0.25,
       breathUpM: 0.0025, breathUpHz: 0.22, breathSideM: 0.0015, breathSideHz: 0.11, breathAimed: 0.35,
       sprintOffsetM: [0.06, -0.06, -0.04], sprintPitchDeg: -18, sprintYawDeg: 32, sprintRollDeg: 18, sprintInS: 0.18, sprintOutS: 0.12, sprintBlocksFire: 0.3,
-      landingDropM: 0.03, landingPitchDeg: -4, landingHardMps: 8, landingSettleS: 0.25,
+      landingDropM: 0.03, landingPitchDeg: -4, landingHardMps: 8, landingSettleS: 0.25, landingAimed: 0.35,
       reloadTiltAt: 0.12, reloadTiltM: [-0.02, -0.04, -0.03], reloadTiltPitchDeg: 8, reloadTiltRollDeg: 28,
       reloadMagOutAt: 0.28, reloadMagOutDropM: 0.015, reloadHoldAt: 0.55,
       reloadMagInAt: 0.62, reloadMagInRiseM: 0.02, reloadMagInPitchDeg: 3,
       reloadBoltAt: 0.82, reloadBoltBackM: 0.02, reloadBoltRollDeg: 34, reloadCutS: 0.15,
       mgDepth: 1.3, mgCoverAt: 0.45,
-      pistolTiltRollDeg: 18, pistolMagOutAt: 0.3, pistolMagInAt: 0.62, pistolSlideAt: 0.86,
+      pistolTiltRollDeg: 18, pistolMagOutAt: 0.3, pistolMagInAt: 0.62, pistolSlideAt: 0.86, pistolSlideRollDeg: 22,
       shellPushM: [0, 0.02, 0], shellPitchDeg: 6, shellBaseS: 0.5, shellEachS: 0.5,
       pumpAfterS: 0.12, pumpBackM: 0.035, pumpStrokeS: 0.12,
       dryReloadS: 0.25,
@@ -140,6 +143,59 @@ describe('handling', () => {
       expect(aimed[k].roll).toBeCloseTo(walk[k].roll * t.bobAimed, 12);
       if (k >= 11) expect(sprint[k].roll - t.sprintRollDeg).toBeCloseTo(walk[k].roll * t.bobSprint, 12);
     }
+  });
+
+  it("in the air the stride's bob is held where the body left the ground and eased out over bob_ground_s (0.1 s): under 1 mm and 0.1° after 0.1 s, and no step on landing", () => {
+    // A run (a run's share of 1) of two strides, the phase at a run's rate as the body's
+    // (physics/character.ts: head_bob_hz, 1.9 a second); a jump of half a second, the body sweeping
+    // its phase back by a tenth a tick in the air as it does (bobPhase *= 0.9), and down again,
+    // running on from wherever the sweep left it.
+    const rate = (1.9 * TAU) / 60;
+    const ground = 120;
+    const air = 30;
+    let phase = 0;
+    const phases: number[] = [];
+    for (let k = 0; k < ground + air + 60; k++) {
+      const onGround = k < ground || k >= ground + air;
+      phase = onGround ? (phase + rate) % TAU : phase * 0.9;
+      phases.push(phase);
+    }
+    const ticks = run(new Handling(t), phases.length, (k) => ({ speedRatio: 1, bobPhase: phases[k], onGround: k < ground || k >= ground + air })).map((r) => r.delta);
+    const channels = (d: HandsDelta) => [d.offset[0], d.offset[1], d.roll];
+    const stepOf = (k: number) => channels(ticks[k]).map((v, c) => Math.abs(v - channels(ticks[k - 1])[c]));
+    // The stride's own largest step a tick, on the ground: what a step on landing is held to.
+    const stride = [0, 1, 2].map((c) => Math.max(...Array.from({ length: ground - 60 }, (_, j) => stepOf(60 + j)[c])));
+    expect(stride[1]).toBeGreaterThan(0.001);
+    // Easing out, it only shrinks toward rest from where it was as the body left the ground, each channel
+    // its share of the take-off's: the sweep back through the stride is not drawn...
+    const off = channels(ticks[ground - 1]);
+    for (let k = ground; k < ground + air; k++) {
+      const share = channels(ticks[k])[1] / off[1];
+      expect(share, `tick ${k - ground} in the air`).toBeLessThanOrEqual(k === ground ? 1 : channels(ticks[k - 1])[1] / off[1]);
+      expect(share, `tick ${k - ground} in the air`).toBeGreaterThanOrEqual(0);
+      channels(ticks[k]).forEach((v, c) => expect(v, `tick ${k - ground} in the air, channel ${c}`).toBeCloseTo(off[c] * share, 12));
+    }
+    // ... and from 0.1 s into the air on, under 1 mm and 0.1°.
+    for (let k = ground + Math.round(t.bobGroundS / TICK); k < ground + air; k++) {
+      const d = ticks[k];
+      expect(Math.hypot(d.offset[0], d.offset[1]), `tick ${k - ground} in the air`).toBeLessThan(0.001);
+      expect(Math.abs(d.roll), `tick ${k - ground} in the air`).toBeLessThan(0.1);
+    }
+    // Leaving the ground and coming back to it, no step: never more a tick than the ease and the stride
+    // move it together (the ease's steepest, 1.5 of its mean, over bob_ground_s, of the bob's whole
+    // reach, and the stride's own largest step). The body's phase, swept back to near nothing in the
+    // air, restarts far from where it was held: unblended, the gun would jump some 10 mm in a tick.
+    const reach = [t.bobSideM, t.bobUpM, t.bobRollDeg];
+    const most = reach.map((a, c) => (a * 1.5 * TICK) / t.bobGroundS + stride[c]);
+    for (const from of [ground, ground + air]) {
+      for (let k = from; k < from + 12; k++) {
+        stepOf(k).forEach((v, c) => expect(v, `tick ${k - from} after ${from === ground ? 'the take-off' : 'the landing'}, channel ${c}: ${JSON.stringify({ stride, most })}`).toBeLessThanOrEqual(most[c]));
+      }
+    }
+    expect(Math.abs(t.bobUpM * (Math.sin(phases[ground - 1]) - Math.sin(phases[ground + air])))).toBeGreaterThan(2 * most[1]);
+    // Back on the ground 0.1 s, the stride's whole bob again.
+    const back = ticks.slice(ground + air + Math.round(t.bobGroundS / TICK));
+    expect(Math.max(...back.map((d) => Math.abs(d.offset[1])))).toBeGreaterThan(0.007);
   });
 
   it('turning at 100°/s sways the gun 0.012 m against the turn, held to 0.025 m, and it settles within 0.18 s of stopping', () => {
@@ -259,6 +315,26 @@ describe('handling', () => {
     expect(soft.tick({ ...REST, landingImpact: 2 }).delta.offset[1]).toBeCloseTo((-0.03 * 2) / 8, 12);
     // Standing, an impact the body still carries is no landing.
     for (const r of run(new Handling(t), 10, () => ({ landingImpact: 9 }))) expect(r.delta).toEqual(ZERO_HANDS);
+  });
+
+  it("aimed, a landing dips the gun landing_aimed (0.35, breathing's share) of the hip's, drop and pitch, all the way back", () => {
+    const landing = (aimed: number) => {
+      const h = new Handling(t);
+      run(h, 10, () => ({ onGround: false, aimed }));
+      return run(h, 30, (k) => ({ landingImpact: k === 0 ? 9 : 0, aimed })).map((r) => r.delta);
+    };
+    const hip = landing(0);
+    const aimed = landing(1);
+    const half = landing(0.5);
+    expect(hip[0].offset[1]).toBeCloseTo(-0.03, 12);
+    expect(aimed[0].offset[1]).toBeCloseTo(-0.03 * t.landingAimed, 12);
+    expect(aimed[0].pitch).toBeCloseTo(-4 * t.landingAimed, 12);
+    for (let k = 0; k < 30; k++) {
+      expect(aimed[k].offset[1], `tick ${k}`).toBeCloseTo(hip[k].offset[1] * t.landingAimed, 12);
+      expect(aimed[k].pitch, `tick ${k}`).toBeCloseTo(hip[k].pitch * t.landingAimed, 12);
+      // Part-aimed, part of the way between.
+      expect(half[k].offset[1], `tick ${k}`).toBeCloseTo(hip[k].offset[1] * (1 + (t.landingAimed - 1) * 0.5), 12);
+    }
   });
 
   it('an aim-in overshoots: the muzzle carried 0.4° past the aim as the sights arrive, from nothing and never a step, and back by 0.15 s', () => {
@@ -381,6 +457,93 @@ describe('handling', () => {
     expect(Object.fromEntries(GUNS.map((g) => [g, gunClass(g)]))).toEqual({
       ak74: 'long', m4: 'long', mp5: 'long', svd: 'long', m249: 'mg', m870: 'pump', m17: 'pistol', pm: 'pistol',
     });
+  });
+
+  it("a pistol's slide turns it pistol_slide_roll_deg (22°) at its release, not the long guns' bolt's 34°", () => {
+    const at = (gun: GunClass, phase: number) => new Handling(t).tick({ ...REST, gun, reload: { phase, shells: 0 } }).delta;
+    expectPose(at('pistol', t.pistolSlideAt), { offset: [-0.02, -0.04, -0.05], pitch: 8, yaw: 0, roll: 22 });
+    // The long guns' and the machine gun's bolt as they were.
+    expect(at('long', t.reloadBoltAt).roll).toBeCloseTo(34, 12);
+    expect(at('mg', t.reloadBoltAt).roll).toBeCloseTo(34 * 1.3, 12);
+    // Over the whole of a pistol's reload, never turned more than at its slide.
+    const rolls = Array.from({ length: 101 }, (_, k) => at('pistol', k / 100).roll);
+    expect(Math.max(...rolls)).toBeCloseTo(22, 12);
+  });
+
+  it('on the firing step (raised) no reload sinks the gun: a curve going down is held to the gun at rest, and stepping on or off mid-reload eases with the raise', () => {
+    // The step's raise clears the parapet's crest at rest only: a reload's tilt and jolt down would sink
+    // the frame and grip into it. Every gun's reload, tick by tick, from the hip and on the step.
+    for (const [gun, seconds, shells] of [['long', 2.4, 0], ['mg', 5.8, 0], ['pistol', 1.6, 0], ['pump', 2, 3]] as const) {
+      const n = Math.round(seconds / TICK);
+      const curve = (raised: number) => run(new Handling(t), n + 1, (k) => ({ gun, raised, reload: { phase: k / n, shells } })).map((r) => r.delta);
+      const hip = curve(0);
+      const step = curve(1);
+      const lowest = (ds: HandsDelta[]) => Math.min(...ds.map((d) => d.offset[1]));
+      if (gun !== 'pump') expect(lowest(hip), gun).toBeLessThan(-0.04);
+      expect(lowest(step), gun).toBeGreaterThanOrEqual(0);
+      // Only the drop is held, and a pistol's draw toward the eye (the next test): every other channel,
+      // and a rise (the shotgun's push), as from the hip.
+      const drawn = (k: number) => (gun === 'pistol' ? Math.max(0, hip[k].offset[2]) : hip[k].offset[2]);
+      if (gun === 'pistol') expect(Math.min(...hip.map((d) => d.offset[2])), gun).toBeLessThan(-0.04);
+      for (let k = 0; k <= n; k++) {
+        expect(step[k].offset[1], `${gun} tick ${k}`).toBe(Math.max(0, hip[k].offset[1]));
+        expect(step[k].offset[0], `${gun} tick ${k}`).toBe(hip[k].offset[0]);
+        expect(step[k].offset[2], `${gun} tick ${k}`).toBe(drawn(k));
+        expect([step[k].pitch, step[k].yaw, step[k].roll], `${gun} tick ${k}`).toEqual([hip[k].pitch, hip[k].yaw, hip[k].roll]);
+      }
+      // Part raised (the raise easing in or out over raise_s), its share of the drop and a pistol's draw.
+      const part = curve(0.25);
+      for (let k = 0; k <= n; k++) {
+        expect(part[k].offset[1], `${gun} tick ${k}`).toBeCloseTo(hip[k].offset[1] < 0 ? hip[k].offset[1] * 0.75 : hip[k].offset[1], 12);
+        expect(part[k].offset[2], `${gun} tick ${k}`).toBeCloseTo(gun === 'pistol' && hip[k].offset[2] < 0 ? hip[k].offset[2] * 0.75 : hip[k].offset[2], 12);
+      }
+    }
+  });
+
+  it("on the firing step a pistol's reload brings no part of it under the crest nearer the eye than it rests: its grip, hung under the crest behind the parapet's face, never comes out through the face", () => {
+    // The step's raise lifts a pistol's slide and frame over a crest crest_clearance_m under the eye;
+    // its grip still hangs under the crest, beyond the parapet's face and hidden in it, as a long gun's
+    // magazine does. Drawn toward the eye by its curve (0.03 m tilted, 0.05 at the slide), the grip's
+    // base came out through the face under the crest, a wedge of it drawn apart from the gun
+    // (hands-captures' reload-m17-30 at the final fix wave's head). The gun posed by heldPose voxel by
+    // voxel, the view level, the parapet's corner crest_clearance_m under the eye, its face anywhere
+    // from the body's radius (as near as the eye comes to it) out.
+    const crest = -tun.f('world.trench.crest_clearance_m');
+    const radius = tun.f('player.radius');
+    const vt = viewmodelTunables(tun);
+    const still = { back: 0, up: 0, side: 0, pitch: 0, yaw: 0, roll: 0 };
+    const n = Math.round(1.6 / TICK);
+    const reload = (raised: number) => run(new Handling(t), n + 1, (k) => ({ gun: 'pistol', raised, reload: { phase: k / n, shells: 0 } })).map((r) => r.delta);
+    for (const gun of ['m17', 'pm'] satisfies GunKey[]) {
+      const model = gunModel(gun, BARE);
+      const [nx, ny, nz] = model.dims;
+      const voxels: [number, number, number][] = [];
+      for (let k = 0; k < nz; k++)
+        for (let j = 0; j < ny; j++)
+          for (let i = 0; i < nx; i++)
+            if (model.voxels[i + nx * (j + ny * k)]) voxels.push([(i + 0.5 - model.origin[0]) * model.voxelM, (j + 0.5 - model.origin[1]) * model.voxelM, (k + 0.5 - model.origin[2]) * model.voxelM]);
+      /** The drawn pistol on the step, moved by `hands`: its voxels' centres (view space) under the crest. */
+      const under = (hands: HandsDelta) => {
+        const pose = heldPose(vt, { kind: 'pistol', sight: sightOf(gun, BARE) }, still, 0, 0, 1, 0, 1, null, hands);
+        return voxels.map((p) => modelToView(pose, p)).filter((c) => c[1] < crest);
+      };
+      const nearest = (cs: number[][]) => Math.min(...cs.map((c) => c[2]));
+      /** How many of them a face `face` metres off leaves in front of it, seen under the crest. */
+      const seen = (cs: number[][], face: number) => cs.filter((c) => c[2] < face).length;
+      const rest = under(ZERO_HANDS);
+      // At rest the grip hangs under the crest, and beyond the face even with the eye against it.
+      expect(rest.length, gun).toBeGreaterThan(20);
+      expect(nearest(rest), gun).toBeGreaterThan(radius);
+      // The curve as from the hip, drawn in, would bring the grip's base 2 cm or more nearer.
+      expect(Math.min(...reload(0).map((d) => nearest(under({ ...d, offset: [d.offset[0], Math.max(0, d.offset[1]), d.offset[2]] })))), gun).toBeLessThan(nearest(rest) - 0.02);
+      // On the step, tick by tick: nothing under the crest nearer than at rest, so wherever the face
+      // is, no more of the gun shows under the crest than at rest.
+      reload(1).forEach((d, k) => {
+        const cs = under(d);
+        expect(nearest(cs), `${gun} tick ${k}`).toBeGreaterThanOrEqual(nearest(rest) - 1e-9);
+        for (let face = radius; face <= 0.5; face += 0.01) expect(seen(cs, face), `${gun} tick ${k}, the face ${face.toFixed(2)} m off`).toBeLessThanOrEqual(seen(rest, face));
+      });
+    }
   });
 
   it('the shotgun pushes a shell per shell to load, evenly over its reload', () => {
@@ -602,13 +765,15 @@ describe('handling', () => {
       sinceShot: g < 44 ? 10 : (g - 43) * TICK,
     });
     run(h, 48, work);
-    // Each of the 19 fields of the state (the tunables and what the constructor makes of them aside)
-    // differs from a fresh pair's, so reset() is held to every one.
+    // Each of the 21 fields of the state (the tunables and what the constructor makes of them aside)
+    // differs from a fresh pair's, so reset() is held to every one: the stride held at take-off and
+    // its ground blend part-way out among them, the body in the air again since tick 44.
     const fresh = new Handling(t);
     const made = ['t', 'swayOmega', 'landOmega', 'curves'];
     const state = Object.keys(fresh).filter((k) => !made.includes(k));
     const field = (x: Handling, k: string) => (x as unknown as Record<string, unknown>)[k];
-    expect(state).toHaveLength(19);
+    expect(state).toHaveLength(21);
+    expect(state).toEqual(expect.arrayContaining(['airBob', 'ground']));
     for (const k of state) expect(field(h, k), k).not.toEqual(field(fresh, k));
     h.reset();
     // Every field as a fresh pair's, and drawn at rest between ticks.

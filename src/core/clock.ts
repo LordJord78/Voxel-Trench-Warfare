@@ -45,6 +45,16 @@ export class FixedClock {
     return this._dropped;
   }
 
+  /**
+   * The leftover set to `share` of a tick (half, unless given), as if the frames had been fed so: for a
+   * frozen test page (main.ts freeze()), whose frames come a tick apart, so each runs one tick at
+   * alpha `share` rather than splitting 0 and 2 on the rounding of whatever leftover there was.
+   */
+  settle(share = 0.5): void {
+    this.accumulator = share * this.dt;
+    this._alpha = share;
+  }
+
   /** Feed a frame's wall-clock delta; returns how many ticks to run. */
   advance(realDt: number): number {
     const delta = realDt > 0 ? Math.min(realDt, 0.25) : 0;

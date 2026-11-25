@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { audioRenders, hooks, openGame, type Hooks } from './support/app';
+import { audioRenders, handsBecome, hooks, openGame, type Hooks } from './support/app';
 
 // The gun in the hands (the shots spec's §2) as the game draws and sounds it: a sprint swings it low
 // and across, and no round leaves while it is low; a reload tilts it through its curve to the
@@ -7,8 +7,9 @@ import { audioRenders, hooks, openGame, type Hooks } from './support/app';
 // an empty magazine clicks and reloads; and turning moves the drawn gun every frame, smoothly, at the
 // display's own rate (run with E2E_FPS unset: handling is ticked at 60 Hz and drawn between ticks);
 // and aimed down the sights, no prong of a shot's flash rises over the line of sight. What is heard is
-// counted only where the page's audio renders (audioRenders), as the audio specs' do: the tests that
-// only count it skip (and say so) elsewhere, and the reload's curve is checked either way.
+// counted only where the page's audio renders (audioRenders), as the audio specs' do: the shots, the
+// rounds, the reloads and their times (in the session's ticks, not the wall's: under load the clock's
+// catch-up cap lets the game's time fall behind it) are checked either way.
 
 type Frame = { ms: number; ticks: number; alpha: number; m: number[] | null };
 type Handy = Omit<Hooks, 'freeze'> & {
@@ -20,7 +21,7 @@ type Handy = Omit<Hooks, 'freeze'> & {
   gunFrames(n: number): Promise<Frame[]>;
   aim(held: boolean): void;
   flashPixels(): { res: [number, number]; flashes: { remote: boolean; at: [number, number] | null; tips: ([number, number] | null)[]; atM: [number, number, number]; tipsM: [number, number, number][]; up: [number, number, number] }[] };
-  session: Hooks['session'] & { ticks: number; weapon: { rounds: number; shotsFired: number }; player: { yaw: number; pitch: number }; arm: { spec: { sight: { y: number } } } };
+  session: Hooks['session'] & { ticks: number; weapon: { rounds: number; shotsFired: number; sinceShot: number; spec: { rpm: number } }; player: { yaw: number; pitch: number }; arm: { spec: { sight: { y: number } } } };
 };
 
 const handy = <T>(page: Page, fn: (h: Handy, arg: unknown) => T | Promise<T>, arg?: unknown): Promise<T> => hooks(page, fn as unknown as (h: Hooks, arg: unknown) => T | Promise<T>, arg);
@@ -166,90 +167,117 @@ test('a reload tilts the gun through its curve and plays its cues: mag-out, mag-
 });
 
 test('the shotgun pumps after each shot, and loads its shells one by one', async ({ page }) => {
+  // The shots, the tube's rounds and the reload's length are checked whether or not the page's audio
+  // renders, on the session's clock; the pumps and the shells heard (and when) only where it does.
   const { errors, renders } = await holding(page, 'm870', { sound: true });
-  test.skip(!renders, SILENT);
   const kind = (k: string) => handy(page, (h, k) => h.audio().kinds[k as string] ?? 0, k);
   const pumps = await kind('pump');
-  // Three shots, a press each: a pump after each, heard 0.12 s on.
+  // Three shots, a press each: a pump after each, heard 0.12 s on; the next pressed once the gun has
+  // cycled (its shot clock at 60 / rpm, 0.8 s, in the session's ticks).
   for (let shot = 0; shot < 3; shot++) {
     const fired = await handy(page, async (h) => {
-      const before = h.session.weapon.shotsFired;
+      const w = h.session.weapon;
+      const before = w.shotsFired;
       h.trigger(true);
-      await h.waitFrames(3);
+      for (let k = 0; k < 60 && w.shotsFired === before; k++) await h.waitFrames(1);
       h.trigger(false);
-      await new Promise((resolve) => setTimeout(resolve, 900));
-      return h.session.weapon.shotsFired - before;
+      const cycle = 60 / w.spec.rpm;
+      const from = h.session.ticks;
+      while (w.sinceShot < cycle && h.session.ticks - from < 3 * 60) await h.waitFrames(1);
+      return { shots: w.shotsFired - before, cycled: w.sinceShot >= cycle };
     });
-    expect(fired).toBe(1);
+    expect(fired).toEqual({ shots: 1, cycled: true });
   }
-  expect((await kind('pump')) - pumps).toBe(3);
+  if (renders) expect((await kind('pump')) - pumps).toBe(3);
   // The tube three short: a reload loads them a shell at a time, each heard as it goes in, evenly
-  // spaced over the time after its base (reload_base_s 0.5, then reload_per_round_s 0.5 a shell).
+  // spaced over the time after its base (reload_base_s 0.5, then reload_per_round_s 0.5 a shell: each
+  // pushed in the middle of its half second, 0.75, 1.25 and 1.75 s in), 2 s in all.
   const rounds = await handy(page, (h) => h.hands().rounds);
   expect(rounds).toBe(4);
   const shells = await kind('shell');
   const loaded = await handy(page, async (h) => {
-    const t0 = performance.now();
+    const t0 = h.session.ticks;
     window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyR' }));
     window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyR' }));
     const at: number[] = [];
     let heard = h.audio().kinds.shell ?? 0;
-    let reloading = false;
-    while (performance.now() - t0 < 4000) {
+    let began: number | null = null;
+    let ended: number | null = null;
+    while (h.session.ticks - t0 < 4 * 60) {
       await h.waitFrames(1);
+      const s = (h.session.ticks - t0) / 60;
       const now = h.audio().kinds.shell ?? 0;
-      for (; heard < now; heard++) at.push((performance.now() - t0) / 1000);
+      for (; heard < now; heard++) at.push(s);
       const r = h.hands().reload;
-      if (r !== null) reloading = true;
-      else if (reloading) break;
+      if (r !== null) began ??= s;
+      else if (began !== null) {
+        ended = s;
+        break;
+      }
     }
-    return { at, s: (performance.now() - t0) / 1000, rounds: h.hands().rounds };
+    return { at, began, ended, rounds: h.hands().rounds };
   });
-  console.log(`the shells heard at ${loaded.at.map((s) => s.toFixed(2)).join(', ')} s; the tube full at ${loaded.s.toFixed(2)} s`);
-  expect((await kind('shell')) - shells).toBe(3);
-  expect(loaded.at).toHaveLength(3);
+  console.log(`the reload under way ${loaded.began?.toFixed(3)} s after R, the tube full at ${loaded.ended?.toFixed(3)} s; the shells heard at ${loaded.at.map((s) => s.toFixed(3)).join(', ')} s (the session's ticks)`);
   expect(loaded.rounds).toBe(7);
-  // One by one: half a second apart, the first after the base.
-  for (let k = 1; k < 3; k++) expect(loaded.at[k] - loaded.at[k - 1]).toBeGreaterThan(0.35);
-  expect(loaded.at[0]).toBeGreaterThan(0.4);
-  // The whole of it about 0.5 + 0.5 × 3 s.
-  expect(loaded.s).toBeGreaterThan(1.8);
-  expect(loaded.s).toBeLessThan(2.6);
+  // Begun on the tick that reads R (a frame's few ticks later at most); whole at 0.5 + 0.5 x 3 = 2 s on.
+  expect(loaded.began).not.toBeNull();
+  expect(loaded.began!).toBeLessThanOrEqual(6 / 60);
+  expect(loaded.ended).not.toBeNull();
+  expect(loaded.ended!).toBeGreaterThanOrEqual(2);
+  expect(loaded.ended!).toBeLessThanOrEqual(2 + 6 / 60);
+  if (renders) {
+    expect((await kind('shell')) - shells).toBe(3);
+    expect(loaded.at).toHaveLength(3);
+    // One by one: half a second apart, the first in the middle of its turn after the base.
+    for (let k = 1; k < 3; k++) expect(Math.abs(loaded.at[k] - loaded.at[k - 1] - 0.5), JSON.stringify(loaded.at)).toBeLessThanOrEqual(6 / 60);
+    expect(loaded.at[0]).toBeGreaterThanOrEqual(0.75);
+    expect(loaded.at[0]).toBeLessThanOrEqual(0.75 + 6 / 60);
+  } else {
+    console.log(`the pumps and shells not counted: ${SILENT}`);
+    test.info().annotations.push({ type: 'heard not checked', description: SILENT });
+  }
   expect(errors).toEqual([]);
 });
 
 test('an empty magazine clicks and reloads', async ({ page }) => {
+  // The reload and its time (in the session's ticks) are checked whether or not the page's audio
+  // renders; the click and the reload's cues heard only where it does.
   const { errors, renders } = await holding(page, 'ak74', { sound: true });
-  test.skip(!renders, SILENT);
   const kinds = () => handy(page, (h) => ({ ...h.audio().kinds }));
   const before = await kinds();
-  // The trigger held on an empty magazine: one click for the press, and a reload dry_reload_s (0.25 s) on.
+  // The trigger held on an empty magazine: one click for the press, and a reload dry_reload_s (0.25 s)
+  // on: begun on the 15th tick after the one that took the press (the 16th after it was pressed).
   const press = await handy(page, async (h) => {
     h.session.weapon.rounds = 0;
     await h.waitFrames(2);
-    const t0 = performance.now();
+    const t0 = h.session.ticks;
     h.trigger(true);
     let began: number | null = null;
-    while (performance.now() - t0 < 600) {
+    while (h.session.ticks - t0 < 36) {
       await h.waitFrames(1);
-      if (began === null && h.hands().reload !== null) began = (performance.now() - t0) / 1000;
+      if (began === null && h.hands().reload !== null) began = (h.session.ticks - t0) / 60;
     }
     h.trigger(false);
     return { began, shots: h.session.weapon.shotsFired };
   });
-  console.log(`the reload began ${press.began?.toFixed(3)} s after the press`);
+  console.log(`the reload began ${press.began?.toFixed(3)} s after the press (the session's ticks)`);
   expect(press.began).not.toBeNull();
-  expect(press.began!).toBeGreaterThan(0.2);
-  expect(press.began!).toBeLessThan(0.25 + 0.15);
+  expect(press.began!).toBeGreaterThanOrEqual(16 / 60);
+  expect(press.began!).toBeLessThanOrEqual(16 / 60 + 5 / 60);
   const clicked = await kinds();
-  // Once a press, however long it is held: no second click.
-  expect((clicked.dry ?? 0) - (before.dry ?? 0)).toBe(1);
   await expect.poll(() => handy(page, (h) => h.hands().rounds), { timeout: 8000 }).toBe(30);
   await handy(page, (h) => h.waitFrames(5));
   const after = await kinds();
-  expect((after.dry ?? 0) - (before.dry ?? 0)).toBe(1);
-  expect((after['mag-out'] ?? 0) - (before['mag-out'] ?? 0)).toBe(1);
-  expect((after.bolt ?? 0) - (before.bolt ?? 0)).toBe(1);
+  if (renders) {
+    // Once a press, however long it is held: no second click.
+    expect((clicked.dry ?? 0) - (before.dry ?? 0)).toBe(1);
+    expect((after.dry ?? 0) - (before.dry ?? 0)).toBe(1);
+    expect((after['mag-out'] ?? 0) - (before['mag-out'] ?? 0)).toBe(1);
+    expect((after.bolt ?? 0) - (before.bolt ?? 0)).toBe(1);
+  } else {
+    console.log(`the click and the reload's cues not counted: ${SILENT}`);
+    test.info().annotations.push({ type: 'heard not checked', description: SILENT });
+  }
   expect(errors).toEqual([]);
 });
 
@@ -257,18 +285,22 @@ test("aimed down the AK's sights, no prong of a shot's flash rises over the line
   // The line of sight runs the sight's height over the bore (the AK's irons, 0.0675 m): a prong rolled
   // up toward it lay along the tracer across the reticle. Measured in the drawn gun's frame, as the
   // flash is drawn: each prong's tip over the bore, along the gun's up. On the screen (the canvas's
-  // middle is the line of sight and the reticle) the kick lifts the gun a little toward it for the
-  // flash's frames, so a tip at the line in the gun's frame may show a few pixels over the middle, well
-  // aside of it: no prong's drawn segment comes within 2% of the canvas's height of the middle (the
-  // unit test's least, at 1600 x 1000, is 3.9%; the hash's whole rolls lay one across it).
+  // middle is the line of sight and the reticle): aimed, the kick no longer lifts or pitches the drawn
+  // gun (G4 Task 4: it shoves it back along the line and rolls it about it), so no tip shows more than
+  // the kick's roll can lift one over the middle, 2 px; and no prong's drawn segment comes within 2% of
+  // the canvas's height of the middle (the unit test's least, the AK at 1600 x 1000, is 48.6 px: 4.9%;
+  // the hash's whole rolls lay one across it). Every shot's own flash is drawn and its muzzle on the screen.
   const { errors } = await holding(page, 'ak74');
+  await handy(page, (h) => h.aim(true));
+  await handsBecome(page, { gun: 'ak74', aimed: 1 });
   const shots = await handy(page, async (h) => {
-    h.aim(true);
-    await h.waitFrames(60);
+    // The aim-in's overshoot settled (0.15 s after the sights arrive), on the session's clock.
+    const from = h.session.ticks;
+    while (h.session.ticks - from < 20) await h.waitFrames(1);
     const aimed = h.hands().aimed;
     const sight = h.session.arm.spec.sight.y;
     h.freeze(60);
-    const out: { aimed: number; sight: number; rises: number[]; overPx: number[]; nearPx: number; height: number }[] = [];
+    const out: { aimed: number; sight: number; own: boolean; at: boolean; rises: number[]; overPx: number[]; nearPx: number; height: number }[] = [];
     for (let n = 0; n < 12; n++) {
       const before = h.session.weapon.shotsFired;
       h.trigger(true);
@@ -288,23 +320,28 @@ test("aimed down the AK's sights, no prong of a shot's flash rises over the line
         const u = Math.max(0, Math.min(1, ((c[0] - a[0]) * d[0] + (c[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1] || 1)));
         nearPx = Math.min(nearPx, Math.hypot(a[0] + d[0] * u - c[0], a[1] + d[1] * u - c[1]));
       }
-      out.push({ aimed, sight, rises, overPx, nearPx, height: f.res[1] });
+      out.push({ aimed, sight, own: own !== undefined, at: own?.at != null, rises, overPx, nearPx, height: f.res[1] });
       await h.stepFrames(20);
     }
     h.thaw();
     h.aim(false);
     return out;
   });
-  const trace = JSON.stringify(shots.map((s) => ({ rises: s.rises.map((r) => +r.toFixed(4)), overPx: s.overPx.map((p) => +p.toFixed(1)), nearPx: +s.nearPx.toFixed(1) })));
+  const trace = JSON.stringify(shots.map((s) => ({ own: s.own, at: s.at, rises: s.rises.map((r) => +r.toFixed(4)), overPx: s.overPx.map((p) => +p.toFixed(1)), nearPx: +s.nearPx.toFixed(1) })));
   console.log(`aimed shots' prongs over the bore (m; the sight ${shots[0].sight}), over the screen's middle (px), and the nearest any comes to it (px, of ${shots[0].height}): ${trace}`);
   expect(shots[0].aimed).toBe(1);
   expect(shots[0].sight).toBeCloseTo(0.0675, 6);
   for (const s of shots) {
+    // Its own flash drawn, its muzzle on the screen.
+    expect(s.own, trace).toBe(true);
+    expect(s.at, trace).toBe(true);
     // Its star drawn: 3 to 5 prongs, every tip under the line of sight in the gun's frame.
     expect(s.rises.length, trace).toBeGreaterThanOrEqual(3);
     expect(s.rises.length, trace).toBeLessThanOrEqual(5);
     for (const r of s.rises) expect(r, trace).toBeLessThanOrEqual(s.sight + 1e-4);
-    // On the canvas, none near the reticle.
+    // On the canvas, no tip more than the kick's roll lifts one over the middle, and none near the reticle.
+    expect(s.overPx.length, trace).toBe(s.rises.length);
+    for (const p of s.overPx) expect(p, trace).toBeLessThanOrEqual(2);
     expect(s.nearPx, trace).toBeGreaterThanOrEqual(0.02 * s.height);
   }
   expect(errors).toEqual([]);

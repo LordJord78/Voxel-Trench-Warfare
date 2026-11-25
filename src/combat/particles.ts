@@ -269,8 +269,11 @@ export class Particles {
   /**
    * A frame's drawing of the anchors, `anchors[a - 1]` where anchor `a` is drawn now (metres; none: not
    * drawn, as the rifle through a scope): each kept particle not yet held takes its drift from it,
-   * where it is drawn less where it was thrown (none where its anchor is not drawn), for good. The
-   * frame's builder holds them before it draws the billboards (app/effects-frame.ts).
+   * where it is drawn less where it was thrown (none where its anchor is not drawn), for good. Called
+   * once a frame, after that frame's ticks and before its billboards (app/effects-frame.ts's builder),
+   * so a kept particle is held only in the first frame drawn after it is thrown: a frame after a hitch,
+   * whose several ticks threw it and then ran on, holds it with those ticks' motion in its drift (where
+   * the anchor is drawn now, the gun moved on by them, less where it was thrown).
    */
   hold(anchors?: readonly (readonly number[] | undefined)[]): void {
     for (let i = 0; i < this.count; i++) {

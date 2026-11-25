@@ -760,7 +760,7 @@ export class EffectsFrameBuilder {
         side = level > 1e-6 ? [side[0] / level, 0, side[2] / level] : [1, 0, 0];
         up = [d[1] * side[2] - d[2] * side[1], d[2] * side[0] - d[0] * side[2], d[0] * side[1] - d[1] * side[0]];
       }
-      lights.push({ position: at, radiusM: t.flashLightRadiusM, colour: t.flashLightColour, intensity: t.flashLightIntensity * f.share });
+      lights.push({ position: at, radiusM: t.flashLightRadiusM, colour: t.flashLightColour, intensity: t.flashLightIntensity * f.share, shot: true });
       // A suppressed shot (under flash_star_min_share of a whole flash): no core and no star, a glimmer of its light.
       if (f.share < t.flashStarMinShare) continue;
       // A prong fades to nothing at its tip; a compensator's short side prongs, most of them inside the

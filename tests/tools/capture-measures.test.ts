@@ -669,7 +669,9 @@ describe("G1's proof: by day (c) and (e) count a sample shown lit or tinted, aft
     expect(flat.share).toBe(0);
   });
 
-  it("(e) judges each pixel across the line over its own background, not the band's: where the line runs along a bright-over-dark edge (17:35's sky over the crest; at night a parapet the flash lights against the sky) and nothing is drawn, no sample is shown or unread, by day or at night; a core drawn on either side is read as it is", () => {
+  it("(e) judges each pixel across the line over its own background, not the band's: where the line runs along a static bright-over-dark edge (17:35's sky over the crest) and nothing is drawn, no sample is shown or unread, by day or at night; a core drawn on either side is read as it is", () => {
+    // A static edge only: the night case of a parapet lit by the shooter's own flash against the sky
+    // (an edge that is there in the flash's frames alone) is parked with (e) for G6's tracers run.
     // The level stream of the test above, its samples on row 120 and read 1.5 px either side (rows 118
     // to 121), over an edge: `bright` on the rows from `from` to `to`, the parapet (40) on the rest.
     const level: Track = { seen: [{ frame: 0, t: { kind: 2, flown: 30, headDrawn: true, head: null, tail: null, headM: [-0.8, -0.4, 2], tailM: [0.8, -0.4, 2], joinsM: 30 } }], path: null };
@@ -891,7 +893,7 @@ describe("G4's aimed gate, (f): the 90 m path beside the post", () => {
     const f = measureCapture(far, { frames, pathDepth: null }).m.aimedCover;
     expect(f.endOn).toBe(false);
     expect(f.counted).toBe(11);
-    expect([0, null]).toContain(f.share);
+    expect(f.share).toBe(0);
   });
 });
 

@@ -124,6 +124,11 @@ export class Weapon {
     return this.timer;
   }
 
+  /** Its cycle round since the last shot (to the timer's slack, as wants() reads it): a round in it would leave now. */
+  get cycled(): boolean {
+    return this.timer + EPS >= this.interval;
+  }
+
   /** A full magazine, nothing under way: a soldier back in after being killed. */
   rearm(): void {
     this.rounds = this.spec.magazine;
@@ -190,7 +195,7 @@ export class Weapon {
       return false;
     }
     if ((!this.spec.automatic || this.semi) && !pressed) return false;
-    return this.timer + EPS >= this.interval;
+    return this.cycled;
   }
 
   /** A shot's direction (unit) aimed along `yawDeg`, `pitchDeg`, with the cone scaled by `sway`, drawn from `rng`. */

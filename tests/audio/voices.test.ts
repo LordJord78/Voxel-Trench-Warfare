@@ -13,7 +13,6 @@ import { cueEvents } from '../../tools/sounds/renders';
 
 const tun = loadTunables();
 const report = reportShape(tun);
-const CUES: readonly HandlingCue[] = ['mag-out', 'mag-in', 'bolt', 'cover', 'shell', 'pump', 'dry'];
 
 /** What a voice made of WebAudio: each node made (its kind and options), and each source or oscillator started (when). */
 interface Made {
@@ -83,17 +82,19 @@ describe("the hands' cues' sounds", () => {
   });
 
   it('[audio.cues] holds each cue: its parts and how long it sounds, as they were drawn in voices.ts', () => {
-    expect([...CUE_NAMES].sort()).toEqual([...CUES].sort());
+    // The cues are cues.ts's CUE_NAMES, whole by its CUE_SET (a Record of every HandlingCue: a cue
+    // added to the type alone does not compile), each once.
+    expect(new Set(CUE_NAMES).size).toBe(CUE_NAMES.length);
     const shapes = cueShapes(tun);
-    expect(Object.keys(shapes).sort()).toEqual([...CUES].sort());
+    expect(Object.keys(shapes).sort()).toEqual([...CUE_NAMES].sort());
     // Every cue's parts fall to the same share, and every clack is made alike.
-    for (const cue of CUES) {
+    for (const cue of CUE_NAMES) {
       expect(shapes[cue].fall, cue).toBe(0.05);
       expect(shapes[cue].clack, cue).toEqual({ q: 1.2, noise: 2.2, attackS: 0.0005, tone: 0.18, glide: 0.7, toneDecay: 0.8 });
     }
     // How long each sounds (for the cap), as before: the magazine out 60 ms, in 40 ms, the bolt's rack
     // over 120 ms, the cover 50 ms, a shell 30 ms, the pump's two clacks 90 ms apart, a dry click 15 ms.
-    expect(Object.fromEntries(CUES.map((c) => [c, shapes[c].lengthS]))).toEqual({ 'mag-out': 0.07, 'mag-in': 0.05, bolt: 0.13, cover: 0.06, shell: 0.04, pump: 0.13, dry: 0.02 });
+    expect(Object.fromEntries(CUE_NAMES.map((c) => [c, shapes[c].lengthS]))).toEqual({ 'mag-out': 0.07, 'mag-in': 0.05, bolt: 0.13, cover: 0.06, shell: 0.04, pump: 0.13, dry: 0.02 });
     expect(shapes.pump.parts).toEqual([
       { part: 'clack', atS: 0, hz: 1500, toneHz: 640, peak: 1, decayS: 0.03 },
       { part: 'clack', atS: 0.09, hz: 1900, toneHz: 760, peak: 1, decayS: 0.03 },
@@ -103,13 +104,13 @@ describe("the hands' cues' sounds", () => {
       { part: 'tone', atS: 0, wave: 'square', fromHz: 2600, toHz: 2100, peak: 0.12, decayS: 0.012 },
     ]);
     // Every part sounds within its cue.
-    for (const cue of CUES) for (const p of shapes[cue].parts) expect(p.atS + ('attackS' in p ? p.attackS : 0) + p.decayS, cue).toBeLessThanOrEqual(shapes[cue].lengthS);
+    for (const cue of CUE_NAMES) for (const p of shapes[cue].parts) expect(p.atS + ('attackS' in p ? p.attackS : 0) + p.decayS, cue).toBeLessThanOrEqual(shapes[cue].lengthS);
   });
 
   it("planVoices gives each cue's plan its shape (audioTunables' [audio.cues]), and voiceLength reads how long it sounds from it", () => {
     const t = audioTunables(tun);
     expect(t.cues).toEqual(cueShapes(tun));
-    for (const cue of CUES) {
+    for (const cue of CUE_NAMES) {
       const [plan] = planVoices(t, cueEvents(cue), [0, 0, 0]);
       expect(plan.cue, cue).toBe(t.cues[cue]);
       expect(voiceLength(plan), cue).toBe(t.cues[cue].lengthS);
@@ -146,7 +147,7 @@ describe("the hands' cues' sounds", () => {
     ]);
     expect(voiceLength(planOf('pump', other))).toBe(0.3);
     // Every cue makes something, and only from its shape: a burst's filter as its part says.
-    for (const cue of CUES) expect(play(planOf(cue, shapes[cue])).length, cue).toBeGreaterThan(0);
+    for (const cue of CUE_NAMES) expect(play(planOf(cue, shapes[cue])).length, cue).toBeGreaterThan(0);
     const dry = play(planOf('dry', shapes.dry));
     expect(dry.filter((n) => n.node === 'BiquadFilterNode').map((n) => [n.opts.type, n.opts.frequency])).toEqual([['highpass', 3000]]);
   });

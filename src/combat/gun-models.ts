@@ -269,10 +269,12 @@ function optic(m: Mounts, kind: Optic, pistol: boolean): Part[] {
       ];
     }
     case 'holo':
-      // A long base, its battery at the back, and the hood round a square window.
+      // A long base, its battery at the back, and the hood round a square window. The battery's top is
+      // the window's bottom: a voxel higher, it hid the window's lowest row from the eye, and the dot
+      // sat 1.6° under the middle of what showed of it (sights.test).
       return [
         sym(0.0375, y0, y0 + 0.015, zc - 0.06, zc + 0.045, BLACK),
-        sym(0.0375, y0 + 0.015, y0 + 0.0375, zc - 0.06, zc - 0.015, BLACK),
+        sym(0.0375, y0 + 0.015, y0 + 0.03, zc - 0.06, zc - 0.015, BLACK),
         sym(0.0375, y0 + 0.015, y0 + 0.09, zc - 0.015, zc + 0.045, BLACK),
         marked('window', sym(0.0225, y0 + 0.03, y0 + 0.075, zc - 0.015, zc + 0.045, 0)),
       ];

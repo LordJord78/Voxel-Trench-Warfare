@@ -17,7 +17,8 @@
 // (kind 6, particles.ts CASING_BILLBOARD: the brass) is lit as a mote is, and handed on with its way (the
 // billboard's last three floats) for the draw to lay it along. The muzzle's smoke (kind 7, particles.ts
 // SMOKE_BILLBOARD) is lit as a mote is, the shots' flashes by the share its tenth float carries (1,
-// whole, but the player's own, kept a hand from the eye: [effects] own_smoke_flash_share); a shot's
+// whole, but the player's own, kept a hand from the eye: [effects] own_smoke_flash_share; the shots'
+// alone, frame.shotFlashCount of the frame's flashes, a gun's light's pool whole); a shot's
 // flash's core (kind 8, effects.ts FLASH_CORE_BILLBOARD) is emissive; each is handed on marked soft (its
 // way's w), for the draw to fade it to its rim.
 #include "scene.wgsl"
@@ -94,12 +95,13 @@ fn skyAround() -> vec3f {
   return (x + y + z) / 6.0;
 }
 
-// The shots' flashes, by `shots` of them, and the shells' blasts at p (voxels).
+// The shots' flashes, by `shots` of them, the frame's other transient lights (a gun's light's pool,
+// after the shots': renderer.ts transientOrder) whole, and the shells' blasts at p (voxels).
 fn flashesAt(p: vec3f, shots: f32) -> vec3f {
   var sum = vec3f(0.0);
   for (var i = 0u; i < min(frame.flashCount, 4u); i++) {
     let f = frame.flashes[i];
-    sum += facing(Light(f.pos, f.radius, f.colour, f.intensity), p) * shots;
+    sum += facing(Light(f.pos, f.radius, f.colour, f.intensity), p) * select(1.0, shots, i < frame.shotFlashCount);
   }
   for (var i = 0u; i < min(frame.blastCount, 4u); i++) {
     let b = frame.blasts[i];

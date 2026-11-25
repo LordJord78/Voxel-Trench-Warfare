@@ -21,6 +21,12 @@ const DEG = 180 / Math.PI;
 const ON_AXIS_DEG = 0.05;
 /** A ray this far over or under the line of sight (degrees): a pixel or two at 1600 x 1000. */
 const NUDGE_DEG = 0.1;
+/**
+ * How far past its window's middle (m, along the gun) a dot's or holo's own frame reaches: its hood
+ * ends within 4 cm of it (gun-models.ts optic). A ray through the window meeting the gun past that (a
+ * front post or the barrel's end, seen under the dot) is through the window: the frame's not met.
+ */
+const FRAME_REACH_M = 0.06;
 
 const holdingOf = (gun: GunKey, fit: Fit): Holding => ({ kind: GUN_DEFS[gun].slot === 'secondary' ? 'pistol' : 'rifle', sight: sightOf(gun, fit) });
 /** How far a view-space point lies off the view's axis, degrees. */
@@ -70,6 +76,43 @@ describe('the sight picture', () => {
       } else {
         for (const deg of [-NUDGE_DEG, 0, NUDGE_DEG]) expect(lookAlong(gun, fit, deg), `${gun} ${fit.optic}: the window open at ${deg} degrees`).toBeNull();
       }
+    });
+  }
+
+  for (const [gun, fit] of SIGHTED.filter(([, f]) => f.optic === 'reddot' || f.optic === 'holo')) {
+    it(`${gun} with ${fit.optic}: the aiming point is the middle of the window, within ${ON_AXIS_DEG}° of its open span over and under the line`, () => {
+      // Down the line of sight from the eye, a ray up and a ray down through the window: the first angle
+      // each way the optic's own frame stops it (its hood's top and bottom as the eye sees them, or
+      // anything of the gun nearer the eye than the hood's far end), found to a thousandth of a degree.
+      // The aiming point is on the line (0°): it must sit in the middle of that span.
+      const marks = sightMarks(gun, fit);
+      const blocked = (deg: number) => {
+        const hit = lookAlong(gun, fit, deg);
+        return hit !== null && hit.z <= marks.aim.z + FRAME_REACH_M;
+      };
+      const edge = (sign: 1 | -1) => {
+        let open = 0;
+        let shut = 0;
+        for (let deg = 0.05; deg <= 30; deg += 0.05) {
+          if (blocked(sign * deg)) {
+            shut = deg;
+            break;
+          }
+          open = deg;
+        }
+        expect(shut, `${gun} ${fit.optic}: the window ${sign > 0 ? 'over' : 'under'} the line is shut within 30°`).toBeGreaterThan(0);
+        while (shut - open > 0.001) {
+          const mid = (open + shut) / 2;
+          if (blocked(sign * mid)) shut = mid;
+          else open = mid;
+        }
+        return sign * shut;
+      };
+      expect(blocked(0)).toBe(false);
+      const over = edge(1);
+      const under = edge(-1);
+      const middle = (over + under) / 2;
+      expect(Math.abs(middle), `${gun} ${fit.optic}: open from ${under.toFixed(3)}° to ${over.toFixed(3)}°`).toBeLessThanOrEqual(ON_AXIS_DEG);
     });
   }
 
