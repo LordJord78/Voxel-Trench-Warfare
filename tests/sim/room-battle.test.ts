@@ -9,7 +9,7 @@ import type { ClientMsg, Dig, MatchLog, RoomShell } from '../../src/net/protocol
 import type { Crater, DetonationRunner } from '../../src/sim/destruction';
 import { RoomBattle, type BattleCatchUp } from '../../src/sim/room-battle';
 import { idleIntent, type CombatEvents, type Harm } from '../../src/sim/session';
-import type { BrickMap } from '../../src/world/bricks';
+import { BrickMap } from '../../src/world/bricks';
 import { CharQueue, fuelNear } from '../../src/world/char';
 import { detonationRegion } from '../../src/world/detonation';
 import { K, kindOf, P } from '../../src/world/materials';
@@ -1162,6 +1162,54 @@ describe("the room's log caught up on a page that joins or reloads", () => {
     await expect(caught).rejects.toThrow(/crater 1 is still out/);
     expect(clock).toBeGreaterThanOrEqual(60_000);
     expect(yields).toBeGreaterThan(19_000);
+  });
+
+  it("cuts the log's next shells ahead, each once no shell before it still to land would cut over its region, and lands the world of a catch-up that cuts none ahead", async () => {
+    // A field 76.8 m across, clay to 6.4 m: three columns of ground whose shells' regions are apart
+    // (whole sectors, x 0–22.4, 28.8–51.2 and 57.6–76.8 m). S3 lands over S1's ground, and a scoop
+    // is dug there after S2 lands, before S3, from a plate of spoil a voxel thick beyond S1's rim; S5
+    // lands over S2's ground once S4 has.
+    const field = () => {
+      const map = new BrickMap({ x: 768, y: 128, z: 256 });
+      map.fillBox(0, 0, 0, 768, 64, 256, P.CLAY);
+      map.fillBox(146, 64, 136, 156, 65, 146, P.SPOIL);
+      map.takeDirty();
+      return map;
+    };
+    const shells = [shell(1, 1_000, 10, 12.8), shell(2, 2_000, 40, 12.8), shell(3, 3_000, 12, 12.8), shell(4, 4_000, 70, 12.8), shell(5, 5_000, 42, 12.8)];
+    const dims = field().dims;
+    const cells = [[150, 64, 140], [151, 64, 140], [150, 64, 141]] as const;
+    const scoop: Dig = { seat: 1, at: 2_500, cells: cells.map(([x, y, z]) => packCell(dims, x, y, z)) };
+    const log = logOf(shells, [scoop]);
+    const regions = shells.map((s) => detonationRegion(dims, [s.at[0] / V, 0, s.at[1] / V], s.radius / V, tun.f('destruction.loosen_radius_scale'))!);
+    expect([overlapXZ(regions[0], regions[1]), overlapXZ(regions[0], regions[2]), overlapXZ(regions[1], regions[3]), overlapXZ(regions[1], regions[4]), overlapXZ(regions[3], regions[4])]).toEqual([false, true, false, true, false]);
+    const caughtUp = async (ahead?: number) => {
+      const j = roomClient(field(), [70, 6.4, 24], 0, 1 / 60, lateRunner(4));
+      const sent: number[] = [];
+      const send = j.session.ahead.bind(j.session);
+      j.session.ahead = (x, z, r, seed) => {
+        sent.push(shells.find((s) => s.seed === seed)!.id);
+        send(x, z, r, seed);
+      };
+      const order: string[] = [];
+      await j.battle.catchUp(log, 0, () => 6_000, null, noYield, { ...(ahead === undefined ? {} : { ahead }), progress: (done) => order.push(`${done}: ${sent.join(' ')}`) });
+      return { j, sent, order };
+    };
+    const without = await caughtUp();
+    expect(without.sent).toEqual([]);
+    const { j, sent, order } = await caughtUp(8);
+    // At the start: S2 and S4 (S1 goes out in its turn; S3 and S5 wait on S1 and S2); S3 once S1 is in; S5 once S2 is.
+    expect(order.slice(0, 3)).toEqual(['0: 2 4', '1: 2 4 3', '2: 2 4 3 5']);
+    expect(sent).toEqual([2, 4, 3, 5]);
+    // S3's ground changed (the scoop, dug) after it was sent: cut afresh. The others' work taken over.
+    expect(cells.map(([x, y, z]) => j.session.map.get(x, y, z))).toEqual([P.AIR, P.AIR, P.AIR]);
+    expect([j.session.destruction.aheadTaken, j.session.destruction.aheadDropped]).toEqual([3, 1]);
+    expect(j.battle.landed.map((s) => s.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(j.session.destruction.pending).toBe(0);
+    expect(sameWorld(without.j.session.map, j.session.map)).toBe(true);
+    // And with fewer ahead: two at most past the next (S3, held back, is one of them at the start), or one.
+    expect((await caughtUp(2)).order.slice(0, 3)).toEqual(['0: 2', '1: 2 3 4', '2: 2 3 4 5']);
+    expect((await caughtUp(1)).order.slice(0, 5)).toEqual(['0: 2', '1: 2 3', '2: 2 3 4', '3: 2 3 4', '4: 2 3 4 5']);
   });
 
   it('a catch-up whose crater never comes back fails loudly, naming it, rather than waiting for ever', async () => {

@@ -2,39 +2,90 @@
  * A page's world as two pages compare it (main.ts's hooks, for battle.spec.ts's sameWorlds): blood
  * spatter is per page and colour only (the shared-battle plan's note 12: each page spatters a
  * headshot or a kill from its own tick, the victim's none), so a comparison of two pages' worlds
- * masks every voxel where either holds a BLOOD_* id. Here a page finds its own blood, and hashes its
- * world (world/fingerprint.ts) with the union of both pages' set to air, only while its frames are
- * held; and says where a foot stands on its ground (standTop), for the specs that put a player there.
+ * masks every voxel where either holds a BLOOD_* id. Here a page finds its own blood, or any ids it is
+ * asked for (a char one page made and the other did not), and hashes its world (world/fingerprint.ts)
+ * with the union of both pages' set to air, only while its frames are held; and, for a comparison that
+ * differs, hashes each sector of it, so the specs can say where.
  */
 
 import { packCell, unpackCell } from '../combat/entrenching';
-import { UNIFORM, type BrickMap } from '../world/bricks';
+import { BRICK, UNIFORM, type BrickMap } from '../world/bricks';
 import { fingerprint } from '../world/fingerprint';
 import { P, PALETTE } from '../world/materials';
 
-/** Whether each palette id is blood: the palette's names starting BLOOD_. */
-const BLOOD = Uint8Array.from({ length: 256 }, (_, id) => (PALETTE[id]?.name.startsWith('BLOOD_') ? 1 : 0));
+/** The blood ids: the palette's names starting BLOOD_. */
+const BLOOD = PALETTE.flatMap((p, id) => (p.name.startsWith('BLOOD_') ? [id] : []));
 
 /**
- * Every voxel of `map` that holds a BLOOD_* id, as its packed cell (combat/entrenching.ts packCell),
+ * Every voxel of `map` that holds one of `ids`, as its packed cell (combat/entrenching.ts packCell),
  * ascending. Brick by brick: an empty brick, or a uniform one of another id, costs one look.
  */
-export function bloodCells(map: BrickMap): number[] {
+export function cellsHolding(map: BrickMap, ids: readonly number[]): number[] {
+  const want = new Uint8Array(256);
+  for (const id of ids) want[id] = 1;
   const out: number[] = [];
   const { bricks, dims } = map;
   const voxels = new Uint8Array(512);
   for (let bi = 0; bi < map.table.length; bi++) {
     const e = map.table[bi];
-    if (e === 0 || (e & UNIFORM && !BLOOD[e & 0xff])) continue;
+    if (e === 0 || (e & UNIFORM && !want[e & 0xff])) continue;
     if (e & UNIFORM) voxels.fill(e & 0xff);
     else voxels.set(map.denseView(bi)!);
-    if (!voxels.some((v) => BLOOD[v] === 1)) continue;
-    const bx = (bi % bricks.x) * 8;
-    const by = (Math.floor(bi / bricks.x) % bricks.y) * 8;
-    const bz = Math.floor(bi / (bricks.x * bricks.y)) * 8;
-    for (let i = 0; i < 512; i++) if (BLOOD[voxels[i]]) out.push(packCell(dims, bx + (i & 7), by + ((i >> 3) & 7), bz + (i >> 6)));
+    if (!voxels.some((v) => want[v] === 1)) continue;
+    const bx = (bi % bricks.x) * BRICK;
+    const by = (Math.floor(bi / bricks.x) % bricks.y) * BRICK;
+    const bz = Math.floor(bi / (bricks.x * bricks.y)) * BRICK;
+    for (let i = 0; i < 512; i++) if (want[voxels[i]]) out.push(packCell(dims, bx + (i & 7), by + ((i >> 3) & 7), bz + (i >> 6)));
   }
   return out.sort((a, b) => a - b);
+}
+
+/** Every voxel of `map` that holds a BLOOD_* id, as cellsHolding gives them. */
+export function bloodCells(map: BrickMap): number[] {
+  return cellsHolding(map, BLOOD);
+}
+
+/** A voxel's mix with its place (an index): sectorHashes' term. */
+function mix(i: number, v: number): number {
+  let k = Math.imul(i + 1, 0x9e3779b1) ^ Math.imul(v + 7, 0x85ebca6b);
+  k = Math.imul(k ^ (k >>> 15), 0xc2b2ae35);
+  return (k ^ (k >>> 13)) | 0;
+}
+
+/** Each id's sum of mix over a brick's 512 places: a uniform brick of it. */
+const UNIFORM_SUM = Int32Array.from({ length: 256 }, (_, v) => {
+  let sum = 0;
+  if (v !== 0) for (let i = 0; i < 512; i++) sum = (sum + mix(i, v)) | 0;
+  return sum;
+});
+
+/**
+ * Each 32-voxel sector's content hash, sector index x fastest: over its bricks, a mix of each non-air
+ * voxel with its place, and of each brick's sum with the brick's place in the sector. A brick of air,
+ * empty or dense, is nothing, and a uniform brick hashes as the same brick dense: so two worlds' sectors
+ * differ only where their voxels do (but for a collision).
+ */
+export function sectorHashes(map: BrickMap): number[] {
+  const { table, bricks, sectors } = map;
+  const out = new Int32Array(sectors.x * sectors.y * sectors.z);
+  for (let bi = 0; bi < table.length; bi++) {
+    const e = table[bi];
+    if (e === 0) continue;
+    let sum = 0;
+    if (e & UNIFORM) sum = UNIFORM_SUM[e & 0xff];
+    else {
+      const d = map.denseView(bi)!;
+      for (let i = 0; i < 512; i++) if (d[i] !== 0) sum = (sum + mix(i, d[i])) | 0;
+    }
+    if (sum === 0) continue;
+    const bx = bi % bricks.x;
+    const by = Math.floor(bi / bricks.x) % bricks.y;
+    const bz = Math.floor(bi / (bricks.x * bricks.y));
+    const local = ((bz & 3) * 4 + (by & 3)) * 4 + (bx & 3);
+    const si = ((bz >> 2) * sectors.y + (by >> 2)) * sectors.x + (bx >> 2);
+    out[si] = (out[si] + mix(local, sum & 0xffff) + mix(local + 64, sum >>> 16)) | 0;
+  }
+  return Array.from(out);
 }
 
 /**
@@ -71,19 +122,4 @@ export function pageFingerprint(map: BrickMap, mask: readonly number[] | undefin
   if (!mask) return fingerprint(map);
   if (!frozen) return Promise.reject(new Error('fingerprint(mask) sets voxels to air while it hashes: hold the frames first (freeze()), and thaw() after'));
   return maskedFingerprint(map, mask);
-}
-
-/**
- * The ground's top at (`x`, `z`) metres in `map` of `voxel`-metre voxels: the top (metres) of the
- * highest voxel there that is neither air nor water, where a foot stands; null with none, or off the world.
- */
-export function standTop(map: BrickMap, x: number, z: number, voxel: number): number | null {
-  const gx = Math.floor(x / voxel);
-  const gz = Math.floor(z / voxel);
-  if (!map.inBounds(gx, 0, gz)) return null;
-  for (let y = map.dims.y - 1; y >= 0; y--) {
-    const v = map.get(gx, y, gz);
-    if (v !== P.AIR && v !== P.WATER) return (y + 1) * voxel;
-  }
-  return null;
 }

@@ -16,7 +16,7 @@
  */
 
 import { UNIFORM, type BrickMap } from './bricks';
-import { isSolid, K, PALETTE_KIND } from './materials';
+import { isSolid, K, P, PALETTE_KIND } from './materials';
 
 export interface RayHit {
   /** Voxels along the unit direction to where the ray entered the hit cell; 0 if it started inside one. */
@@ -126,6 +126,21 @@ export function groundTop(map: BrickMap, x: number, z: number): number | null {
   for (let by = map.bricks.y - 1; by >= 0; by--) {
     if (map.table[map.brickIndex(cx >> 3, by, cz >> 3)] === 0) continue;
     for (let y = by * 8 + 7; y >= by * 8; y--) if (map.get(cx, y, cz) !== 0) return y + 1;
+  }
+  return null;
+}
+
+/**
+ * The ground's top at (`x`, `z`) metres in `map` of `voxel`-metre voxels: the top (metres) of the
+ * highest voxel there that is neither air nor water, where a foot stands; null with none, or off the world.
+ */
+export function standTop(map: BrickMap, x: number, z: number, voxel: number): number | null {
+  const gx = Math.floor(x / voxel);
+  const gz = Math.floor(z / voxel);
+  if (!map.inBounds(gx, 0, gz)) return null;
+  for (let y = map.dims.y - 1; y >= 0; y--) {
+    const v = map.get(gx, y, gz);
+    if (v !== P.AIR && v !== P.WATER) return (y + 1) * voxel;
   }
   return null;
 }

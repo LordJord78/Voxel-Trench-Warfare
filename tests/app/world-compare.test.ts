@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bloodCells, maskedFingerprint, pageFingerprint, standTop } from '../../src/app/world-compare';
+import { bloodCells, cellsHolding, maskedFingerprint, pageFingerprint, sectorHashes } from '../../src/app/world-compare';
 import { packCell } from '../../src/combat/entrenching';
 import { BrickMap } from '../../src/world/bricks';
 import { fingerprint } from '../../src/world/fingerprint';
@@ -84,20 +84,33 @@ describe("a page's world as two pages compare it", () => {
     expect(sameWorld(map, kept)).toBe(true);
   });
 
-  it("the ground's top at (x, z) metres: the highest voxel neither air nor water, or none", () => {
+  it('finds every voxel holding any of the ids asked for, as bloodCells finds blood: chars, or timber and sod', () => {
     const map = arena();
-    // Water over the clay at one column, a post at another.
-    map.fillBox(10, 16, 10, 11, 19, 11, P.WATER);
+    expect(cellsHolding(map, [P.CHAR_TIMBER])).toEqual([]);
+    map.set(3, 15, 9, P.CHAR_TIMBER);
     map.takeDirty();
-    const V = 0.1;
-    expect(standTop(map, 0.55, 0.55, V)).toBeCloseTo(1.6, 9);
-    expect(standTop(map, 1.05, 1.05, V)).toBeCloseTo(1.6, 9);
-    expect(standTop(map, 2.05, 2.05, V)).toBeCloseTo(3.0, 9);
-    // A column of air, and one off the world: none.
-    const empty = new BrickMap({ x: 32, y: 32, z: 32 });
-    expect(standTop(empty, 0.5, 0.5, V)).toBeNull();
-    expect(standTop(map, -0.05, 1, V)).toBeNull();
-    expect(standTop(map, 6.4, 1, V)).toBeNull();
+    expect(cellsHolding(map, [P.CHAR_TIMBER, P.CHAR_CLOTH])).toEqual([packCell(map.dims, 3, 15, 9)]);
+    // The post's 2 × 14 × 2 and the sod's uniform brick, ascending.
+    const timber: number[] = [];
+    for (let z = 20; z < 22; z++) for (let y = 16; y < 30; y++) for (let x = 20; x < 22; x++) timber.push(packCell(map.dims, x, y, z));
+    const sod: number[] = [];
+    for (let z = 40; z < 48; z++) for (let y = 16; y < 24; y++) for (let x = 40; x < 48; x++) sod.push(packCell(map.dims, x, y, z));
+    expect(cellsHolding(map, [P.TIMBER, P.SOD])).toEqual([...timber, ...sod].sort((a, b) => a - b));
+  });
+
+  it("each 32-voxel sector's hash changes with a voxel in it, and only its", () => {
+    const map = arena();
+    const before = sectorHashes(map);
+    // 2 × 2 × 2 sectors; the empty top ones hash to nothing.
+    expect(before).toHaveLength(8);
+    expect(sectorHashes(arena())).toEqual(before);
+    map.set(40, 20, 3, P.CLAY);
+    const after = sectorHashes(map);
+    // Sector (1, 0, 0): x 32–63, y 0–31, z 0–31.
+    expect(after.flatMap((h, si) => (h !== before[si] ? [si] : []))).toEqual([1]);
+    // As the uniform brick it was, a voxel dense again: the same hash.
+    map.set(40, 20, 3, P.AIR);
+    expect(sectorHashes(map)).toEqual(before);
   });
 
   it('takes no cell outside the world, and with none masked is the plain fingerprint', async () => {

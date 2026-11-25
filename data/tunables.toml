@@ -662,6 +662,11 @@ sight_near_m        = 3.0      # its sight stopped nearer its muzzle than this i
 # time at that second's dark, spread over frames. Not copied into SHELLING: the room runs no Director.
 catch_up_chunks     = 4        # chunks a frame at most: a dark heavy second is 60 Director steps of
                                # up to 20 µs, so about 5 ms; a 20-minute absence is 5 s of frames
+# A page catching up on the room's log (sim/room-battle.ts catchUp) has the log's next shells' craters
+# cut ahead of their turn on [destruction] catch_up_workers, each kept only if its ground is as it was
+# when its turn comes; so the wait is the workers' at once, not one crater after another (Task 8c).
+catch_up_ahead      = 8        # shells past the next to have out at once: twice the workers and more,
+                               # so none waits for work; each holds a copy of its region (about 2 MB)
 
 [range]
 # Solo play's firing range (the shots spec's §5, combat/range.ts): dummies and
@@ -795,6 +800,12 @@ chip_energy_j          = 260.0 # per unit hardness, for a single round to mark
 collapse_max_passes    = 64
 bricks_per_tick        = 512   # a crater's changed bricks written back a tick:
                                # about a millisecond (the spec's budget is 4 ms)
+catch_up_workers       = 3     # workers more than the session's one, made for a page
+                               # catching up on a room's log (Task 8c): they cut its
+                               # next shells' craters ahead of their turn, at once
+                               # (sim/destruction.ts ahead), and go when it is done.
+                               # At most the page's cores less two (the page's own and
+                               # the session's worker); none on two cores
 
 # ---------------------------------------------------------------------------
 # VIEWKICK — cosmetic recoil

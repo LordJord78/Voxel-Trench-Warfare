@@ -115,7 +115,7 @@ export class Front {
   /** Time to the next round, and where a burst is: rounds left in it. */
   private wait = 0;
   private burstLeft = 0;
-  private fired = 0;
+  private firedRounds = 0;
 
   constructor(
     readonly t: FrontTunables,
@@ -123,6 +123,11 @@ export class Front {
     public source: FrontSource,
     private readonly rng: Rng,
   ) {}
+
+  /** The rounds it has fired: every one that left a muzzle, with a tracer or not. */
+  get fired(): number {
+    return this.firedRounds;
+  }
 
   /**
    * One tick: the rounds this intensity owes, fired at `target` (the head) into `rounds`; how many
@@ -164,8 +169,8 @@ export class Front {
       const len = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
       if (!(len > 0)) continue;
       const s = spec.muzzleVelocity / len;
-      this.fired++;
-      const tracer = this.t.tracerEvery > 0 && this.fired % this.t.tracerEvery === 0;
+      this.firedRounds++;
+      const tracer = this.t.tracerEvery > 0 && this.firedRounds % this.t.tracerEvery === 0;
       if (rounds.fire(origin, [d[0] * s, d[1] * s, d[2] * s], spec, 1, tracer) >= 0) fired++;
     }
     return fired;

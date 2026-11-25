@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/core/rng';
 import { BrickMap } from '../../src/world/bricks';
 import { isOpaque, isSolid, K, kindOf, P } from '../../src/world/materials';
-import { raycast } from '../../src/world/raycast';
+import { raycast, standTop } from '../../src/world/raycast';
 import { SYNTHETIC, syntheticWorld } from '../support/synthetic';
 import { traceRef, type Vec3 } from '../support/trace-ref';
 
@@ -159,5 +159,25 @@ describe('the CPU raycast', () => {
     const ms = performance.now() - t0;
     expect(hits).toBeGreaterThan(0);
     expect(ms).toBeLessThan(200);
+  });
+});
+
+describe('where a foot stands', () => {
+  it("the ground's top at (x, z) metres: the highest voxel neither air nor water, or none", () => {
+    // 6.4 m a side: clay to 1.6 m, a timber post, water over the clay at one column.
+    const map = new BrickMap({ x: 64, y: 64, z: 64 });
+    map.fillBox(0, 0, 0, 64, 16, 64, P.CLAY);
+    map.fillBox(20, 16, 20, 22, 30, 22, P.TIMBER);
+    map.fillBox(10, 16, 10, 11, 19, 11, P.WATER);
+    map.takeDirty();
+    const V = 0.1;
+    expect(standTop(map, 0.55, 0.55, V)).toBeCloseTo(1.6, 9);
+    expect(standTop(map, 1.05, 1.05, V)).toBeCloseTo(1.6, 9);
+    expect(standTop(map, 2.05, 2.05, V)).toBeCloseTo(3.0, 9);
+    // A column of air, and one off the world: none.
+    const empty = new BrickMap({ x: 32, y: 32, z: 32 });
+    expect(standTop(empty, 0.5, 0.5, V)).toBeNull();
+    expect(standTop(map, -0.05, 1, V)).toBeNull();
+    expect(standTop(map, 6.4, 1, V)).toBeNull();
   });
 });

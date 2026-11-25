@@ -1093,6 +1093,17 @@ export class Session {
   }
 
   /**
+   * A room's shell of `radiusM` still to land at (x, z) (metres), its crater cut with `seed`, cut ahead
+   * of its turn (Destruction.ahead), as `land` will queue it in a room: nothing heard, harmed or written;
+   * none where there is no ground. A catch-up's next shells (sim/room-battle.ts).
+   */
+  ahead(x: number, z: number, radiusM: number, seed: number): void {
+    const v = this.voxel;
+    const top = groundTop(this.map, x / v, z / v);
+    if (top !== null) this.destruction.ahead([x / v, top, z / v], radiusM / v, seed);
+  }
+
+  /**
    * A voxel ray from `from` to `to` (metres): where it meets solid (metres) a voxel or more short of
    * `to`, or null if it gets that far. A blast's cover; in a room, the front's view of the player's head.
    */

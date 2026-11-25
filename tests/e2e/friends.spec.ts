@@ -1,6 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { SHELL_FIELDS } from '../../src/net/shell-fields';
-import { goIn, groundAt, h, hostAndJoin, ready, sameWorlds, windows, type Compared, type GamePage, type RoomHooks } from './support/room';
+import { alive, feedOf, front, goIn, groundAt, h, hostAndJoin, meOf, ready, sameWorlds, windows, type Compared, type GamePage, type RoomHooks } from './support/room';
 
 // The paths friends take (the final review's item 15, Task 8b), two pages against the relay on one
 // room on the Corridor, its shelling heavy, through three matches:
@@ -45,18 +45,6 @@ const battleOf = (page: Page) => h(page, (x) => ({ front: x.session.front.intens
 /** Waits `ms` of the page's time in frames. */
 const hold = (page: Page, ms: number) => page.waitForTimeout(ms);
 
-/** Each page's front set here, not through setIntensity (which sets the artillery too: in a room it must stay off). */
-const front = (page: Page, i: 'off' | 'light' | 'heavy') =>
-  h(
-    page,
-    (x, a) => {
-      x.session.front.intensity = a as 'off' | 'light' | 'heavy';
-    },
-    i,
-  );
-
-/** Back in after being killed, if killed: once the page's player is alive again. */
-const alive = (page: Page) => page.waitForFunction(() => (window as unknown as { __trenchline: RoomHooks }).__trenchline.together.deadFor() === null, null, { timeout: 20_000 });
 
 /** Into a match the owner (A) starts now: both pages begun and gone in. */
 async function rematch(): Promise<void> {
@@ -409,7 +397,11 @@ test('kills: the front\'s reads "shot from the line"; a round\'s spatters, and t
   // On level ground, as the spot was chosen, and the aim within a degree of the line found clear.
   expect(Math.abs(aim.pitch - spot!.pitch)).toBeLessThan(1);
   expect(dead).toBe(true);
-  await expect(A.page.locator('#hud .feed')).toContainText('shot');
+  // The round kill's own line, the newest naming B (by team too: both may go by the default name): A's, shot (or headshot), B's; not the front's earlier "shot from the line".
+  const [me, them] = [await meOf(A.page), await meOf(B.page)];
+  const bKilled = async () => (await feedOf(A.page)).find((l) => l.victim?.team === them.team && l.victim.name === them.name) ?? null;
+  await expect.poll(bKilled, { timeout: 5000 }).toMatchObject({ killer: { team: me.team, name: me.name }, victim: { team: them.team, name: them.name } });
+  expect(['shot', 'headshot']).toContain((await bKilled())!.how);
   // Out of the open, both, once B is back; A on its feet.
   await A.page.keyboard.press('KeyZ');
   await alive(B.page);

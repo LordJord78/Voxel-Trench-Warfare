@@ -14,7 +14,8 @@
  * - a Session on its own world (`map`: tests/support/worlds.ts cloneMap), its craters cut by `runner`
  *   (in-process unless given: a slow worker is lateRunner);
  * - a RoomBattle (sim/room-battle.ts) once welcomed, as Together makes one: the welcome's catch-up's,
- *   then each match's, made with its first frame and given the scoops the last one held;
+ *   then each match's, made with its first frame and given the scoops the last one held (each end's
+ *   count of them kept: `carriedAtEnds`);
  * - at its deploy, main.ts's battle: a Director over the plan on the match's clock (app/battle-clock.ts
  *   BattleClock), by day (darkness 0), given each frame's strikes (RoomBattle.strikes), its fires' chars
  *   made through a CharQueue once no crater is pending about them; and, catching up, run along the log
@@ -27,6 +28,7 @@
  * - in a match, once caught up: `session.room` true and `session.seat` the player's, every frame;
  *   the queued shells and scoops to `hear` and `dug` at the player's room clock, in arrival order;
  *   `tick`; then the queued shots fired (`fireRemote`, from the shooter's eye: no soldier is drawn),
+ *   the queue held to NetClient's SHOT_QUEUE_MAX, its oldest dropped past it as NetClient drops them,
  *   no more a frame than the round pool has room for (Session.roundRoom), silent once more than
  *   SILENT_STEP_S old. `session.together` stays false: no body is drawn, so it would only let a
  *   player's own body stop another's pellets on its own world;
@@ -48,6 +50,7 @@
  */
 
 import { BattleClock, catchUpRunner } from '../../src/app/battle-clock';
+import { SHOT_QUEUE_MAX } from '../../src/app/net-client';
 import { stateOf } from '../../src/app/together';
 import { Director, type BattleEvents, type BattleInputs } from '../../src/battle/director';
 import { fireTunables } from '../../src/battle/fires';
@@ -99,6 +102,8 @@ export interface PlayerSpec {
   act?(player: NodeClient, matchS: number | null): void;
   /** Its tab hidden from the first of these match seconds (its clock) to the second: no frame runs between. */
   hidden?: [number, number];
+  /** How many of the log's next shells its catch-up has cut ahead of their turn (main.ts: [room_battle] catch_up_ahead, unless given). */
+  ahead?: number;
 }
 
 /** A shot another player fired, as the room's frame relayed it: their seat, the shot, and the room's clock of the frame. */
@@ -226,6 +231,10 @@ export class NodeClient {
   hid: { from: number; to: number } | null = null;
   /** The catch-up of its welcome: how long it took (wall clock, ms), and how many of the log's entries it took in. */
   catchUp: { ms: number; entries: number } | null = null;
+  /** The scoops each match's end carried to the next match's battle (RoomBattle.finish), in order. */
+  carriedAtEnds: number[] = [];
+  /** The log its welcome carried, which it caught up on. */
+  welcomeLog: { shells: number[][]; digs: number[][] } | null = null;
   /** The match second of the last strike given its battle (−∞ none yet), the strikes given it, and the chars its fires asked for. */
   lastStrikeS = Number.NEGATIVE_INFINITY;
   strikes = 0;
@@ -411,6 +420,7 @@ export class NodeClient {
         this.phase = m.phase;
         this.match = m.match;
         if (m.phase === 'playing' && m.match) this.deploy();
+        this.welcomeLog = m.log;
         await this.catchUpOn(m.log, t);
         return;
       }
@@ -431,6 +441,8 @@ export class NodeClient {
           const shot = decodeShot(p.slice(1));
           if (shot && p[0] !== this.you) this.shots.push({ seat: p[0], shot, at: m.s });
         }
+        // NetClient's cap: past it the oldest go.
+        if (this.shots.length > SHOT_QUEUE_MAX) this.shots.splice(0, this.shots.length - SHOT_QUEUE_MAX);
         return;
       case 'shell': {
         const shell = decodeShell(m.s);
@@ -469,6 +481,7 @@ export class NodeClient {
       }
     }
     this.carried = battle.finish();
+    this.carriedAtEnds.push(this.carried.length);
   }
 
   /** main.ts's deploy (Together.started): at the team's start, carrying the loadout; the match's battle from its start, on its clock. */
@@ -495,7 +508,8 @@ export class NodeClient {
   /**
    * Together.welcomed and main.ts's catchUp hook: the welcome's log caught up on a battle made now, the
    * room's time held while it runs (`t`); in a match, the deploy's battle run along it (catchUpRunner),
-   * its strikes given it first, its chars made at once; then the battle's clock given the second it reached.
+   * its strikes given it first, its chars made at once; the log's next shells' craters cut ahead of their
+   * turn (PlayerSpec.ahead, as main.ts has them); then the battle's clock given the second it reached.
    */
   private async catchUpOn(log: { shells: number[][]; digs: number[][] }, t: number): Promise<void> {
     this.caughtUp = false;
@@ -510,7 +524,8 @@ export class NodeClient {
     const along = match && director ? catchUpRunner(director, () => this.inputs(), made) : null;
     let entries = 0;
     const t0 = performance.now();
-    await battle.catchUp(log, match?.startAt ?? null, () => this.serverAt(t), along, async () => {}, { progress: (_done, total) => (entries = total) });
+    const ahead = this.spec.ahead ?? tun.i('room_battle.catch_up_ahead');
+    await battle.catchUp(log, match?.startAt ?? null, () => this.serverAt(t), along, async () => {}, { progress: (_done, total) => (entries = total), ahead });
     this.catchUp = { ms: performance.now() - t0, entries };
     if (along && this.director === director) this.clock.given = along.reached;
     this.caughtUp = true;

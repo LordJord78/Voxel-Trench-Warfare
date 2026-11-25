@@ -83,6 +83,27 @@ export function copyRegion(map: BrickMap, box: Box): RegionCopy {
   return { origin, size, entries, dense };
 }
 
+/**
+ * Whether two copies hold the same: the same region, each brick the same entry (empty, the same uniform
+ * id, or dense), and every dense brick the same bytes. Two copies of one region of a world that nothing
+ * has written into in between are; a brick written and put back as it was may not be (dense where it was
+ * uniform), which says only that they may differ.
+ */
+export function sameCopy(a: RegionCopy, b: RegionCopy): boolean {
+  if (a.origin.some((v, k) => v !== b.origin[k]) || a.size.some((v, k) => v !== b.size[k])) return false;
+  if (a.entries.length !== b.entries.length || a.dense.length !== b.dense.length) return false;
+  for (let i = 0; i < a.entries.length; i++) if (a.entries[i] !== b.entries[i]) return false;
+  // Four bytes at a time where both lie on a word (copyRegion's do): dense is whole bricks of 512.
+  if (a.dense.byteOffset % 4 === 0 && b.dense.byteOffset % 4 === 0) {
+    const x = new Uint32Array(a.dense.buffer, a.dense.byteOffset, a.dense.length >> 2);
+    const y = new Uint32Array(b.dense.buffer, b.dense.byteOffset, b.dense.length >> 2);
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+    return true;
+  }
+  for (let i = 0; i < a.dense.length; i++) if (a.dense[i] !== b.dense[i]) return false;
+  return true;
+}
+
 /** The copy as a map of its own, its bricks at the region's local brick coordinates, none of them dirty. */
 export function regionMap(copy: RegionCopy): BrickMap {
   const map = new BrickMap({ x: copy.size[0] * BRICK, y: copy.size[1] * BRICK, z: copy.size[2] * BRICK });

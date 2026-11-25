@@ -28,8 +28,10 @@
  * - **Caught up** (`catchUp`, spec notes 5, 6 and 10): a page that joins or reloads lands the room's
  *   log (the welcome's) in time order, quietly, each crater settled before the next, and runs the
  *   battle around it along the log, given each crater's strike as it goes in; so its world is a
- *   client's that was there all along. The shells still in the air are heard for the time they have
- *   left.
+ *   client's that was there all along. The log's next shells' craters are cut ahead of their turn
+ *   meanwhile, each taken up only if its ground is as it was (Destruction.ahead), so the wait is the
+ *   destruction workers' at once, not one crater's after another. The shells still in the air are
+ *   heard for the time they have left.
  *
  * Times are the room's clock as this page reckons it (ms).
  */
@@ -81,6 +83,8 @@ export interface CatchUpPage {
   clock?(): number;
   /** How far the catch-up has come: `done` of the log's `total` entries due, said at the start and after each. */
   progress?(done: number, total: number): void;
+  /** How many of the log's next shells to have cut ahead of their turn ([room_battle] catch_up_ahead); none if not given. */
+  ahead?: number;
 }
 
 /** A log's entry: a shell at its landing, or a scoop at its stamp; ranked so a shell comes before a scoop of the same ms (`dug` lands the shells due by its stamp first). */
@@ -189,6 +193,13 @@ export class RoomBattle {
    * The page breathes (`yieldNow`) between a settle's ticks, after every SCOOPS_A_BREATH scoops, and
    * after each run of the battle of RUN_A_BREATH_S or more; and is told how far the catch-up has come
    * (`page.progress`), at the start and after each entry due.
+   *
+   * Up to `page.ahead` of the shells due after the next are cut ahead of their turn (Destruction.ahead),
+   * each once no shell before it still to land here would cut over its region (their craters would
+   * change its ground for certain): on the destruction workers at once, while the entries before them
+   * are taken. Each shell still lands in its turn, and its crater takes that work up only if its
+   * ground is as it was when the work was sent (a scoop or a char between may have changed it); else
+   * it is cut afresh. So the world is the same voxel for voxel, and the craters go in in their order.
    */
   async catchUp(log: MatchLog, startAt: number | null, now: () => number, battle: BattleCatchUp | null, yieldNow: () => Promise<void>, page: CatchUpPage = {}): Promise<void> {
     const { session } = this;
@@ -203,6 +214,33 @@ export class RoomBattle {
       ...digs.map((dig, n): Entry => ({ at: dig.at, rank: 1, n, dig })),
     ];
     const due = entries.filter((e) => startAt === null || e.at <= nowMs).sort((a, b) => a.at - b.at || a.rank - b.rank || a.n - b.n);
+    // Each due shell that will land here (heard before and landed: not again), by its place in `due`, and its crater's region.
+    const v = session.voxel;
+    const loosen = session.destruction.t.options.loosen;
+    const regions = due.map((e) => (e.rank === 0 && (!this.heard.has(e.shell.id) || this.air.some((a) => a.id === e.shell.id)) ? detonationRegion(session.map.dims, [e.shell.at[0] / v, 0, e.shell.at[1] / v], e.shell.radius / v, loosen) : null));
+    const sent = new Set<number>();
+    /** Up to `page.ahead` of the shells after the next from `from` in `due`, each cut ahead once no shell from `from` before it would cut over its region. */
+    const sendAhead = (from: number) => {
+      const most = page.ahead ?? 0;
+      let next = true;
+      for (let k = from, n = 0; k < due.length && n < most; k++) {
+        const box = regions[k];
+        if (!box) continue;
+        // The next to land goes out in its turn at once.
+        if (next) {
+          next = false;
+          continue;
+        }
+        n++;
+        if (sent.has(k)) continue;
+        let clear = true;
+        for (let i = from; i < k && clear; i++) clear = regions[i] === null || !overlapXZ(regions[i]!, box);
+        if (!clear) continue;
+        sent.add(k);
+        const { shell } = due[k] as Extract<Entry, { rank: 0 }>;
+        session.ahead(shell.at[0], shell.at[1], shell.radius, shell.seed);
+      }
+    };
     /** The second the battle around the page was last run to (it runs from 0, never back), and the log's scoops taken. */
     let ranS = 0;
     let scoops = 0;
@@ -242,12 +280,18 @@ export class RoomBattle {
       const strike = crater ? roomStrike(session.map, crater, shell.seed, session.voxel, this.fireT) : null;
       await run(s, strike ? [{ ...strike, atS: s }] : []);
     };
-    page.progress?.(0, due.length);
-    for (let k = 0; k < due.length; k++) {
-      const e = due[k];
-      await take(e);
-      page.progress?.(k + 1, due.length);
-      if (e.rank === 1 && ++scoops % SCOOPS_A_BREATH === 0) await yieldNow();
+    try {
+      sendAhead(0);
+      page.progress?.(0, due.length);
+      for (let k = 0; k < due.length; k++) {
+        const e = due[k];
+        await take(e);
+        if (e.rank === 0) sendAhead(k + 1);
+        page.progress?.(k + 1, due.length);
+        if (e.rank === 1 && ++scoops % SCOOPS_A_BREATH === 0) await yieldNow();
+      }
+    } finally {
+      session.destruction.dropAhead();
     }
     if (startAt === null) return;
     await run(matchSeconds(nowMs, startAt), []);

@@ -111,6 +111,7 @@ The spec is silent on the following; they are decided here.
 
     M6's final review added these, lettered as its synthesis letters them:
     - (b) a scoop over a shell told in the last round trip before the end, or a dig carried across an end, can go in on the other side of `finish()`'s quiet craters (ruled, Task 6);
+      - *Since narrowed:* a dig carried across an end now keeps its place (Task 8b's c995e22, kept by the controller's ruling at 92037fd); the spec's Deferred (b) holds what is left of it, a scoop over a shell told in the end's last round trip.
     - (c) after a match ends during a catch-up, that match's chars may fall differently: colour only (Task 7);
     - (d) a digger whose clock runs ahead can stamp a dig before a shell it already landed: note 9 tolerates 1.2 s, in one direction (parked, Task 6);
     - (e) shots fired in a match's last round trip chip only the shooter's world (parked by the final review);
@@ -120,6 +121,7 @@ The spec is silent on the following; they are decided here.
     - (a) a very long-lived room's welcome grows past `ROOM_TEXT_MAX` on shells alone (about 17,600 shells), and the joiner then waits at "Joining…"; long before that, each new scoop leaves the log on arrival (ledger, Task 2);
     - (f) the log holds about 3,200 scoops, roughly 14 digger-minutes over a map's life; past that, a reloader or joiner lacks the earliest scoops; the owner changing the map, or everyone leaving, resets the log;
     - (g) a catch-up costs about 0.3–0.47 s of crater work per shell the map has seen, on one destruction worker (benched: 55 heavy shells in 17.4 s, 120 in 56 s). The wait is shown with its progress and unthrottled in a hidden tab; the cost itself is parked until Task 8 measures a realistic log.
+      - *Since cut:* Task 8c cuts the log's craters ahead of their turn on a pool of workers, about 75–100 ms a shell; the spec's Deferred (g) holds the new measure.
 
     The spec's Deferred section lists these.
 

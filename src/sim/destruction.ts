@@ -25,6 +25,15 @@
  * it, still to be dug over its region (sim/room-battle.ts), so its crater is copied with that scoop
  * in, as its digger's was. Until it goes out a shell has copied nothing, so ground it alone has
  * queued is pending only to what comes after it (`overlapsPendingBy`).
+ *
+ * A catch-up on the room's log may have a shell's crater cut ahead of its turn (`ahead`), on a copy
+ * of its region as the world is then, while the craters before it are still being cut. That job is
+ * no shell of the session's: nothing waits for it, and nothing of it is written. When the shell's own
+ * job goes out, it takes the work over only if it would have been given the same: the same centre,
+ * radius and seed, and its region the same voxel for voxel, so the same ground top and material (the
+ * job is a function of what it is given: world/detonation.ts). Anything written there in between (a
+ * crater, a scoop, a char) and the work is dropped, and the job is cut afresh. So the craters go in
+ * as they would have, in their order, each from the ground it would have been cut from; only sooner.
  */
 
 import type { Tunables } from '../core/tunables';
@@ -34,7 +43,7 @@ import { detonationRegion, runDetonation, type DetonationRequest, type Detonatio
 import { P } from '../world/materials';
 import { groundTop } from '../world/raycast';
 import { overlapXZ, type Box } from '../world/region';
-import { applyPatch, copyRegion, type BrickPatch } from '../world/region-copy';
+import { applyPatch, copyRegion, sameCopy, type BrickPatch, type RegionCopy } from '../world/region-copy';
 
 /** Where a crater's job runs: post it, and take what has come back since. */
 export interface DetonationRunner {
@@ -107,6 +116,23 @@ interface Job {
   held: Mark[];
 }
 
+/**
+ * A crater's job sent ahead of its turn (`ahead`): what it was given, its copy kept to be checked
+ * against the world's when its shell's own job goes out, what has come back of it meanwhile, and the
+ * job that took it over.
+ */
+interface Ahead {
+  centre: [number, number, number];
+  radius: number;
+  seed: number;
+  box: Box;
+  material: number;
+  /** As it was sent; none once a shell's job has taken the work over. */
+  copy: RegionCopy | null;
+  back: DetonationResult[];
+  job: Job | null;
+}
+
 /** A job's crater, `bricks` written: what it struck, if it was cut on the ground. */
 const crater = (j: Job, bricks: number): Crater => ({ id: j.id, centre: j.centre, radius: j.radius, bricks, ...(j.material === undefined ? {} : { material: j.material }) });
 const inside = (b: Box, x: number, y: number, z: number) => x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1 && z >= b.z0 && z < b.z1;
@@ -123,7 +149,15 @@ export class Destruction {
   waits: (id: number, box: Box) => boolean = () => false;
   /** The craters whose cuts the last tick finished writing (their settling still to come). */
   cuts: Crater[] = [];
+  /** Of the jobs sent ahead (`ahead`): those whose shell's own job took the work over, and those dropped, the world changed under them. */
+  aheadTaken = 0;
+  aheadDropped = 0;
   private nextId = 1;
+  /** The jobs sent ahead and not yet done with, by their runner ids (−1, −2, …: never a shell's). */
+  private readonly aheads = new Map<number, Ahead>();
+  private nextAhead = -1;
+  /** What came back of a job sent ahead before its shell's own job took it over: taken by the next tick, as that job's. */
+  private early: DetonationResult[] = [];
 
   constructor(
     readonly map: BrickMap,
@@ -187,6 +221,30 @@ export class Destruction {
     return id;
   }
 
+  /**
+   * A shell on the ground of `radius` at `centre` (voxels) and `seed`, as `shell(..., true)` will be
+   * given it, its crater cut ahead of its turn: posted now, on a copy of its region as the world is
+   * now, centred on the ground's top there now. Nothing waits for it and nothing of it is written:
+   * its shell's own job takes the work over when it goes out, if the world there is still as it was
+   * (`post`). One off the map sends nothing.
+   */
+  ahead(centre: readonly [number, number, number], radius: number, seed: number): void {
+    const box = detonationRegion(this.map.dims, centre, radius, this.t.options.loosen);
+    if (!box) return;
+    const at: [number, number, number] = [centre[0], centre[1], centre[2]];
+    const material = this.groundUnder(at);
+    const copy = copyRegion(this.map, box);
+    const id = this.nextAhead--;
+    // Kept as it was sent: the runner may take the copy's buffers.
+    this.aheads.set(id, { centre: [at[0], at[1], at[2]], radius, seed, box, material, copy: { ...copy, entries: copy.entries.slice(), dense: copy.dense.slice() }, back: [], job: null });
+    this.runner.post({ id, centre: at, radius, seed, options: this.t.options, copy, world: this.map.dims });
+  }
+
+  /** The jobs sent ahead that no shell's job has taken over dropped, whatever comes back of them: a catch-up done with them. */
+  dropAhead(): void {
+    for (const [id, a] of this.aheads) if (!a.job) this.aheads.delete(id);
+  }
+
   /** A round's mark (world/destruction.ts `chip`): made now, or held while a region it is in is out. */
   mark(x: number, y: number, z: number, energyJ: number, chipEnergyJ: number): boolean | 'held' {
     for (const j of this.jobs) {
@@ -200,7 +258,18 @@ export class Destruction {
   /** One tick: what has come back, the write-back's budget of it, and the shells now free to go out; the craters that settled (their cuts in `cuts`). */
   tick(): Crater[] {
     this.cuts = [];
-    for (const r of this.runner.take()) {
+    for (let r of [...this.early.splice(0), ...this.runner.take()]) {
+      if (r.id < 0) {
+        // A job sent ahead: kept until a shell's job takes it over, then that job's; dropped, nothing.
+        const a = this.aheads.get(r.id);
+        if (!a) continue;
+        if (!a.job) {
+          a.back.push(r);
+          continue;
+        }
+        if (!('stage' in r) || r.stage === 'settled') this.aheads.delete(r.id);
+        r = { ...r, id: a.job.id };
+      }
       const j = this.jobs.find((o) => o.id === r.id);
       if (!j || j.state !== 'out') continue;
       if ('wider' in r) {
@@ -247,13 +316,44 @@ export class Destruction {
   private post(j: Job): void {
     // On the ground: centred where it is now, the first time it goes out (a wider region asked for
     // is copied again about the same centre). Nothing has written into its region since.
-    if (j.onGround && j.material === undefined) {
-      const top = groundTop(this.map, j.centre[0], j.centre[2]);
-      if (top !== null) j.centre[1] = top;
-      j.material = top === null ? P.AIR : this.map.get(Math.floor(j.centre[0]), top - 1, Math.floor(j.centre[2]));
-    }
+    const first = j.onGround && j.material === undefined;
+    if (first) j.material = this.groundUnder(j.centre);
     j.state = 'out';
-    this.runner.post({ id: j.id, centre: j.centre, radius: j.radius, seed: j.seed, options: this.t.options, copy: copyRegion(this.map, j.box), world: this.map.dims });
+    const copy = copyRegion(this.map, j.box);
+    if (first && this.takeOver(j, copy)) return;
+    this.runner.post({ id: j.id, centre: j.centre, radius: j.radius, seed: j.seed, options: this.t.options, copy, world: this.map.dims });
+  }
+
+  /** A crater on the ground at `centre`: its y set to the top of the ground there (if any), and the voxel under it, what it strikes. */
+  private groundUnder(centre: [number, number, number]): number {
+    const top = groundTop(this.map, centre[0], centre[2]);
+    if (top !== null) centre[1] = top;
+    return top === null ? P.AIR : this.map.get(Math.floor(centre[0]), top - 1, Math.floor(centre[2]));
+  }
+
+  /**
+   * Job `j`, going out for the first time with `copy`, takes over the work of the job sent ahead for its
+   * shell (the same seed, radius and place), if that one was given the same: the same centre, region
+   * and material, and a copy the same voxel for voxel. What has come back of it is `j`'s from the next
+   * tick, and what comes back after. One given otherwise (the world changed under it) is dropped.
+   * Whether `j` has its work.
+   */
+  private takeOver(j: Job, copy: RegionCopy): boolean {
+    for (const [id, a] of this.aheads) {
+      if (a.job || a.seed !== j.seed || a.radius !== j.radius || a.centre[0] !== j.centre[0] || a.centre[2] !== j.centre[2]) continue;
+      const box = a.box;
+      if (a.centre[1] !== j.centre[1] || a.material !== j.material || box.x0 !== j.box.x0 || box.z0 !== j.box.z0 || box.x1 !== j.box.x1 || box.z1 !== j.box.z1 || !sameCopy(a.copy!, copy)) {
+        this.aheads.delete(id);
+        this.aheadDropped++;
+        return false;
+      }
+      a.job = j;
+      a.copy = null;
+      this.aheadTaken++;
+      this.early.push(...a.back.splice(0));
+      return true;
+    }
+    return false;
   }
 
   private makeHeld(j: Job): void {

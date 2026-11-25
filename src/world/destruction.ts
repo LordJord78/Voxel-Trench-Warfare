@@ -323,6 +323,9 @@ function settleSegment(data: Uint8Array, base: number, step: number, start: numb
     }
   }
   if (top < 0) return false;
+  // Grains already stacked from the bottom stay where they are: the work starts at the first gap.
+  while (start <= top && GRANULAR[data[base + start * step]]) start++;
+  if (start > top) return false;
   grains.length = 0;
   waters.length = 0;
   for (let y = start; y <= top; y++) {
@@ -439,12 +442,17 @@ function slumpColumns(r: Region, candidates: number[], changed: Uint8Array, floo
   return moved;
 }
 
-/** The columns that changed plus their four neighbours: the only places the next pass can move anything. */
-function nextActive(r: Region, changed: Uint8Array): number[] {
+/**
+ * The columns that changed (`moving`), and those plus their four neighbours (`active`): the only places
+ * the next pass can move anything. Each ascending.
+ */
+function nextActive(r: Region, changed: Uint8Array): { active: number[]; moving: number[] } {
   const { sx, sz } = r;
   const mark = new Uint8Array(changed.length);
+  const moving: number[] = [];
   for (let col = 0; col < changed.length; col++) {
     if (!changed[col]) continue;
+    moving.push(col);
     const x = col % sx;
     const z = (col - x) / sx;
     mark[col] = 1;
@@ -453,9 +461,9 @@ function nextActive(r: Region, changed: Uint8Array): number[] {
     if (z > 0) mark[col - sx] = 1;
     if (z + 1 < sz) mark[col + sx] = 1;
   }
-  const out: number[] = [];
-  for (let col = 0; col < mark.length; col++) if (mark[col]) out.push(col);
-  return out;
+  const active: number[] = [];
+  for (let col = 0; col < mark.length; col++) if (mark[col]) active.push(col);
+  return { active, moving };
 }
 
 /** Does a resting loose voxel on the work region's outer columns face open air past the region? */
@@ -536,19 +544,23 @@ function settleOnce(map: BrickMap, box: Box, opts: CollapseOptions, widen: numbe
   const floor = new Int16Array(columns);
   const top = new Int16Array(columns);
   let active: number[] = Array.from({ length: columns }, (_, i) => i);
+  // The columns whose voxels changed since they last fell (every one at first): a column that fell
+  // and has not changed since is at rest, so falling again moves nothing, and its bounds are as they
+  // were. Only these fall, and have their bounds taken again; every active column may slump.
+  let moving = active;
   let total = 0;
   for (let pass = 0; pass < maxPasses && active.length > 0; pass++) {
     changed.fill(0);
-    let moved = fallColumns(region, active, changed);
+    let moved = fallColumns(region, moving, changed);
     if (repose) {
-      for (const col of active) columnBounds(region, col, floor, top);
+      for (const col of moving) columnBounds(region, col, floor, top);
       moved += slumpColumns(region, active, changed, floor, top);
     }
     total += moved;
     if (moved === 0) break;
-    active = nextActive(region, changed);
+    ({ active, moving } = nextActive(region, changed));
   }
-  total += fallColumns(region, Array.from({ length: columns }, (_, i) => i), changed);
+  total += fallColumns(region, moving, changed);
   region.commit(map);
   return { moved: total, work };
 }

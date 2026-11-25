@@ -32,7 +32,7 @@ type H = {
     harmed(): { shell: { n: number; hp: number }; round: { n: number; hp: number } };
   };
   /** The front: its intensity, from which side, and the rounds it has fired (Front.fired); the visitor's shells. */
-  session: { front: { intensity: string; fired: number }; frontSide: number; artillery: { intensity: string } };
+  session: { front: { intensity: string; readonly fired: number }; frontSide: number; artillery: { intensity: string } };
   hitFeedback(): { marker: 'hit' | 'head' | 'kill' | null; pop: string | null; voices: Record<string, number>; flashes: number; markers: Record<'hit' | 'head' | 'kill', number> };
   views: Record<string, { position: [number, number, number] }>;
   teleport(at: { position: [number, number, number]; yaw: number; pitch: number }): void;
@@ -74,7 +74,7 @@ async function open(browser: Browser, path: string): Promise<{ page: Page; error
  * respawning after `respawnS`. The room's battle quiet (`off`), so the only rounds in the air are the
  * players' own, unless the test asks for the room's default (`default`: light, left as the lobby has it).
  */
-async function match(browser: Browser, friendTeam: 'red' | 'blue', respawnS: number, battle: 'off' | 'default' = 'off') {
+async function match(browser: Browser, friendTeam: 'red' | 'blue', battle: 'off' | 'default' = 'off') {
   const host = await open(browser, `/?relay=${RELAY}`);
   // The start screen is taller than this 800 × 500 window: it scrolls with its head in reach, as the
   // pause menu and the lobby do, rather than rise off the top, so Host lies inside the window.
@@ -88,8 +88,6 @@ async function match(browser: Browser, friendTeam: 'red' | 'blue', respawnS: num
   await host.page.waitForFunction((t) => (window as unknown as { __trenchline: H }).__trenchline.together.seats()[1]?.team === t, friendTeam);
   if (battle === 'off') await host.page.locator('#match-settings select[name="intensity"]').selectOption('off');
   else for (const p of [host.page, friend.page]) await expect(p.locator('#match-settings select[name="intensity"]')).toHaveValue('light');
-  // The respawn time is the room's; the test asks for a short one through the owner's config message.
-  await host.page.evaluate((s) => (window as unknown as { __trenchline: { together: unknown } }).__trenchline && void s, respawnS);
   await host.page.locator('#start').click();
   for (const p of [host.page, friend.page]) {
     await p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.begun(), null, { timeout: 15_000 });
@@ -250,7 +248,7 @@ async function tapUntilDead(shooter: Page, target: Page, ms: number): Promise<bo
 
 test('a round kills: the feed and the score say so, the shooter sees the kill marked and named, the one shot sees red, and the dead come back in', async ({ browser }) => {
   test.setTimeout(300_000);
-  const { host, friend } = await match(browser, 'blue', 5);
+  const { host, friend } = await match(browser, 'blue');
   await face(host.page, friend.page);
   await watch(host.page);
   await watch(friend.page);
@@ -295,7 +293,7 @@ test('a round kills: the feed and the score say so, the shooter sees the kill ma
 
 test("a headshot kill: the shooter's ear hears its crack and gush, and HEADSHOT names the victim when the room says", async ({ browser }) => {
   test.setTimeout(300_000);
-  const { host, friend } = await match(browser, 'blue', 5);
+  const { host, friend } = await match(browser, 'blue');
   // At the head: an AK's round there kills (105), one round, which may reach the one shot's page
   // after the room's word that they are dead.
   await face(host.page, friend.page, 1.62);
@@ -331,7 +329,7 @@ test("a headshot kill: the shooter's ear hears its crack and gush, and HEADSHOT 
 
 test("a team kill costs the killer's team a point, and is no kill of theirs to celebrate", async ({ browser }) => {
   test.setTimeout(300_000);
-  const { host, friend } = await match(browser, 'red', 5);
+  const { host, friend } = await match(browser, 'red');
   await face(host.page, friend.page);
   const before = await h(host.page, (x) => x.hitFeedback());
   expect(await shootUntilDead(host.page, friend.page, 8000)).toBe(true);
@@ -365,7 +363,7 @@ const feedOf = (page: Page): Promise<FeedLine[]> =>
 test("under the room's default light battle, the front firing on both and its shells landing: a round kills, the shooter's in the feed and the score, and the dead come back in", async ({ browser }) => {
   test.setTimeout(300_000);
   // The lobby's battle left as it is: light, the room's default (the other tests quiet it).
-  const { host, friend } = await match(browser, 'blue', 5, 'default');
+  const { host, friend } = await match(browser, 'blue', 'default');
   // On each page the room's battle, light: its front from the line across from the page's team, the shells the room's alone.
   const battleOf = (p: Page) => h(p, (x) => ({ front: x.session.front.intensity, side: x.session.frontSide, artillery: x.session.artillery.intensity }));
   expect(await battleOf(host.page)).toEqual({ front: 'light', side: 1, artillery: 'off' });
@@ -373,11 +371,19 @@ test("under the room's default light battle, the front firing on both and its sh
   const firedOf = (p: Page) => h(p, (x) => x.session.front.fired);
   const fired0 = [await firedOf(host.page), await firedOf(friend.page)];
   const name = await otherName(host.page);
+  const hostName = await h(host.page, (x) => x.together.seats().find((s) => s.id === x.together.you())!.name);
   /** Back in, if killed. */
   const alive = (p: Page) => p.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.deadFor() === null, null, { timeout: 15_000 });
+  // The score and the host's kill markers before any try: each kill of the host's that the feed names
+  // raises both by one, whichever try it came in.
+  const red0 = (await h(host.page, (x) => x.together.score()?.red)) ?? 0;
+  const marked0 = await h(host.page, (x) => x.hitFeedback().markers.kill);
+  /** The feed's lines on the host's page naming the friend (Blue's) as the one killed: by team too, as both may go by the default name. */
+  const friendDeaths = async () => (await feedOf(host.page)).filter((l) => l.victim?.team === 'blue' && l.victim.name === name);
   // The host shoots the friend in the open, where the front fires at both: tried again if the battle
   // (the front's round, a shell) kills the friend first, or the host, so the host cannot.
   let killed: FeedLine | null = null;
+  let hostKills = 0;
   const tried: string[] = [];
   for (let tries = 0; tries < 3 && !killed; tries++) {
     await alive(host.page);
@@ -388,27 +394,34 @@ test("under the room's default light battle, the front firing on both and its sh
     for (const [p, n] of [[host.page, fh + 2], [friend.page, ff + 2]] as const) {
       await p.waitForFunction((k) => (window as unknown as { __trenchline: H }).__trenchline.session.front.fired >= (k as number), n, { timeout: 20_000 });
     }
-    if (!(await tapUntilDead(host.page, friend.page, 8000))) {
-      tried.push('the friend standing');
-      continue;
+    // No line of an earlier try's death of the friend's still shown (a line stays 7 s): the line that comes is this try's.
+    await expect.poll(async () => (await friendDeaths()).length, { timeout: 10_000 }).toBe(0);
+    const dead = await tapUntilDead(host.page, friend.page, 8000);
+    // This try's death, if the friend fell: its line (a round still in the air may kill after the taps stop).
+    const line = await expect
+      .poll(async () => (await friendDeaths())[0] ?? null, { timeout: dead ? 5000 : 1000 })
+      .not.toBeNull()
+      .then(async () => (await friendDeaths())[0])
+      .catch(() => null);
+    tried.push(line ? JSON.stringify(line) : 'the friend standing');
+    if (line?.killer?.team === 'red' && line.killer.name === hostName) {
+      hostKills++;
+      killed = line;
     }
-    await host.page.waitForTimeout(300);
-    const line = (await feedOf(host.page)).find((l) => l.victim?.name === name) ?? null;
-    tried.push(JSON.stringify(line));
-    if (line?.killer) killed = line;
   }
   const hurt = { host: await h(host.page, (x) => ({ hurts: x.together.hurts(), harmed: x.together.harmed() })), friend: await h(friend.page, (x) => ({ hurts: x.together.hurts(), harmed: x.together.harmed() })) };
   console.log(`the fight under the light battle: ${tried.join('; ')}; the front fired ${(await firedOf(host.page)) - fired0[0]} rounds at the host and ${(await firedOf(friend.page)) - fired0[1]} at the friend; the battle's harm told the room: ${JSON.stringify(hurt)}`);
   // The host's round, the host's kill: in the feed, Red's name, how, and Blue's.
   expect(killed, tried.join('; ')).not.toBeNull();
-  const hostName = await h(host.page, (x) => x.together.seats().find((s) => s.id === x.together.you())!.name);
+  expect(hostKills).toBeGreaterThanOrEqual(1);
   expect(killed!.killer).toEqual({ team: 'red', name: hostName });
   expect(['shot', 'headshot']).toContain(killed!.how);
   expect(killed!.victim).toEqual({ team: 'blue', name });
-  // The score is the host's team's (the battle's kills score nothing), and the host's crosshair marks it.
-  await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.together.score()?.red === 1);
-  await expect(host.page.locator('#roomline')).toContainText('RED 1');
-  await host.page.waitForFunction(() => (window as unknown as { __trenchline: H }).__trenchline.hitFeedback().markers.kill === 1, null, { timeout: 5000 });
+  // The score rose by the host's kills alone (the battle's kills score nothing), and the host's crosshair marked each.
+  const red = red0 + hostKills;
+  await host.page.waitForFunction((n) => (window as unknown as { __trenchline: H }).__trenchline.together.score()?.red === n, red);
+  await expect(host.page.locator('#roomline')).toContainText(`RED ${red}`);
+  await host.page.waitForFunction((n) => (window as unknown as { __trenchline: H }).__trenchline.hitFeedback().markers.kill === n, marked0 + hostKills, { timeout: 5000 });
   // The dead come back in.
   await alive(friend.page);
   await expect(friend.page.locator('#hud .fallen')).toBeHidden();

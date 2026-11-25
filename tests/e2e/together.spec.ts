@@ -31,7 +31,7 @@ type H = {
    * The side this page fires for: its own rounds' colour, and the word each of its shots carries; the
    * front (its intensity, from which side, and the rounds it has fired: Front.fired); the visitor's shells.
    */
-  session: { team: 'red' | 'blue'; front: { intensity: string; fired: number }; frontSide: number; artillery: { intensity: string } };
+  session: { team: 'red' | 'blue'; front: { intensity: string; readonly fired: number }; frontSide: number; artillery: { intensity: string } };
   waitFrames(n: number): Promise<void>;
 };
 

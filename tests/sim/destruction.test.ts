@@ -6,6 +6,7 @@ import { chip, detonate } from '../../src/world/destruction';
 import { detonationRegion, runDetonation, type DetonationRequest, type DetonationResult } from '../../src/world/detonation';
 import { P } from '../../src/world/materials';
 import { groundTop } from '../../src/world/raycast';
+import type { BrickMap } from '../../src/world/bricks';
 import { sameWorld, shellOptions, trenchArena } from '../support/worlds';
 
 // The session's craters land through a queue (the spec's §3): posted to a runner, written back a
@@ -317,5 +318,116 @@ describe('the destruction queue', () => {
     expect(land(d).craters.map((c) => c.id)).toEqual([id]);
     expect(d.cuts).toEqual([]);
     expect(sameWorld(inPlace, map)).toBe(true);
+  });
+});
+
+// A catch-up on the room's log has its next shells' craters cut ahead of their turn (sim/room-battle.ts):
+// each such job is no shell's until its shell's own job goes out and takes the work over, and only if
+// its ground is as it was when the work was sent. Two shells on the ground, as a room's are cut: the
+// west's region and the east's apart (whole sectors: x 0–128 and 128–256), on the open clay.
+describe('craters cut ahead of their turn', () => {
+  const WEST: [number, number, number] = [40, 0, 60];
+  const EAST: [number, number, number] = [216, 0, 60];
+  const R = 8;
+  const loosen = t().options.loosen;
+
+  /** The world where the shells go in each in its turn, cut nowhere ahead: each landed, `between` each pair. */
+  function inTurn(shells: readonly (readonly [readonly [number, number, number], number])[], between?: (map: BrickMap, k: number) => void): BrickMap {
+    const map = trenchArena();
+    const d = new Destruction(map, inProcessRunner(), t());
+    shells.forEach(([at, seed], k) => {
+      if (k > 0) between?.(map, k);
+      d.shell(at, R, seed, true);
+      land(d);
+    });
+    return map;
+  }
+
+  /** Ticks until `n` craters have landed, the runner's results released before each. */
+  function released(d: Destruction, runner: { release(): void }, n = 1) {
+    const craters = [];
+    for (let k = 0; k < 50 && craters.length < n; k++) {
+      runner.release();
+      craters.push(...d.tick());
+    }
+    return craters;
+  }
+
+  it('one cut ahead goes in as it would have in its turn, its work taken over; until then nothing of it is pending, out or written', () => {
+    const [w, e] = [WEST, EAST].map((at) => detonationRegion(trenchArena().dims, at, R, loosen)!);
+    expect(w.x1 <= e.x0).toBe(true);
+    const map = trenchArena();
+    const runner = heldRunner();
+    const d = new Destruction(map, runner, t());
+    d.ahead([EAST[0], 64, EAST[2]], R, 32);
+    expect(runner.posted.map((r) => r.id)).toEqual([-1]);
+    // Centred on the ground's top, and given the region as the world is now.
+    expect(runner.posted[0].centre).toEqual([EAST[0], groundTop(map, EAST[0], EAST[2]), EAST[2]]);
+    runner.release();
+    for (let k = 0; k < 3; k++) expect(d.tick()).toEqual([]);
+    expect([d.pending, d.out.length, d.lastId, d.overlapsPending(e), d.overlapsOut(e)]).toEqual([0, 0, 0, false, false]);
+    expect(sameWorld(trenchArena(), map)).toBe(true);
+    // In their turns: the west's, then the east's, which takes the work over and posts nothing.
+    const west = d.shell(WEST, R, 31, true);
+    expect(released(d, runner).map((c) => c.id)).toEqual([west]);
+    const east = d.shell(EAST, R, 32, true);
+    const craters = released(d, runner);
+    expect(craters.map((c) => c.id)).toEqual([east]);
+    const fresh = trenchArena();
+    expect(craters[0].material).toBe(fresh.get(EAST[0], groundTop(fresh, EAST[0], EAST[2])! - 1, EAST[2]));
+    expect(runner.posted.map((r) => r.id)).toEqual([-1, west]);
+    expect([d.aheadTaken, d.aheadDropped]).toEqual([1, 0]);
+    expect(sameWorld(inTurn([[WEST, 31], [EAST, 32]]), map)).toBe(true);
+  });
+
+  it("one whose ground changed before its turn, by a voxel or a crater over it, is cut afresh from the ground as it is then", () => {
+    // A voxel dug in its region, far from its crater (a scoop's); then a crater over its region.
+    const dug = (map: BrickMap) => map.set(250, 63, 10, P.AIR);
+    for (const [shells, between] of [
+      [[[WEST, 31], [EAST, 32]], (map: BrickMap) => dug(map)],
+      [[[[196, 0, 60], 33], [EAST, 32]], undefined],
+    ] as const) {
+      const map = trenchArena();
+      const runner = heldRunner();
+      const d = new Destruction(map, runner, t());
+      d.ahead([EAST[0], 64, EAST[2]], R, 32);
+      const first = d.shell(shells[0][0], R, shells[0][1], true);
+      released(d, runner);
+      between?.(map);
+      const east = d.shell(EAST, R, 32, true);
+      expect(released(d, runner).map((c) => c.id)).toEqual([east]);
+      expect(runner.posted.map((r) => r.id)).toEqual([-1, first, east]);
+      expect([d.aheadTaken, d.aheadDropped]).toEqual([0, 1]);
+      expect(sameWorld(inTurn(shells, between), map)).toBe(true);
+    }
+  });
+
+  it("what comes back of it after its shell's job went out is that job's: its cut, then its crater", () => {
+    const map = trenchArena();
+    const runner = heldRunner();
+    const d = new Destruction(map, runner, t());
+    d.ahead([EAST[0], 64, EAST[2]], R, 32);
+    const east = d.shell(EAST, R, 32, true);
+    d.tick();
+    d.tick();
+    expect(runner.posted.map((r) => r.id)).toEqual([-1]);
+    expect([d.pending, d.out.length, d.aheadTaken]).toEqual([1, 1, 1]);
+    expect(released(d, runner).map((c) => c.id)).toEqual([east]);
+    expect(sameWorld(inTurn([[EAST, 32]]), map)).toBe(true);
+  });
+
+  it('one dropped (dropAhead) is no shell\'s: what comes back of it is nothing, and its shell is cut afresh', () => {
+    const map = trenchArena();
+    const runner = heldRunner();
+    const d = new Destruction(map, runner, t());
+    d.ahead([EAST[0], 64, EAST[2]], R, 32);
+    d.dropAhead();
+    runner.release();
+    d.tick();
+    const east = d.shell(EAST, R, 32, true);
+    expect(released(d, runner).map((c) => c.id)).toEqual([east]);
+    expect(runner.posted.map((r) => r.id)).toEqual([-1, east]);
+    expect([d.aheadTaken, d.aheadDropped]).toEqual([0, 0]);
+    expect(sameWorld(inTurn([[EAST, 32]]), map)).toBe(true);
   });
 });

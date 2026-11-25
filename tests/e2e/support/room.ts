@@ -24,6 +24,21 @@ export interface ShellSeen {
   radius: number;
 }
 
+/**
+ * A welcome's catch-up as the page recorded it (main.ts's catchUps): when it began, how long it took
+ * (null: running, or failed), each entry done (ms from its start, entries done) of `total`, and where its
+ * time went (ms): the destruction workers' jobs done meanwhile, the ms they ran there and the ms beyond
+ * that from post to result; the session's destruction ticks; the battle's runs along the log; the
+ * breaths and the ms awaiting them; and the page's frames meanwhile and their main-thread ms.
+ */
+export interface CatchUpSeen {
+  from: number;
+  ms: number | null;
+  total: number;
+  done: [number, number][];
+  parts: { jobs: number; jobMs: number; tripMs: number; ticks: number; tickMs: number; runs: number; runMs: number; breaths: number; breathMs: number; frames: number; frameMs: number };
+}
+
 /** The hooks the room specs use (main.ts's `__trenchline`). */
 export interface RoomHooks {
   ready: boolean;
@@ -48,12 +63,15 @@ export interface RoomHooks {
     harmed(): { shell: { n: number; hp: number }; round: { n: number; hp: number } };
     end(): void;
     log(): { shells: number[][]; digs: number[][] } | null;
-    catchUps(): { from: number; ms: number | null; total: number; done: [number, number][] }[];
+    catchUps(): CatchUpSeen[];
+    /** Every voxel holding one of `ids`, and each sector's content hash (world-compare.ts). */
+    cells(ids: readonly number[]): number[];
+    sectorHashes(): number[];
     others(): { id: number; team: 'red' | 'blue'; position: [number, number, number] }[];
   };
   session: {
-    /** The front: its intensity, and the rounds it has fired (combat/front.ts Front.fired, private in its class: read for the tests). */
-    front: { intensity: 'off' | 'light' | 'heavy'; fired: number };
+    /** The front: its intensity, and the rounds it has fired (combat/front.ts Front.fired). */
+    front: { intensity: 'off' | 'light' | 'heavy'; readonly fired: number };
     artillery: { intensity: 'off' | 'light' | 'heavy' };
     frontSide: 0 | 1;
     alive: boolean;
@@ -145,6 +163,36 @@ export async function goIn(page: Page): Promise<void> {
   await expect(page.locator('#lobby')).toBeHidden();
 }
 
+/** The page's front set here, not through setIntensity (which sets the artillery too: in a room it must stay off). */
+export const front = (page: Page, i: 'off' | 'light' | 'heavy') =>
+  h(
+    page,
+    (x, a) => {
+      x.session.front.intensity = a as 'off' | 'light' | 'heavy';
+    },
+    i,
+  );
+
+/** Back in after being killed, if killed: once the page's player is alive again. */
+export const alive = (page: Page) => page.waitForFunction(() => (window as unknown as { __trenchline: RoomHooks }).__trenchline.together.deadFor() === null, null, { timeout: 20_000 });
+
+/** A line of the kill feed: the killer (their team and name; none for the battle's), how, and the one killed. */
+export type FeedLine = { killer: { team: string; name: string } | null; how: string; victim: { team: string; name: string } | null };
+
+/** `page`'s kill feed, newest line first. */
+export const feedOf = (page: Page): Promise<FeedLine[]> =>
+  page.evaluate(() =>
+    [...document.querySelectorAll('#hud .feed li')].map((li) => {
+      const spans = [...li.querySelectorAll('span')];
+      const how = spans.findIndex((s) => s.className === 'how');
+      const who = (s: Element | undefined) => (s ? { team: s.className, name: s.textContent ?? '' } : null);
+      return { killer: how > 0 ? who(spans[0]) : null, how: spans[how]?.textContent ?? '', victim: who(spans[how + 1]) };
+    }),
+  );
+
+/** The page's own name and team, from its seat. */
+export const meOf = (page: Page) => h(page, (x) => x.together.seats().find((s) => s.id === x.together.you())!);
+
 /** The world's top at (x, z) metres on `page`: the highest voxel neither air nor water (the footAt hook), as a foot's height (metres, 5 cm over it), or null. */
 export const groundAt = (page: Page, x: number, z: number): Promise<number | null> =>
   h(
@@ -179,6 +227,11 @@ export interface SameOptions {
    * the chars of those matches' fires are not made there (the shared-battle spec's note 5: a char is
    * colour only, an accepted drift). Masked: each voxel that is a char on one page and on the other a
    * shade that burns to it (of the char's kind, unburnt); any other difference there still counts.
+   *
+   * It masks this match's chars too, which a catch-up does make (the spec's note 10: it runs the battle
+   * along the log, each strike given at its second), so it is for a comparison across a match's end
+   * alone. Every comparison within a match leaves it off and compares chars unmasked: friends-long's
+   * reload after three minutes of heavy, battle.spec, and friends.spec's within-match ones.
    */
   chars?: boolean;
 }
@@ -189,29 +242,8 @@ const isChar = (id: number) => CHAR_IDS.includes(id);
 /** Whether one of two voxels is a char and the other a shade that burns to it: the same kind, unburnt. */
 const charredOnOne = (p: number, q: number) => p !== q && (isChar(p) !== isChar(q)) && PALETTE[p]?.kind === PALETTE[q]?.kind;
 
-/** On a page: every voxel holding one of `ids`, as packed cells, brick by brick (as world-compare.ts bloodCells). */
-const cellsHolding = (page: Page, ids: readonly number[]): Promise<number[]> =>
-  h(
-    page,
-    (x, a) => {
-      const map = x.world.map as unknown as { table: Uint32Array; dims: { x: number; y: number; z: number }; bricks: { x: number; y: number; z: number }; denseView(bi: number): Uint8Array | null };
-      const want = new Uint8Array(256);
-      for (const id of a as number[]) want[id] = 1;
-      const { table, bricks, dims } = map;
-      const out: number[] = [];
-      for (let bi = 0; bi < table.length; bi++) {
-        const e = table[bi];
-        if (e === 0 || (e & 0x80000000 && !want[e & 0xff])) continue;
-        const voxels = e & 0x80000000 ? new Uint8Array(512).fill(e & 0xff) : map.denseView(bi)!;
-        const bx = (bi % bricks.x) * 8;
-        const by = (Math.floor(bi / bricks.x) % bricks.y) * 8;
-        const bz = Math.floor(bi / (bricks.x * bricks.y)) * 8;
-        for (let i = 0; i < 512; i++) if (want[voxels[i]]) out.push(((bz + (i >> 6)) * dims.y + by + ((i >> 3) & 7)) * dims.x + bx + (i & 7));
-      }
-      return out;
-    },
-    ids,
-  );
+/** On a page: every voxel holding one of `ids`, as packed cells (the cells hook: world-compare.ts cellsHolding). */
+const cellsHolding = (page: Page, ids: readonly number[]): Promise<number[]> => h(page, (x, a) => x.together.cells(a as number[]), ids);
 
 /** On a page: the voxel at each of `cells` (packed). */
 const voxelsAt = (page: Page, cells: readonly number[]): Promise<number[]> =>
@@ -339,38 +371,8 @@ export async function sameWorlds(a: Page, b: Page, { tries = 10, chars = false }
   return last ?? { same: false, hashes: ['', ''], landed: [[], []], masked: 0, tries, seconds: [{ battle: 0, match: 0 }, { battle: 0, match: 0 }], notes, charsMasked: 0 };
 }
 
-/** On a page, each 32-voxel sector's content hash: the sum over its bricks of a mix of each non-air voxel and its place (an empty brick, or one of air, is nothing). */
-const sectorHashes = (page: Page): Promise<number[]> =>
-  h(page, (x) => {
-    const map = x.world.map as unknown as { table: Uint32Array; bricks: { x: number; y: number; z: number }; sectors: { x: number; y: number; z: number }; denseView(bi: number): Uint8Array | null };
-    const mix = (i: number, v: number) => {
-      let k = Math.imul(i + 1, 0x9e3779b1) ^ Math.imul(v + 7, 0x85ebca6b);
-      k = Math.imul(k ^ (k >>> 15), 0xc2b2ae35);
-      return (k ^ (k >>> 13)) | 0;
-    };
-    const uniform = new Int32Array(256);
-    for (let v = 1; v < 256; v++) for (let i = 0; i < 512; i++) uniform[v] = (uniform[v] + mix(i, v)) | 0;
-    const { table, bricks, sectors } = map;
-    const out = new Int32Array(sectors.x * sectors.y * sectors.z);
-    for (let bi = 0; bi < table.length; bi++) {
-      const e = table[bi];
-      if (e === 0) continue;
-      let sum = 0;
-      if (e & 0x80000000) sum = uniform[e & 0xff];
-      else {
-        const d = map.denseView(bi)!;
-        for (let i = 0; i < 512; i++) if (d[i] !== 0) sum = (sum + mix(i, d[i])) | 0;
-      }
-      if (sum === 0) continue;
-      const bx = bi % bricks.x;
-      const by = Math.floor(bi / bricks.x) % bricks.y;
-      const bz = Math.floor(bi / (bricks.x * bricks.y));
-      const local = ((bz & 3) * 4 + (by & 3)) * 4 + (bx & 3);
-      const si = ((bz >> 2) * sectors.y + (by >> 2)) * sectors.x + (bx >> 2);
-      out[si] = (out[si] + mix(local, sum & 0xffff) + mix(local + 64, sum >>> 16)) | 0;
-    }
-    return Array.from(out);
-  });
+/** On a page, each 32-voxel sector's content hash (the sectorHashes hook: world-compare.ts sectorHashes). */
+const sectorHashes = (page: Page): Promise<number[]> => h(page, (x) => x.together.sectorHashes());
 
 /** On a page, sector `si`'s voxels (x fastest, then y, then z) and its first voxel. */
 const sectorVoxels = (page: Page, si: number): Promise<{ origin: [number, number, number]; voxels: number[] }> =>

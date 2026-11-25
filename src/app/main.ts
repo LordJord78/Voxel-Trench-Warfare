@@ -74,13 +74,13 @@ import { defaultSettings, loadSettings, saveSettings, type Settings } from '../u
 import { UNIFORM } from '../world/bricks';
 import { DETONATION_MARGIN, DETONATION_WIDEN, detonationRegion, runDetonation } from '../world/detonation';
 import { fingerprint } from '../world/fingerprint';
-import { groundTop } from '../world/raycast';
+import { groundTop, standTop } from '../world/raycast';
 import { copyRegion, type RegionCopy } from '../world/region-copy';
 import { CameraRig, rigTunables } from './camera-rig';
 import { workerRunner } from './destruction-in-worker';
 import { CHECK_CANVAS, reporter, runCheck } from './check';
 import { BattleClock, catchUpRunner } from './battle-clock';
-import { bloodCells, pageFingerprint, standTop } from './world-compare';
+import { bloodCells, cellsHolding, pageFingerprint, sectorHashes } from './world-compare';
 import { coverAt, daylightAt, EffectsFrameBuilder, effectsTunables, NO_BATTLE, type BuiltEffects, type ShownBattle, type DebugEmber, type DebugQuad, type DebugRibbon, type DebugTracer } from './effects-frame';
 import { FlyCam } from './flycam';
 import { generateInWorkers } from './generate-in-workers';
@@ -273,8 +273,10 @@ async function start(): Promise<void> {
   const renderer = await Renderer.create(gpu, canvas, gpuWorld, world.plan, { ...render, far, compiled, dynres: true });
 
   const views = standardViews(world.plan, world.spawn);
-  // Craters are cut in a worker, off the frame.
-  const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn, runner: workerRunner() }, tun, SEED, views.bay.yaw);
+  // Craters are cut in a worker, off the frame; a catch-up's cut ahead of their turn on a pool of more
+  // ([destruction] catch_up_workers), one core left for the page and one for the session's worker.
+  const runner = workerRunner(Math.max(0, Math.min(tun.i('destruction.catch_up_workers'), (navigator.hardwareConcurrency || 4) - 2)));
+  const session = Session.create({ map: world.map, plan: world.plan, spawn: world.spawn, runner }, tun, SEED, views.bay.yaw);
   // Each team's starts, picked once from the world as loaded (before any crater): the starts the
   // room's shell field pins (net/shell-fields.ts), whose shells keep clear of them, for every deploy
   // and respawn.
@@ -673,10 +675,30 @@ async function start(): Promise<void> {
     });
   /**
    * Each welcome's catch-up on this page, for the tests: when it began (performance.now: the welcome's
-   * arrival, which starts it), how long it took (ms; null while it runs, or if it failed), and each of
-   * the log's entries done as it said (ms from its start, entries done) of how many (`total`).
+   * arrival, which starts it), how long it took (ms; null while it runs, or if it failed), each of
+   * the log's entries done as it said (ms from its start, entries done) of how many (`total`), and
+   * where its time went (`parts`, ms): the destruction workers' jobs done meanwhile, the ms they ran
+   * there and the ms beyond that from post to result (RunnerStats); the session's destruction ticks
+   * (the write-back, and each crater's copy and post); the battle's runs along the log, its chars made;
+   * its breaths, and the ms spent awaiting them; and the page's frames meanwhile, and their main-thread ms.
    */
-  const catchUps: { from: number; ms: number | null; total: number; done: [number, number][] }[] = [];
+  type CatchUpParts = { jobs: number; jobMs: number; tripMs: number; ticks: number; tickMs: number; runs: number; runMs: number; breaths: number; breathMs: number; frames: number; frameMs: number };
+  const catchUps: { from: number; ms: number | null; total: number; done: [number, number][]; parts: CatchUpParts }[] = [];
+  /** The catch-up running, whose frames and destruction ticks are counted in its parts; null with none. And how many run. */
+  let catching: CatchUpParts | null = null;
+  let catchingUp = 0;
+  const tickOf = session.destruction.tick.bind(session.destruction);
+  session.destruction.tick = () => {
+    const parts = catching;
+    if (!parts) return tickOf();
+    const t0 = performance.now();
+    try {
+      return tickOf();
+    } finally {
+      parts.ticks++;
+      parts.tickMs += performance.now() - t0;
+    }
+  };
   // Playing with friends (together.ts): nothing happens until the player hosts or follows a link.
   const searchParams = new URLSearchParams(location.search);
   const together = new Together(document, relayUrl(searchParams, location.hostname, import.meta.env.DEV, import.meta.env.VITE_RELAY_URL), __TRENCHLINE_BUILD__, storage, {
@@ -747,18 +769,45 @@ async function start(): Promise<void> {
         for (const c of events.chars) chars.add(c.at);
         chars.make(session.map, (box) => session.destruction.overlapsPending(box));
       };
-      const along = match ? catchUpRunner(director, (s) => matchInputs(match.config, s), made) : null;
-      const record: (typeof catchUps)[number] = { from: performance.now(), ms: null, total: 0, done: [] };
+      const ran = match ? catchUpRunner(director, (s) => matchInputs(match.config, s), made) : null;
+      const parts: CatchUpParts = { jobs: -runner.stats.jobs, jobMs: -runner.stats.jobMs, tripMs: -runner.stats.tripMs, ticks: 0, tickMs: 0, runs: 0, runMs: 0, breaths: 0, breathMs: 0, frames: 0, frameMs: 0 };
+      const record: (typeof catchUps)[number] = { from: performance.now(), ms: null, total: 0, done: [], parts };
       catchUps.push(record);
       const told = (done: number, total: number) => {
         record.total = total;
         record.done.push([performance.now() - record.from, done]);
         progress(done, total);
       };
-      await room.catchUp(log, match?.startAt ?? null, now, along, breathe, { clock: () => performance.now(), progress: told });
+      // Each part timed as it goes.
+      const along = ran && {
+        runTo: (s: number, strikes: readonly Strike[]) => {
+          const t0 = performance.now();
+          ran.runTo(s, strikes);
+          parts.runs++;
+          parts.runMs += performance.now() - t0;
+        },
+      };
+      const breath = async () => {
+        const t0 = performance.now();
+        await breathe();
+        parts.breaths++;
+        parts.breathMs += performance.now() - t0;
+      };
+      catching = parts;
+      catchingUp++;
+      try {
+        await room.catchUp(log, match?.startAt ?? null, now, along, breath, { clock: () => performance.now(), progress: told, ahead: tun.i('room_battle.catch_up_ahead') });
+      } finally {
+        if (catching === parts) catching = null;
+        // The pool's work is done once no catch-up runs (each crater cut ahead is in, or was dropped): it goes.
+        if (--catchingUp === 0) runner.rest();
+        parts.jobs += runner.stats.jobs;
+        parts.jobMs += runner.stats.jobMs;
+        parts.tripMs += runner.stats.tripMs;
+      }
       record.ms = performance.now() - record.from;
       renderer.largeEdit();
-      if (along && battle === director) battleClock.given = along.reached;
+      if (ran && battle === director) battleClock.given = ran.reached;
     },
     // A crater that never goes in, or any other failure to catch up: the world can't be the room's,
     // so the game stops and says why.
@@ -1021,7 +1070,12 @@ async function start(): Promise<void> {
     try {
       const t0 = performance.now();
       step(frozen ? last - skipped + advance : time);
-      mainMs[mainFrames++ % MAIN_FRAMES] = performance.now() - t0;
+      const ms = performance.now() - t0;
+      mainMs[mainFrames++ % MAIN_FRAMES] = ms;
+      if (catching) {
+        catching.frames++;
+        catching.frameMs += ms;
+      }
     } catch (e) {
       // A frame that throws would otherwise freeze the last image without a word.
       console.error(e);
@@ -1490,7 +1544,7 @@ async function start(): Promise<void> {
     renderer,
     session,
     views,
-    /** Where a foot stands at (x, z) metres: the top of the highest voxel neither air nor water (world-compare.ts standTop), metres; null, none. */
+    /** Where a foot stands at (x, z) metres: the top of the highest voxel neither air nor water (world/raycast.ts standTop), metres; null, none. */
     footAt: (x: number, z: number) => standTop(session.map, x, z, voxelM),
     /** The visitor's settings as they stand (the pause menu's; their battle's intensity among them). */
     settings: () => ({ ...settings }),
@@ -1559,6 +1613,10 @@ async function start(): Promise<void> {
       catchUps: () => catchUps,
       /** Every voxel holding a BLOOD_* id, as packed cells (world-compare.ts): per page, and masked when pages compare worlds. */
       blood: () => bloodCells(world.map),
+      /** Every voxel holding one of `ids`, as packed cells (world-compare.ts): a char one page made and the other did not, masked when they compare worlds. */
+      cells: (ids: readonly number[]) => cellsHolding(world.map, ids),
+      /** Each 32-voxel sector's content hash (world-compare.ts): where two pages' worlds differ, when they do. */
+      sectorHashes: () => sectorHashes(world.map),
     },
     /** Soldiers stood in the world without a room, for the tests and the perf gate (seat 100 on, so they never share a probe with a player's). */
     puppets(list: (Pick<Figure, 'team' | 'position' | 'yaw' | 'pitch' | 'height'> & Partial<Pick<Figure, 'velocity' | 'deadFor' | 'gear' | 'flags'>>)[]) {

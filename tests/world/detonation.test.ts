@@ -5,7 +5,7 @@ import { detonate } from '../../src/world/destruction';
 import { detonationRegion, runDetonation, type DetonationResult } from '../../src/world/detonation';
 import { isLoose, P } from '../../src/world/materials';
 import { groundTop } from '../../src/world/raycast';
-import { applyPatch, copyRegion, regionMap, sectorBox, type BrickPatch } from '../../src/world/region-copy';
+import { applyPatch, copyRegion, regionMap, sameCopy, sectorBox, type BrickPatch } from '../../src/world/region-copy';
 import { sameWorld, shellOptions, trenchArena } from '../support/worlds';
 
 // A shell's crater is cut off the main thread, on a copy of the region it works over: the copy is
@@ -46,6 +46,24 @@ describe('a crater cut on a copy of its region', () => {
       }
     }
     expect(() => copyRegion(map, { x0: 100, y0: 0, z0: 96, x1: 160, y1: 128, z1: 160 })).toThrow(RangeError);
+  });
+
+  it('two copies of a region are the same until a voxel in it changes, wherever it is, and a copy of another region never is', () => {
+    const map = trench();
+    const box = sectorBox(map.dims, { x0: 100, y0: 60, z0: 110, x1: 150, y1: 80, z1: 160 })!;
+    const first = copyRegion(map, box);
+    expect(sameCopy(first, copyRegion(map, box))).toBe(true);
+    // Outside it: still the same.
+    map.set(20, 70, 20, P.CLAY);
+    expect(sameCopy(first, copyRegion(map, box))).toBe(true);
+    // In a dense brick (the trench's wall), in a uniform one (the clay under it), and at its top corner: each differs.
+    for (const [x, y, z, id] of [[100, 50, 119, P.AIR], [130, 10, 130, P.SUBSOIL], [159, 127, 159, P.CLAY]] as const) {
+      const was = map.get(x, y, z);
+      map.set(x, y, z, id);
+      expect(sameCopy(first, copyRegion(map, box)), `(${x}, ${y}, ${z})`).toBe(false);
+      map.set(x, y, z, was);
+    }
+    expect(sameCopy(first, copyRegion(map, sectorBox(map.dims, { x0: 140, y0: 0, z0: 110, x1: 190, y1: 1, z1: 160 })!))).toBe(false);
   });
 
   it("the job's crater is detonate's in place, voxel for voxel, and it lists only bricks that changed", () => {

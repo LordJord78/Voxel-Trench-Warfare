@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { decodeDig, decodeShell } from '../../src/net/protocol';
 import { SHELL_FIELDS } from '../../src/net/shell-fields';
-import { goIn, groundAt, h, hostAndJoin, ready, sameWorlds, windows, type GamePage, type RoomHooks } from './support/room';
+import { alive, front, goIn, groundAt, h, hostAndJoin, ready, sameWorlds, windows, type CatchUpSeen, type GamePage, type RoomHooks } from './support/room';
 
 // The long paths friends take (the final review's item 15, Task 8b), two pages against the relay on
 // one room on the Corridor, its shelling heavy: a page reloaded after three minutes and more of heavy
@@ -18,19 +18,12 @@ let B: GamePage;
 const CATCH_UP_BUDGET_MS = 60_000;
 /** The match's seconds of heavy before B reloads: three minutes and more. */
 const HEAVY_S = 185;
-
-/** Each page's front set here, not through setIntensity (which sets the artillery too: in a room it must stay off). */
-const front = (page: Page, i: 'off' | 'light' | 'heavy') =>
-  h(
-    page,
-    (x, a) => {
-      x.session.front.intensity = a as 'off' | 'light' | 'heavy';
-    },
-    i,
-  );
-
-/** Back in, if killed. */
-const alive = (page: Page) => page.waitForFunction(() => (window as unknown as { __trenchline: RoomHooks }).__trenchline.together.deadFor() === null, null, { timeout: 20_000 });
+/** The catch-up's gate (Task 8c): the median shell's cost at most (ms), and 20 minutes of heavy (386 shells, and the scoops at the rate dug here) projected at most (s). */
+const SHELL_MEDIAN_MS = 120;
+const HEAVY_20_MIN_S = 60;
+const HEAVY_20_MIN_SHELLS = 386;
+/** The longest the page's main thread may be held at once while it catches up (ms). */
+const BLOCK_MAX_MS = 250;
 
 /** Quantiles of `xs`. */
 const at = (xs: number[], q: number) => {
@@ -73,21 +66,33 @@ test('a reload after three minutes of heavy shelling and digging catches up with
     await A.page.waitForTimeout(6000);
   }
   const logged = await h(A.page, (x) => ({ s: x.together.matchSeconds(), shells: x.together.shells().landed.length, digs: x.together.digs().sent }));
-  // Watched from the reload's first script, every frame from the welcome until it has caught up: what the way in says, whether Go is drawn, and the session's ticks.
+  // Watched from the reload's first script, every frame from the welcome until it has caught up: what the way in says, whether Go is drawn, the session's ticks,
+  // and the worst interval between frames; and every task that held the main thread 50 ms or more (the Long Tasks API), when and for how long.
+  type Watched = { frames: number; lines: string[]; counted: number; go: number; ticks: number[]; worstGap: number; long: [number, number][] };
   await B.page.addInitScript(() => {
-    const w = window as unknown as { __trenchline?: RoomHooks; __catching: { frames: number; lines: string[]; counted: number; go: number; ticks: number[] } };
-    const seen: { frames: number; lines: string[]; counted: number; go: number; ticks: number[] } = { frames: 0, lines: [], counted: 0, go: 0, ticks: [] };
+    const w = window as unknown as { __trenchline?: RoomHooks; __catching: Watched };
+    const seen: Watched = { frames: 0, lines: [], counted: 0, go: 0, ticks: [], worstGap: 0, long: [] };
     w.__catching = seen;
-    const look = () => {
+    try {
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) seen.long.push([e.startTime, e.duration]);
+      }).observe({ type: 'longtask', buffered: true });
+    } catch {
+      // No Long Tasks API: the worst frame interval alone.
+    }
+    let last: number | null = null;
+    const look = (t: number) => {
       const x = w.__trenchline;
       if (x?.together && x.together.room() !== null && x.together.phase() === 'playing' && !x.together.caughtUp()) {
         seen.frames++;
+        if (last !== null) seen.worstGap = Math.max(seen.worstGap, t - last);
+        last = t;
         const line = document.getElementById('deploy-line')?.textContent ?? '';
         if (/^Catching up on the battle… \d+ of \d+$/.test(line)) seen.counted++;
         if (seen.lines.length < 6 && !seen.lines.includes(line)) seen.lines.push(line);
         if (document.getElementById('go')?.checkVisibility()) seen.go++;
         if (!seen.ticks.includes(x.session.ticks)) seen.ticks.push(x.session.ticks);
-      }
+      } else last = null;
       requestAnimationFrame(look);
     };
     requestAnimationFrame(look);
@@ -97,8 +102,8 @@ test('a reload after three minutes of heavy shelling and digging catches up with
   await ready(B.page);
   await B.page.waitForFunction(() => (window as unknown as { __trenchline: RoomHooks }).__trenchline.together.catchUps().some((c) => c.ms !== null), null, { timeout: 600_000 });
   const goAfterS = (Date.now() - t0) / 1000;
-  const caught = await h(B.page, (x) => x.together.catchUps()[0]);
-  const watched = await B.page.evaluate(() => (window as unknown as { __catching: { frames: number; lines: string[]; counted: number; go: number; ticks: number[] } }).__catching);
+  const caught: CatchUpSeen = await h(B.page, (x) => x.together.catchUps()[0]);
+  const watched = await B.page.evaluate(() => (window as unknown as { __catching: Watched }).__catching);
   // The log's entries in the catch-up's order (RoomBattle.catchUp: by time, a shell before a scoop of the same ms), the first `total` of them due: each entry's cost from the progress said after it.
   const log = (await h(B.page, (x) => x.together.log()))!;
   const entries = [
@@ -108,33 +113,48 @@ test('a reload after three minutes of heavy shelling and digging catches up with
       return d ? [{ at: d.at, rank: 1, n }] : [];
     }),
   ].sort((a, b) => a.at - b.at || a.rank - b.rank || a.n - b.n);
-  const cost = { shell: { n: 0, ms: 0 }, scoop: { n: 0, ms: 0 } };
+  const cost = { shell: [] as number[], scoop: [] as number[] };
   for (let k = 1; k < caught.done.length; k++) {
     const [t, done] = caught.done[k];
     const [t1, done1] = caught.done[k - 1];
     if (done !== done1 + 1) continue;
-    const kind = entries[done - 1].rank === 0 ? cost.shell : cost.scoop;
-    kind.n++;
-    kind.ms += t - t1;
+    (entries[done - 1].rank === 0 ? cost.shell : cost.scoop).push(t - t1);
   }
-  const perShell = cost.shell.ms / Math.max(1, cost.shell.n);
-  const perScoop = cost.scoop.ms / Math.max(1, cost.scoop.n);
-  const rest = (caught.ms ?? 0) - cost.shell.ms - cost.scoop.ms;
-  const project = (shells: number, scoops: number) => ((shells * perShell + scoops * perScoop + rest) / 1000).toFixed(1);
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+  const perShell = sum(cost.shell) / Math.max(1, cost.shell.length);
+  const shellMedian = at(cost.shell, 0.5);
+  const perScoop = sum(cost.scoop) / Math.max(1, cost.scoop.length);
+  const rest = (caught.ms ?? 0) - sum(cost.shell) - sum(cost.scoop);
+  const project = (shells: number, scoops: number) => (shells * perShell + scoops * perScoop + rest) / 1000;
   const scoopsPerS = log.digs.length / logged.s;
+  const heavy20 = project(HEAVY_20_MIN_SHELLS, scoopsPerS * 1200);
+  // Where the catch-up's time went, per shell of the log (main.ts's catchUps parts).
+  const p = caught.parts;
+  const n = Math.max(1, cost.shell.length);
+  const per = (ms: number) => (ms / n).toFixed(1);
+  const longest = watched.long.filter(([start, ms]) => start + ms >= caught.from && start <= caught.from + (caught.ms ?? 0)).reduce((a, [, ms]) => Math.max(a, ms), 0);
   console.log(
     `B reloaded ${logged.s.toFixed(0)} s into heavy, the log ${log.shells.length} shells and ${log.digs.length} scoops (${caught.total} due): welcome to caught up ${((caught.ms ?? 0) / 1000).toFixed(1)} s ` +
-      `(shells ${cost.shell.n} at ${perShell.toFixed(0)} ms each, scoops ${cost.scoop.n} at ${perScoop.toFixed(1)} ms each, the rest ${rest.toFixed(0)} ms); Go ${goAfterS.toFixed(1)} s after the reload. ` +
-      `Projected: 20 min of light (150 shells, ${Math.round(scoopsPerS * 1200)} scoops at this rate) ${project(150, scoopsPerS * 1200)} s; 20 min of heavy (${Math.round((log.shells.length / logged.s) * 1200)} shells) ${project((log.shells.length / logged.s) * 1200, scoopsPerS * 1200)} s`,
+      `(shells ${cost.shell.length} at ${perShell.toFixed(0)} ms each, median ${shellMedian.toFixed(0)}, p90 ${at(cost.shell, 0.9).toFixed(0)}; scoops ${cost.scoop.length} at ${perScoop.toFixed(1)} ms each; the rest ${rest.toFixed(0)} ms); Go ${goAfterS.toFixed(1)} s after the reload. ` +
+      `Projected: 20 min of light (150 shells, ${Math.round(scoopsPerS * 1200)} scoops at this rate) ${project(150, scoopsPerS * 1200).toFixed(1)} s; 20 min of heavy (${HEAVY_20_MIN_SHELLS} shells) ${heavy20.toFixed(1)} s`,
+  );
+  console.log(
+    `where it went, ms a shell (${n} shells): the workers' jobs ${per(p.jobMs)} (${p.jobs} jobs), their round trips beyond the job ${per(p.tripMs)}; destruction ticks ${per(p.tickMs)} (${(p.ticks / n).toFixed(1)} a shell); ` +
+      `the battle's runs ${per(p.runMs)} (${p.runs}); breaths ${(p.breaths / n).toFixed(1)} a shell, awaited ${per(p.breathMs)}; frames meanwhile ${p.frames} (${(p.frames / n).toFixed(1)} a shell), their main thread ${per(p.frameMs)}; ` +
+      `the longest task ${longest.toFixed(0)} ms (${watched.long.length} of 50 ms or more on the page), the worst frame interval ${watched.worstGap.toFixed(0)} ms`,
   );
   console.log(`while catching up: ${watched.frames} frames, ${watched.counted} saying how far (${watched.lines.join(' | ')}), Go drawn in ${watched.go}, the session's ticks ${watched.ticks.join(', ')}`);
   expect(log.shells.length).toBeGreaterThanOrEqual(40);
   expect(caught.total).toBeGreaterThanOrEqual(log.shells.length);
   expect(watched.frames).toBeGreaterThan(10);
-  expect(watched.counted).toBeGreaterThan(0);
+  // Every frame says how far it has come, but the welcome's first.
+  expect(watched.counted).toBeGreaterThanOrEqual(watched.frames - 1);
   expect(watched.go).toBe(0);
   expect(watched.ticks).toHaveLength(1);
   expect(caught.ms, 'welcome to caught up (ms)').toBeLessThanOrEqual(CATCH_UP_BUDGET_MS);
+  expect(shellMedian, 'the median shell (ms)').toBeLessThanOrEqual(SHELL_MEDIAN_MS);
+  expect(heavy20, '20 minutes of heavy, projected (s)').toBeLessThanOrEqual(HEAVY_20_MIN_S);
+  expect(longest, 'the longest task while catching up (ms)').toBeLessThanOrEqual(BLOCK_MAX_MS);
   // In, and the same world as A's.
   await goIn(B.page);
   await front(B.page, 'off');
@@ -197,9 +217,10 @@ test('both pages keep their frames through a minute of heavy shelling with the f
     expect(end[k].shells - start[k].shells, lines[k]).toBeGreaterThanOrEqual(10);
     // The front firing on the page all the while (heavy: 500 rounds a minute in bursts).
     expect(end[k].fired - start[k].fired, lines[k]).toBeGreaterThanOrEqual(100);
-    expect(runs[k].gaps.length, lines[k]).toBeGreaterThan(60 * 20);
-    expect(at(runs[k].gaps, 0.95), lines[k]).toBeLessThanOrEqual(50);
-    expect(at(runs[k].main, 0.99), lines[k]).toBeLessThanOrEqual(16);
+    // 60 frames a second for at least 40 of the minute's; the intervals at 60 Hz but for one in twenty; the main thread's work well inside a frame.
+    expect(runs[k].gaps.length, lines[k]).toBeGreaterThan(60 * 40);
+    expect(at(runs[k].gaps, 0.95), lines[k]).toBeLessThanOrEqual(25);
+    expect(at(runs[k].main, 0.99), lines[k]).toBeLessThanOrEqual(8);
   }
   expect(A.errors).toEqual([]);
   expect(B.errors).toEqual([]);

@@ -1,7 +1,10 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { loadTunables } from '../../src/core/tunables';
+import { cellsHolding, maskedFingerprint } from '../../src/app/world-compare';
 import { MAP_SEEDS } from '../../src/net/room-core';
+import { decodeDig, decodeShell, type RoomShell } from '../../src/net/protocol';
 import { SHELL_FIELDS } from '../../src/net/shell-fields';
+import { Shelling, shellingSeed } from '../../src/net/shelling';
 import { idleIntent } from '../../src/sim/session';
 import { UNIFORM, type BrickMap } from '../../src/world/bricks';
 import { fingerprint } from '../../src/world/fingerprint';
@@ -10,8 +13,10 @@ import { generateWorld } from '../../src/world/generation/generate';
 import { genParams } from '../../src/world/generation/params';
 import { planWorld } from '../../src/world/generation/plan';
 import { pickSpawns } from '../../src/world/generation/spawn';
-import { K, kindOf, P } from '../../src/world/materials';
-import type { Box } from '../../src/world/region';
+import { groundTop } from '../../src/world/raycast';
+import { detonationRegion } from '../../src/world/detonation';
+import { K, kindOf, P, PALETTE } from '../../src/world/materials';
+import { overlapXZ, type Box } from '../../src/world/region';
 import { RoomNet, type NodeClient, type PlayerSpec } from '../support/room-net';
 import { cloneMap, lateRunner } from '../support/worlds';
 
@@ -247,6 +252,143 @@ async function hide(): Promise<Hidden> {
   return { A, D, hash: { A: a, D: d }, startAt };
 }
 
+interface Evening {
+  A: NodeClient;
+  B: NodeClient;
+  J: NodeClient;
+  hash: { A: string; B: string; J: string };
+  /** The log J caught up on: its shells (decoded) and how many scoops. */
+  shells: RoomShell[];
+  scoops: number;
+  /** The shell whose crater A dug at as the first match ended; and the second match's shell whose ground A dug before it was told. */
+  over: RoomShell;
+  dugBefore: { landS: number; at: [number, number] };
+  /** The scoops A made there. */
+  dugThere: number;
+  /** The chars A's world held a second into the second match: the first match's fires', which a joiner's catch-up does not make (spec note 5). */
+  firstChars: number[];
+}
+
+/** The chars' palette ids (CHAR_*). */
+const CHAR_IDS = PALETTE.flatMap((p, id) => (p.name.startsWith('CHAR_') ? [id] : []));
+
+/** The region a room's shell's crater works over (voxels: Destruction's). */
+const regionOf = (s: { at: readonly number[]; radius: number }): Box => detonationRegion(base.dims, [s.at[0] / V, 0, s.at[1] / V], s.radius / V, tun.f('destruction.loosen_radius_scale'))!;
+
+/** No man's land on the Corridor (voxels, z), 3 m in from each side: clear of every trench and start. */
+const NML: [number, number] = [Math.round((SHELL_FIELDS.corridor.nml[0] + 3) / V), Math.round((SHELL_FIELDS.corridor.nml[1] - 3) / V)];
+
+/**
+ * `map` with a voxel of spoil laid over the ground across no man's land, wherever its top is sod, mud or
+ * clay: loose ground a shovel takes wherever a shell may land there. Every page of the evening starts on it.
+ */
+function carpeted(map: BrickMap): BrickMap {
+  for (let z = NML[0]; z < NML[1]; z++) {
+    for (let x = 0; x < map.dims.x; x++) {
+      const top = groundTop(map, x, z);
+      if (top === null || top >= map.dims.y) continue;
+      const k = kindOf(map.get(x, top - 1, z));
+      if (k === K.SOD || k === K.MUD || k === K.CLAY) map.set(x, top, z, P.SPOIL);
+    }
+  }
+  map.takeDirty();
+  return map;
+}
+
+let carpet: BrickMap | null = null;
+
+/**
+ * Two matches of heavy on one world, and a page that joins the second late (Task 8c), every page on the
+ * Corridor with no man's land carpeted in spoil. A hosts and B joins in the lobby; A sets heavy shelling
+ * and starts. A digs at the heap from 20 s to 26 s of each match. B's craters come back 150 ticks late
+ * (2.5 s), as a slow worker's would.
+ * - The first shell heard from 70 s of the first match: once its crater is in on A, A stands on its rim
+ *   and digs its spoil; the owner ends the match 0.4 s after A's first scoop there, so B, that crater
+ *   still out, holds the scoop at the end and carries it into the next match (RoomBattle.finish, carry).
+ * - The owner starts the second. Its shells are the room's schedule (net/shelling.ts, from the match's
+ *   start): of those landing from 35 s to 65 s in no man's land, the first whose region none of the 8
+ *   before it reaches, so a late page cuts it ahead of its turn well before it lands. A digs where it
+ *   will land from 9 s before it lands until it is told (1.5 s before), and goes back: the ground a page
+ *   catching up has cut it on ahead changes under it before its turn.
+ * - J joins at 70 s and catches up on the log of both, the log's next shells' craters cut ahead of their
+ *   turn (main.ts's [room_battle] catch_up_ahead), its own craters 20 ticks late. The room ticks to 85 s
+ *   of the second match and stops; every page runs on until 20 s after the last strike, and settles.
+ */
+async function evening(): Promise<Evening> {
+  carpet ??= carpeted(cloneMap(base));
+  const net = new RoomNet();
+  const player = (name: string, offsetMs: number, lineMs: number, frameS: number, more: Partial<PlayerSpec> = {}): PlayerSpec => ({ name, map: cloneMap(carpet!), plan, seed: SEED, offsetMs, lineMs, frameS, ...more });
+  /** Whether A digs where it stands now (not at the heap). */
+  let digging = false;
+  const A = net.connect(
+    player('A', 0, 30, 1 / 60, {
+      place: (p) => p.session.teleport(stand, 180, 0),
+      act: (p, s) => {
+        p.session.intent = idleIntent();
+        if (s !== null && ((s >= 20 && s < 26) || digging)) p.session.intent = { ...idleIntent(), dig: true };
+      },
+    }),
+  );
+  /** A on the ground `south` metres south of (x, z), facing north (+z), to dig there. */
+  const standAt = (x: number, z: number, south: number) => {
+    const top = groundTop(A.map, x / V, (z - south) / V)!;
+    A.session.teleport([x, top * V + 0.05, z - south], 0, -35);
+  };
+  await net.runTo(300);
+  A.say({ t: 'config', config: { map: 'corridor', intensity: 'heavy' } });
+  const B = net.connect(player('B', 80, 120, 1 / 45, { runner: lateRunner(150) }));
+  await net.runTo(1_000);
+  A.say({ t: 'start' });
+  await net.runTo(1_500);
+  const first = A.match!.startAt;
+  await net.runTo(first + 70_000);
+  let over: RoomShell | null = null;
+  let sent = 0;
+  for (let t = first + 70_000; ; t += 20) {
+    if (t > first + 100_000) throw new Error(`no scoop at shell ${over?.id}'s crater by 100 s`);
+    await net.runTo(t);
+    if (!over) over = A.battle?.waiting[0] ?? null;
+    else if (!digging && A.battle!.landed.includes(over) && A.session.destruction.pending === 0) {
+      standAt(over.at[0], over.at[1], 1.25 * over.radius);
+      digging = true;
+      sent = A.digsSent;
+    } else if (digging && A.digsSent > sent) {
+      await net.runTo(t + 400);
+      A.say({ t: 'end' });
+      break;
+    }
+  }
+  digging = false;
+  await net.runTo(net.now + 1_000);
+  A.say({ t: 'start' });
+  await net.runTo(net.now + 500);
+  const second = A.match!.startAt;
+  const told = new Shelling(SHELL_FIELDS.corridor, shellingSeed(second, SEED), 'heavy').between(0, 70);
+  const m = told.find((x, k) => x.landS >= 35 && x.landS <= 65 && x.at[1] / V >= NML[0] + 20 && x.at[1] / V < NML[1] - 20 && told.slice(Math.max(0, k - 8), k).every((e) => !overlapXZ(regionOf(e), regionOf(x))));
+  if (!m) throw new Error('no shell of the second match to dig before');
+  await net.runTo(second + 1_000);
+  const firstChars = cellsHolding(A.map, CHAR_IDS);
+  await net.runTo(second + (m.landS - 9) * 1000);
+  standAt(m.at[0], m.at[1], 1);
+  digging = true;
+  const before = A.digsSent;
+  await net.runTo(second + (m.landS - 1.6) * 1000);
+  digging = false;
+  const dugThere = A.digsSent - before;
+  A.session.teleport(stand, 180, 0);
+  await net.runTo(second + 70_000);
+  const J = net.connect(player('J', -40, 50, 1 / 50, { runner: lateRunner(20) }));
+  await net.runTo(second + 85_000);
+  net.stopTicking();
+  await net.runTo(second + 87_000);
+  const lastStrikeS = Math.max(...net.players.map((p) => p.lastStrikeS));
+  if (lastStrikeS + 21 > 87) await net.runTo(second + (lastStrikeS + 21) * 1000);
+  expect(await net.settle()).toBe(true);
+  const [a, b, j] = await Promise.all([fingerprint(A.map), fingerprint(B.map), fingerprint(J.map)]);
+  const log = J.welcomeLog!;
+  return { A, B, J, hash: { A: a, B: b, J: j }, shells: log.shells.map((w) => decodeShell(w)!), scoops: log.digs.filter((w) => decodeDig(w) !== null).length, over: over!, dugBefore: m, dugThere, firstChars };
+}
+
 let played: Promise<Played> | null = null;
 const scenario = () => (played ??= play());
 
@@ -311,5 +453,43 @@ describe("the room's battle, in Node: a tab hidden mid-match", () => {
     expect(D.battle!.landed.map((s) => s.id)).toEqual(landed.map((s) => s.id));
     expect(D.battle!.held).toEqual([]);
     expect(hash.D, hash.A === hash.D ? '' : differences(A.map, D.map)).toBe(hash.A);
+  }, 900_000);
+});
+
+describe("the room's battle, in Node: a late friend's catch-up", () => {
+  it("a page that joins the second match of an evening, its craters cut ahead of their turn, hashes the same as pages that were there all along: a scoop carried across the first match's end, and ground dug under a shell already cut ahead", async () => {
+    const { A, B, J, hash, shells, scoops, over, dugBefore, dugThere, firstChars } = await evening();
+    const d = J.session.destruction;
+    // The first match's chars that J's catch-up did not make (it landed that match's shells quietly,
+    // without the battle: spec note 5, colour only): each a char on A and, on J, a shade of the char's kind.
+    const at = (map: BrickMap, c: number) => map.get(c % map.dims.x, Math.floor(c / map.dims.x) % map.dims.y, Math.floor(c / (map.dims.x * map.dims.y)));
+    const unmade = firstChars.filter((c) => at(J.map, c) !== at(A.map, c) && !CHAR_IDS.includes(at(J.map, c)) && kindOf(at(J.map, c)) === kindOf(at(A.map, c)));
+    const masked = [await maskedFingerprint(A.map, unmade), await maskedFingerprint(J.map, unmade)];
+    // The shells whose crater's region overlaps one of the eight before it in the log: each is held back
+    // from being cut ahead until those are in.
+    const overlapping = shells.filter((s, k) => shells.slice(Math.max(0, k - 8), k).some((e) => overlapXZ(regionOf(e), regionOf(s))));
+    console.log(
+      `J caught up on ${J.catchUp?.entries} entries (${shells.length} shells, ${overlapping.length} of them over one of the 8 before, and ${scoops} scoops) in ${J.catchUp?.ms.toFixed(0)} ms: ` +
+        `${d.aheadTaken} craters taken from the work cut ahead, ${d.aheadDropped} cut afresh (their ground changed); A dug at shell ${over.id}'s crater as the first match ended, B carrying ${B.carriedAtEnds.join(', ')}; ` +
+        `A dug ${dugThere} scoops where the second match's shell at ${dugBefore.landS} s lands, before it was told; ` +
+        `the first match's chars ${firstChars.length}, ${unmade.length} of them not made on J; hashes ${hash.A.slice(0, 12)}, ${hash.B.slice(0, 12)}, ${hash.J.slice(0, 12)}, with those masked ${masked[0].slice(0, 12)} and ${masked[1].slice(0, 12)}`,
+    );
+    // One world: B's, there all along, A's voxel for voxel; J's too, but for the first match's chars it did not make.
+    expect(hash.B, hash.A === hash.B ? '' : differences(A.map, B.map)).toBe(hash.A);
+    expect(masked[1], masked[0] === masked[1] ? '' : differences(A.map, J.map)).toBe(masked[0]);
+    expect(J.battle!.landed.map((s) => s.id)).toEqual(A.battle!.landed.map((s) => s.id));
+    expect([A, B, J].map((p) => p.battle!.held)).toEqual([[], [], []]);
+    // A log long enough for the cut ahead to matter: 40 shells and more, some over others' ground, scoops among them.
+    expect(shells.length).toBeGreaterThanOrEqual(40);
+    expect(overlapping.length).toBeGreaterThanOrEqual(3);
+    expect(scoops).toBeGreaterThanOrEqual(20);
+    // Every entry of the log but a shell still in the air at the join (heavy's gaps are longer than its lead).
+    expect(J.catchUp!.entries).toBeGreaterThanOrEqual(shells.length - 1 + scoops);
+    // The first match's end carried A's scoop at the crater on B, the crater still out there.
+    expect(B.carriedAtEnds[0]).toBeGreaterThanOrEqual(1);
+    // Most craters taken from the work cut ahead; the ground under one dug before its turn, so that work dropped and the crater cut afresh.
+    expect(d.aheadTaken).toBeGreaterThanOrEqual(30);
+    expect(dugThere).toBeGreaterThanOrEqual(3);
+    expect(d.aheadDropped).toBeGreaterThanOrEqual(1);
   }, 900_000);
 });
