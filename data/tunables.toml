@@ -1374,6 +1374,8 @@ flash_comp_splay_deg = 80.0
 flash_comp_tip      = 0.7      # a side prong's brightness at its tip (a prong's else fades to nothing):
                                # most of it lies inside the core, and faded it was lost there
 flash_star_width_m  = 0.025    # each prong's width: at 0.06 a prong half a metre off was a bar
+flash_star_min_share = 0.5     # a shot's flash under this share of a whole one (a suppressor's 0.12)
+                               # draws no core and no star: its light's glimmer alone
 flash_colour        = [1.0, 0.86, 0.55]
 flash_intensity     = 60.0
 flash_light_radius_m  = 6.0    # a shot's light: warm, falling to nothing at this

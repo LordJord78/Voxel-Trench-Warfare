@@ -13,7 +13,9 @@
 //   - (a) near width: the widest run across the player's tracer within NEAR_M of the muzzle (from
 //     NEAR_FROM_M, clear of the flash's star), at half its height over each side's surroundings: the
 //     line's own band, not the bloom's halo nor the parapet its shot's flash lights (the looser width,
-//     every pixel LIT over them, is reported beside it).
+//     every pixel LIT over them, is reported beside it); where a puff of the muzzle's smoke nearer the
+//     eye, shown lit over what is round it (by the shot's flash a metre from the eye), covers the walk,
+//     left out and reported.
 //   - (b) far colour: the mean HSV saturation and hue of the player's tracers' lit pixels past FAR_M
 //     of flight, against their team colour's own hue as shown (TEAM) and their kind's saturation
 //     (TARGET.farSaturation), gated after dark and reported by day; and the battle's streams', gated at
@@ -27,8 +29,10 @@
 //   - (d) noon contrast: the brightest pixel of the player's tracer at NOON_AT_M of flight over its
 //     NOON_RING_PX ring, gated at noon and reported at 17:35.
 //   - (e) the stream from the hip: the followed round's drawn ribbons from STREAM_FROM_M past the muzzle
-//     to within STREAM_AIM_PX of the point of aim, the share shown, and how far out the shown stream
-//     reaches over the muzzle's distance from the point of aim.
+//     to within STREAM_AIM_PX of the point of aim, each sample read across the line as (c)'s are, the
+//     share shown, and how far out the shown stream reaches over the muzzle's distance from the point
+//     of aim; a sample brighter than a background the lit rule cannot reach (LIT.ratio times it past
+//     255) and not tinted left out, counted (`unread`).
 //   - the graze: a ricochet of the player's kind drawn in the burst (not the front's amber beside it).
 //   - the wall (10 m out, at night): its rounds strike within their first tick, each drawn once, to the
 //     wall: gated on (a) and (e) as a near burst is, its stream the struck rounds'; its head, drawn only
@@ -84,6 +88,21 @@ const NEAR_M = 10;
 const NEAR_FROM_M = 3;
 const WALK_PX = 32;
 const BG_PX = [34, 48];
+/**
+ * The muzzle's smoke's billboard kind (particles.ts SMOKE_BILLBOARD), as the page's particleBillboards
+ * gives it: the tool reads each frame's puffs (`smoke`, centre and half size, metres). (a) leaves out a
+ * sample whose walk a puff nearer the eye covers, where the puff shows lit over what is round it (LIT:
+ * the median of PUFF_IN points across its middle over the median of PUFF_RING points round its rim): the
+ * run read there is the puff's (the shooter's own, lit by the shot's flash a metre from the eye), not the
+ * line's, as (c) leaves out what the gun and the world hide. A puff that does not show (by day, a sunlit
+ * wisp of 0.18 alpha; at night, one no flash lights) is read through. Counted, with the widest run so
+ * read, beside it (`underSmoke`).
+ */
+export const SMOKE_KIND = 7;
+/** A puff's middle, as shares of its half size across the image: its centre and eight points at 0.4 of it. */
+const PUFF_IN = [[0, 0], [0.4, 0], [-0.4, 0], [0, 0.4], [0, -0.4], [0.28, 0.28], [-0.28, 0.28], [0.28, -0.28], [-0.28, -0.28]];
+/** What is round a puff: sixteen points at 1.3 of its half size. */
+const PUFF_RING = Array.from({ length: 16 }, (_, k) => [1.3 * Math.cos((k * Math.PI) / 8), 1.3 * Math.sin((k * Math.PI) / 8)]);
 /** A sample's centre this many steps over the brighter side's surroundings at least, or its run is not a line's (a ribbon's fading tail; a half-height on the haze's noise). */
 const NEAR_CONTRAST = 40;
 /** (b): past this much of its flight; pixels within FAR_RADIUS_PX of the ribbon, FAR_HEAD_PX of a head, of them the lit ((c)'s rule); fewer than FAR_LIT_MIN lit is no measure. */
@@ -96,6 +115,8 @@ const BATTLE_RADIUS_PX = 1.5;
 /** (e): the stream from the hip, from this far past the muzzle to within STREAM_AIM_PX of the point of aim (the view's middle). */
 export const STREAM_FROM_M = 0.5;
 export const STREAM_AIM_PX = 12;
+/** (e): of its samples, at least this share read (not left out as past the lit rule's reach), or it is no measure. */
+export const STREAM_READ_MIN = 0.5;
 /** (c): a round's path, metres of its flight; its pixels read PATH_ACROSS_PX either side; under DEGENERATE_PX on the image it is seen end on. */
 export const PATH_M = [20, 80];
 const PATH_ACROSS_PX = 1.5;
@@ -313,14 +334,58 @@ export function headRing(img, info, kind, anyKind = false) {
   return { skyP99, tracersProjected: mine.length, headsDrawn: mine.filter((t) => t.headDrawn).length, headsMeasured: heads.length, headsValid: valid.length, gunMasked: gun !== null, skipped, headline: valid[0] ?? null, heads };
 }
 
-/** (a): the widest run across the player's tracers, at half its height, within NEAR_M of the drawn muzzle (from NEAR_FROM_M), over the window's frames. */
+/**
+ * A frame's puffs of smoke (centre and half size, m) as they show on its image: each one's depth along
+ * the view (m), its centre and half size across the image (pixels), those that show lit over what is
+ * round them (PUFF_IN over PUFF_RING, LIT) alone.
+ */
+function litPuffs(img, pose, res, puffs) {
+  if (!puffs?.length) return [];
+  const { forward } = basis(pose);
+  const t = pose.fov === undefined || pose.fov === 90 ? 1 : Math.tan((pose.fov * RAD) / 2);
+  const shown = [];
+  for (const s of puffs) {
+    const d = dot(sub(s.at, pose.position), forward);
+    const c = d > 0 ? project(pose, res, s.at) : null;
+    if (!c) continue;
+    const r = (s.half / (d * t)) * (res[0] / 2);
+    const lums = (points) => points.map(([x, y]) => at(img, [c[0] + x * r, c[1] + y * r])).filter((k) => k >= 0).map((k) => img.lum[k]);
+    const inside = median(lums(PUFF_IN));
+    const round = median(lums(PUFF_RING));
+    if (inside !== null && round !== null && lit(inside, round)) shown.push({ depth: d, c, r });
+  }
+  return shown;
+}
+
+/** Whether a puff of `puffs` (litPuffs') nearer the eye than `p` (m) covers, on the image, any of the segment `a` to `b` (pixels). */
+function smokeOver(pose, puffs, p, a, b) {
+  if (!puffs.length) return false;
+  const depth = dot(sub(p, pose.position), basis(pose).forward);
+  for (const { depth: d, c, r } of puffs) {
+    if (!(d < depth)) continue;
+    // The segment's nearest point to its centre.
+    const ab = [b[0] - a[0], b[1] - a[1]];
+    const u = Math.max(0, Math.min(1, ((c[0] - a[0]) * ab[0] + (c[1] - a[1]) * ab[1]) / (ab[0] * ab[0] + ab[1] * ab[1] || 1)));
+    if (Math.hypot(a[0] + ab[0] * u - c[0], a[1] + ab[1] * u - c[1]) < r) return true;
+  }
+  return false;
+}
+
+/**
+ * (a): the widest run across the player's tracers, at half its height, within NEAR_M of the drawn muzzle
+ * (from NEAR_FROM_M), over the window's frames; a sample whose walk a puff of smoke nearer the eye, shown
+ * lit, covers left out, and counted with its widest run (`underSmoke`).
+ */
 export function nearWidth(imgs, frames, kind) {
   let best = null;
   let samples = 0;
+  let smoked = null;
+  let underSmoke = 0;
   frames.forEach((f, i) => {
     const img = imgs[i];
     const { pose, res } = f.info;
     const muzzle = f.muzzle ?? pose.position;
+    const puffs = litPuffs(img, pose, res, f.smoke);
     for (const t of own(f, kind)) {
       const N = 400;
       for (let j = 0; j <= N; j++) {
@@ -348,7 +413,9 @@ export function nearWidth(imgs, frames, kind) {
         if (bgs[0] === null || bgs[1] === null) continue;
         const centre = img.lum[at(img, q)];
         if (!(centre >= Math.max(bgs[0], bgs[1]) + NEAR_CONTRAST)) continue;
-        samples++;
+        const under = smokeOver(pose, puffs, lerp(t.tailM, t.headM, u), [q[0] - n[0] * WALK_PX, q[1] - n[1] * WALK_PX], [q[0] + n[0] * WALK_PX, q[1] + n[1] * WALK_PX]);
+        if (under) underSmoke++;
+        else samples++;
         // The first step either side short of `within(v, bg)`, less half a step: the run's extent that way.
         const reach = (sign, bg, within) => {
           for (let o = 0.5; o <= WALK_PX; o += 0.5) {
@@ -361,12 +428,16 @@ export function nearWidth(imgs, frames, kind) {
         // halo round it, nor the parapet its shot's flash lights); and, as loosely as (c)'s, all of it lit.
         const half = (v, bg) => v - bg >= 0.5 * (centre - bg);
         const width = reach(-1, bgs[0], half) + reach(1, bgs[1], half);
+        if (under) {
+          if (!smoked || width > smoked.px) smoked = { px: width, frame: i, at: [Math.round(q[0]), Math.round(q[1])], fromMuzzleM: Math.round(m * 10) / 10 };
+          continue;
+        }
         const loose = reach(-1, bgs[0], lit) + reach(1, bgs[1], lit);
         if (!best || width > best.px) best = { px: width, litPx: loose, frame: i, at: [Math.round(q[0]), Math.round(q[1])], normal: n, fromMuzzleM: Math.round(m * 10) / 10, background: bgs.map(Math.round), centre: Math.round(centre), flownM: Math.round(t.flown * 10) / 10 };
       }
     }
   });
-  return { ...(best ?? { px: null }), samples };
+  return { ...(best ?? { px: null }), samples, underSmoke: { samples: underSmoke, ...(smoked ?? { px: null }) } };
 }
 
 /**
@@ -450,9 +521,18 @@ export function battleColour(imgs, comp, frames) {
 /**
  * (e): the stream from the hip. The followed round's drawn ribbons, from STREAM_FROM_M past the drawn
  * muzzle to within STREAM_AIM_PX of the point of aim (the view's middle), sampled a pixel apart on each
- * frame's image: the share of them shown in the composite ((c)'s rule: lit, or by day (`day`) lit or
- * tinted by `team`'s colour); and how far out from the point of aim the shown stream reaches, over the
- * muzzle's distance from it. Beside them (`lit`), the share lit and its reach alone.
+ * frame's image and read across the line as (c) reads its path (PATH_ACROSS_PX either side: the
+ * brightest over the median of their backgrounds, tinted if any is): the share of them shown in the
+ * composite ((c)'s rule: lit, or by day (`day`) lit or tinted by `team`'s colour); and how far out from
+ * the point of aim the shown stream reaches, over the muzzle's distance from it. Beside them (`lit`),
+ * the share lit and its reach alone.
+ *
+ * A sample over a background the lit rule cannot reach (LIT.ratio times it past 255: 17:35's sky,
+ * 170 and brighter, through a gap in the crest) that is brighter than it by LIT.min, but not shown, is
+ * left out of both shares and counted (`unread`), as (c) leaves out what the gun and the world hide:
+ * a white core there cannot be lit, nor is white its team's colour, and it is not a miss. One no
+ * brighter than its background is (nothing is drawn there), and a tinted one is shown, as before. Under
+ * STREAM_READ_MIN of the samples read, the share is no measure.
  */
 export function streamCover(comp, frames, track, team = null, day = false) {
   if (!track) return { share: null, why: 'no round followed' };
@@ -476,11 +556,29 @@ export function streamCover(comp, frames, track, team = null, day = false) {
       if (off < STREAM_AIM_PX) break;
       if (last && Math.hypot(q[0] - last[0], q[1] - last[1]) < 1) continue;
       last = q;
-      const k = at(comp, q);
-      if (k < 0) continue;
-      const covered = lit(comp.lum[k], comp.least[k]);
-      const tint = !!team && tinted([comp.data[k * 4], comp.data[k * 4 + 1], comp.data[k * 4 + 2]], [comp.back[k * 3], comp.back[k * 3 + 1], comp.back[k * 3 + 2]], team);
-      samples.push({ at: q, off, covered, tint, shown: covered || (day && tint) });
+      if (at(comp, q) < 0) continue;
+      // Across the line as (c) reads its path: PATH_ACROSS_PX either side, its brightest over the median
+      // of their backgrounds, tinted if any is (a line along the crest's edge has the sky behind one side
+      // of its band and the parapet behind the other).
+      const ahead = project(pose, res, lerp(t.tailM, t.headM, Math.min(1, j / 2000 + 1e-3)));
+      const along = ahead ? Math.hypot(ahead[0] - q[0], ahead[1] - q[1]) : 0;
+      const n = along > 0 ? [-(ahead[1] - q[1]) / along, (ahead[0] - q[0]) / along] : [0, 1];
+      let best = 0;
+      const bgs = [];
+      let tint = false;
+      for (let o = -PATH_ACROSS_PX; o <= PATH_ACROSS_PX + 1e-9; o += 0.5) {
+        const k = at(comp, [q[0] + n[0] * o, q[1] + n[1] * o]);
+        if (k < 0) continue;
+        best = Math.max(best, comp.lum[k]);
+        bgs.push(comp.least[k]);
+        if (!tint && team && tinted([comp.data[k * 4], comp.data[k * 4 + 1], comp.data[k * 4 + 2]], [comp.back[k * 3], comp.back[k * 3 + 1], comp.back[k * 3 + 2]], team)) tint = true;
+      }
+      const bg = median(bgs);
+      const covered = lit(best, bg);
+      const shown = covered || (day && tint);
+      // Brighter than a background no reading can be lit over, and not tinted: unread, not a miss.
+      const unread = !shown && LIT.ratio * bg > 255 && best >= bg + LIT.min;
+      samples.push({ at: q, off, covered, tint, shown, unread, lum: best, bg });
     }
   }
   // Where the stream is on the image STREAM_FROM_M, a metre and three metres past the muzzle (from the first frame it is drawn in): how far from the point of aim.
@@ -500,10 +598,13 @@ export function streamCover(comp, frames, track, team = null, day = false) {
   const geometry = { atFromPx: where(STREAM_FROM_M), at1mPx: where(1), at3mPx: where(3) };
   const counts = day ? 'lit or tinted' : 'lit';
   if (samples.length === 0) return { share: null, counts, lit: { share: null, span: null }, muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), ...geometry, why: `nothing of the stream ${STREAM_FROM_M} m past the muzzle lies ${STREAM_AIM_PX} px or more from the point of aim` };
-  /** The share of the samples `ones` are, how far out from the point of aim they reach, and its share of the muzzle's distance. */
+  const unread = samples.filter((x) => x.unread).length;
+  const read = samples.length - unread;
+  if (read < STREAM_READ_MIN * samples.length) return { share: null, counts, samples: samples.length, unread, lit: { share: null, span: null }, muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), ...geometry, marks: samples, why: `${unread} of ${samples.length} samples over a background that cannot be lit (${LIT.ratio} times it past 255), more than ${1 - STREAM_READ_MIN} of them` };
+  /** The share of the samples read `ones` are, how far out from the point of aim they reach, and its share of the muzzle's distance. */
   const over = (ones) => {
     const reach = ones.length ? Math.max(...ones.map((x) => x.off)) : 0;
-    return { share: ones.length / samples.length, reach, span: muzzlePx ? reach / muzzlePx : null };
+    return { share: ones.length / read, reach, span: muzzlePx ? reach / muzzlePx : null };
   };
   const shownOnes = samples.filter((x) => x.shown);
   const shown = over(shownOnes);
@@ -511,7 +612,7 @@ export function streamCover(comp, frames, track, team = null, day = false) {
   // Beside the span, the shown stream's own extent: its outermost shown pixel to its innermost, over the muzzle's distance.
   const inner = shownOnes.length ? Math.min(...shownOnes.map((x) => x.off)) : 0;
   return {
-    share: shown.share, counts, samples: samples.length, reachPx: Math.round(shown.reach), innerPx: Math.round(inner), muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), span: shown.span, extent: muzzlePx && shownOnes.length ? (shown.reach - inner) / muzzlePx : null,
+    share: shown.share, counts, samples: samples.length, unread, reachPx: Math.round(shown.reach), innerPx: Math.round(inner), muzzlePx: muzzlePx === null ? null : Math.round(muzzlePx), span: shown.span, extent: muzzlePx && shownOnes.length ? (shown.reach - inner) / muzzlePx : null,
     lit: { share: litAlone.share, reachPx: Math.round(litAlone.reach), span: litAlone.span },
     ...geometry, marks: samples,
   };
@@ -695,7 +796,7 @@ export function marked(img, m) {
   return encode(data, img.w, img.h);
 }
 
-/** The composite marked: (c)'s path a few pixels aside (green lit, blue tinted by its team's colour and not lit, red neither, grey behind the gun or hidden), (a)'s run (cyan), (b)'s pixels (yellow), (e)'s stream (cyan lit, blue tinted and not lit, orange neither), (d)'s point and ring (magenta). By day (c) and (e) count the blue as shown; after dark they do not. */
+/** The composite marked: (c)'s path a few pixels aside (green lit, blue tinted by its team's colour and not lit, red neither, grey behind the gun or hidden), (a)'s run (cyan), (b)'s pixels (yellow), (e)'s stream (cyan lit, blue tinted and not lit, grey unread: brighter than a background no reading can be lit over, orange neither), (d)'s point and ring (magenta). By day (c) and (e) count the blue as shown; after dark they do not. */
 export function markedComposite(comp, m) {
   const data = Buffer.from(comp.data);
   const put = (x, y, c) => {
@@ -717,7 +818,7 @@ export function markedComposite(comp, m) {
       put(p.at[0] + 3, p.at[1], [255, 255, 0]);
     }
   }
-  if (m.stream?.marks) for (const x of m.stream.marks) for (const o of [5, 6]) put(x.at[0], x.at[1] + o, x.covered ? [0, 255, 255] : x.tint ? [0, 96, 255] : [255, 128, 0]);
+  if (m.stream?.marks) for (const x of m.stream.marks) for (const o of [5, 6]) put(x.at[0], x.at[1] + o, x.covered ? [0, 255, 255] : x.tint ? [0, 96, 255] : x.unread ? [160, 160, 160] : [255, 128, 0]);
   const d = m.noonContrast;
   if (d?.at) for (let t = 0; t < 360; t += 2) for (const r of NOON_RING_PX) put(d.at[0] + r * Math.cos(t * RAD), d.at[1] + r * Math.sin(t * RAD), [255, 0, 255]);
   return encode(data, comp.w, comp.h);
@@ -794,7 +895,7 @@ export function gateCapture(c, m, burst) {
   }
   if (hip && nearLike(c)) {
     const e = m.stream;
-    if (!(num(e?.share) && e.share >= TARGET.streamCover && num(e.span) && e.span >= TARGET.streamSpan)) failures.push(`(e) the stream from the hip: ${e?.counts ?? 'shown'} ${round3(e?.share)} (>= ${TARGET.streamCover}) of ${e?.samples ?? 0} samples, reaching ${e?.reachPx ?? '-'} of ${e?.muzzlePx ?? '-'} px to the muzzle: ${round3(e?.span)} (>= ${TARGET.streamSpan}); lit alone ${round3(e?.lit?.share)}, span ${round3(e?.lit?.span)}${e?.why ? ` (${e.why})` : ''}`);
+    if (!(num(e?.share) && e.share >= TARGET.streamCover && num(e.span) && e.span >= TARGET.streamSpan)) failures.push(`(e) the stream from the hip: ${e?.counts ?? 'shown'} ${round3(e?.share)} (>= ${TARGET.streamCover}) of ${e?.samples ?? 0} samples (${e?.unread ?? 0} unread), reaching ${e?.reachPx ?? '-'} of ${e?.muzzlePx ?? '-'} px to the muzzle: ${round3(e?.span)} (>= ${TARGET.streamSpan}); lit alone ${round3(e?.lit?.share)}, span ${round3(e?.lit?.span)}${e?.why ? ` (${e.why})` : ''}`);
   }
   if (hip && c.burst !== 'graze') {
     const a = m.nearWidth;

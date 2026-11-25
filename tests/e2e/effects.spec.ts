@@ -277,7 +277,7 @@ type Kicked = Hooks & {
   setLoadout(l: unknown): void;
   session: Hooks['session'] & { weapon: { shotsFired: number } };
   tracerPixels(): { tracers: { tailM: [number, number, number]; flown: number }[] };
-  particleBillboards(): { kind: number; at: [number, number, number] }[];
+  particleBillboards(): { kind: number; at: [number, number, number]; half: number }[];
 };
 
 test("the SVD's shot frame: its flash, smoke and tracer leave the drawn muzzle, kicked up with it", async ({ page }) => {

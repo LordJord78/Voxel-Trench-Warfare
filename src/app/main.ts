@@ -1647,13 +1647,13 @@ async function start(): Promise<void> {
         flashes: builtFlashes.map((f) => ({ remote: f.remote, at: projectToPixel(lastPose, res, f.at), tips: f.tips.map((p) => projectToPixel(lastPose, res, p)), atM: f.at, tipsM: f.tips, up: f.up })),
       };
     },
-    /** The session's particles as the last frame drew them (the shot's flash and brass held to the drawn gun): each billboard's kind and centre (metres). */
+    /** The session's particles as the last frame drew them (the shot's flash and brass held to the drawn gun): each billboard's kind, centre and half its size (metres). */
     particleBillboards: () => {
       const f = builtFrame;
       if (!f) return [];
       return Array.from({ length: effects.debugAt }, (_, i) => {
         const o = i * BILLBOARD_FLOATS;
-        return { kind: f.billboards[o + 8], at: [f.billboards[o], f.billboards[o + 1], f.billboards[o + 2]] as [number, number, number] };
+        return { kind: f.billboards[o + 8], at: [f.billboards[o], f.billboards[o + 1], f.billboards[o + 2]] as [number, number, number], half: f.billboards[o + 3] };
       });
     },
     debugQuads(quads: DebugQuad[]) {

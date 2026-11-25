@@ -637,6 +637,21 @@ describe('a frame of effects', () => {
     expect(built.lights[0].intensity).toBeCloseTo(t.flashLightIntensity * 0.12, 9);
   });
 
+  it("a shot's flash under flash_star_min_share (0.5, [effects]) of a whole one draws no core and no star: the suppressor's 0.12 is under it, and the line moves with the tunable", () => {
+    expect(t.flashStarMinShare).toBe(0.5);
+    const s = stand();
+    const events = shoot(s);
+    const at = (share: number, least: number) => new EffectsFrameBuilder({ ...t, flashStarMinShare: least }).build(s, { ...events, shots: [{ ...events.shots[0], flash: share }] }).counts;
+    // Today's line: 0.5 draws its star and core, a hair under it neither.
+    expect(at(0.5, 0.5).cores).toBe(1);
+    expect(at(0.5, 0.5).stars).toBeGreaterThanOrEqual(3);
+    expect(at(0.49, 0.5)).toMatchObject({ cores: 0, stars: 0, lights: 1 });
+    // The line moved: the suppressor's wisp drawn whole under 0.1, none over 0.13.
+    expect(at(0.12, 0.1).cores).toBe(1);
+    expect(at(0.12, 0.1).stars).toBeGreaterThanOrEqual(3);
+    expect(at(0.12, 0.13)).toMatchObject({ cores: 0, stars: 0, lights: 1 });
+  });
+
   it("the player's tracer leaves the muzzle and joins the round's path where it was aimed", () => {
     const s = stand();
     const origin: [number, number, number] = [12.8, 2.0, 2];

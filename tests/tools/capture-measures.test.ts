@@ -7,8 +7,9 @@ import { Rng } from '../../src/core/rng';
 import { project } from '../../tools/lib/camera.mjs';
 import { at, brightest, colourOf, composite, decode, encode, hsv, hueOff, lit, luminance, median, p95, percentile, ringMean, topChannel, type Composite, type Image } from '../../tools/lib/image.mjs';
 import { failedEntry, removePictures, stamp } from '../../tools/lib/report.mjs';
-import { byDay, CAPTURES, FAR_LIT_MIN, gateCapture, headRing, kindOf, MIN_GPU_SAMPLES, nearLike, pathCover, streamCover, TARGET, TEAM, teamChannel, tinted, trackRound, WALL, type Burst, type Capture, type Frame, type Measures, type Track } from '../../tools/lib/tracer-measures.mjs';
+import { byDay, CAPTURES, FAR_LIT_MIN, gateCapture, headRing, kindOf, LIT, MIN_GPU_SAMPLES, nearLike, nearWidth, pathCover, SMOKE_KIND, streamCover, TARGET, TEAM, teamChannel, tinted, trackRound, WALL, type Burst, type Capture, type Frame, type Measures, type Track } from '../../tools/lib/tracer-measures.mjs';
 import { P } from '../../src/world/materials';
+import { SMOKE_BILLBOARD } from '../../src/combat/particles';
 
 // The capture tools' measures (tools/lib: the pixels of a screenshot as displayed, the game's camera, a
 // report's entries) and G1's proof's own (tools/lib/tracer-measures.mjs), read on synthetic images: every
@@ -293,6 +294,44 @@ describe("G1's proof: its measures", () => {
     // Another kind's round is not the player's.
     expect(trackRound(frames, 3)).toBeNull();
   });
+
+  it("(a) reads the line's own band where no puff of muzzle smoke nearer the eye, shown lit, covers its walk: a sample under one (the shooter's own, lit by the shot's flash) is left out and counted with its width (`underSmoke`), as (c) leaves out what the gun and the world hide; a puff behind the line, or one that does not show, is not", () => {
+    // The game's smoke billboards are what the tool reads as smoke.
+    expect(SMOKE_KIND).toBe(SMOKE_BILLBOARD);
+    // A night's dark (30) and the player's red line 5 m out, the image's row 100 from x 60 to 140, its
+    // muzzle at the eye; a lit puff (luminance 190) 40 px across over its middle, behind the line's pixels.
+    const line = { kind: 2, flown: 6, headDrawn: false, head: null, tail: null, headM: [2, 0, 5] as [number, number, number], tailM: [-2, 0, 5] as [number, number, number], joinsM: 30 };
+    const img = image(200, 200, [30, 30, 30], (set) => {
+      for (let y = 80; y <= 120; y++) for (let x = 80; x <= 120; x++) if (Math.hypot(x - 100, y - 100) <= 20) set(x, y, [200, 190, 170]);
+      for (let y = 99; y <= 101; y++) for (let x = 60; x <= 140; x++) set(x, y, [255, 80, 80]);
+    });
+    const at = (smoke: Frame['smoke']): Frame => ({ ...frameOf(0, [line]), muzzle: [0, 0, 0], smoke });
+    // Read without the puff: its 40 px are the run.
+    const blind = nearWidth([img], [at([])], 2);
+    expect(blind.px).toBeGreaterThan(30);
+    expect(blind.underSmoke.samples).toBe(0);
+    // The puff 1.25 m from the eye, half 0.25 m: 20 px round the image's middle, in front of the line.
+    const front = nearWidth([img], [at([{ at: [0, 0, 1.25], half: 0.25 }])], 2);
+    expect(front.px).toBeLessThan(6);
+    expect(front.underSmoke.samples).toBeGreaterThan(20);
+    expect(front.underSmoke.px).toBeGreaterThan(30);
+    expect(front.samples + front.underSmoke.samples).toBe(blind.samples);
+    expect(front.samples).toBeGreaterThan(front.underSmoke.samples);
+    // The same disc on the image from a puff behind the line (12.5 m out, half 2.5 m): read as before.
+    const behind = nearWidth([img], [at([{ at: [0, 0, 12.5], half: 2.5 }])], 2);
+    expect(behind.px).toBe(blind.px);
+    expect(behind.underSmoke.samples).toBe(0);
+    // Far aside of the line's walk (60 px under it): read as before.
+    const aside = nearWidth([img], [at([{ at: [0, -0.75, 1.25], half: 0.25 }])], 2);
+    expect(aside.px).toBe(blind.px);
+    expect(aside.underSmoke.samples).toBe(0);
+    // A puff in front over the line's own left end (x 70, 10 px round), where the image shows none (by
+    // day a sunlit wisp; at night one no flash lights): read through, the line there read as it is.
+    const unseen = nearWidth([img], [at([{ at: [-0.375, 0, 1.25], half: 0.125 }])], 2);
+    expect(unseen.px).toBe(blind.px);
+    expect(unseen.samples).toBe(blind.samples);
+    expect(unseen.underSmoke.samples).toBe(0);
+  });
 });
 
 /** Every measure a capture can be gated on, each passing, the far colour at the capture's team's hue. */
@@ -521,6 +560,82 @@ describe("G1's proof: by day (c) and (e) count a sample shown lit or tinted, aft
       expect(neither.share, name).toBe(0);
       expect(gateCapture(c, { ...passing(c), stream: neither }, burstOf()), name).toHaveLength(1);
     }
+  });
+
+  it("(e): a sample over a background the lit rule cannot reach (LIT.ratio times it past 255), brighter than it but neither lit nor tinted, is left out and counted (`unread`), as (c) leaves out what the gun and the world hide; nothing drawn there is still a miss; and a stream mostly so is no measure", () => {
+    // 17:35's sky behind the crest's gap (luminance 200: lit would ask 300) over the stream's outer
+    // part, the image's x 135 on; the dark parapet (40) under its inner part.
+    const sky = [200, 200, 200];
+    const parapet = [40, 40, 40];
+    const white = [250, 250, 250];
+    const split = (paint: (set: (x: number, y: number, c: readonly number[]) => void) => void, skyFrom = 135): Composite => {
+      const backAt = (x: number) => (x >= skyFrom ? sky : parapet);
+      const shown = image(200, 200, parapet, (set) => {
+        for (let y = 0; y < 200; y++) for (let x = skyFrom; x < 200; x++) set(x, y, sky);
+        paint(set);
+      });
+      const n = shown.w * shown.h;
+      const backs = new Uint8Array(n * 3);
+      const least = new Float32Array(n);
+      for (let p = 0; p < n; p++) {
+        const b = backAt(p % shown.w);
+        backs.set(b, p * 3);
+        least[p] = luminance(b[0], b[1], b[2]);
+      }
+      return { ...shown, least, back: backs };
+    };
+    const c = capture('1735');
+    expect(LIT.ratio * 200).toBeGreaterThan(255);
+    // The white core across both: lit over the parapet; over the sky brighter than it, but no reading of
+    // it can be lit, nor is white its team's colour.
+    const whole = streamCover(split(alongStream(white)), hip, stream, TEAM.red, true);
+    expect(whole.samples).toBeGreaterThan(60);
+    expect(whole.unread).toBeGreaterThan(20);
+    expect(whole.unread).toBeLessThan(whole.samples / 2);
+    expect(whole.share).toBe(1);
+    expect(whole.lit.share).toBe(1);
+    // Its reach is the shown samples' as before: the parapet's part, from x 134 in.
+    expect(whole.reachPx).toBeLessThan(50);
+    expect(gateCapture(c, { ...passing(c), stream: { ...whole, span: 0.75 } }, burstOf())).toEqual([]);
+    // Nothing drawn over the sky (the stream over the parapet alone): each sample there is a miss still.
+    const half = streamCover(split((set) => alongStream(white)((x, y, col) => (x < 135 ? set(x, y, col) : undefined))), hip, stream, TEAM.red, true);
+    expect(half.unread).toBe(0);
+    expect(half.samples).toBe(whole.samples);
+    expect(half.share).toBeCloseTo(1 - whole.unread / whole.samples, 9);
+    expect(half.share).toBeLessThan(TARGET.streamCover);
+    // Its team's colour over the sky is read as it was: shown.
+    const red = streamCover(split(alongStream(covering)), hip, stream, TEAM.red, true);
+    expect(red.unread).toBe(0);
+    expect(red.share).toBeGreaterThan(0.99);
+    // Over the sky nearly all its length, too little of it is read: no measure, and the gate fails.
+    const most = streamCover(split(alongStream(white), 112), hip, stream, TEAM.red, true);
+    expect(most.unread).toBeGreaterThan(most.samples / 2);
+    expect(most.share).toBeNull();
+    expect(most.why).toMatch(/cannot be lit/);
+    expect(gateCapture(c, { ...passing(c), stream: most }, burstOf())).toHaveLength(1);
+  });
+
+  it("(e) reads each sample across the line as (c) reads its path: its brightest within PATH_ACROSS_PX either side over the median of their backgrounds, so a line whose drawn core lies a pixel off the sample's is read by its core", () => {
+    // A level stream on the image's row 120 from x 140 to 60 (2 m out), over a haze of luminance 166
+    // (lit asks 249): the sampled row a shade under it (245), the core a pixel across at 252.
+    const level: Track = { seen: [{ frame: 0, t: { kind: 2, flown: 30, headDrawn: true, head: null, tail: null, headM: [-0.8, -0.4, 2], tailM: [0.8, -0.4, 2], joinsM: 30 } }], path: null };
+    const at15: Frame[] = [{ ...frameOf(0, []), muzzle: [0.8, -0.4, 1.5] }];
+    const hazy = [166, 166, 166];
+    const comp = compositeOf(hazy, (set) => {
+      for (let x = 55; x <= 145; x++) {
+        set(x, 120, [245, 245, 245]);
+        set(x, 121, [252, 252, 252]);
+      }
+    });
+    const e = streamCover(comp, at15, level, TEAM.red, true);
+    expect(e.samples).toBeGreaterThan(60);
+    expect(e.unread).toBe(0);
+    expect(e.share).toBe(1);
+    // Neither row alone over the haze: nothing shown.
+    const flat = streamCover(compositeOf(hazy, (set) => {
+      for (let x = 55; x <= 145; x++) set(x, 120, [245, 245, 245]);
+    }), at15, level, TEAM.red, true);
+    expect(flat.share).toBe(0);
   });
 
   it('(c) and (e) after dark: a sample tinted and not lit is not shown, and a lit one is, as before', () => {

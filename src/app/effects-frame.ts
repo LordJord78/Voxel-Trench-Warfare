@@ -138,7 +138,8 @@ export interface EffectsTunables {
    * how far off the bore (degrees) and how far each strays from an even spread (a share of it);
    * aimed (the sights' blend `flashAimedBlend` or more), the arc about the gun's up their rolls skip
    * (degrees, either way, at least); a compensator's side prongs' length (m), angle off the bore
-   * (degrees) and brightness at their tips; each prong's width (m).
+   * (degrees) and brightness at their tips; each prong's width (m); and the least share of a whole
+   * flash (a shot's `flash`) that draws its core and star (under it, a suppressor's, its light alone).
    */
   flashCoreM: [number, number];
   flashCoreColour: V3;
@@ -154,6 +155,7 @@ export interface EffectsTunables {
   flashCompSplayDeg: number;
   flashCompTip: number;
   flashStarWidthM: number;
+  flashStarMinShare: number;
   flashColour: V3;
   flashIntensity: number;
   flashLightRadiusM: number;
@@ -230,6 +232,7 @@ export function effectsTunables(tun: Tunables): EffectsTunables {
     flashCompSplayDeg: f('flash_comp_splay_deg'),
     flashCompTip: f('flash_comp_tip'),
     flashStarWidthM: f('flash_star_width_m'),
+    flashStarMinShare: f('flash_star_min_share'),
     flashColour: rgb(tun, 'effects.flash_colour'),
     flashIntensity: f('flash_intensity'),
     flashLightRadiusM: f('flash_light_radius_m'),
@@ -753,8 +756,8 @@ export class EffectsFrameBuilder {
         up = [d[1] * side[2] - d[2] * side[1], d[2] * side[0] - d[0] * side[2], d[0] * side[1] - d[1] * side[0]];
       }
       lights.push({ position: at, radiusM: t.flashLightRadiusM, colour: t.flashLightColour, intensity: t.flashLightIntensity * f.share });
-      // A suppressed shot: no core and no star, a glimmer of its light.
-      if (f.share < 0.5) continue;
+      // A suppressed shot (under flash_star_min_share of a whole flash): no core and no star, a glimmer of its light.
+      if (f.share < t.flashStarMinShare) continue;
       // A prong fades to nothing at its tip; a compensator's short side prongs, most of them inside the
       // core, keep flash_comp_tip of it there, so they show past it.
       const tip = f.draw.comp ? t.flashCompTip : 0;
