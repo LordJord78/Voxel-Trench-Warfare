@@ -659,7 +659,10 @@ describe('a crater whose job asks for a wider region', () => {
 // z 140–150, x 40–330; two shells at its foot 12.8 m apart, their regions side by side (x 64–192 and
 // 192–320). Each slumps the ridge further along than its region holds. The east's asks first, over the
 // west's region, and waits; then the west's asks for a region over the east's ground (x 0–256), and cuts
-// the ridge where the east's cut stands, then once more, before the east's goes out again.
+// the ridge where the east's cut stands, then once more, before the east's goes out again. With the east's
+// shelled first, this also pins that the west's ask does not wait on the waiting east. If it did, it would
+// go back to the queue behind the east, the east's would go out first, and the live world would not be the
+// one-take world.
 describe('a crater waiting with its cut in', () => {
   const WEST: [number, number, number] = [128, 0, 135];
   const EAST: [number, number, number] = [256, 0, 135];

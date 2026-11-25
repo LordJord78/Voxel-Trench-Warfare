@@ -30,14 +30,19 @@
  * out, for it is to be copied from it again: a mark there is held until no
  * crater holds it, and an edit waits (overlapsOut). Another crater may go out
  * over it meanwhile: a neighbour's job asking for a wider region, or one before
- * it in the queue, which never waits on a waiting crater (two over each other's
- * ground would wait for each other). That one is copied with the waiting one's
- * kept bricks under it too, as the waiting one goes out after it, and each such
- * brick it writes is its own kept ground from then on, what it leaves there the
- * waiting one's. Until the waiting one is cut again, its cut is gone from those
- * bricks. So where their results come back in the same order, a live page cuts
- * the same craters in the same order from the same ground as a page whose jobs'
- * results each come back in one take.
+ * it in the queue, neither of which waits on a waiting crater. In the queue, two
+ * over each other's ground would wait for each other. An ask that waited would
+ * go back to the queue, and the waiting one, if shelled first, would go out
+ * before it: the reverse of one take, where nothing of the waiting one's is in
+ * when the ask comes, so the ask goes out at once and the other waits behind it.
+ * (An asker shelled first would be sent out by the queue in that tick anyway.)
+ * The one that goes out is copied with the waiting one's kept bricks under it
+ * too, as the waiting one goes out after it, and each such brick it writes is
+ * its own kept ground from then on, what it leaves there the waiting one's.
+ * Until the waiting one is cut again, its cut is gone from those bricks. So
+ * where their results come back in the same order, a live page cuts the same
+ * craters in the same order from the same ground as a page whose jobs' results
+ * each come back in one take.
  *
  * A shell on the ground (in a room) is cut where the ground is when its job goes out, not where it
  * was when it landed: by then every earlier crater that overlaps it is in, so every client cuts it
@@ -358,7 +363,9 @@ export class Destruction {
       if ('wider' in r) {
         // Copied again (post) from its ground as it was before its own writes: `before` under the world.
         // It waits only for a region out or landing, as a shell in the queue does: one waiting with its
-        // cut in goes out after it, its kept ground under this one's copy (keptUnder).
+        // cut in goes out after it, its kept ground under this one's copy (keptUnder). Waiting on that
+        // one would send that one out first wherever it was shelled first, the reverse of one take
+        // (the header).
         j.box = r.wider;
         if (this.waits(j.id, j.box) || this.jobs.some((o) => o !== j && o.state !== 'queued' && overlapXZ(o.box, j.box))) {
           j.state = 'queued';
